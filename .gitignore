@@ -19,3 +19,4 @@ Thumbs.db
 
 postgres_data/
 .local-dev.db*
+backend/.tmp-delete-group-test.db-journal
