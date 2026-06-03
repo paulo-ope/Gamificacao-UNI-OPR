@@ -66,7 +66,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(body || `Erro HTTP ${response.status}`);
+    if (body) {
+      try {
+        const parsed = JSON.parse(body) as { detail?: string; message?: string };
+        throw new Error(parsed.detail || parsed.message || body);
+      } catch {
+        throw new Error(body);
+      }
+    }
+    throw new Error(`Erro HTTP ${response.status}`);
   }
 
   return response.json() as Promise<T>;

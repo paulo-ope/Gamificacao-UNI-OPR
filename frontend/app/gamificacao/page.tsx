@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleDollarSign, ClipboardList, Download, Loader2, LockKeyhole, Mail, RefreshCw, Search, Settings2, Trophy, UsersRound } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuditPanel } from "@/components/gamification/audit-panel";
 import { ClosureHistoryPanel } from "@/components/gamification/closure-history-panel";
@@ -352,6 +352,8 @@ export default function GamificacaoPage() {
   const [leadershipProfilesLoaded, setLeadershipProfilesLoaded] = useState(false);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [rulesSupportLoaded, setRulesSupportLoaded] = useState(false);
+  const authBootstrapRef = useRef(false);
+  const initialLoadRef = useRef(false);
   const [tabLoading, setTabLoading] = useState<Record<string, boolean>>({});
 
   const can = useCallback((permission: string) => Boolean(currentUser?.permissions.some((item) => item === permission)), [currentUser]);
@@ -402,7 +404,13 @@ export default function GamificacaoPage() {
       if (!referenceMonth || !referenceYear) {
         throw new Error("Período analisado não identificado para carregar a configuração.");
       }
-      const [subjectSummaryData, importedDiagnosisData] = await Promise.all([
+      const [groupData, subjectRuleData, recurrenceRuleData, slaData, healthData, settingsData, subjectSummaryData, importedDiagnosisData] = await Promise.all([
+        api.scoringGroups(),
+        api.scoringSubjectRules(),
+        api.recurrenceClassificationRules(),
+        api.slaPenaltyRules(),
+        api.healthRules(),
+        api.settings(),
         api.serviceOrderSubjectSummary({
           reference_month: referenceMonth,
           reference_year: referenceYear,
@@ -410,6 +418,13 @@ export default function GamificacaoPage() {
         }),
         api.importedDiagnoses(runId)
       ]);
+      setGroups(groupData);
+      setSubjectRules(subjectRuleData);
+      setRecurrenceRules(recurrenceRuleData);
+      setSlaRules(slaData);
+      setHealthRules(healthData);
+      const pointSetting = settingsData.find((setting) => setting.key === "point_value");
+      setPointValue(pointSetting?.value ?? String(summary?.point_value ?? ""));
       setConfigSubjectSummaries(subjectSummaryData);
       setImportedDiagnoses(importedDiagnosisData);
       setRulesSupportLoaded(true);
@@ -551,30 +566,21 @@ export default function GamificacaoPage() {
     resetLazyData();
     const summaryData = await api.summary(period);
     setSummary(summaryData);
+    setPointValue(String(summaryData.point_value ?? ""));
     setLoading(false);
 
-    Promise.all([
-      api.scoringGroups(),
-      api.scoringSubjectRules(),
-      api.recurrenceClassificationRules(),
-      api.slaPenaltyRules(),
-      api.healthRules(),
-      api.settings()
-    ])
-      .then(([groupData, subjectRuleData, recurrenceRuleData, slaData, healthData, settingsData]) => {
+    Promise.all([api.scoringGroups(), api.settings()])
+      .then(([groupData, settingsData]) => {
         setGroups(groupData);
-        setSubjectRules(subjectRuleData);
-        setRecurrenceRules(recurrenceRuleData);
-        setSlaRules(slaData);
-        setHealthRules(healthData);
-
         const pointSetting = settingsData.find((setting) => setting.key === "point_value");
-        setPointValue(pointSetting?.value ?? "");
+        setPointValue(pointSetting?.value ?? String(summaryData.point_value ?? ""));
       })
       .catch((err: Error) => setError(err.message));
   }, [analysisPeriod, currentUser, resetLazyData]);
 
   useEffect(() => {
+    if (authBootstrapRef.current) return;
+    authBootstrapRef.current = true;
     api.me()
       .then((user) => setCurrentUser(user))
       .catch(() => {
@@ -589,6 +595,8 @@ export default function GamificacaoPage() {
       setLoading(false);
       return;
     }
+    if (initialLoadRef.current) return;
+    initialLoadRef.current = true;
     setLoading(true);
     loadAll()
       .catch((err: Error) => setError(err.message))

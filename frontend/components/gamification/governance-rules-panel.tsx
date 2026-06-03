@@ -53,7 +53,7 @@ export function GovernanceRulesPanel({
   }
 
   return (
-    <section className="panel">
+    <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
       <div className="panel-header">
         <div>
           <h2 className="panel-title">Governança da Apuração</h2>
@@ -129,7 +129,7 @@ export function GovernanceRulesPanel({
             O sistema calcula a saúde por regional: % de O.S dentro do SLA e % de reincidências. A regra ativa que bater nesses limites define o multiplicador aplicado nos pontos líquidos do colaborador.
           </p>
         </div>
-        <div className="mb-3 grid gap-2 rounded-md border border-blue-100 bg-blue-50 p-3 text-xs text-slate-700 md:grid-cols-3">
+        <div className="mb-3 grid gap-2 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs text-slate-700 md:grid-cols-3">
           <div>
             <span className="font-semibold text-slate-950">SLA min.</span> e o percentual mínimo de O.S no prazo para a regional entrar nessa saúde.
           </div>
@@ -141,11 +141,11 @@ export function GovernanceRulesPanel({
           </div>
         </div>
         {!hasActiveHealthRule ? (
-          <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+          <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
             Nenhuma regra de saúde está ativa. Enquanto isso, o ranking usa multiplicador neutro 1.00x.
           </div>
         ) : null}
-        <div className="table-frame rounded-md border">
+        <div className="overflow-hidden rounded-2xl border border-slate-200">
           <Table>
             <TableHeader>
               <TableRow>

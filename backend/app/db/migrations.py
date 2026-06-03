@@ -3,6 +3,8 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
+from app.models import default_percentage_for_role
+
 
 def ensure_runtime_schema(engine: Engine) -> None:
     """Small compatibility migration for local Docker/SQLite databases.
@@ -203,6 +205,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(160) NOT NULL,
                 role_type VARCHAR(40) NOT NULL,
+                percentage FLOAT DEFAULT 0 NOT NULL,
                 multiplier FLOAT DEFAULT 1 NOT NULL,
                 role_profile_id INTEGER REFERENCES leadership_role_profiles(id),
                 use_custom_multiplier BOOLEAN DEFAULT FALSE NOT NULL,
@@ -219,6 +222,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                 id INTEGER PRIMARY KEY,
                 name VARCHAR(160) NOT NULL,
                 role_type VARCHAR(40) NOT NULL,
+                percentage FLOAT DEFAULT 0 NOT NULL,
                 multiplier FLOAT DEFAULT 1 NOT NULL,
                 role_profile_id INTEGER,
                 use_custom_multiplier BOOLEAN DEFAULT FALSE NOT NULL,
@@ -246,6 +250,19 @@ def ensure_runtime_schema(engine: Engine) -> None:
                     WHEN 'regional_manager' THEN 2
                     WHEN 'portfolio_manager' THEN 3
                     ELSE 1
+                END
+                """
+            )
+        if "percentage" not in leadership_profile_columns:
+            statements.append("ALTER TABLE leadership_profiles ADD COLUMN percentage FLOAT DEFAULT 0 NOT NULL")
+            statements.append(
+                """
+                UPDATE leadership_profiles
+                SET percentage = CASE role_type
+                    WHEN 'supervisor' THEN 10
+                    WHEN 'regional_manager' THEN 7.5
+                    WHEN 'portfolio_manager' THEN 5
+                    ELSE 0
                 END
                 """
             )
@@ -435,7 +452,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                     for row in connection.execute(text("SELECT id, scope_type FROM leadership_role_profiles")).fetchall()
                 }
                 rows = connection.execute(
-                    text("SELECT id, role_type, multiplier, role_profile_id FROM leadership_profiles")
+                    text("SELECT id, role_type, multiplier, percentage, role_profile_id FROM leadership_profiles")
                 ).fetchall()
                 default_multipliers = {
                     "supervisor": 1.5,
@@ -448,6 +465,9 @@ def ensure_runtime_schema(engine: Engine) -> None:
                     default_multiplier = default_multipliers.get(role_type, 1.0)
                     if row.role_profile_id is None and role_type in role_profiles:
                         updates["role_profile_id"] = role_profiles[role_type]
+                    expected_percentage = default_percentage_for_role(role_type)
+                    if abs(float(row.percentage or expected_percentage) - float(expected_percentage)) > 0.0001:
+                        updates["percentage"] = expected_percentage
                     if abs(float(row.multiplier or default_multiplier) - float(default_multiplier)) > 0.0001:
                         updates["use_custom_multiplier"] = True
                         updates["custom_multiplier"] = float(row.multiplier)

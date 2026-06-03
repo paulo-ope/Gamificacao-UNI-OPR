@@ -918,28 +918,6 @@ export function LogicConfigurationPanel({
             </Button>
           ))}
         </div>
-        <div className="border-t bg-slate-50 px-5 py-4">
-          <div className="grid gap-3 text-sm text-slate-700 lg:grid-cols-3">
-            <div className="rounded-md border bg-white p-3">
-              <div className="font-semibold text-slate-950">Ordem recomendada</div>
-              <p className="mt-1 text-xs leading-5 text-slate-600">
-                Comece por valor do ponto, depois tipos gerais, grupos, assuntos e diagnósticos.
-              </p>
-            </div>
-            <div className="rounded-md border bg-white p-3">
-              <div className="font-semibold text-slate-950">Configuração operacional</div>
-              <p className="mt-1 text-xs leading-5 text-slate-600">
-                Use o modo simples para manter o que impacta a apuração diária e o fechamento.
-              </p>
-            </div>
-            <div className="rounded-md border bg-white p-3">
-              <div className="font-semibold text-slate-950">Configuração técnica</div>
-              <p className="mt-1 text-xs leading-5 text-slate-600">
-                Use o modo avançado para reincidência, SLA, multiplicadores, backup e restauração.
-              </p>
-            </div>
-          </div>
-        </div>
       </section>
 
       <div className="grid gap-4">
@@ -959,7 +937,7 @@ export function LogicConfigurationPanel({
           ) : null}
 
           {configSection === "categories" ? (
-          <section className="panel">
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
             <div className="panel-header">
               <div>
                 <h3 className="panel-title">Tipos gerais da planilha</h3>
@@ -970,7 +948,7 @@ export function LogicConfigurationPanel({
             </div>
             <div className="grid gap-3 border-b bg-slate-50 p-5 md:grid-cols-3 xl:grid-cols-6">
               {typeRows.map((row) => (
-                <div key={row.os_type} className="rounded-md border bg-white p-3">
+                <div key={row.os_type} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                   <div className="text-sm font-semibold text-slate-950">{row.os_type}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge className="border-slate-200 bg-slate-50 text-slate-700">{formatInteger(row.subjects)} assunto(s)</Badge>
@@ -1092,7 +1070,7 @@ export function LogicConfigurationPanel({
                               const stats = periodRuleStats(rule);
 
                               return (
-                                <div key={rule.id} className="grid gap-2 rounded-lg border bg-white p-3 xl:grid-cols-[minmax(260px,1.3fr)_minmax(220px,0.8fr)_150px_150px] xl:items-center">
+                                <div key={rule.id} className="grid gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] xl:grid-cols-[minmax(260px,1.3fr)_minmax(220px,0.8fr)_150px_150px] xl:items-center">
                                   <div className="min-w-0">
                                     <div className="truncate text-sm font-semibold text-slate-950" title={rule.os_subject}>
                                       {rule.os_subject}
@@ -1123,7 +1101,7 @@ export function LogicConfigurationPanel({
           </section>
           ) : null}
           {configSection === "groups" ? (
-          <section className="panel">
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
             <div className="panel-header">
               <div>
                 <h3 className="panel-title">1. Grupos de Pontuação</h3>
@@ -1151,6 +1129,7 @@ export function LogicConfigurationPanel({
                 Criar grupo
               </Button>
             </div>
+            <div className="overflow-hidden rounded-b-[24px] border-t border-slate-200">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1241,11 +1220,12 @@ export function LogicConfigurationPanel({
                 ))}
               </TableBody>
             </Table>
+            </div>
           </section>
           ) : null}
 
           {configSection === "subjects" ? (
-          <section className="panel">
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
             <div className="panel-header">
               <div>
                 <h3 className="panel-title">2. Assuntos</h3>
@@ -1294,6 +1274,7 @@ export function LogicConfigurationPanel({
               </div>
               <div className="ml-auto text-xs text-slate-500">{formatInteger(filteredSubjectRules.length)} assunto(s) no filtro</div>
             </div>
+            <div className="overflow-hidden rounded-b-[24px] border-t border-slate-200">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1440,11 +1421,12 @@ export function LogicConfigurationPanel({
                 })}
               </TableBody>
             </Table>
+            </div>
           </section>
           ) : null}
 
           {configSection === "diagnoses" ? (
-          <section className="panel">
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
             <div className="panel-header">
               <div>
                 <h3 className="panel-title">3. Diagnósticos</h3>
@@ -1469,6 +1451,7 @@ export function LogicConfigurationPanel({
               ))}
               <div className="ml-auto text-xs text-slate-500">{formatInteger(diagnosisRows.length)} diagnóstico(s) no filtro</div>
             </div>
+            <div className="overflow-hidden rounded-b-[24px] border-t border-slate-200">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1538,11 +1521,12 @@ export function LogicConfigurationPanel({
                 })}
               </TableBody>
             </Table>
+            </div>
           </section>
           ) : null}
 
           {configSection === "sla" ? (
-          <section className="panel">
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
             <div className="panel-header">
               <div>
                 <h3 className="panel-title">4. SLA</h3>
@@ -1554,6 +1538,7 @@ export function LogicConfigurationPanel({
                 </Button>
               ) : null}
             </div>
+            <div className="overflow-hidden rounded-b-[24px] border-t border-slate-200">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1606,6 +1591,7 @@ export function LogicConfigurationPanel({
                 ))}
               </TableBody>
             </Table>
+            </div>
             <div className="border-t p-5">
               <div className="mb-3">
                 <h4 className="text-sm font-semibold text-slate-950">Multiplicadores de saúde operacional</h4>
@@ -1613,7 +1599,7 @@ export function LogicConfigurationPanel({
                   Configuração técnica do modo avançado: combina SLA mínimo, reincidência máxima e multiplicador final da base.
                 </p>
               </div>
-              <div className="table-frame rounded-md border">
+              <div className="overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1683,7 +1669,7 @@ export function LogicConfigurationPanel({
           ) : null}
 
           {configSection === "recurrence" ? (
-          <section className="panel">
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
             <div className="panel-header">
               <div>
                 <h3 className="panel-title">5. Reincidência</h3>
@@ -1702,7 +1688,7 @@ export function LogicConfigurationPanel({
                 ["6", recurrenceActionLabel(localSettings.recurrence_action || "")],
                 ["7", "Auditoria mostra evidências"]
               ].map(([step, label]) => (
-                <div key={step} className="rounded-md border bg-white p-3">
+                <div key={step} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                   <div className="mb-2 flex h-6 w-6 items-center justify-center rounded-full bg-teal-700 text-xs font-semibold text-white">{step}</div>
                   <div className="text-xs font-semibold text-slate-700">{label}</div>
                 </div>
@@ -1710,7 +1696,7 @@ export function LogicConfigurationPanel({
             </div>
 
             <div className="grid gap-4 border-b p-5 xl:grid-cols-[1fr_1.4fr]">
-              <section className="rounded-lg border bg-white">
+              <section className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                 <div className="border-b bg-slate-50 px-4 py-3">
                   <h4 className="text-sm font-semibold text-slate-950">Configuração geral</h4>
                   <p className="text-xs text-slate-500">Define a janela, o vínculo do cliente e o comportamento padrão.</p>
@@ -1783,7 +1769,7 @@ export function LogicConfigurationPanel({
                 </div>
               </section>
 
-              <section className="rounded-lg border bg-white">
+              <section className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                 <div className="border-b bg-slate-50 px-4 py-3">
                   <h4 className="text-sm font-semibold text-slate-950">Nova regra</h4>
                   <p className="text-xs text-slate-500">Monte a regra por origem, retorno, diagnóstico e decisão final.</p>
@@ -1821,7 +1807,7 @@ export function LogicConfigurationPanel({
                     </div>
                   </div>
                   <div className="grid gap-3 lg:grid-cols-2">
-                    <div className="grid gap-3 rounded-md border bg-slate-50 p-3">
+                    <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">1. O.S original entra na regra</div>
                       <SearchableMultiSelect
                         label="Tipo original"
@@ -1838,7 +1824,7 @@ export function LogicConfigurationPanel({
                         onChange={(value) => setNewRecurrenceRule({ ...newRecurrenceRule, original_os_subject_pattern: value })}
                       />
                     </div>
-                    <div className="grid gap-3 rounded-md border bg-slate-50 p-3">
+                    <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">2. O.S retorno confirma reincidência</div>
                       <SearchableMultiSelect
                         label="Tipo retorno"
@@ -1870,7 +1856,7 @@ export function LogicConfigurationPanel({
                       />
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-white p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                     <label className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
@@ -1896,7 +1882,7 @@ export function LogicConfigurationPanel({
               </div>
 
               {filteredRecurrenceRules.map((rule) => (
-                <section key={rule.id} className="rounded-lg border bg-white">
+                <section key={rule.id} className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                   <div className="grid gap-3 border-b bg-slate-50 px-4 py-3 lg:grid-cols-[1fr_auto] lg:items-center">
                     <div className="min-w-0">
                       <Input
@@ -1975,7 +1961,7 @@ export function LogicConfigurationPanel({
                         onChange={(value) => setRecurrenceRules(replaceById(recurrenceRules, rule.id, { ignore_diagnosis_pattern: value }))}
                       />
                     </div>
-                    <div className="grid gap-3 rounded-md border bg-white p-3">
+                    <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                       <div className="grid gap-2">
                         <Label>Subtipo</Label>
                         <select
@@ -2049,8 +2035,8 @@ export function LogicConfigurationPanel({
           ) : null}
 
           {configSection === "advanced" && mode === "advanced" ? (
-            <section className="grid gap-4">
-              <section className="panel">
+          <section className="grid gap-4">
+              <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
                 <div className="panel-header">
                   <div>
                     <h3 className="panel-title">Avançado</h3>

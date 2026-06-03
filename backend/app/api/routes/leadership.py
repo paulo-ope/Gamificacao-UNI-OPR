@@ -6,7 +6,15 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import require_permission
 from app.db.session import get_db
-from app.models import CalculationRun, CollaboratorScore, LeadershipBonusResult, LeadershipProfile, LeadershipRoleProfile, User
+from app.models import (
+    CalculationRun,
+    CollaboratorScore,
+    LeadershipBonusResult,
+    LeadershipProfile,
+    LeadershipRoleProfile,
+    User,
+    default_percentage_for_role,
+)
 from app.schemas import (
     LeadershipBonusSummaryOut,
     LeadershipProfileCreate,
@@ -160,6 +168,7 @@ def create_leadership_profile(
     profile = LeadershipProfile(
         name=payload.name.strip(),
         role_type=role_type,
+        percentage=default_percentage_for_role(role_type),
         role_profile_id=role_profile.id if role_profile else None,
         use_custom_multiplier=bool(payload.use_custom_multiplier),
         custom_multiplier=float(payload.custom_multiplier) if payload.custom_multiplier is not None else None,
@@ -212,6 +221,7 @@ def update_leadership_profile(
     if payload.name is not None:
         profile.name = payload.name.strip()
     profile.role_type = role_type
+    profile.percentage = default_percentage_for_role(role_type)
     if payload.multiplier is not None:
         profile.multiplier = float(payload.multiplier)
     if payload.use_custom_multiplier is not None:

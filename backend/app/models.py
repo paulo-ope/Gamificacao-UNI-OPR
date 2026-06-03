@@ -12,6 +12,21 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+LEADERSHIP_PERCENTAGE_BY_ROLE: dict[str, float] = {
+    "supervisor": 10.0,
+    "regional_manager": 7.5,
+    "portfolio_manager": 5.0,
+}
+
+
+def default_percentage_for_role(role_type: str | None) -> float:
+    return float(LEADERSHIP_PERCENTAGE_BY_ROLE.get((role_type or "").strip(), 0.0))
+
+
+def default_percentage_for_role_context(context) -> float:
+    return default_percentage_for_role(context.get_current_parameters().get("role_type"))
+
+
 class Collaborator(Base):
     __tablename__ = "collaborators"
 
@@ -266,6 +281,7 @@ class LeadershipProfile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     role_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    percentage: Mapped[float] = mapped_column(Float, default=default_percentage_for_role_context, nullable=False)
     multiplier: Mapped[float] = mapped_column(Float, default=1, nullable=False)
     role_profile_id: Mapped[int | None] = mapped_column(ForeignKey("leadership_role_profiles.id"), nullable=True, index=True)
     use_custom_multiplier: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
