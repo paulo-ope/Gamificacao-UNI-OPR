@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 224 30% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 30% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 30% 12%;
+    --primary: 174 72% 30%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 214 24% 92%;
+    --secondary-foreground: 224 30% 16%;
+    --muted: 215 22% 94%;
+    --muted-foreground: 215 16% 40%;
+    --accent: 38 91% 56%;
+    --accent-foreground: 224 30% 13%;
+    --destructive: 0 74% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 22% 84%;
+    --input: 214 22% 84%;
+    --ring: 174 72% 30%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    letter-spacing: 0;
+  }
+
+  html,
+  body {
+    height: 100%;
+    overflow-x: hidden;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply overflow-hidden rounded-lg border bg-white shadow-sm;
+  }
+
+  .panel-header {
+    @apply flex min-w-0 flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5;
+  }
+
+  .panel-title {
+    @apply text-base font-semibold text-slate-950;
+  }
+
+  .panel-subtitle {
+    @apply text-sm text-slate-500;
+  }
+
+  .table-frame {
+    @apply w-full overflow-x-auto;
+  }
+
+  .erp-control {
+    @apply h-10 rounded-md border border-input bg-white px-3 text-sm;
+  }
+
+  .audit-table-frame {
+    @apply max-h-full min-h-0 overflow-auto bg-white;
+  }
+
+  .audit-table {
+    @apply w-full table-fixed border-collapse text-xs;
+  }
+
+  .audit-table thead th {
+    @apply pointer-events-none sticky top-0 z-10 border-b bg-slate-50 px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+
+  .audit-table tbody td {
+    @apply border-b px-2 py-1.5 align-middle leading-snug;
+  }
+
+  .audit-table tbody tr {
+    @apply hover:bg-teal-50/40;
+  }
+}

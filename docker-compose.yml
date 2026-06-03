@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: opr-gamification-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-opr_gamification}
+      POSTGRES_USER: ${POSTGRES_USER:-opr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opr}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opr} -d ${POSTGRES_DB:-opr_gamification}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: opr-gamification-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opr:opr@db:5432/opr_gamification}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      AUTO_SEED: ${AUTO_SEED:-true}
+      DEMO_SEED: ${DEMO_SEED:-false}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        INTERNAL_API_URL: ${INTERNAL_API_URL:-http://backend:8000}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api}
+    container_name: opr-gamification-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api}
+      INTERNAL_API_URL: ${INTERNAL_API_URL:-http://backend:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
