@@ -1,16 +1,19 @@
 ﻿"use client";
 
-import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleDollarSign, ClipboardList, Download, Loader2, LockKeyhole, Mail, RefreshCw, Search, Settings2, Trophy, UsersRound } from "lucide-react";
+import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleDollarSign, ClipboardList, Download, HelpCircle, Loader2, LockKeyhole, Mail, MapPin, MinusCircle, RefreshCw, Search, Send, Settings2, ShieldAlert, Trophy, UsersRound, Wallet, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuditPanel } from "@/components/gamification/audit-panel";
+import { AuditTrailPanel } from "@/components/gamification/audit-trail-panel";
 import { ClosureHistoryPanel } from "@/components/gamification/closure-history-panel";
 import { CollaboratorRegistryPanel } from "@/components/gamification/collaborator-registry-panel";
 import { CollaboratorOrdersSheet } from "@/components/gamification/collaborator-orders-sheet";
+import { AppDrawer } from "@/components/gamification/config-ui";
 import { DashboardCharts } from "@/components/gamification/dashboard-charts";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { LogicConfigurationPanel } from "@/components/gamification/logic-configuration-panel";
 import { LeadershipBonusPanel } from "@/components/gamification/leadership-bonus-panel";
+import { PointBalancePanel } from "@/components/gamification/point-balance-panel";
 import { RankingTable } from "@/components/gamification/ranking-table";
 import { UnmappedDiagnosesPanel } from "@/components/gamification/unmapped-diagnoses-panel";
 import { UnmappedSubjectsPanel } from "@/components/gamification/unmapped-subjects-panel";
@@ -23,6 +26,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, setAuthToken } from "@/lib/api";
+import { useConfirm } from "@/hooks/use-confirm";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type {
   CalculationRunHistory,
@@ -30,17 +34,19 @@ import type {
   CollaboratorRegistry,
   CollaboratorRegistryItem,
   CollaboratorScore,
+  DashboardBootstrap,
+  DashboardFilteredBreakdown,
   DashboardSummary,
-  FinancialBreakdownItem,
   HealthRule,
   ImportedDiagnosis,
+  LeadershipAverageAuditCollaborator,
   LeadershipProfile,
+  LeadershipBonusResult,
   LeadershipRoleProfile,
   PenaltyDistributionItem,
   RecurrenceClassificationRule,
   ScoringGroup,
   ScoringSubjectRule,
-  ServiceOrder,
   ServiceOrderSubjectSummary,
   SlaPenaltyRule,
   UnmappedSubject
@@ -56,6 +62,7 @@ const TAB_HELP: Record<string, string> = {
   pending: "Lista itens que precisam de revisão, correção ou validação antes do fechamento.",
   config: "Reúne parâmetros operacionais, regras e definições que influenciam os cálculos e a exibição dos dados.",
   audit: "Permite consultar registros detalhados, validar regras aplicadas e conferir inconsistências.",
+  balance: "Lista débitos de garantia detectados após o pagamento do período original, pendentes de abatimento no próximo fechamento do colaborador.",
   history: "Mostra o acompanhamento de períodos anteriores e a evolução dos resultados.",
   import: "Permite definir ou consultar o mês de referência usado nas análises da competência."
 };
@@ -85,11 +92,62 @@ function formatPoints(value: number) {
   return `${formatNumber(value)} pts`;
 }
 
+function calculationStatusMeta(status: string | undefined) {
+  switch (status) {
+    case "review":
+      return {
+        label: "Em conferência",
+        className: "w-fit border-amber-200 bg-white text-amber-700"
+      };
+    case "approved":
+      return {
+        label: "Aprovado",
+        className: "w-fit border-sky-200 bg-white text-sky-700"
+      };
+    case "paid":
+      return {
+        label: "Pago",
+        className: "w-fit border-emerald-200 bg-white text-emerald-700"
+      };
+    case "cancelled":
+      return {
+        label: "Cancelado",
+        className: "w-fit border-rose-200 bg-white text-rose-700"
+      };
+    case "draft":
+    default:
+      return {
+        label: "Rascunho",
+        className: "w-fit border-slate-200 bg-white text-slate-700"
+      };
+  }
+}
+
 function leadershipRoleLabel(value: string) {
   if (value === "supervisor") return "Supervisor";
   if (value === "regional_manager") return "Gerente da unidade";
   if (value === "portfolio_manager") return "Gerente de pasta";
   return value;
+}
+
+function leadershipAverageSourceLabel(value: string | undefined) {
+  if (value === "collaborators_and_leaders") return "Colaboradores + líderes";
+  return "Colaboradores";
+}
+
+function leadershipAuditSourceLabel(value: string | undefined) {
+  if (value === "leader") return "Líder";
+  return "Colaborador";
+}
+
+function pluralizeFilial(count: number, suffix: "" | " selecionada" | " coberta" = "") {
+  const suffixPlural = suffix ? `${suffix}s` : "";
+  return count === 1 ? `filial${suffix}` : `filiais${suffixPlural}`;
+}
+
+function summarizeLabels(items: string[], visibleCount = 2) {
+  if (items.length <= visibleCount) return { visible: items, remaining: 0 };
+  return { visible: items.slice(0, visibleCount), remaining: items.length - visibleCount };
 }
 
 function parseOptionalNumber(value: string) {
@@ -146,6 +204,7 @@ function FinancialTable({
             className="h-8 w-8 rounded-xl p-0 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
             onClick={onToggle}
             title={collapsed ? "Expandir todos" : "Recolher todos"}
+            aria-label={collapsed ? "Expandir todos" : "Recolher todos"}
           >
             {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           </Button>
@@ -206,109 +265,20 @@ function FinancialTable({
   );
 }
 
-function buildFinancialBreakdownsFromOrders(
-  orders: Array<{
-    regional: string;
-    group_name: string | null;
-    os_type: string;
-    os_subject: string;
-    net_points: number;
-    point_value: number;
-    is_unscored: boolean;
-  }>,
-  health: Array<{ regional: string; multiplier: number }>,
-  pointValue: number,
-  estimatedUnmappedPoints: number
-) {
-  const healthMultiplier = new Map(health.map((item) => [normalizeRegional(item.regional), item.multiplier || 1]));
-  const regionalTotals = new Map<string, FinancialBreakdownItem>();
-  const groupTotals = new Map<string, FinancialBreakdownItem>();
-  const unmappedTotals = new Map<string, FinancialBreakdownItem>();
-
-  orders.forEach((order) => {
-    const regional = normalizeRegional(order.regional);
-    const multiplier = healthMultiplier.get(regional) ?? 1;
-    const estimated = Number((order.net_points * multiplier * (order.point_value || pointValue)).toFixed(2));
-
-    const regionalItem = regionalTotals.get(regional) ?? { regional, orders: 0, estimated_payment: 0 };
-    regionalItem.orders += 1;
-    regionalItem.estimated_payment = Number((regionalItem.estimated_payment + estimated).toFixed(2));
-    regionalTotals.set(regional, regionalItem);
-
-    const group = order.group_name || "Sem regra";
-    const groupItem = groupTotals.get(group) ?? { group, orders: 0, net_points: 0, estimated_payment: 0 };
-    groupItem.orders += 1;
-    groupItem.net_points = Number(((groupItem.net_points ?? 0) + order.net_points).toFixed(2));
-    groupItem.estimated_payment = Number((groupItem.estimated_payment + estimated).toFixed(2));
-    groupTotals.set(group, groupItem);
-
-    if (order.is_unscored) {
-      const subjectKey = `${order.os_type} | ${order.os_subject}`;
-      const subjectItem = unmappedTotals.get(subjectKey) ?? {
-        os_type: order.os_type,
-        os_subject: order.os_subject,
-        orders: 0,
-        estimated_payment: 0
-      };
-      subjectItem.orders += 1;
-      subjectItem.estimated_payment = Number((subjectItem.estimated_payment + estimatedUnmappedPoints * pointValue).toFixed(2));
-      unmappedTotals.set(subjectKey, subjectItem);
-    }
-  });
-
-  const byInvestment = (a: FinancialBreakdownItem, b: FinancialBreakdownItem) => b.estimated_payment - a.estimated_payment;
-  const byOrders = (a: FinancialBreakdownItem, b: FinancialBreakdownItem) => b.orders - a.orders;
-
-  return {
-    cost_by_regional: Array.from(regionalTotals.values()).sort(byInvestment),
-    cost_by_group: Array.from(groupTotals.values()).sort(byInvestment),
-    top_unmapped_subjects: Array.from(unmappedTotals.values()).sort(byOrders)
-  };
-}
-
-function buildPenaltyDistributionFromOrders(
-  orders: Array<{
-    diagnosis_penalty_points: number;
-    sla_penalty_points: number;
-    recurrence_penalty_points: number;
-    additional_penalty_points: number;
-  }>
-): PenaltyDistributionItem[] {
-  const buckets = new Map<string, PenaltyDistributionItem>();
-  const add = (name: string, value: number) => {
-    const annulled = Math.abs(value);
-    if (annulled <= 0) return;
-    const current = buckets.get(name) ?? { name, value: 0, service_orders_count: 0 };
-    buckets.set(name, {
-      ...current,
-      value: current.value + annulled,
-      service_orders_count: current.service_orders_count + 1
-    });
-  };
-
-  orders.forEach((order) => {
-    add("Diagnóstico", order.diagnosis_penalty_points);
-    add("SLA fora do prazo", order.sla_penalty_points);
-    add("Reincidências", order.recurrence_penalty_points);
-    add("Outros ajustes", order.additional_penalty_points);
-  });
-
-  return Array.from(buckets.values());
-}
-
 export default function GamificacaoPage() {
+  const { confirm, ConfirmDialog } = useConfirm();
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [bootstrap, setBootstrap] = useState<DashboardBootstrap | null>(null);
   const [calculationRuns, setCalculationRuns] = useState<CalculationRunHistory[]>([]);
   const [groups, setGroups] = useState<ScoringGroup[]>([]);
   const [subjectRules, setSubjectRules] = useState<ScoringSubjectRule[]>([]);
   const [unmappedSubjects, setUnmappedSubjects] = useState<UnmappedSubject[]>([]);
   const [importedDiagnoses, setImportedDiagnoses] = useState<ImportedDiagnosis[]>([]);
   const [unmappedDiagnoses, setUnmappedDiagnoses] = useState<ImportedDiagnosis[]>([]);
-  const [serviceOrders, setServiceOrders] = useState<ServiceOrder[]>([]);
   const [configSubjectSummaries, setConfigSubjectSummaries] = useState<ServiceOrderSubjectSummary[]>([]);
   const [collaboratorRegistry, setCollaboratorRegistry] = useState<CollaboratorRegistry>({ registered: [], unregistered: [] });
   const [leadershipProfiles, setLeadershipProfiles] = useState<LeadershipProfile[]>([]);
@@ -319,32 +289,23 @@ export default function GamificacaoPage() {
   const [slaRules, setSlaRules] = useState<SlaPenaltyRule[]>([]);
   const [pointValue, setPointValue] = useState("");
   const [loading, setLoading] = useState(true);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedScore, setSelectedScore] = useState<CollaboratorScore | null>(null);
+  const [selectedLeadershipResult, setSelectedLeadershipResult] = useState<LeadershipBonusResult | null>(null);
   const [ordersOpen, setOrdersOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("closure");
   const [configTab, setConfigTab] = useState("rules");
+  const [auditTab, setAuditTab] = useState("scoring");
   const [rankingTab, setRankingTab] = useState("collaborators");
   const [analysisPeriod, setAnalysisPeriod] = useState<AnalysisPeriod>({});
   const [selectedRegionals, setSelectedRegionals] = useState<string[]>([]);
   const [rankingSearch, setRankingSearch] = useState("");
   const [chartPenalties, setChartPenalties] = useState<PenaltyDistributionItem[]>([]);
   const [financialCollapsed, setFinancialCollapsed] = useState(true);
-  const [filteredAuditOrders, setFilteredAuditOrders] = useState<Array<{
-    regional: string;
-    group_name: string | null;
-    os_type: string;
-    os_subject: string;
-    net_points: number;
-    point_value: number;
-    is_unscored: boolean;
-    diagnosis_penalty_points: number;
-    sla_penalty_points: number;
-    recurrence_penalty_points: number;
-    additional_penalty_points: number;
-  }> | null>(null);
+  const [filteredBreakdowns, setFilteredBreakdowns] = useState<DashboardFilteredBreakdown | null>(null);
   const [serviceOrdersLoaded, setServiceOrdersLoaded] = useState(false);
   const [pendingDataLoaded, setPendingDataLoaded] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -354,6 +315,12 @@ export default function GamificacaoPage() {
   const [rulesSupportLoaded, setRulesSupportLoaded] = useState(false);
   const authBootstrapRef = useRef(false);
   const initialLoadRef = useRef(false);
+  const serviceOrdersLoadKeyRef = useRef<string | null>(null);
+  const pendingLoadKeyRef = useRef<string | null>(null);
+  const historyLoadInFlightRef = useRef(false);
+  const rulesSupportLoadKeyRef = useRef<string | null>(null);
+  const loadAllKeyRef = useRef<string | null>(null);
+  const calculationInFlightRef = useRef(false);
   const [tabLoading, setTabLoading] = useState<Record<string, boolean>>({});
 
   const can = useCallback((permission: string) => Boolean(currentUser?.permissions.some((item) => item === permission)), [currentUser]);
@@ -364,7 +331,6 @@ export default function GamificacaoPage() {
 
   const resetLazyData = useCallback(() => {
     setCalculationRuns([]);
-    setServiceOrders([]);
     setCollaboratorRegistry({ registered: [], unregistered: [] });
     setLeadershipProfiles([]);
     setLeadershipRoleProfiles([]);
@@ -386,13 +352,36 @@ export default function GamificacaoPage() {
     if (serviceOrdersLoaded) return;
     setTabBusy("serviceOrders", true);
     try {
-      const serviceOrderData = await api.serviceOrders();
-      setServiceOrders(serviceOrderData);
+      const referenceMonth = summary?.run?.reference_month ?? analysisPeriod.reference_month;
+      const referenceYear = summary?.run?.reference_year ?? analysisPeriod.reference_year;
+      const referenceRegional = summary?.run?.regional ?? analysisPeriod.regional ?? undefined;
+      if (!referenceMonth || !referenceYear) {
+        throw new Error("Período analisado não identificado para carregar a auditoria.");
+      }
+      const loadKey = `${referenceMonth}:${referenceYear}:${referenceRegional ?? ""}`;
+      if (serviceOrdersLoadKeyRef.current === loadKey) return;
+      serviceOrdersLoadKeyRef.current = loadKey;
+      const subjectSummaryData = await api.serviceOrderSubjectSummary({
+        reference_month: referenceMonth,
+        reference_year: referenceYear,
+        regional: referenceRegional
+      });
+      setConfigSubjectSummaries(subjectSummaryData);
       setServiceOrdersLoaded(true);
     } finally {
+      serviceOrdersLoadKeyRef.current = null;
       setTabBusy("serviceOrders", false);
     }
-  }, [serviceOrdersLoaded, setTabBusy]);
+  }, [
+    analysisPeriod.reference_month,
+    analysisPeriod.reference_year,
+    analysisPeriod.regional,
+    serviceOrdersLoaded,
+    setTabBusy,
+    summary?.run?.reference_month,
+    summary?.run?.reference_year,
+    summary?.run?.regional
+  ]);
 
   const loadRulesConfigSupport = useCallback(async (runId?: number) => {
     if (rulesSupportLoaded) return;
@@ -404,6 +393,9 @@ export default function GamificacaoPage() {
       if (!referenceMonth || !referenceYear) {
         throw new Error("Período analisado não identificado para carregar a configuração.");
       }
+      const loadKey = `${runId ?? ""}:${referenceMonth}:${referenceYear}:${referenceRegional ?? ""}`;
+      if (rulesSupportLoadKeyRef.current === loadKey) return;
+      rulesSupportLoadKeyRef.current = loadKey;
       const [groupData, subjectRuleData, recurrenceRuleData, slaData, healthData, settingsData, subjectSummaryData, importedDiagnosisData] = await Promise.all([
         api.scoringGroups(),
         api.scoringSubjectRules(),
@@ -429,6 +421,7 @@ export default function GamificacaoPage() {
       setImportedDiagnoses(importedDiagnosisData);
       setRulesSupportLoaded(true);
     } finally {
+      rulesSupportLoadKeyRef.current = null;
       setTabBusy("configRules", false);
     }
   }, [
@@ -444,6 +437,9 @@ export default function GamificacaoPage() {
 
   const loadPendingData = useCallback(async (runId?: number) => {
     if (pendingDataLoaded) return;
+    const loadKey = String(runId ?? "latest");
+    if (pendingLoadKeyRef.current === loadKey) return;
+    pendingLoadKeyRef.current = loadKey;
     setTabBusy("pending", true);
     try {
       const [unmappedData, unmappedDiagnosisData] = await Promise.all([
@@ -454,18 +450,22 @@ export default function GamificacaoPage() {
       setUnmappedDiagnoses(unmappedDiagnosisData);
       setPendingDataLoaded(true);
     } finally {
+      pendingLoadKeyRef.current = null;
       setTabBusy("pending", false);
     }
   }, [pendingDataLoaded, setTabBusy]);
 
   const loadHistoryData = useCallback(async () => {
     if (historyLoaded) return;
+    if (historyLoadInFlightRef.current) return;
+    historyLoadInFlightRef.current = true;
     setTabBusy("history", true);
     try {
       const calculationRunData = await api.calculationRuns();
       setCalculationRuns(calculationRunData);
       setHistoryLoaded(true);
     } finally {
+      historyLoadInFlightRef.current = false;
       setTabBusy("history", false);
     }
   }, [historyLoaded, setTabBusy]);
@@ -560,32 +560,54 @@ export default function GamificacaoPage() {
     summary?.run?.regional
   ]);
 
-  const loadAll = useCallback(async (period: AnalysisPeriod = analysisPeriod) => {
+  const loadAll = useCallback(async (period: AnalysisPeriod = analysisPeriod, options: { refreshRuleBasics?: boolean } = {}) => {
     if (!currentUser) return;
+    const refreshRuleBasics = options.refreshRuleBasics ?? true;
+    const loadKey = `${period.reference_month ?? ""}:${period.reference_year ?? ""}:${period.regional ?? ""}:${refreshRuleBasics}`;
+    if (loadAllKeyRef.current === loadKey) return;
+    loadAllKeyRef.current = loadKey;
     setError(null);
+    setSummaryLoading(true);
     resetLazyData();
-    const summaryData = await api.summary(period);
-    setSummary(summaryData);
-    setPointValue(String(summaryData.point_value ?? ""));
-    setLoading(false);
-
-    Promise.all([api.scoringGroups(), api.settings()])
-      .then(([groupData, settingsData]) => {
-        setGroups(groupData);
-        const pointSetting = settingsData.find((setting) => setting.key === "point_value");
-        setPointValue(pointSetting?.value ?? String(summaryData.point_value ?? ""));
-      })
-      .catch((err: Error) => setError(err.message));
+    try {
+      const summaryData = await api.summary(period);
+      setSummary(summaryData);
+      setPointValue(String(summaryData.point_value ?? ""));
+      if (refreshRuleBasics) {
+        Promise.all([api.scoringGroups(), api.settings()])
+          .then(([groupData, settingsData]) => {
+            setGroups(groupData);
+            const pointSetting = settingsData.find((setting) => setting.key === "point_value");
+            setPointValue(pointSetting?.value ?? String(summaryData.point_value ?? ""));
+          })
+          .catch((err: Error) => setError(err.message));
+      }
+    } finally {
+      loadAllKeyRef.current = null;
+      setSummaryLoading(false);
+      setLoading(false);
+    }
   }, [analysisPeriod, currentUser, resetLazyData]);
 
   useEffect(() => {
     if (authBootstrapRef.current) return;
     authBootstrapRef.current = true;
-    api.me()
-      .then((user) => setCurrentUser(user))
+    Promise.all([api.me(), api.dashboardBootstrap().catch(() => null)])
+      .then(([user, bootstrapData]) => {
+        setCurrentUser(user);
+        setBootstrap(bootstrapData);
+        if (bootstrapData?.reference_month && bootstrapData?.reference_year) {
+          setAnalysisPeriod({
+            reference_month: bootstrapData.reference_month,
+            reference_year: bootstrapData.reference_year,
+            regional: bootstrapData.regional ?? null
+          });
+        }
+      })
       .catch(() => {
         setAuthToken(null);
         setCurrentUser(null);
+        setBootstrap(null);
       })
       .finally(() => setAuthChecked(true));
   }, []);
@@ -604,13 +626,35 @@ export default function GamificacaoPage() {
   }, [authChecked, currentUser, loadAll]);
 
   useEffect(() => {
-    if (summary && loading) {
+    if ((summary || bootstrap) && loading) {
       setLoading(false);
     }
-  }, [loading, summary]);
+  }, [bootstrap, loading, summary]);
 
   useEffect(() => {
-    if (!currentUser || !summary) return;
+    if (!currentUser) return;
+
+    if (activeTab === "history") {
+      void loadHistoryData().catch((err: Error) => setError(err.message));
+      return;
+    }
+
+    if (activeTab === "config") {
+      if (configTab === "collaborators") {
+        void loadCollaboratorRegistryData().catch((err: Error) => setError(err.message));
+        return;
+      }
+      if (configTab === "leadership") {
+        void loadLeadershipProfilesData().catch((err: Error) => setError(err.message));
+        return;
+      }
+      if (configTab === "users") {
+        void loadUsersData().catch((err: Error) => setError(err.message));
+        return;
+      }
+    }
+
+    if (!summary) return;
 
     if (activeTab === "ranking" || activeTab === "audit") {
       void loadServiceOrdersSupport().catch((err: Error) => setError(err.message));
@@ -622,26 +666,10 @@ export default function GamificacaoPage() {
       return;
     }
 
-    if (activeTab === "history") {
-      void loadHistoryData().catch((err: Error) => setError(err.message));
-      return;
-    }
-
     if (activeTab === "config") {
       if (configTab === "rules") {
         void loadRulesConfigSupport(summary.run?.id).catch((err: Error) => setError(err.message));
         return;
-      }
-      if (configTab === "collaborators") {
-        void loadCollaboratorRegistryData().catch((err: Error) => setError(err.message));
-        return;
-      }
-      if (configTab === "leadership") {
-        void loadLeadershipProfilesData().catch((err: Error) => setError(err.message));
-        return;
-      }
-      if (configTab === "users") {
-        void loadUsersData().catch((err: Error) => setError(err.message));
       }
     }
   }, [
@@ -663,7 +691,8 @@ export default function GamificacaoPage() {
       return {
         ready: false,
         pendingCount: 0,
-        pendingItems: []
+        pendingItems: [],
+        isClosed: false
       };
     }
 
@@ -672,27 +701,33 @@ export default function GamificacaoPage() {
         label: "O.S sem regra de pontuação",
         value: summary.cards.unscored_service_orders,
         tab: "pending",
+        icon: HelpCircle,
         help: "Assuntos importados que ainda não estão vinculados a um grupo."
       },
       {
         label: "Diagnósticos sem regra",
         value: summary.cards.diagnosis_unmapped_service_orders,
         tab: "pending",
+        icon: ShieldAlert,
         help: "Diagnósticos encontrados sem regra de liberação ou anulação."
       },
       {
         label: "Colaboradores pendentes de cadastro",
         value: summary.leadership_bonus?.pending_collaborators.length ?? 0,
-        tab: "settings" as const,
+        tab: "config" as const,
+        configSubTab: "collaborators" as const,
+        icon: UsersRound,
         help: "Colaboradores com produção no período que ainda não estão formalmente cadastrados."
       }
     ];
     const pendingCount = pendingItems.reduce((total, item) => total + item.value, 0);
+    const isClosed = summary.run?.status === "paid" || summary.run?.status === "cancelled";
 
     return {
       ready: pendingCount === 0,
       pendingCount,
-      pendingItems
+      pendingItems,
+      isClosed
     };
   }, [summary]);
 
@@ -706,6 +741,14 @@ export default function GamificacaoPage() {
     };
   }, [summary]);
 
+  const closureBalanceImpact = useMemo(() => {
+    const affected = (summary?.ranking ?? []).filter((score) => (score.balance_adjustment_points ?? 0) < 0);
+    return {
+      collaboratorCount: affected.length,
+      points: affected.reduce((total, score) => total + (score.balance_adjustment_points ?? 0), 0)
+    };
+  }, [summary]);
+
   const regionalOptions = useMemo(() => {
     if (!summary) return [];
     return Array.from(new Set(summary.ranking.map((score) => normalizeRegional(score.regional)).filter(Boolean))).sort((a, b) =>
@@ -716,7 +759,8 @@ export default function GamificacaoPage() {
   const collaboratorRegionalOptions = useMemo(() => {
     const values = [
       ...regionalOptions,
-      ...serviceOrders.map((order) => order.regional),
+      ...collaboratorRegistry.registered.map((item) => item.regional),
+      ...collaboratorRegistry.unregistered.map((item) => item.regional),
     ];
     return Array.from(
       new Set(
@@ -727,20 +771,7 @@ export default function GamificacaoPage() {
     ).sort((a, b) =>
       a.localeCompare(b, "pt-BR")
     );
-  }, [regionalOptions, serviceOrders]);
-
-  const periodServiceOrders = useMemo(() => {
-    const month = summary?.run?.reference_month;
-    const year = summary?.run?.reference_year;
-    if (!month || !year) return serviceOrders;
-    return serviceOrders.filter((order) => {
-      const dateValue = order.closed_at ?? order.opened_at;
-      if (!dateValue) return false;
-      const orderDate = new Date(dateValue);
-      if (Number.isNaN(orderDate.getTime())) return false;
-      return orderDate.getMonth() + 1 === month && orderDate.getFullYear() === year;
-    });
-  }, [serviceOrders, summary?.run?.reference_month, summary?.run?.reference_year]);
+  }, [collaboratorRegistry.registered, collaboratorRegistry.unregistered, regionalOptions]);
 
   const auditCollaboratorOptions = useMemo(() => {
     if (!summary) return [];
@@ -754,10 +785,10 @@ export default function GamificacaoPage() {
   }, [summary]);
 
   const auditSubjectOptions = useMemo(() => {
-    return Array.from(new Set(periodServiceOrders.map((order) => order.os_subject).filter(Boolean))).sort((a, b) =>
+    return Array.from(new Set(configSubjectSummaries.map((order) => order.os_subject).filter(Boolean))).sort((a, b) =>
       a.localeCompare(b, "pt-BR")
     );
-  }, [periodServiceOrders]);
+  }, [configSubjectSummaries]);
 
   const filteredRanking = useMemo(() => {
     if (!summary) return [];
@@ -771,16 +802,99 @@ export default function GamificacaoPage() {
 
   const filteredLeadershipResults = useMemo(() => {
     if (!summary) return [];
-    return (summary.leadership_bonus?.results ?? []).filter((item) => {
-      return selectedRegionals.length === 0 || item.regionals.some((regional) => selectedRegionals.includes(normalizeRegional(regional)));
-    });
-  }, [selectedRegionals, summary]);
+    const search = rankingSearch.trim().toLowerCase();
+    return (summary.leadership_bonus?.results ?? [])
+      .filter((item) => {
+        const matchesRegional =
+          selectedRegionals.length === 0 || item.regionals.some((regional) => selectedRegionals.includes(normalizeRegional(regional)));
+        const matchesSearch =
+          !search ||
+          item.name.toLowerCase().includes(search) ||
+          leadershipRoleLabel(item.role_type).toLowerCase().includes(search) ||
+          (item.role_profile_name ?? "").toLowerCase().includes(search);
+        return matchesRegional && matchesSearch;
+      })
+      .sort((a, b) => b.bonus_amount - a.bonus_amount || b.average_final_points - a.average_final_points || a.name.localeCompare(b.name, "pt-BR"));
+  }, [rankingSearch, selectedRegionals, summary]);
 
   const leadershipCoveredRegionals = useMemo(() => {
     return Array.from(
       new Set(filteredLeadershipResults.flatMap((item) => item.regionals.map((regional) => normalizeRegional(regional)).filter(Boolean)))
     ).length;
   }, [filteredLeadershipResults]);
+
+  const leadershipScopeTotals = useMemo(
+    () => ({
+      leaders: filteredLeadershipResults.length,
+      scopedCollaborators: filteredLeadershipResults.reduce((total, item) => total + item.scoped_collaborators, 0),
+      averageMultiplier: filteredLeadershipResults.length
+        ? filteredLeadershipResults.reduce((total, item) => total + item.multiplier, 0) / filteredLeadershipResults.length
+        : 0,
+      baseAmount: filteredLeadershipResults.reduce((total, item) => total + item.base_amount, 0),
+      bonusAmount: filteredLeadershipResults.reduce((total, item) => total + item.bonus_amount, 0)
+    }),
+    [filteredLeadershipResults]
+  );
+
+  const leadershipAudit = useMemo(() => {
+    if (!summary || !selectedLeadershipResult) {
+      return {
+        collaborators: [] as LeadershipAverageAuditCollaborator[],
+        totalFinalPoints: 0,
+        averageFinalPoints: 0,
+        differenceFromStoredAverage: 0,
+        isExactAudit: false,
+        explanation: "",
+      };
+    }
+
+    if (selectedLeadershipResult.audit) {
+      const sourceLabel = leadershipAverageSourceLabel(selectedLeadershipResult.average_source);
+      return {
+        collaborators: selectedLeadershipResult.audit.collaborators,
+        totalFinalPoints: selectedLeadershipResult.audit.total_final_points,
+        averageFinalPoints: selectedLeadershipResult.audit.average_final_points,
+        differenceFromStoredAverage: Math.abs(selectedLeadershipResult.audit.average_final_points - selectedLeadershipResult.average_final_points),
+        isExactAudit: true,
+        explanation: `Esta auditoria usa a base salva no fechamento. Origem da média: ${sourceLabel}.`,
+      };
+    }
+
+    const scopedRegionals = new Set(selectedLeadershipResult.regionals.map((regional) => normalizeRegional(regional)).filter(Boolean));
+    const collaborators = summary.ranking
+      .filter((score) => {
+        if (!score.is_registered) return false;
+        if (selectedLeadershipResult.role_type === "portfolio_manager") return true;
+        return scopedRegionals.has(normalizeRegional(score.regional));
+      })
+      .sort((a, b) => b.final_points - a.final_points || b.estimated_payment - a.estimated_payment || a.collaborator_name.localeCompare(b.collaborator_name, "pt-BR"))
+      .map((score) => ({
+        collaborator_id: score.collaborator_id,
+        collaborator_name: score.collaborator_name,
+        role: score.role,
+        regional: score.regional,
+        source_type: "collaborator" as const,
+        service_orders_count: score.service_orders_count,
+        health_multiplier: score.health_multiplier,
+        final_points: score.final_points,
+        estimated_payment: score.estimated_payment,
+      }));
+
+    const totalFinalPoints = collaborators.reduce((total, score) => total + score.final_points, 0);
+    const averageFinalPoints = collaborators.length ? totalFinalPoints / collaborators.length : 0;
+    const reconstructedSource = selectedLeadershipResult.average_source === "collaborators_and_leaders"
+      ? "A média original desta liderança considera colaboradores + líderes, mas esta visualização foi reconstituída no frontend com base no ranking disponível."
+      : "Esta visualização foi reconstituída no frontend a partir do ranking disponível para conferência rápida.";
+
+    return {
+      collaborators,
+      totalFinalPoints,
+      averageFinalPoints,
+      differenceFromStoredAverage: Math.abs(averageFinalPoints - selectedLeadershipResult.average_final_points),
+      isExactAudit: false,
+      explanation: reconstructedSource,
+    };
+  }, [selectedLeadershipResult, summary]);
 
   const rankingScope = useMemo(() => {
     if (!summary) return [];
@@ -843,60 +957,44 @@ export default function GamificacaoPage() {
         top_unmapped_subjects: []
       };
     }
-    if (!filteredAuditOrders) {
+    if (!filteredBreakdowns) {
       return {
         cost_by_regional: summary.cost_by_regional,
         cost_by_group: summary.cost_by_group,
         top_unmapped_subjects: summary.top_unmapped_subjects
       };
     }
-
-    const activeGroups = groups.filter((group) => group.active);
-    const estimatedUnmappedPoints =
-      activeGroups.length > 0
-        ? activeGroups.reduce((total, group) => total + Number(group.default_points ?? 0), 0) / activeGroups.length
-        : 0;
-
-    return buildFinancialBreakdownsFromOrders(
-      filteredAuditOrders,
-      chartHealth,
-      summary.run?.point_value ?? summary.point_value,
-      estimatedUnmappedPoints
-    );
-  }, [chartHealth, filteredAuditOrders, groups, summary]);
+    return {
+      cost_by_regional: filteredBreakdowns.cost_by_regional,
+      cost_by_group: filteredBreakdowns.cost_by_group,
+      top_unmapped_subjects: filteredBreakdowns.top_unmapped_subjects
+    };
+  }, [filteredBreakdowns, summary]);
 
   useEffect(() => {
     if (!summary) {
       setChartPenalties([]);
-      setFilteredAuditOrders(null);
+      setFilteredBreakdowns(null);
       return;
     }
     if (selectedRegionals.length === 0 || !summary.run?.id) {
       setChartPenalties(summary.penalty_distribution);
-      setFilteredAuditOrders(null);
+      setFilteredBreakdowns(null);
       return;
     }
 
     let cancelled = false;
-    Promise.all(
-      selectedRegionals.map((regional) =>
-        api.auditOrders({
-          calculation_run_id: summary.run?.id,
-          regional
-        })
-      )
-    )
-      .then((responses) => {
+    api.dashboardFilteredBreakdowns(summary.run.id, selectedRegionals)
+      .then((response) => {
         if (cancelled) return;
-        const orders = responses.flatMap((response) => response.orders);
-        setFilteredAuditOrders(orders);
-        setChartPenalties(buildPenaltyDistributionFromOrders(orders));
+        setFilteredBreakdowns(response);
+        setChartPenalties(response.penalty_distribution);
       })
       .catch((err: Error) => {
         if (!cancelled) {
           setError(err.message);
           setChartPenalties(summary.penalty_distribution);
-          setFilteredAuditOrders(null);
+          setFilteredBreakdowns(null);
         }
       });
 
@@ -924,58 +1022,151 @@ export default function GamificacaoPage() {
   }
 
   async function recalculate() {
-    await withFeedback(async () => {
-      const value = parseOptionalNumber(pointValue);
-      if (value !== null) {
-        await api.updateSetting("point_value", value.toFixed(2));
-      }
-      await api.calculate(value, {
-        reference_month: summary?.run?.reference_month,
-        reference_year: summary?.run?.reference_year,
-        regional: summary?.run?.regional
-      });
-      await loadAll();
-    }, "Pontuação recalculada com matriz operacional.");
+    if (calculationInFlightRef.current) return;
+    calculationInFlightRef.current = true;
+    try {
+      await withFeedback(async () => {
+        const safePeriod = {
+          reference_month: analysisPeriod.reference_month ?? summary?.run?.reference_month ?? bootstrap?.reference_month ?? undefined,
+          reference_year: analysisPeriod.reference_year ?? summary?.run?.reference_year ?? bootstrap?.reference_year ?? undefined,
+          regional: analysisPeriod.regional ?? summary?.run?.regional ?? bootstrap?.regional ?? undefined
+        };
+        if (!safePeriod.reference_month || !safePeriod.reference_year) {
+          throw new Error("Selecione um periodo valido antes de recalcular a pontuacao.");
+        }
+        const value = parseOptionalNumber(pointValue);
+        const currentRunMatchesPeriod =
+          summary?.run &&
+          summary.run.reference_month === safePeriod.reference_month &&
+          summary.run.reference_year === safePeriod.reference_year &&
+          (summary.run.regional ?? null) === (safePeriod.regional ?? null);
+        const shouldCreateRevision =
+          currentRunMatchesPeriod && summary?.run?.status === "paid"
+            ? await confirm({
+                title: "Fechamento já pago",
+                description: "Este período já foi marcado como pago. Deseja criar uma nova revisão em rascunho sem alterar o fechamento pago?",
+                confirmLabel: "Criar revisão"
+              })
+            : false;
+        if (currentRunMatchesPeriod && summary?.run?.status === "paid" && !shouldCreateRevision) {
+          throw new Error("Recalculo cancelado para preservar o fechamento pago.");
+        }
+        if (value !== null) {
+          await api.updateSetting("point_value", value.toFixed(2));
+        }
+        await api.calculate(value, safePeriod, {
+          create_revision: shouldCreateRevision,
+          execution_note: shouldCreateRevision ? "Revisão pós-pagamento criada pela interface." : undefined
+        });
+        setAnalysisPeriod(safePeriod);
+        await loadAll(safePeriod, { refreshRuleBasics: false });
+      }, summary?.run?.status === "paid" ? "Revisão em rascunho criada para o período pago." : "Pontuação recalculada com matriz operacional.");
+    } finally {
+      calculationInFlightRef.current = false;
+    }
   }
 
   async function refreshAfterCollaboratorRegistryChange() {
-    if (summary?.run) {
+    // Um fechamento pago é imutável: recalcular sem "create_revision" seria rejeitado pelo
+    // backend (409) e, como esse erro interrompia esta função ANTES de recarregar a lista de
+    // colaboradores, a aprovação parecia ter falhado mesmo já tendo sido salva no banco.
+    if (summary?.run && summary.run.status !== "paid") {
       await api.calculate(summary.run.point_value ?? summary.point_value, {
         reference_month: summary.run.reference_month,
         reference_year: summary.run.reference_year,
         regional: summary.run.regional
       });
     }
-    await loadAll();
+    await loadAll(undefined, { refreshRuleBasics: false });
   }
 
   async function calculatePeriod(month: number, year: number) {
     await withFeedback(async () => {
       const value = parseOptionalNumber(pointValue);
-      if (value !== null) {
-        await api.updateSetting("point_value", value.toFixed(2));
-      }
-      await api.calculate(value, {
+      const requestedPeriod = {
         reference_month: month,
         reference_year: year,
         regional: summary?.run?.regional
+      };
+      const isCurrentPaidRun =
+        summary?.run?.status === "paid" &&
+        summary.run.reference_month === month &&
+        summary.run.reference_year === year &&
+        (summary.run.regional ?? null) === (requestedPeriod.regional ?? null);
+      const shouldCreateRevision = isCurrentPaidRun
+        ? await confirm({
+            title: "Fechamento já pago",
+            description: "Este período já foi marcado como pago. Deseja criar uma nova revisão em rascunho sem alterar o fechamento pago?",
+            confirmLabel: "Criar revisão"
+          })
+        : false;
+      if (isCurrentPaidRun && !shouldCreateRevision) {
+        throw new Error("Recalculo cancelado para preservar o fechamento pago.");
+      }
+      if (value !== null) {
+        await api.updateSetting("point_value", value.toFixed(2));
+      }
+      await api.calculate(value, requestedPeriod, {
+        create_revision: shouldCreateRevision,
+        execution_note: shouldCreateRevision ? "Revisão pós-pagamento criada pela seleção de período." : undefined
       });
       const period = { reference_month: month, reference_year: year, regional: summary?.run?.regional };
       setAnalysisPeriod(period);
-      await loadAll(period);
-    }, "Período recalculado com janela de reincidência.");
+      await loadAll(period, { refreshRuleBasics: false });
+    }, summary?.run?.status === "paid" ? "Revisão em rascunho criada para o período pago." : "Período recalculado com janela de reincidência.");
   }
 
   async function viewPeriod(month: number, year: number) {
     await withFeedback(async () => {
       const period = { reference_month: month, reference_year: year, regional: summary?.run?.regional };
       setAnalysisPeriod(period);
-      await loadAll(period);
+      await loadAll(period, { refreshRuleBasics: false });
     }, "Período de análise alterado.");
+  }
+
+  async function advanceRunStatus(nextStatus: "review" | "approved" | "paid" | "cancelled", successMessage: string) {
+    const runId = summary?.run?.id;
+    if (!runId) {
+      setError("Nenhum fechamento calculado para avançar o status. Recalcule o período primeiro.");
+      return;
+    }
+    if (nextStatus === "paid") {
+      const confirmed = await confirm({
+        title: "Marcar como pago",
+        description:
+          "Marcar este fechamento como PAGO é definitivo e não pode ser revertido. " +
+          "A partir daqui, débitos de garantia pendentes dos colaboradores serão aplicados. Deseja continuar?",
+        confirmLabel: "Marcar como pago",
+        tone: "danger"
+      });
+      if (!confirmed) return;
+    }
+    if (nextStatus === "cancelled") {
+      const confirmed = await confirm({
+        title: "Cancelar fechamento",
+        description: "Cancelar este fechamento? Ele não poderá mais ser aprovado ou pago.",
+        confirmLabel: "Cancelar fechamento",
+        tone: "danger"
+      });
+      if (!confirmed) return;
+    }
+    await withFeedback(async () => {
+      await api.updateCalculationRunStatus(runId, { status: nextStatus });
+      const period = {
+        reference_month: summary?.run?.reference_month,
+        reference_year: summary?.run?.reference_year,
+        regional: summary?.run?.regional
+      };
+      await loadAll(period, { refreshRuleBasics: false });
+      setHistoryLoaded(false);
+    }, successMessage);
   }
 
   function exportPaymentCsv() {
     if (!summary || currentUser?.role === "viewer") return;
+    const healthByRegional = new Map(
+      summary.health_by_regional.map((item) => [normalizeRegional(item.regional), item])
+    );
     const paymentRows = summary.ranking.filter((score) => {
       const matchesRegional = selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(score.regional));
       return matchesRegional && score.is_registered !== false;
@@ -988,27 +1179,62 @@ export default function GamificacaoPage() {
     });
     const rows = [
       ["Pagamento de técnicos"],
-      ["Colaborador", "Filial", "Tipo", "Valor a ser pago"],
-      ...paymentRows.map((score) => [
-        score.collaborator_name,
-        regionalName(score.regional),
-        "Técnico",
-        formatMoney(score.estimated_payment)
-      ]),
+      [
+        "Colaborador",
+        "Regional",
+        "Tipo",
+        "O.S",
+        "Pontos brutos",
+        "Pontos anulados",
+        "Pontos líquidos",
+        "SLA da base (%)",
+        "Multiplicador saúde",
+        "Pontos finais",
+        "Valor a ser pago"
+      ],
+      ...paymentRows.map((score) => {
+        const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
+        return [
+          score.collaborator_name,
+          regionalName(score.regional),
+          "Técnico",
+          formatNumber(score.service_orders_count),
+          formatPoints(score.gross_points),
+          formatPoints(score.penalty_points),
+          formatPoints(score.net_points),
+          regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
+          `${formatNumber(score.health_multiplier)}x`,
+          formatPoints(score.final_points),
+          formatMoney(score.estimated_payment)
+        ];
+      }),
       [],
       ["Bonificação de liderança"],
-      ["Liderança", "Filiais", "Tipo", "Média final", "Multiplicador", "Valor a ser pago"],
+      [
+        "Liderança",
+        "Regionais",
+        "Tipo",
+        "Origem da média",
+        "Pessoas na média",
+        "Soma dos pontos",
+        "Média final",
+        "Multiplicador",
+        "Valor a ser pago"
+      ],
       ...leadershipRows.map((item) => [
         item.name,
         item.regionals.map((regional) => regionalName(regional)).join(", "),
         leadershipRoleLabel(item.role_type),
+        leadershipAverageSourceLabel(item.average_source),
+        formatNumber(item.audit?.scoped_collaborators ?? item.scoped_collaborators),
+        `${formatNumber(item.audit?.total_final_points ?? item.average_final_points * item.scoped_collaborators)} pts`,
         `${formatNumber(item.average_final_points)} pts`,
         `${formatNumber(item.multiplier)}x`,
         formatMoney(item.bonus_amount)
       ]),
       [],
       ["Pendentes de cadastro"],
-      ["Nome identificado", "Filial sugerida", "O.S", "Valor potencial", "Status"],
+      ["Nome identificado", "Regional sugerida", "O.S", "Valor potencial", "Status"],
       ...pendingRows.map((item) => [
         item.name,
         regionalName(item.suggested_regional || item.regional),
@@ -1166,7 +1392,7 @@ export default function GamificacaoPage() {
                 {can("calculation:run") ? (
                   <Button onClick={recalculate} disabled={busy || loading} className="h-11 w-full rounded-2xl bg-teal-600 px-4 shadow-sm hover:bg-teal-700 sm:w-auto">
                     <RefreshCw className={busy ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-                    Recalcular pontuação
+                    {summary?.run?.status === "paid" ? "Criar revisão" : "Recalcular pontuação"}
                   </Button>
                 ) : null}
                 <Button type="button" variant="outline" onClick={logout} className="h-11 rounded-2xl border-slate-300 bg-white px-4">
@@ -1204,7 +1430,7 @@ export default function GamificacaoPage() {
           </div>
         ) : null}
 
-        {loading || !summary ? (
+        {loading && !bootstrap ? (
           <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-5 py-5">
               <div className="flex flex-col gap-2">
@@ -1246,9 +1472,9 @@ export default function GamificacaoPage() {
                 <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Navegação do módulo</div>
                   <div className="mt-1 flex items-center gap-2 text-sm text-slate-600">
-                    <span>{activeTab === "closure" ? "Fechamento" : activeTab === "ranking" ? "Ranking" : activeTab === "pending" ? "Pendências" : activeTab === "config" ? "Configuração" : activeTab === "audit" ? "Auditoria" : activeTab === "history" ? "Histórico" : "Período"}</span>
+                    <span>{activeTab === "closure" ? "Fechamento" : activeTab === "ranking" ? "Ranking" : activeTab === "pending" ? "Pendências" : activeTab === "config" ? "Configuração" : activeTab === "audit" ? "Auditoria" : activeTab === "balance" ? "Saldo de pontos" : activeTab === "history" ? "Histórico" : "Período"}</span>
                     <InfoHint
-                      ariaLabel={`Ajuda sobre a aba ${activeTab === "closure" ? "Fechamento" : activeTab === "ranking" ? "Ranking" : activeTab === "pending" ? "Pendências" : activeTab === "config" ? "Configuração" : activeTab === "audit" ? "Auditoria" : activeTab === "history" ? "Histórico" : "Período"}`}
+                      ariaLabel={`Ajuda sobre a aba ${activeTab === "closure" ? "Fechamento" : activeTab === "ranking" ? "Ranking" : activeTab === "pending" ? "Pendências" : activeTab === "config" ? "Configuração" : activeTab === "audit" ? "Auditoria" : activeTab === "balance" ? "Saldo de pontos" : activeTab === "history" ? "Histórico" : "Período"}`}
                       description={TAB_HELP[activeTab] ?? TAB_HELP.closure}
                       side="bottom"
                     />
@@ -1265,9 +1491,11 @@ export default function GamificacaoPage() {
                           ? "Governança"
                           : activeTab === "audit"
                             ? "Rastreabilidade"
-                            : activeTab === "history"
-                              ? "Histórico"
-                              : "Período analisado"}
+                            : activeTab === "balance"
+                              ? "Saldo de garantias"
+                              : activeTab === "history"
+                                ? "Histórico"
+                                : "Período analisado"}
                 </Badge>
               </div>
               <TabsList className="mt-3 flex h-auto w-full justify-start gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50/80 p-2">
@@ -1290,6 +1518,9 @@ export default function GamificacaoPage() {
                 <TabsTrigger value="audit" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
                   Auditoria
                 </TabsTrigger>
+                <TabsTrigger value="balance" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
+                  Saldo de pontos
+                </TabsTrigger>
                 <TabsTrigger value="history" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
                   Histórico
                 </TabsTrigger>
@@ -1301,17 +1532,14 @@ export default function GamificacaoPage() {
 
             <TabsContent value="closure" className="mt-0 flex-1 pr-1">
               {activeTab === "closure" ? (
+                !summary ? (
+                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo executivo e indicadores do fechamento...</div>
+                ) : (
                 <div className="grid gap-4">
-                  <section
-                    className={
-                      closure.ready
-                        ? "overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-sm"
-                        : "overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-sm"
-                    }
-                  >
+                  <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-sm">
                     <div
                       className={
-                        closure.ready
+                        closure.ready || closure.isClosed
                           ? "grid gap-5 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.08),transparent_22%),linear-gradient(180deg,#ffffff_0%,#fbfdff_100%)] p-5"
                           : "grid gap-5 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.08),transparent_22%),linear-gradient(180deg,#ffffff_0%,#fbfdff_100%)] p-5"
                       }
@@ -1319,37 +1547,109 @@ export default function GamificacaoPage() {
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Badge
-                              className={
-                                closure.ready
-                                  ? "w-fit border-emerald-200 bg-white text-emerald-700"
-                                  : "w-fit border-amber-200 bg-white text-amber-700"
-                              }
-                            >
-                              {closure.ready ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                              {closure.ready ? "Fechamento liberado" : "Fechamento com pendência"}
-                            </Badge>
+                            {closure.isClosed ? (
+                              <Badge className={summary.run?.status === "paid" ? "w-fit border-emerald-200 bg-white text-emerald-700" : "w-fit border-rose-200 bg-white text-rose-700"}>
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                {summary.run?.status === "paid" ? "Fechamento pago" : "Fechamento cancelado"}
+                              </Badge>
+                            ) : (
+                              <Badge
+                                className={
+                                  closure.ready
+                                    ? "w-fit border-emerald-200 bg-white text-emerald-700"
+                                    : "w-fit border-amber-200 bg-white text-amber-700"
+                                }
+                              >
+                                {closure.ready ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                                {closure.ready ? "Fechamento liberado" : "Fechamento com pendência"}
+                              </Badge>
+                            )}
                             <Badge className="w-fit border-slate-200 bg-white text-slate-700">
                               <CalendarDays className="h-3.5 w-3.5" />
                               {summary.run ? `${summary.run.reference_month}/${summary.run.reference_year}` : "Sem cálculo"}
                             </Badge>
+                            {summary.run ? (
+                              <Badge className={calculationStatusMeta(summary.run.status).className}>
+                                <ClipboardList className="h-3.5 w-3.5" />
+                                {calculationStatusMeta(summary.run.status).label}
+                              </Badge>
+                            ) : null}
                           </div>
                           <div className="mt-3 flex items-center gap-2">
                             <h2 className="text-2xl font-semibold leading-tight text-slate-950">
-                              {closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}
+                              {closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}
                             </h2>
                             <InfoHint
-                              ariaLabel={`Ajuda sobre ${closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}`}
+                              ariaLabel={`Ajuda sobre ${closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}`}
                               description={SECTION_HELP.summary}
                             />
                           </div>
+                          {closure.isClosed && closure.pendingCount > 0 ? (
+                            <p className="mt-2 text-sm text-amber-700">
+                              Este fechamento tinha {formatNumber(closure.pendingCount)} pendência(s) de governança registrada(s) no momento do pagamento. Veja abaixo.
+                            </p>
+                          ) : null}
+                          {summary.run?.status_note ? (
+                            <p className="mt-2 text-sm text-slate-500">{summary.run.status_note}</p>
+                          ) : null}
                         </div>
-                        {currentUser.role !== "viewer" ? (
-                          <Button type="button" variant="outline" onClick={exportPaymentCsv} className="w-full bg-white sm:w-auto">
-                            <Download className="h-4 w-4" />
-                            Exportar pagamento
-                          </Button>
-                        ) : null}
+                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+                          {currentUser.role !== "viewer" ? (
+                            <Button type="button" variant="outline" onClick={exportPaymentCsv} className="w-full bg-white sm:w-auto">
+                              <Download className="h-4 w-4" />
+                              Exportar pagamento
+                            </Button>
+                          ) : null}
+                          {summary.run && can("calculation:run") ? (
+                            <>
+                              {summary.run.status === "draft" ? (
+                                <Button
+                                  type="button"
+                                  onClick={() => advanceRunStatus("review", "Fechamento enviado para conferência.")}
+                                  disabled={busy}
+                                  className="w-full bg-amber-600 text-white hover:bg-amber-700 sm:w-auto"
+                                >
+                                  <Send className="h-4 w-4" />
+                                  Enviar para conferência
+                                </Button>
+                              ) : null}
+                              {summary.run.status === "review" && currentUser.role === "admin" ? (
+                                <Button
+                                  type="button"
+                                  onClick={() => advanceRunStatus("approved", "Fechamento aprovado.")}
+                                  disabled={busy}
+                                  className="w-full bg-sky-600 text-white hover:bg-sky-700 sm:w-auto"
+                                >
+                                  <CheckCircle2 className="h-4 w-4" />
+                                  Aprovar fechamento
+                                </Button>
+                              ) : null}
+                              {summary.run.status === "approved" && currentUser.role === "admin" ? (
+                                <Button
+                                  type="button"
+                                  onClick={() => advanceRunStatus("paid", "Fechamento marcado como pago.")}
+                                  disabled={busy}
+                                  className="w-full bg-emerald-600 text-white hover:bg-emerald-700 sm:w-auto"
+                                >
+                                  <Wallet className="h-4 w-4" />
+                                  Marcar como pago
+                                </Button>
+                              ) : null}
+                              {["draft", "review", "approved"].includes(summary.run.status) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => advanceRunStatus("cancelled", "Fechamento cancelado.")}
+                                  disabled={busy}
+                                  className="w-full bg-white text-rose-600 hover:bg-rose-50 sm:w-auto"
+                                >
+                                  <XCircle className="h-4 w-4" />
+                                  Cancelar
+                                </Button>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </div>
                       </div>
 
                       <div className="grid gap-3 lg:grid-cols-3">
@@ -1401,7 +1701,7 @@ export default function GamificacaoPage() {
                         })}
                       </div>
 
-                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                         {[
                           {
                             label: "Total de O.S",
@@ -1426,16 +1726,42 @@ export default function GamificacaoPage() {
                             value: `${formatNumber(summary.cards.penalty_points)} pts anulados`,
                             icon: AlertTriangle,
                             tone: summary.cards.penalty_points > 0 ? "text-red-700" : "text-slate-700"
+                          },
+                          {
+                            label: "Descontos de garantia",
+                            value: closureBalanceImpact.collaboratorCount > 0 ? formatPoints(Math.abs(closureBalanceImpact.points)) : "Sem descontos",
+                            sub: closureBalanceImpact.collaboratorCount > 0 ? `em ${formatNumber(closureBalanceImpact.collaboratorCount)} colaborador(es)` : undefined,
+                            icon: MinusCircle,
+                            tone: closureBalanceImpact.collaboratorCount > 0 ? "text-red-700" : "text-slate-700",
+                            onClick: closureBalanceImpact.collaboratorCount > 0 ? () => setActiveTab("balance") : undefined
                           }
                         ].map((item) => {
                           const Icon = item.icon;
-                          return (
-                            <div key={item.label} className="min-w-0 rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                          const content = (
+                            <>
                               <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                                 <Icon className="h-3.5 w-3.5" />
                                 <span className="truncate">{item.label}</span>
                               </div>
                               <div className={`mt-3 truncate text-[28px] font-semibold leading-none ${item.tone}`}>{item.value}</div>
+                              {item.sub ? <div className="mt-1 truncate text-xs text-slate-500">{item.sub}</div> : null}
+                            </>
+                          );
+                          if (item.onClick) {
+                            return (
+                              <button
+                                key={item.label}
+                                type="button"
+                                onClick={item.onClick}
+                                className="min-w-0 rounded-[20px] border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-teal-300 hover:bg-teal-50/40"
+                              >
+                                {content}
+                              </button>
+                            );
+                          }
+                          return (
+                            <div key={item.label} className="min-w-0 rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                              {content}
                             </div>
                           );
                         })}
@@ -1461,43 +1787,59 @@ export default function GamificacaoPage() {
 
                     <Accordion className="gap-0 bg-white">
                       <AccordionItem value="closure-pending" defaultOpen={closure.pendingCount > 0} className="rounded-none border-0 border-b">
-                        <AccordionTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50/80"
-                          >
-                            <div className="flex min-w-0 items-start gap-3">
-                              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-700">
-                                <AlertTriangle className="h-4 w-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <div className="text-sm font-semibold text-slate-950">Alertas e pendências</div>
-                                  <InfoHint ariaLabel="Ajuda sobre Alertas e pendências" description={SECTION_HELP.alerts} />
+                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
+                          <AccordionTrigger asChild>
+                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
+                              <div className="flex min-w-0 items-start gap-3">
+                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-700">
+                                  <AlertTriangle className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-sm font-semibold text-slate-950">
+                                    {closure.isClosed ? "Pendências registradas no fechamento" : "Alertas e pendências"}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                            <Badge className={closure.pendingCount > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}>
-                              {closure.pendingCount > 0 ? `${formatNumber(closure.pendingCount)} pendência(s)` : "Sem pendências"}
-                            </Badge>
-                          </button>
-                        </AccordionTrigger>
+                              <Badge className={closure.pendingCount > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}>
+                                {closure.pendingCount > 0 ? `${formatNumber(closure.pendingCount)} pendência(s)` : "Sem pendências"}
+                              </Badge>
+                            </button>
+                          </AccordionTrigger>
+                          <InfoHint ariaLabel="Ajuda sobre Alertas e pendências" description={SECTION_HELP.alerts} />
+                        </div>
                         <AccordionContent className="px-5 pb-5">
                           {closure.pendingCount > 0 ? (
                             <div className="grid gap-3 rounded-[20px] border border-slate-200 bg-slate-50/60 p-3 md:grid-cols-2">
-                              {closure.pendingItems.map((item) => (
-                                <button
-                                  key={item.label}
-                                  className="rounded-[18px] border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-teal-300 hover:bg-teal-50/40"
-                                  onClick={() => setActiveTab(item.tab)}
-                                >
-                                  <div className={item.value > 0 ? "text-2xl font-semibold text-amber-700" : "text-2xl font-semibold text-emerald-700"}>
-                                    {formatNumber(item.value)}
-                                  </div>
-                                  <div className="mt-1 text-sm font-semibold text-slate-950">{item.label}</div>
-                                  <div className="mt-2 text-xs text-slate-500">{item.help}</div>
-                                </button>
-                              ))}
+                              {closure.pendingItems.map((item) => {
+                                const Icon = item.icon;
+                                return (
+                                  <button
+                                    key={item.label}
+                                    className="rounded-[18px] border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-teal-300 hover:bg-teal-50/40"
+                                    onClick={() => {
+                                      setActiveTab(item.tab);
+                                      if ("configSubTab" in item && item.configSubTab) setConfigTab(item.configSubTab);
+                                    }}
+                                  >
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div className={item.value > 0 ? "text-2xl font-semibold text-amber-700" : "text-2xl font-semibold text-emerald-700"}>
+                                        {formatNumber(item.value)}
+                                      </div>
+                                      <div
+                                        className={
+                                          item.value > 0
+                                            ? "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700"
+                                            : "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"
+                                        }
+                                      >
+                                        <Icon className="h-4 w-4" />
+                                      </div>
+                                    </div>
+                                    <div className="mt-1 text-sm font-semibold text-slate-950">{item.label}</div>
+                                    <div className="mt-2 text-xs text-slate-500">{item.help}</div>
+                                  </button>
+                                );
+                              })}
                             </div>
                           ) : (
                             <div className="flex items-center gap-3 rounded-lg border bg-emerald-50/60 px-4 py-4 text-sm text-slate-700">
@@ -1509,31 +1851,28 @@ export default function GamificacaoPage() {
                       </AccordionItem>
 
                       <AccordionItem value="closure-leadership" className="rounded-none border-0 border-b">
-                        <AccordionTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50/80"
-                          >
-                            <div className="flex min-w-0 items-start gap-3">
-                              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
-                                <Trophy className="h-4 w-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
+                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
+                          <AccordionTrigger asChild>
+                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
+                              <div className="flex min-w-0 items-start gap-3">
+                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+                                  <Trophy className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0">
                                   <div className="text-sm font-semibold text-slate-950">Bonificação de liderança</div>
-                                  <InfoHint ariaLabel="Ajuda sobre Bonificação de liderança" description={SECTION_HELP.leadership} />
                                 </div>
                               </div>
-                            </div>
-                            <Badge className="border-blue-200 bg-blue-50 text-blue-700">{formatMoney(summary.leadership_bonus?.total_bonus_amount ?? 0)}</Badge>
-                          </button>
-                        </AccordionTrigger>
+                              <Badge className="border-blue-200 bg-blue-50 text-blue-700">{formatMoney(summary.leadership_bonus?.total_bonus_amount ?? 0)}</Badge>
+                            </button>
+                          </AccordionTrigger>
+                          <InfoHint ariaLabel="Ajuda sobre Bonificação de liderança" description={SECTION_HELP.leadership} />
+                        </div>
                         <AccordionContent className="px-5 pb-5">
                           <div className="grid gap-3 rounded-[20px] border border-slate-200 bg-slate-50/60 p-3 md:grid-cols-3">
                             {[
                               ["Valor da liderança", formatMoney(summary.leadership_bonus?.total_bonus_amount ?? 0)],
                               ["Perfis ativos", `${formatNumber(summary.leadership_bonus?.results.length ?? 0)} líder(es)`],
-                              ["Filiais cobertas", `${formatNumber(leadershipCoveredRegionals)} filial(is)`]
+                              ["Filiais cobertas", `${formatNumber(leadershipCoveredRegionals)} ${pluralizeFilial(leadershipCoveredRegionals)}`]
                             ].map(([label, value]) => (
                               <div key={label} className="rounded-[18px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                                 <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</div>
@@ -1564,25 +1903,22 @@ export default function GamificacaoPage() {
                       </AccordionItem>
 
                       <AccordionItem value="closure-financial-breakdown" className="rounded-none border-0 border-b">
-                        <AccordionTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50/80"
-                          >
-                            <div className="flex min-w-0 items-start gap-3">
-                              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-700">
-                                <CircleDollarSign className="h-4 w-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
+                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
+                          <AccordionTrigger asChild>
+                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
+                              <div className="flex min-w-0 items-start gap-3">
+                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-700">
+                                  <CircleDollarSign className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0">
                                   <div className="text-sm font-semibold text-slate-950">Detalhamento financeiro</div>
-                                  <InfoHint ariaLabel="Ajuda sobre Detalhamento financeiro" description={SECTION_HELP.financial} />
                                 </div>
                               </div>
-                            </div>
-                            <Badge className="border-slate-200 bg-slate-50 text-slate-700">3 painéis</Badge>
-                          </button>
-                        </AccordionTrigger>
+                              <Badge className="border-slate-200 bg-slate-50 text-slate-700">3 painéis</Badge>
+                            </button>
+                          </AccordionTrigger>
+                          <InfoHint ariaLabel="Ajuda sobre Detalhamento financeiro" description={SECTION_HELP.financial} />
+                        </div>
                         <AccordionContent className="px-5 pb-5">
                           <div className="grid min-w-0 gap-4 xl:grid-cols-3">
                             <FinancialTable
@@ -1611,25 +1947,22 @@ export default function GamificacaoPage() {
                       </AccordionItem>
 
                       <AccordionItem value="closure-analysis" className="rounded-none border-0">
-                        <AccordionTrigger asChild>
-                          <button
-                            type="button"
-                            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-slate-50/80"
-                          >
-                            <div className="flex min-w-0 items-start gap-3">
-                              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-violet-50 text-violet-700">
-                                <BarChart3 className="h-4 w-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
+                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
+                          <AccordionTrigger asChild>
+                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
+                              <div className="flex min-w-0 items-start gap-3">
+                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-violet-50 text-violet-700">
+                                  <BarChart3 className="h-4 w-4" />
+                                </div>
+                                <div className="min-w-0">
                                   <div className="text-sm font-semibold text-slate-950">Análise operacional e gráficos</div>
-                                  <InfoHint ariaLabel="Ajuda sobre Análise operacional e gráficos" description={SECTION_HELP.chartArea} />
                                 </div>
                               </div>
-                            </div>
-                            <Badge className="border-slate-200 bg-slate-50 text-slate-700">{selectedRegionals.length ? `${selectedRegionals.length} filial(is)` : "Todas as filiais"}</Badge>
-                          </button>
-                        </AccordionTrigger>
+                              <Badge className="border-slate-200 bg-slate-50 text-slate-700">{selectedRegionals.length ? `${selectedRegionals.length} ${pluralizeFilial(selectedRegionals.length)}` : "Todas as filiais"}</Badge>
+                            </button>
+                          </AccordionTrigger>
+                          <InfoHint ariaLabel="Ajuda sobre Análise operacional e gráficos" description={SECTION_HELP.chartArea} />
+                        </div>
                         <AccordionContent className="px-5 pb-5">
                           <div className="grid gap-4 rounded-[20px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] p-4 lg:grid-cols-[1fr_minmax(260px,360px)] lg:items-start">
                             <div>
@@ -1656,7 +1989,7 @@ export default function GamificacaoPage() {
                                 ))}
                               </select>
                               <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                                <span>{selectedRegionals.length ? `${selectedRegionals.length} filial(is) selecionada(s)` : "Todas as filiais"}</span>
+                                <span>{selectedRegionals.length ? `${selectedRegionals.length} ${pluralizeFilial(selectedRegionals.length, " selecionada")}` : "Todas as filiais"}</span>
                                 <Button type="button" variant="ghost" size="sm" className="h-6 px-2" onClick={() => setSelectedRegionals([])}>
                                   Limpar
                                 </Button>
@@ -1692,12 +2025,15 @@ export default function GamificacaoPage() {
                     </Accordion>
                   </section>
                 </div>
+                )
               ) : null}
             </TabsContent>
 
             <TabsContent value="ranking" className="mt-0 flex-1 overflow-visible">
               {activeTab === "ranking" ? (
-                !serviceOrdersLoaded && tabLoading.serviceOrders ? (
+                !summary ? (
+                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado para montar o ranking...</div>
+                ) : !serviceOrdersLoaded && tabLoading.serviceOrders ? (
                   <div className="panel p-8 text-sm text-slate-500">Carregando base detalhada do ranking...</div>
                 ) : (
                   <div className="flex h-full min-h-0 flex-col gap-3">
@@ -1715,25 +2051,39 @@ export default function GamificacaoPage() {
                               {formatMoney(summary.run?.point_value ?? summary.point_value)}.
                             </p>
                           </div>
-                          <div className="grid gap-2 sm:grid-cols-2 xl:min-w-[520px]">
-                            <div className="grid gap-1">
-                              <select
-                                multiple
-                                className="h-20 rounded-md border border-input bg-white px-3 py-2 text-sm"
-                                value={selectedRegionals}
-                                onChange={(event) => updateSelectedRegionals(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}
-                              >
-                                {regionalOptions.map((regional) => (
-                                  <option key={regional} value={regional}>
-                                    {regionalName(regional)}
-                                  </option>
-                                ))}
-                              </select>
-                              <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                                <span>{selectedRegionals.length ? `${selectedRegionals.length} filial(is)` : "Todas as filiais"}</span>
-                                <Button type="button" variant="ghost" size="sm" className="h-6 px-2" onClick={() => setSelectedRegionals([])}>
-                                  Todas
+                          <div className="grid gap-2 xl:min-w-[520px]">
+                            <div className="grid gap-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-medium text-slate-500">
+                                  {selectedRegionals.length ? `${selectedRegionals.length} ${pluralizeFilial(selectedRegionals.length, " selecionada")}` : "Todas as filiais"}
+                                </span>
+                                <Button type="button" variant="ghost" size="sm" className="h-6 px-2" onClick={() => setSelectedRegionals([])} disabled={selectedRegionals.length === 0}>
+                                  Limpar
                                 </Button>
+                              </div>
+                              <div className="flex max-h-20 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+                                {regionalOptions.map((regional) => {
+                                  const normalized = normalizeRegional(regional);
+                                  const active = selectedRegionals.includes(normalized);
+                                  return (
+                                    <button
+                                      key={regional}
+                                      type="button"
+                                      onClick={() =>
+                                        updateSelectedRegionals(
+                                          active ? selectedRegionals.filter((value) => value !== normalized) : [...selectedRegionals, normalized]
+                                        )
+                                      }
+                                      className={
+                                        active
+                                          ? "shrink-0 rounded-full border border-teal-600 bg-teal-600 px-3 py-1 text-xs font-medium text-white"
+                                          : "shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-teal-300 hover:bg-teal-50/40"
+                                      }
+                                    >
+                                      {regionalName(regional)}
+                                    </button>
+                                  );
+                                })}
                               </div>
                             </div>
                             <div className="relative">
@@ -1742,8 +2092,7 @@ export default function GamificacaoPage() {
                                 className="h-9 pl-9"
                                 value={rankingSearch}
                                 onChange={(event) => setRankingSearch(event.target.value)}
-                                placeholder="Buscar colaborador"
-                                disabled={rankingTab !== "collaborators"}
+                                placeholder={rankingTab === "collaborators" ? "Buscar colaborador" : "Buscar líder ou perfil"}
                               />
                             </div>
                           </div>
@@ -1769,17 +2118,33 @@ export default function GamificacaoPage() {
 
                             <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
                               {[
-                                ["O.S no ranking", `${formatNumber(rankingScopeTotals.serviceOrders)} O.S`],
-                                ["Fora do ranking", `${formatNumber(outsideRankingCount)} O.S`],
-                                ["O.S pontuadas", `${formatNumber(rankingScopeTotals.scored)} O.S`],
-                                ["O.S sem regra", `${formatNumber(rankingScopeTotals.unscored)} O.S`],
-                                ["Valor a ser pago", formatMoney(rankingScopeTotals.estimated)]
-                              ].map(([label, value]) => (
-                                <div key={label} className="min-w-0 rounded-md border bg-white px-3 py-2">
-                                  <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-                                  <div className="mt-1 truncate text-sm font-semibold text-slate-950">{value}</div>
-                                </div>
-                              ))}
+                                { label: "O.S no ranking", value: `${formatNumber(rankingScopeTotals.serviceOrders)} O.S`, icon: ClipboardList, tone: "neutral" as const },
+                                { label: "Fora do ranking", value: `${formatNumber(outsideRankingCount)} O.S`, icon: XCircle, tone: outsideRankingCount > 0 ? ("warning" as const) : ("good" as const) },
+                                { label: "O.S pontuadas", value: `${formatNumber(rankingScopeTotals.scored)} O.S`, icon: CheckCircle2, tone: "good" as const },
+                                { label: "O.S sem regra", value: `${formatNumber(rankingScopeTotals.unscored)} O.S`, icon: HelpCircle, tone: rankingScopeTotals.unscored > 0 ? ("warning" as const) : ("good" as const) },
+                                { label: "Valor a ser pago", value: formatMoney(rankingScopeTotals.estimated), icon: CircleDollarSign, tone: "info" as const }
+                              ].map((item) => {
+                                const Icon = item.icon;
+                                const iconToneClass =
+                                  item.tone === "warning"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : item.tone === "good"
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : item.tone === "info"
+                                        ? "bg-blue-100 text-blue-700"
+                                        : "bg-slate-200 text-slate-600";
+                                return (
+                                  <div key={item.label} className="min-w-0 rounded-md border bg-white px-3 py-2">
+                                    <div className="flex items-center gap-2">
+                                      <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${iconToneClass}`}>
+                                        <Icon className="h-3.5 w-3.5" />
+                                      </div>
+                                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</div>
+                                    </div>
+                                    <div className="mt-1 truncate text-sm font-semibold text-slate-950">{item.value}</div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </TabsContent>
 
@@ -1789,21 +2154,32 @@ export default function GamificacaoPage() {
                                 Escopo atual: {formatNumber(filteredLeadershipResults.length)} líder(es) no recorte
                               </span>{" "}
                               |{" "}
-                              {formatNumber(leadershipCoveredRegionals)} filial(is) coberta(s).
+                              {formatNumber(leadershipCoveredRegionals)} {pluralizeFilial(leadershipCoveredRegionals, " coberta")}.
+                              {rankingSearch.trim() ? " A busca filtra a tabela abaixo, sem alterar o resumo financeiro do período." : ""}
                             </div>
 
-                            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                               {[
-                                ["Líderes no ranking", `${formatNumber(filteredLeadershipResults.length)} líder(es)`],
-                                ["Filiais cobertas", `${formatNumber(leadershipCoveredRegionals)} filial(is)`],
-                                ["Multiplicador médio", filteredLeadershipResults.length ? `${formatNumber(filteredLeadershipResults.reduce((total, item) => total + item.multiplier, 0) / filteredLeadershipResults.length)}x` : "0x"],
-                                ["Valor a pagar", formatMoney(filteredLeadershipResults.reduce((total, item) => total + item.bonus_amount, 0))]
-                              ].map(([label, value]) => (
-                                <div key={label} className="min-w-0 rounded-md border bg-white px-3 py-2">
-                                  <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-                                  <div className="mt-1 truncate text-sm font-semibold text-slate-950">{value}</div>
-                                </div>
-                              ))}
+                                { label: "Líderes no ranking", value: `${formatNumber(leadershipScopeTotals.leaders)} líder(es)`, icon: Trophy, tone: "info" as const },
+                                { label: "Filiais cobertas", value: `${formatNumber(leadershipCoveredRegionals)} ${pluralizeFilial(leadershipCoveredRegionals)}`, icon: MapPin, tone: "neutral" as const },
+                                { label: "Colaboradores na base", value: `${formatNumber(leadershipScopeTotals.scopedCollaborators)} colaborador(es)`, icon: UsersRound, tone: "neutral" as const },
+                                { label: "Multiplicador médio", value: leadershipScopeTotals.leaders ? `${formatNumber(leadershipScopeTotals.averageMultiplier)}x` : "0x", icon: BarChart3, tone: "neutral" as const },
+                                { label: "Valor a pagar", value: formatMoney(leadershipScopeTotals.bonusAmount), icon: CircleDollarSign, tone: "info" as const }
+                              ].map((item) => {
+                                const Icon = item.icon;
+                                const iconToneClass = item.tone === "info" ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-600";
+                                return (
+                                  <div key={item.label} className="min-w-0 rounded-md border bg-white px-3 py-2">
+                                    <div className="flex items-center gap-2">
+                                      <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${iconToneClass}`}>
+                                        <Icon className="h-3.5 w-3.5" />
+                                      </div>
+                                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</div>
+                                    </div>
+                                    <div className="mt-1 truncate text-sm font-semibold text-slate-950">{item.value}</div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </TabsContent>
                         </Tabs>
@@ -1818,44 +2194,101 @@ export default function GamificacaoPage() {
                             }}
                           />
                         ) : (
-                          <div className="table-frame h-full px-2 py-2">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>Nome</TableHead>
-                                  <TableHead>Tipo</TableHead>
-                                  <TableHead>Filiais</TableHead>
-                                  <TableHead>Média final</TableHead>
-                                  <TableHead>Base</TableHead>
-                                  <TableHead>Multiplicador</TableHead>
-                                  <TableHead>Valor a pagar</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {filteredLeadershipResults.map((item) => (
-                                  <TableRow key={`${item.leadership_profile_id}-${item.role_type}`}>
-                                    <TableCell className="font-medium">{item.name}</TableCell>
-                                    <TableCell>{leadershipRoleLabel(item.role_type)}</TableCell>
-                                    <TableCell className="max-w-[540px]">
-                                      <div className="line-clamp-2 text-sm text-slate-700">
-                                        {item.regionals.map((regional) => regionalName(regional)).join(", ")}
-                                      </div>
-                                    </TableCell>
-                                    <TableCell>{formatNumber(item.average_final_points)} pts</TableCell>
-                                    <TableCell>{formatMoney(item.base_amount)}</TableCell>
-                                    <TableCell>{formatNumber(item.multiplier)}x</TableCell>
-                                    <TableCell className="font-semibold text-teal-700">{formatMoney(item.bonus_amount)}</TableCell>
-                                  </TableRow>
-                                ))}
-                                {filteredLeadershipResults.length === 0 ? (
+                          <div className="table-frame h-full overflow-auto px-2 py-2">
+                            <div className="rounded-xl border border-slate-200 bg-white">
+                              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-slate-950">Ranking de liderança</div>
+                                  <div className="text-xs text-slate-500">Ordenado pelo valor a pagar no recorte atual.</div>
+                                </div>
+                                <Badge className="border-slate-200 bg-slate-50 text-slate-700">
+                                  Base financeira {formatMoney(leadershipScopeTotals.baseAmount)}
+                                </Badge>
+                              </div>
+                              <Table>
+                                <TableHeader>
                                   <TableRow>
-                                    <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
-                                      Nenhum líder encontrado para os filtros atuais.
-                                    </TableCell>
+                                    <TableHead>Líder</TableHead>
+                                    <TableHead>Perfil</TableHead>
+                                    <TableHead>Filiais cobertas</TableHead>
+                                    <TableHead>Base</TableHead>
+                                    <TableHead>Média final</TableHead>
+                                    <TableHead>Multiplicador</TableHead>
+                                    <TableHead className="text-right">Valor a pagar</TableHead>
                                   </TableRow>
-                                ) : null}
-                              </TableBody>
-                            </Table>
+                                </TableHeader>
+                                <TableBody>
+                                  {filteredLeadershipResults.map((item) => {
+                                    const normalizedRegionals = item.regionals.map((regional) => regionalName(regional));
+                                    const regionalSummary = summarizeLabels(normalizedRegionals);
+                                    const roleLabel = leadershipRoleLabel(item.role_type);
+                                    const profileLabel =
+                                      item.role_profile_name && item.role_profile_name !== roleLabel ? item.role_profile_name : roleLabel;
+                                    return (
+                                      <TableRow key={`${item.leadership_profile_id}-${item.role_type}`}>
+                                        <TableCell className="min-w-[220px]">
+                                          <div className="grid gap-1">
+                                            <div className="font-semibold text-slate-950">{item.name}</div>
+                                            <div className="text-xs text-slate-500">{profileLabel}</div>
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <Badge className="border-blue-200 bg-blue-50 text-blue-700">{profileLabel}</Badge>
+                                        </TableCell>
+                                        <TableCell className="min-w-[280px]">
+                                          <div className="flex flex-wrap gap-1.5">
+                                            {regionalSummary.visible.map((regional) => (
+                                              <Badge key={`${item.leadership_profile_id}-${regional}`} className="border-slate-200 bg-slate-50 text-slate-700">
+                                                {regional}
+                                              </Badge>
+                                            ))}
+                                            {regionalSummary.remaining > 0 ? (
+                                              <Badge className="border-slate-200 bg-white text-slate-500">+{regionalSummary.remaining}</Badge>
+                                            ) : null}
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="grid gap-0.5">
+                                            <span className="font-medium text-slate-900">{formatNumber(item.scoped_collaborators)} pessoa(s)</span>
+                                            <span className="text-xs text-slate-500">{leadershipAverageSourceLabel(item.average_source)} - {formatMoney(item.base_amount)}</span>
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="grid gap-2">
+                                            <span className="font-medium text-slate-950">{formatPoints(item.average_final_points)}</span>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              className="h-8 w-fit rounded-full border border-teal-600 bg-teal-600 px-3 text-[11px] font-semibold text-white shadow-sm hover:bg-teal-700"
+                                              onClick={() => setSelectedLeadershipResult(item)}
+                                            >
+                                              <Search className="h-3.5 w-3.5" />
+                                              Auditar média
+                                            </Button>
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="grid gap-0.5">
+                                            <span className="font-medium text-slate-900">{formatNumber(item.multiplier)}x</span>
+                                            <span className="text-xs text-slate-500">{item.point_value > 0 ? `${formatMoney(item.point_value)}/pt` : "Sem valor"}</span>
+                                          </div>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                          <span className="font-semibold text-teal-700">{formatMoney(item.bonus_amount)}</span>
+                                        </TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                  {filteredLeadershipResults.length === 0 ? (
+                                    <TableRow>
+                                      <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
+                                        Nenhum líder encontrado para os filtros atuais.
+                                      </TableCell>
+                                    </TableRow>
+                                  ) : null}
+                                </TableBody>
+                              </Table>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1870,12 +2303,13 @@ export default function GamificacaoPage() {
                 <UpvalueImportPanel
                   onImported={loadAll}
                   onRecalculate={recalculate}
-                  onAnalyzePeriod={can("calculation:run") ? calculatePeriod : viewPeriod}
+                  onAnalyzePeriod={calculatePeriod}
+                  onViewPeriod={viewPeriod}
                   canImport={can("orders:import")}
                   canCalculate={can("calculation:run")}
                   currentPeriod={{
-                    reference_month: summary.run?.reference_month,
-                    reference_year: summary.run?.reference_year
+                    reference_month: summary?.run?.reference_month ?? bootstrap?.reference_month ?? undefined,
+                    reference_year: summary?.run?.reference_year ?? bootstrap?.reference_year ?? undefined
                   }}
                   busy={busy}
                 />
@@ -1884,7 +2318,9 @@ export default function GamificacaoPage() {
 
             <TabsContent value="pending" className="mt-0 flex-1 pr-1">
               {activeTab === "pending" ? (
-                !pendingDataLoaded && tabLoading.pending ? (
+                !summary ? (
+                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado antes de abrir as pendencias...</div>
+                ) : !pendingDataLoaded && tabLoading.pending ? (
                   <div className="panel p-8 text-sm text-slate-500">Carregando assuntos e diagnósticos pendentes...</div>
                 ) : (
                 <div className="grid gap-4">
@@ -1906,23 +2342,49 @@ export default function GamificacaoPage() {
                       </Button>
                     </div>
                     <div className="grid gap-3 border-t bg-white p-5 md:grid-cols-3">
-                      <div className="rounded-lg border bg-slate-50/70 p-4">
-                        <div className="text-xs font-medium uppercase text-slate-500">O.S sem regra</div>
-                        <div className="mt-2 text-2xl font-semibold text-amber-700">{formatNumber(summary.cards.unscored_service_orders)} O.S</div>
-                        <p className="mt-1 text-xs text-slate-500">Assuntos que precisam de grupo de pontuação.</p>
-                      </div>
-                      <div className="rounded-lg border bg-slate-50/70 p-4">
-                        <div className="text-xs font-medium uppercase text-slate-500">Diagnósticos sem regra</div>
-                        <div className="mt-2 text-2xl font-semibold text-amber-700">{formatNumber(summary.cards.diagnosis_unmapped_service_orders)} O.S</div>
-                        <p className="mt-1 text-xs text-slate-500">Diagnósticos que ainda precisam de decisão.</p>
-                      </div>
-                      <div className="rounded-lg border bg-slate-50/70 p-4">
-                        <div className="text-xs font-medium uppercase text-slate-500">Total pendente</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-950">
-                          {formatNumber(summary.cards.closure_pending_service_orders ?? (summary.cards.unscored_service_orders + summary.cards.diagnosis_unmapped_service_orders))} O.S
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">Conta O.S únicas com assunto sem grupo ou diagnóstico sem regra, sem duplicar a mesma ordem.</p>
-                      </div>
+                      {[
+                        {
+                          label: "O.S sem regra",
+                          value: `${formatNumber(summary.cards.unscored_service_orders)} O.S`,
+                          help: "Assuntos que precisam de grupo de pontuação.",
+                          icon: HelpCircle,
+                          tone: summary.cards.unscored_service_orders > 0 ? "warning" : "good"
+                        },
+                        {
+                          label: "Diagnósticos sem regra",
+                          value: `${formatNumber(summary.cards.diagnosis_unmapped_service_orders)} O.S`,
+                          help: "Diagnósticos que ainda precisam de decisão.",
+                          icon: ShieldAlert,
+                          tone: summary.cards.diagnosis_unmapped_service_orders > 0 ? "warning" : "good"
+                        },
+                        {
+                          label: "Total pendente",
+                          value: `${formatNumber(summary.cards.closure_pending_service_orders ?? (summary.cards.unscored_service_orders + summary.cards.diagnosis_unmapped_service_orders))} O.S`,
+                          help: "Conta O.S únicas com assunto sem grupo ou diagnóstico sem regra, sem duplicar a mesma ordem.",
+                          icon: ClipboardList,
+                          tone: "neutral"
+                        }
+                      ].map((item) => {
+                        const Icon = item.icon;
+                        const toneClass =
+                          item.tone === "warning"
+                            ? { badge: "bg-amber-100 text-amber-700", value: "text-amber-700" }
+                            : item.tone === "good"
+                              ? { badge: "bg-emerald-100 text-emerald-700", value: "text-emerald-700" }
+                              : { badge: "bg-slate-200 text-slate-600", value: "text-slate-950" };
+                        return (
+                          <div key={item.label} className="rounded-lg border bg-slate-50/70 p-4">
+                            <div className="flex items-center gap-2">
+                              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${toneClass.badge}`}>
+                                <Icon className="h-4 w-4" />
+                              </div>
+                              <div className="text-xs font-medium uppercase text-slate-500">{item.label}</div>
+                            </div>
+                            <div className={`mt-2 text-2xl font-semibold ${toneClass.value}`}>{item.value}</div>
+                            <p className="mt-1 text-xs text-slate-500">{item.help}</p>
+                          </div>
+                        );
+                      })}
                     </div>
                   </section>
 
@@ -2299,6 +2761,7 @@ export default function GamificacaoPage() {
                               role_profile_id: profile.role_profile_id,
                               use_custom_multiplier: profile.use_custom_multiplier,
                               custom_multiplier: profile.custom_multiplier,
+                              average_source: profile.average_source,
                               active: profile.active,
                               collaborator_id: profile.collaborator_id,
                               regional_names: profile.regional_names
@@ -2431,19 +2894,46 @@ export default function GamificacaoPage() {
               ) : null}
             </TabsContent>
 
-            <TabsContent value="audit" className="mt-0 flex-1 overflow-visible">
+            <TabsContent value="audit" className="mt-0 flex flex-1 flex-col overflow-visible">
               {activeTab === "audit" ? (
-                !serviceOrdersLoaded && tabLoading.serviceOrders ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando filtros detalhados da auditoria...</div>
-                ) : (
-                  <AuditPanel
-                    calculationRunId={summary.run?.id}
-                    groups={groups}
-                    regionalOptions={regionalOptions}
-                    collaboratorOptions={auditCollaboratorOptions}
-                    subjectOptions={auditSubjectOptions}
-                  />
-                )
+                <Tabs value={auditTab} onValueChange={setAuditTab} className="flex h-full min-h-0 flex-1 flex-col gap-3">
+                  <TabsList className="w-full shrink-0 justify-start gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-2">
+                    <TabsTrigger value="scoring" className="rounded-xl px-4 py-2">Pontuação de O.S</TabsTrigger>
+                    <TabsTrigger value="trail" className="rounded-xl px-4 py-2">Trilha de ações</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="scoring" className="mt-0 flex min-h-0 flex-1 flex-col">
+                    {!summary ? (
+                      <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado para habilitar a auditoria...</div>
+                    ) : !serviceOrdersLoaded && tabLoading.serviceOrders ? (
+                      <div className="panel p-8 text-sm text-slate-500">Carregando filtros detalhados da auditoria...</div>
+                    ) : (
+                      <AuditPanel
+                        calculationRunId={summary?.run?.id}
+                        groups={groups}
+                        regionalOptions={regionalOptions}
+                        collaboratorOptions={auditCollaboratorOptions}
+                        subjectOptions={auditSubjectOptions}
+                      />
+                    )}
+                  </TabsContent>
+                  <TabsContent value="trail" className="mt-0 min-h-0 flex-1 overflow-auto">
+                    <div className="panel p-4">
+                      <AuditTrailPanel />
+                    </div>
+                  </TabsContent>
+                </Tabs>
+              ) : null}
+            </TabsContent>
+
+            <TabsContent value="balance" className="mt-0 flex-1 pr-1">
+              {activeTab === "balance" ? (
+                <PointBalancePanel
+                  isAdmin={currentUser?.role === "admin"}
+                  calculationRunId={summary?.run?.id}
+                  referenceMonth={summary?.run?.reference_month ?? analysisPeriod.reference_month}
+                  referenceYear={summary?.run?.reference_year ?? analysisPeriod.reference_year}
+                  runStatus={summary?.run?.status}
+                />
               ) : null}
             </TabsContent>
 
@@ -2452,7 +2942,9 @@ export default function GamificacaoPage() {
                 !historyLoaded && tabLoading.history ? (
                   <div className="panel p-8 text-sm text-slate-500">Carregando histórico de apurações...</div>
                 ) : (
-                  <ClosureHistoryPanel runs={calculationRuns} />
+                  <div className="space-y-4">
+                    <ClosureHistoryPanel runs={calculationRuns} />
+                  </div>
                 )
               ) : null}
             </TabsContent>
@@ -2466,12 +2958,161 @@ export default function GamificacaoPage() {
         score={selectedScore}
         calculationRunId={summary?.run?.id}
         groups={groups}
+        regionalHealth={
+          selectedScore
+            ? summary?.health_by_regional.find((item) => normalizeRegional(item.regional) === normalizeRegional(selectedScore.regional)) ?? null
+            : null
+        }
+        pointValue={summary?.run?.point_value ?? summary?.point_value ?? null}
+        rulesVersionId={summary?.run?.rules_version_id ?? null}
+        runStatus={summary?.run?.status ?? null}
         rankingPosition={
           selectedScore
             ? filteredRanking.findIndex((score) => score.collaborator_id === selectedScore.collaborator_id) + 1 || null
             : null
         }
       />
+
+      <AppDrawer
+        open={selectedLeadershipResult != null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedLeadershipResult(null);
+        }}
+        title={selectedLeadershipResult ? `Auditoria da liderança: ${selectedLeadershipResult.name}` : "Auditoria da liderança"}
+        description="Mostra exatamente quais pessoas entraram no escopo e como a média final foi formada."
+        widthClassName="sm:max-w-7xl"
+      >
+        {selectedLeadershipResult ? (
+          <>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Pessoas na base</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatNumber(leadershipAudit.collaborators.length)}</div>
+                <div className="mt-1 text-sm text-slate-500">Entraram na média deste líder.</div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Soma dos pontos finais</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatNumber(leadershipAudit.totalFinalPoints)}</div>
+                <div className="mt-1 text-sm text-slate-500">Total antes de dividir pela base.</div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Média final</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatPoints(selectedLeadershipResult.average_final_points)}</div>
+                <div className="mt-1 text-sm text-slate-500">Soma dos pontos finais / base.</div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Base financeira</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatMoney(selectedLeadershipResult.base_amount)}</div>
+                <div className="mt-1 text-sm text-slate-500">{formatMoney(selectedLeadershipResult.point_value)}/pt aplicado sobre a média.</div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Valor a pagar</div>
+                <div className="mt-2 text-2xl font-semibold text-teal-700">{formatMoney(selectedLeadershipResult.bonus_amount)}</div>
+                <div className="mt-1 text-sm text-slate-500">Base x multiplicador {formatNumber(selectedLeadershipResult.multiplier)}x.</div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-slate-700">
+              <span className="font-semibold text-slate-950">Fórmula usada:</span>{" "}
+              {formatNumber(leadershipAudit.totalFinalPoints)} pts / {formatNumber(leadershipAudit.collaborators.length)} pessoa(s)
+              = {formatNumber(leadershipAudit.averageFinalPoints)} pts de média.
+              {" "}Depois: {formatMoney(selectedLeadershipResult.base_amount)} x {formatNumber(selectedLeadershipResult.multiplier)}x
+              = {formatMoney(selectedLeadershipResult.bonus_amount)}.
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <span className="font-semibold text-slate-950">Como ler esta auditoria:</span>{" "}
+              {leadershipAudit.explanation}
+              {" "}
+              {leadershipAudit.differenceFromStoredAverage > 0.01
+                ? "A diferença aparece porque a média exibida na conferência não bate com a média salva no fechamento."
+                : "A média exibida na conferência bate com a média salva no fechamento."}
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-sm font-semibold text-slate-950">Escopo considerado</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {selectedLeadershipResult.regionals.map((regional) => (
+                    <Badge key={`${selectedLeadershipResult.leadership_profile_id}-${regional}`} className="border-slate-200 bg-slate-50 text-slate-700">
+                      {regionalName(regional)}
+                    </Badge>
+                  ))}
+                </div>
+                <div className="mt-4 text-xs text-slate-500">
+                  Origem da média: {leadershipAverageSourceLabel(selectedLeadershipResult.average_source)}.
+                  {" "}
+                  {selectedLeadershipResult.role_type === "portfolio_manager"
+                    ? "Gerente de pasta usa toda a base registrada do ranking."
+                    : "As filiais vinculadas definem o escopo desta média."}
+                </div>
+                {leadershipAudit.differenceFromStoredAverage > 0.01 ? (
+                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Diferença detectada: a média recalculada na conferência difere da média salva em {formatNumber(leadershipAudit.differenceFromStoredAverage)} pts.
+                    {" "}
+                    {!leadershipAudit.isExactAudit && selectedLeadershipResult.average_source === "collaborators_and_leaders"
+                      ? "Neste caso, o motivo mais provável é que a apuração salva considerou líderes na composição da média e a reconstrução visual usa apenas a base disponível no frontend."
+                      : "Revise se a base desta liderança mudou entre o fechamento salvo e a visualização atual."}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <div className="text-sm font-semibold text-slate-950">Base que forma a média</div>
+                  <div className="text-xs text-slate-500">Ordenados pelos pontos finais dentro do escopo deste líder.</div>
+                </div>
+                <div className="max-h-[60vh] overflow-y-auto overflow-x-hidden">
+                  <Table className="table-fixed">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[22%]">Pessoa</TableHead>
+                        <TableHead className="w-[14%]">Origem</TableHead>
+                        <TableHead className="w-[24%]">Filial</TableHead>
+                        <TableHead className="w-[8%]">O.S / time</TableHead>
+                        <TableHead className="w-[12%]">Multiplicador saúde</TableHead>
+                        <TableHead className="w-[12%]">Pontos finais</TableHead>
+                        <TableHead className="w-[8%] text-right">Valor técnico</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {leadershipAudit.collaborators.map((score, index) => (
+                        <TableRow key={`leadership-audit-${selectedLeadershipResult.leadership_profile_id}-${score.source_type}-${score.collaborator_id}-${score.collaborator_name}-${index}`}>
+                          <TableCell className="break-words">
+                            <div className="grid gap-0.5">
+                              <span className="font-medium text-slate-950">{score.collaborator_name}</span>
+                              <span className="text-xs text-slate-500">{score.role}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="break-words">
+                            <Badge className={score.source_type === "leader" ? "border-cyan-200 bg-cyan-50 text-cyan-700" : "border-slate-200 bg-slate-50 text-slate-700"}>
+                              {leadershipAuditSourceLabel(score.source_type)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="break-words text-sm text-slate-700">{regionalName(score.regional)}</TableCell>
+                          <TableCell>
+                            {score.source_type === "leader" ? (
+                              <span title="Colaboradores no time deste líder, não ordens de serviço">
+                                {formatNumber(score.service_orders_count)} no time
+                              </span>
+                            ) : (
+                              formatNumber(score.service_orders_count)
+                            )}
+                          </TableCell>
+                          <TableCell>{score.source_type === "leader" ? "—" : `${formatNumber(score.health_multiplier)}x`}</TableCell>
+                          <TableCell className="font-medium text-slate-950">{formatPoints(score.final_points)}</TableCell>
+                          <TableCell className="text-right font-semibold text-teal-700">{formatMoney(score.estimated_payment)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
+      </AppDrawer>
+      {ConfirmDialog}
     </main>
   );
 }

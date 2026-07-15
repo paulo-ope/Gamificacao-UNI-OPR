@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-opr}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-opr}
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,10 +23,10 @@ services:
     container_name: opr-gamification-backend
     restart: unless-stopped
     environment:
+      APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opr:opr@db:5432/opr_gamification}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
-      AUTO_SEED: ${AUTO_SEED:-true}
-      DEMO_SEED: ${DEMO_SEED:-false}
+      AUTH_SECRET_KEY: ${AUTH_SECRET_KEY}
     ports:
       - "8000:8000"
     depends_on:
@@ -34,6 +34,9 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./backend/pytest.ini:/app/pytest.ini
+      - ./backend/requirements-dev.txt:/app/requirements-dev.txt
 
   frontend:
     build:
@@ -44,12 +47,23 @@ services:
     container_name: opr-gamification-frontend
     restart: unless-stopped
     environment:
+      NODE_ENV: development
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api}
       INTERNAL_API_URL: ${INTERNAL_API_URL:-http://backend:8000}
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+    command: npm run dev -- --hostname 0.0.0.0 --port 3000
     ports:
       - "3000:3000"
     depends_on:
       - backend
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
 
 volumes:
   postgres_data:
+  frontend_node_modules:
+  frontend_next:

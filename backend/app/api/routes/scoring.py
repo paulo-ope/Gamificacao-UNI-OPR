@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.performance import performance_step
 from app.core.security import require_permission
 from app.db.session import get_db
 from app.models import CalculationRun, DiagnosisPenaltyRule, ScoringGroup, ScoringRule, ScoringSubjectRule, ServiceOrder, User
@@ -160,7 +161,7 @@ def _delete_legacy_subject_rule(db: Session, os_type: str, os_subject: str) -> N
 def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> ScoringSubjectRule:
     group = db.get(ScoringGroup, payload.group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="Grupo de pontuacao nao encontrado.")
+        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
 
     rule = db.scalar(
         select(ScoringSubjectRule)
@@ -191,7 +192,7 @@ def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> Scori
 
 def _configure_diagnosis_rule(db: Session, payload: DiagnosisConfigureRequest) -> DiagnosisPenaltyRule:
     if payload.action_type not in ALLOWED_DIAGNOSIS_ACTIONS:
-        raise HTTPException(status_code=422, detail="Tipo de acao de diagnostico invalido.")
+        raise HTTPException(status_code=422, detail="Tipo de ação de diagnóstico inválido.")
 
     rule = db.scalar(select(DiagnosisPenaltyRule).where(DiagnosisPenaltyRule.diagnosis_name == payload.diagnosis_name))
     if not rule:
@@ -228,7 +229,7 @@ def create_scoring_group(payload: ScoringGroupCreate, db: Session = Depends(get_
 def update_scoring_group(group_id: int, payload: ScoringGroupUpdate, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
     group = db.get(ScoringGroup, group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="Grupo de pontuacao nao encontrado.")
+        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
 
     before = snapshot(group)
     for field, value in payload.model_dump(exclude_unset=True).items():
@@ -249,16 +250,16 @@ def delete_scoring_group(
 ):
     group = db.get(ScoringGroup, group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="Grupo de pontuacao nao encontrado.")
+        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
 
     delete_request = payload or ScoringGroupDeleteRequest()
     replacement_group: ScoringGroup | None = None
     if delete_request.replacement_group_id is not None:
         if delete_request.replacement_group_id == group_id:
-            raise HTTPException(status_code=400, detail="Selecione um grupo diferente para receber os vinculos.")
+            raise HTTPException(status_code=400, detail="Selecione um grupo diferente para receber os vínculos.")
         replacement_group = db.get(ScoringGroup, delete_request.replacement_group_id)
         if not replacement_group:
-            raise HTTPException(status_code=404, detail="Grupo de destino nao encontrado.")
+            raise HTTPException(status_code=404, detail="Grupo de destino não encontrado.")
 
     subject_rules = list(db.scalars(select(ScoringSubjectRule).where(ScoringSubjectRule.group_id == group_id)))
     legacy_rules = list(db.scalars(select(ScoringRule).where(ScoringRule.group_id == group_id)))
@@ -269,7 +270,7 @@ def delete_scoring_group(
             detail=(
                 "O grupo possui "
                 f"{len(subject_rules)} assunto(s) vinculado(s) e {len(legacy_rules)} regra(s) legada(s). "
-                "Escolha um grupo de destino ou confirme a exclusao dos vinculos."
+                "Escolha um grupo de destino ou confirme a exclusão dos vínculos."
             ),
         )
 
@@ -324,7 +325,7 @@ def list_scoring_subject_rules(db: Session = Depends(get_db)):
 def create_scoring_subject_rule(payload: ScoringSubjectRuleCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
     group = db.get(ScoringGroup, payload.group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="Grupo de pontuacao nao encontrado.")
+        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
 
     exists = db.scalar(
         select(ScoringSubjectRule)
@@ -351,14 +352,14 @@ def create_scoring_subject_rule(payload: ScoringSubjectRuleCreate, db: Session =
 def update_scoring_subject_rule(rule_id: int, payload: ScoringSubjectRuleUpdate, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
     rule = db.get(ScoringSubjectRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de assunto nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de assunto não encontrada.")
 
     before = snapshot(rule)
     previous_os_type = rule.os_type
     previous_os_subject = rule.os_subject
     updates = payload.model_dump(exclude_unset=True)
     if "group_id" in updates and not db.get(ScoringGroup, updates["group_id"]):
-        raise HTTPException(status_code=404, detail="Grupo de pontuacao nao encontrado.")
+        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
 
     for field, value in updates.items():
         setattr(rule, field, value)
@@ -376,7 +377,7 @@ def update_scoring_subject_rule(rule_id: int, payload: ScoringSubjectRuleUpdate,
 def delete_scoring_subject_rule(rule_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
     rule = db.get(ScoringSubjectRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de assunto nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de assunto não encontrada.")
 
     result = ScoringSubjectRuleDeleteResult(
         deleted_rule_id=rule.id,
@@ -403,7 +404,8 @@ def list_unmapped_subjects(
     month = reference_month or (run.reference_month if run else now.month)
     year = reference_year or (run.reference_year if run else now.year)
     selected_regional = regional if regional is not None else (run.regional if run else None)
-    return unmapped_subjects(db, month, year, selected_regional)
+    with performance_step("scoring.unmapped-subjects", "aggregate_unmapped_subjects"):
+        return unmapped_subjects(db, month, year, selected_regional)
 
 
 @router.get("/scoring-matrix/unmapped-subjects", response_model=list[UnmappedSubjectOut])
@@ -462,7 +464,8 @@ def list_imported_diagnoses(
     month = reference_month or (run.reference_month if run else now.month)
     year = reference_year or (run.reference_year if run else now.year)
     selected_regional = regional if regional is not None else (run.regional if run else None)
-    return imported_diagnosis_stats(db, month, year, selected_regional)
+    with performance_step("scoring.imported-diagnoses", "aggregate_imported_diagnoses"):
+        return imported_diagnosis_stats(db, month, year, selected_regional)
 
 
 @router.get("/diagnoses/unmapped", response_model=list[ImportedDiagnosisOut])
@@ -478,7 +481,8 @@ def list_unmapped_diagnoses(
     month = reference_month or (run.reference_month if run else now.month)
     year = reference_year or (run.reference_year if run else now.year)
     selected_regional = regional if regional is not None else (run.regional if run else None)
-    return imported_diagnosis_stats(db, month, year, selected_regional, only_unmapped=True)
+    with performance_step("scoring.unmapped-diagnoses", "aggregate_unmapped_diagnoses"):
+        return imported_diagnosis_stats(db, month, year, selected_regional, only_unmapped=True)
 
 
 @router.get("/scoring-matrix/unmapped-diagnoses", response_model=list[ImportedDiagnosisOut])
@@ -527,7 +531,7 @@ def list_scoring_rules(db: Session = Depends(get_db)):
 def create_scoring_rule(payload: ScoringRuleCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
     group = db.get(ScoringGroup, payload.group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="Grupo de pontuacao nao encontrado.")
+        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
 
     rule = ScoringRule(**payload.model_dump())
     db.add(rule)
@@ -544,12 +548,12 @@ def create_scoring_rule(payload: ScoringRuleCreate, db: Session = Depends(get_db
 def update_scoring_rule(rule_id: int, payload: ScoringRuleUpdate, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
     rule = db.get(ScoringRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de pontuacao nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de pontuação não encontrada.")
 
     before = snapshot(rule)
     updates = payload.model_dump(exclude_unset=True)
     if "group_id" in updates and not db.get(ScoringGroup, updates["group_id"]):
-        raise HTTPException(status_code=404, detail="Grupo de pontuacao nao encontrado.")
+        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
 
     for field, value in updates.items():
         setattr(rule, field, value)

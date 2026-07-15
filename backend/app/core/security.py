@@ -42,6 +42,10 @@ def permissions_for_role(role: str) -> set[str]:
     return ROLE_PERMISSIONS.get(role, set())
 
 
+def is_admin_user(user: User | None) -> bool:
+    return bool(user and user.role == "admin")
+
+
 def hash_password(password: str) -> str:
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 260_000)
@@ -105,7 +109,7 @@ def decode_access_token(token: str) -> dict:
             raise ValueError("expired")
         return payload
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido ou expirado.") from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido ou expirado.") from exc
 
 
 def get_current_user(
@@ -113,18 +117,18 @@ def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     if not credentials:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Autenticacao obrigatoria.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Autenticação obrigatória.")
     payload = decode_access_token(credentials.credentials)
     user = db.get(User, int(payload.get("sub") or 0))
     if not user or not user.active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inativo ou nao encontrado.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuário inativo ou não encontrado.")
     return user
 
 
 def require_permission(permission: str):
     def dependency(user: User = Depends(get_current_user)) -> User:
         if permission not in permissions_for_role(user.role):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permissao insuficiente.")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permissão insuficiente.")
         return user
 
     return dependency

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { BarChart3, CalendarDays, Database, FileSpreadsheet, RefreshCw, Trash2, UploadCloud } from "lucide-react";
+import { BarChart3, CalendarDays, Database, Eye, FileSpreadsheet, RefreshCw, Trash2, UploadCloud } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,20 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { formatDateTime, formatInteger } from "@/lib/format";
-import type { ImportPreview, ImportResult, ServiceOrderDeletePeriodResult, ServiceOrderPeriodSummary } from "@/lib/types";
+import type {
+  ImportPreview,
+  ImportResult,
+  ImportRun,
+  ImportServiceOrderAudit,
+  ServiceOrderDeletePeriodResult,
+  ServiceOrderPeriodSummary
+} from "@/lib/types";
 
 type UpvalueImportPanelProps = {
   onImported: () => Promise<void>;
   onRecalculate: () => Promise<void>;
   onAnalyzePeriod: (month: number, year: number) => Promise<void>;
+  onViewPeriod: (month: number, year: number) => Promise<void>;
   currentPeriod?: {
     reference_month?: number | null;
     reference_year?: number | null;
@@ -50,6 +58,7 @@ export function UpvalueImportPanel({
   onImported,
   onRecalculate,
   onAnalyzePeriod,
+  onViewPeriod,
   currentPeriod,
   busy,
   canImport = false,
@@ -58,6 +67,8 @@ export function UpvalueImportPanel({
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [latestImport, setLatestImport] = useState<ImportRun | null>(null);
+  const [latestImportErrors, setLatestImportErrors] = useState<ImportServiceOrderAudit[]>([]);
   const [periods, setPeriods] = useState<ServiceOrderPeriodSummary[]>([]);
   const [selectedPeriodKey, setSelectedPeriodKey] = useState<string | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
@@ -67,6 +78,7 @@ export function UpvalueImportPanel({
   const [loadingPeriods, setLoadingPeriods] = useState(false);
   const [deletingPeriod, setDeletingPeriod] = useState(false);
   const [calculatingPeriodKey, setCalculatingPeriodKey] = useState<string | null>(null);
+  const [viewingPeriodKey, setViewingPeriodKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [periodError, setPeriodError] = useState<string | null>(null);
 
@@ -102,8 +114,26 @@ export function UpvalueImportPanel({
     }
   }
 
+  async function loadLatestImport() {
+    try {
+      const runs = await api.importRuns({ limit: 1 });
+      const lastRun = runs[0] ?? null;
+      setLatestImport(lastRun);
+      if (lastRun) {
+        const audits = await api.importRunErrors(lastRun.id, { limit: 20 });
+        setLatestImportErrors(audits);
+      } else {
+        setLatestImportErrors([]);
+      }
+    } catch {
+      setLatestImport(null);
+      setLatestImportErrors([]);
+    }
+  }
+
   useEffect(() => {
     void loadPeriodSummary();
+    void loadLatestImport();
   }, []);
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -138,6 +168,7 @@ export function UpvalueImportPanel({
       const importResult = await api.importUpvalueServiceOrders(file);
       setResult(importResult);
       await loadPeriodSummary();
+      await loadLatestImport();
       await onImported();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Não foi possível importar a planilha.");
@@ -184,6 +215,20 @@ export function UpvalueImportPanel({
       setPeriodError(err instanceof Error ? err.message : "Não foi possível analisar o período.");
     } finally {
       setCalculatingPeriodKey(null);
+    }
+  }
+
+  async function viewPeriod(period: ServiceOrderPeriodSummary) {
+    const key = periodKey(period);
+    setViewingPeriodKey(key);
+    setPeriodError(null);
+    setDeleteResult(null);
+    try {
+      await onViewPeriod(period.reference_month, period.reference_year);
+    } catch (err) {
+      setPeriodError(err instanceof Error ? err.message : "Não foi possível abrir o período.");
+    } finally {
+      setViewingPeriodKey(null);
     }
   }
 
@@ -265,6 +310,7 @@ export function UpvalueImportPanel({
                     const selected = key === selectedPeriodKey;
                     const isActive = key === activePeriodKey;
                     const isCalculating = key === calculatingPeriodKey;
+                    const isViewing = key === viewingPeriodKey;
                     return (
                       <TableRow key={key} className={isActive ? "bg-teal-50/60" : undefined}>
                         <TableCell className="font-semibold">
@@ -286,12 +332,26 @@ export function UpvalueImportPanel({
                               type="button"
                               variant={isActive ? "default" : "outline"}
                               size="sm"
-                              onClick={() => void analyzePeriod(period)}
-                              disabled={busy || deletingPeriod || Boolean(calculatingPeriodKey)}
+                              onClick={() => void viewPeriod(period)}
+                              disabled={busy || deletingPeriod || Boolean(calculatingPeriodKey) || Boolean(viewingPeriodKey)}
+                              title="Abrir este mês somente para consulta (não recalcula, funciona mesmo se estiver pago)"
                             >
-                              {isCalculating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
-                              {canCalculate ? "Recalcular período" : "Alterar período"}
+                              {isViewing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+                              Ver período
                             </Button>
+                            {canCalculate ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void analyzePeriod(period)}
+                                disabled={busy || deletingPeriod || Boolean(calculatingPeriodKey) || Boolean(viewingPeriodKey)}
+                                title="Recalcular a pontuação deste mês (bloqueado se já estiver pago, exceto criando uma revisão)"
+                              >
+                                {isCalculating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
+                                Recalcular período
+                              </Button>
+                            ) : null}
                             {canImport ? (
                               <Button
                                 type="button"
@@ -364,24 +424,140 @@ export function UpvalueImportPanel({
           </div>
         ) : null}
 
-        {canImport && result ? (
-          <div className="grid gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 sm:grid-cols-4">
-            <div>
-              <div className="text-xs font-medium uppercase">Importadas</div>
-              <div className="text-lg font-semibold">{result.imported}</div>
+        {canImport && (result || latestImport) ? (
+          <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-slate-950">Resumo da última importação</div>
+                <div className="text-xs text-slate-500">
+                  {result?.file_name || latestImport?.filename || "Planilha importada"}{" "}
+                  {result?.status ? `• status ${result.status}` : latestImport ? `• status ${latestImport.status}` : ""}
+                </div>
+              </div>
+              <div className="text-xs text-slate-500">
+                {latestImport?.finished_at ? `Finalizada em ${formatDateTime(latestImport.finished_at)}` : null}
+              </div>
             </div>
-            <div>
-              <div className="text-xs font-medium uppercase">Ignoradas</div>
-              <div className="text-lg font-semibold">{result.ignored}</div>
+            <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800">
+                <div className="text-[11px] font-semibold uppercase">Criadas</div>
+                <div className="text-lg font-semibold">{result?.summary.created_count ?? latestImport?.created_count ?? 0}</div>
+              </div>
+              <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-800">
+                <div className="text-[11px] font-semibold uppercase">Atualizadas</div>
+                <div className="text-lg font-semibold">{result?.summary.updated_count ?? latestImport?.updated_count ?? 0}</div>
+              </div>
+              <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-slate-700">
+                <div className="text-[11px] font-semibold uppercase">Ignoradas</div>
+                <div className="text-lg font-semibold">{result?.summary.skipped_count ?? latestImport?.skipped_count ?? 0}</div>
+              </div>
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                <div className="text-[11px] font-semibold uppercase">Rejeitadas / erro</div>
+                <div className="text-lg font-semibold">
+                  {(result?.summary.rejected_count ?? latestImport?.rejected_count ?? 0) + (result?.summary.error_count ?? latestImport?.error_rows ?? 0)}
+                </div>
+              </div>
+              <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-rose-800">
+                <div className="text-[11px] font-semibold uppercase">Bloqueadas por pago</div>
+                <div className="text-lg font-semibold">{result?.summary.paid_period_blocked_count ?? latestImport?.paid_period_blocked_count ?? 0}</div>
+              </div>
             </div>
-            <div>
-              <div className="text-xs font-medium uppercase">Total de linhas</div>
-              <div className="text-lg font-semibold">{result.summary.total_rows}</div>
+            <div className="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
+              <div className="rounded-md border bg-white px-3 py-2 text-slate-700">
+                <div className="text-[11px] font-semibold uppercase">Total de linhas</div>
+                <div className="text-lg font-semibold">{result?.summary.total_rows ?? latestImport?.total_rows ?? 0}</div>
+              </div>
+              <div className="rounded-md border bg-white px-3 py-2 text-slate-700">
+                <div className="text-[11px] font-semibold uppercase">Processadas</div>
+                <div className="text-lg font-semibold">{result?.summary.processed_rows ?? latestImport?.processed_rows ?? 0}</div>
+              </div>
+              <div className="rounded-md border bg-white px-3 py-2 text-slate-700">
+                <div className="text-[11px] font-semibold uppercase">Sem data</div>
+                <div className="text-lg font-semibold">{result?.summary.missing_date_count ?? latestImport?.missing_date_count ?? 0}</div>
+              </div>
+              <div className="rounded-md border bg-white px-3 py-2 text-slate-700">
+                <div className="text-[11px] font-semibold uppercase">Colaborador novo</div>
+                <div className="text-lg font-semibold">{result?.summary.unknown_collaborator_count ?? latestImport?.unknown_collaborator_count ?? 0}</div>
+              </div>
+              <div className="rounded-md border bg-white px-3 py-2 text-slate-700">
+                <div className="text-[11px] font-semibold uppercase">Hash duplicado</div>
+                <div className="text-lg font-semibold">{result?.summary.duplicate_count ?? latestImport?.duplicate_count ?? 0}</div>
+              </div>
             </div>
-            <div>
-              <div className="text-xs font-medium uppercase">Import ID</div>
-              <div className="text-lg font-semibold">{result.import_id ?? "-"}</div>
-            </div>
+            {(() => {
+              const s = result?.summary;
+              const l = latestImport;
+              const total = s?.total_rows ?? l?.total_rows ?? 0;
+              const created = s?.created_count ?? l?.created_count ?? 0;
+              const updated = s?.updated_count ?? l?.updated_count ?? 0;
+              const skipped = s?.skipped_count ?? l?.skipped_count ?? 0;
+              const rejected = (s?.rejected_count ?? l?.rejected_count ?? 0) + (s?.error_count ?? l?.error_rows ?? 0);
+              const blocked = s?.paid_period_blocked_count ?? l?.paid_period_blocked_count ?? 0;
+              const accounted = created + updated + skipped + rejected + blocked;
+              const balances = accounted === total;
+              return (
+                <div
+                  className={`rounded-md border px-3 py-2 text-sm ${
+                    balances ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"
+                  }`}
+                >
+                  <span className="font-semibold">Conferência:</span> {formatInteger(total)} linha(s) ={" "}
+                  {formatInteger(created)} criadas + {formatInteger(updated)} atualizadas + {formatInteger(skipped)} ignoradas +{" "}
+                  {formatInteger(rejected)} rejeitadas/erro + {formatInteger(blocked)} bloqueadas ={" "}
+                  {formatInteger(accounted)}.{" "}
+                  {balances ? "Nenhuma linha sumiu." : "⚠ Há diferença — algumas linhas não foram contabilizadas; verifique o arquivo."}
+                </div>
+              );
+            })()}
+            {(result?.message || latestImport?.notes || latestImport?.error_message) ? (
+              <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                {result?.message || latestImport?.notes || latestImport?.error_message}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {canImport && (result?.summary.missing_date_count || latestImport?.missing_date_count) ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Existem O.S sem data de referência. Elas foram rejeitadas e não entraram no período atual.
+          </div>
+        ) : null}
+
+        {canImport && (result?.summary.paid_period_blocked_count || latestImport?.paid_period_blocked_count) ? (
+          <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            Algumas O.S não foram alteradas porque pertencem a período já marcado como pago.
+          </div>
+        ) : null}
+
+        {canImport && (result?.summary.duplicate_count || latestImport?.duplicate_count) ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Este arquivo já foi importado anteriormente e o sistema bloqueou o reprocessamento automático.
+          </div>
+        ) : null}
+
+        {canImport && latestImportErrors.length ? (
+          <div className="rounded-md border">
+            <div className="border-b px-4 py-3 text-sm font-semibold">Auditoria básica da última importação</div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Ação</TableHead>
+                  <TableHead>O.S</TableHead>
+                  <TableHead>Linha</TableHead>
+                  <TableHead>Motivo</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {latestImportErrors.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell>{item.action}</TableCell>
+                    <TableCell>{item.os_code || "-"}</TableCell>
+                    <TableCell>{item.row_number ?? "-"}</TableCell>
+                    <TableCell className="max-w-xl truncate">{item.reason || "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         ) : null}
 

@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, select
+from sqlalchemy import desc, extract, func, select
 from sqlalchemy.orm import Session
 
+from app.core.performance import performance_step
+from app.core.config import get_settings
 from app.core.security import require_permission
 from app.db.session import get_db
-from app.models import CalculationRun, ServiceOrder, User
+from app.models import CalculationRun, LeadershipBonusResult, PointBalanceEntry, ServiceOrder, User
 from app.schemas import (
     ServiceOrderDeletePeriodRequest,
     ServiceOrderDeletePeriodResult,
@@ -46,28 +48,32 @@ def list_service_orders(limit: int = 200, db: Session = Depends(get_db), user: U
 
 @router.get("/period-summary", response_model=list[ServiceOrderPeriodSummary])
 def service_order_period_summary(db: Session = Depends(get_db), user: User = Depends(require_permission("orders:read"))):
-    orders = real_service_orders(list(db.scalars(select(ServiceOrder))))
-    grouped: dict[tuple[int, int], list[ServiceOrder]] = {}
-    for order in orders:
-        reference_date = _closed_reference_date(order)
-        if reference_date is None:
-            continue
-        grouped.setdefault((reference_date.year, reference_date.month), []).append(order)
-
-    summaries: list[ServiceOrderPeriodSummary] = []
-    for (year, month), period_orders in grouped.items():
-        dates = [date for date in (_closed_reference_date(order) for order in period_orders) if date is not None]
-        summaries.append(
-            ServiceOrderPeriodSummary(
-                reference_month=month,
-                reference_year=year,
-                total_service_orders=len(period_orders),
-                first_order_at=min(dates) if dates else None,
-                last_order_at=max(dates) if dates else None,
+    with performance_step("service-orders.period-summary", "aggregate_periods"):
+        year_expr = extract("year", ServiceOrder.closed_at)
+        month_expr = extract("month", ServiceOrder.closed_at)
+        rows = db.execute(
+            select(
+                year_expr.label("reference_year"),
+                month_expr.label("reference_month"),
+                func.count(ServiceOrder.id).label("total_service_orders"),
+                func.min(ServiceOrder.closed_at).label("first_order_at"),
+                func.max(ServiceOrder.closed_at).label("last_order_at"),
             )
+            .where(ServiceOrder.closed_at.is_not(None))
+            .where(ServiceOrder.os_code.notin_(DEMO_SERVICE_ORDER_CODES))
+            .group_by(year_expr, month_expr)
+            .order_by(year_expr.desc(), month_expr.desc())
         )
-
-    return sorted(summaries, key=lambda item: (item.reference_year, item.reference_month), reverse=True)
+        return [
+            ServiceOrderPeriodSummary(
+                reference_month=int(row.reference_month),
+                reference_year=int(row.reference_year),
+                total_service_orders=int(row.total_service_orders),
+                first_order_at=row.first_order_at,
+                last_order_at=row.last_order_at,
+            )
+            for row in rows
+        ]
 
 
 @router.get("/subject-summary", response_model=list[ServiceOrderSubjectSummary])
@@ -78,14 +84,16 @@ def service_order_subject_summary(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("orders:read")),
 ):
-    orders = real_service_orders(period_orders(db, reference_month, reference_year, regional))
+    with performance_step("service-orders.subject-summary", "load_period_orders"):
+        orders = real_service_orders(period_orders(db, reference_month, reference_year, regional))
     grouped: dict[tuple[str, str], int] = {}
-    for order in orders:
-        key = (
-            str(order.os_type or "Nao informado").strip() or "Nao informado",
-            str(order.os_subject or "Nao informado").strip() or "Nao informado",
-        )
-        grouped[key] = grouped.get(key, 0) + 1
+    with performance_step("service-orders.subject-summary", "group_subjects"):
+        for order in orders:
+            key = (
+                str(order.os_type or "Não informado").strip() or "Não informado",
+                str(order.os_subject or "Não informado").strip() or "Não informado",
+            )
+            grouped[key] = grouped.get(key, 0) + 1
 
     return [
         ServiceOrderSubjectSummary(
@@ -107,13 +115,13 @@ def delete_service_orders_by_period(
     user: User = Depends(require_permission("orders:import")),
 ):
     if payload.reference_month < 1 or payload.reference_month > 12:
-        raise HTTPException(status_code=422, detail="Mes de referencia invalido.")
+        raise HTTPException(status_code=422, detail="Mês de referência inválido.")
 
     expected_confirmation = _period_confirmation(payload.reference_month, payload.reference_year)
     if payload.confirmation.strip().upper() != expected_confirmation:
         raise HTTPException(
             status_code=400,
-            detail=f"Confirmacao invalida. Digite exatamente: {expected_confirmation}",
+            detail=f"Confirmação inválida. Digite exatamente: {expected_confirmation}",
         )
 
     regional = normalize_regional(payload.regional) if payload.regional else None
@@ -136,6 +144,72 @@ def delete_service_orders_by_period(
     if regional:
         calculation_stmt = calculation_stmt.where(CalculationRun.regional == regional)
     calculation_runs = list(db.scalars(calculation_stmt))
+    calculation_run_ids = [run.id for run in calculation_runs]
+    order_ids_to_delete = [order.id for order in orders_to_delete]
+
+    # Um fechamento (CalculationRun) e o registro real de um pagamento: apagar um que ja foi usado
+    # como origem/aplicacao de um debito de garantia destruiria historico financeiro de verdade, e
+    # isso continua bloqueado abaixo. Ja uma O.S bruta importada e apenas dado de origem re-importavel
+    # - o lancamento no ledger guarda o os_code (ver original_os_code/related_os_code), entao o debito
+    # sobrevive a O.S ser apagada e reimportada; so precisamos desfazer o vinculo com a linha antiga.
+    if calculation_run_ids:
+        blocking_entries = list(
+            db.scalars(
+                select(PointBalanceEntry).where(
+                    PointBalanceEntry.origin_calculation_run_id.in_(calculation_run_ids)
+                    | PointBalanceEntry.applied_calculation_run_id.in_(calculation_run_ids)
+                )
+            )
+        )
+        if blocking_entries:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Este período tem {len(blocking_entries)} lançamento(s) no ledger de saldo de garantia "
+                    "vinculado(s) ao próprio fechamento (débito detectado ou aplicado neste fechamento pago). "
+                    "Apagar o período destruiria esse histórico financeiro. Resolva ou estorne esses lançamentos "
+                    "antes de apagar."
+                ),
+            )
+
+    if order_ids_to_delete:
+        linked_entries = list(
+            db.scalars(
+                select(PointBalanceEntry).where(
+                    PointBalanceEntry.original_service_order_id.in_(order_ids_to_delete)
+                    | PointBalanceEntry.related_service_order_id.in_(order_ids_to_delete)
+                )
+            )
+        )
+        undocumented_entries = [
+            entry
+            for entry in linked_entries
+            if not (
+                (entry.original_service_order_id not in order_ids_to_delete or entry.original_os_code)
+                and (entry.related_service_order_id not in order_ids_to_delete or entry.related_os_code)
+            )
+        ]
+        if undocumented_entries:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Este período tem {len(undocumented_entries)} lançamento(s) antigo(s) no ledger de saldo de "
+                    "garantia sem o código da O.S salvo, então apagar as O.S perderia a referência. Resolva ou "
+                    "estorne esses lançamentos antes de apagar."
+                ),
+            )
+        for entry in linked_entries:
+            if entry.original_service_order_id in order_ids_to_delete:
+                entry.original_service_order_id = None
+            if entry.related_service_order_id in order_ids_to_delete:
+                entry.related_service_order_id = None
+
+    if calculation_run_ids:
+        db.execute(
+            LeadershipBonusResult.__table__.delete().where(
+                LeadershipBonusResult.calculation_run_id.in_(calculation_run_ids)
+            )
+        )
 
     for run in calculation_runs:
         db.delete(run)
@@ -163,5 +237,8 @@ def delete_service_orders_by_period(
 
 @router.post("/seed")
 def seed_service_orders(db: Session = Depends(get_db), user: User = Depends(require_permission("settings:write"))) -> dict[str, str]:
+    if get_settings().app_env.lower() != "development":
+        raise HTTPException(status_code=403, detail="Seed manual disponível apenas em ambiente de desenvolvimento.")
     seed_database(db, include_demo=False)
+    db.commit()
     return {"status": "logic_seeded_without_demo_orders"}

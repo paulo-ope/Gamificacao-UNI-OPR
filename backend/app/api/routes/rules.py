@@ -1,3 +1,5 @@
+from math import isfinite
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,6 +38,20 @@ ALLOWED_RECURRENCE_CLASSIFICATIONS = {
 }
 
 
+def _validate_health_rule_payload(updates: dict) -> None:
+    for field in ("min_sla", "max_recurrence_rate"):
+        if field in updates and updates[field] is None:
+            raise HTTPException(status_code=422, detail="SLA mínimo e reincidência máxima são obrigatórios.")
+        if field in updates and (not isfinite(float(updates[field])) or float(updates[field]) < 0 or float(updates[field]) > 100):
+            raise HTTPException(status_code=422, detail="SLA mínimo e reincidência máxima devem ficar entre 0 e 100.")
+    if "multiplier" in updates and updates["multiplier"] is None:
+        raise HTTPException(status_code=422, detail="Multiplicador é obrigatório.")
+    if "multiplier" in updates and (not isfinite(float(updates["multiplier"])) or float(updates["multiplier"]) < 0):
+        raise HTTPException(status_code=422, detail="Multiplicador deve ser um número maior ou igual a zero.")
+    if "condition_operator" in updates and updates["condition_operator"] not in {"and", "or", "fallback"}:
+        raise HTTPException(status_code=422, detail="Operador da faixa de saúde inválido.")
+
+
 @router.get("/diagnosis-penalty-rules", response_model=list[DiagnosisPenaltyRuleOut])
 def list_diagnosis_penalty_rules(db: Session = Depends(get_db)):
     return db.scalars(select(DiagnosisPenaltyRule).order_by(DiagnosisPenaltyRule.diagnosis_name.asc())).all()
@@ -44,11 +60,11 @@ def list_diagnosis_penalty_rules(db: Session = Depends(get_db)):
 @router.post("/diagnosis-penalty-rules", response_model=DiagnosisPenaltyRuleOut, status_code=201)
 def create_diagnosis_penalty_rule(payload: DiagnosisPenaltyRuleCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("penalties:write"))):
     if payload.action_type not in ALLOWED_DIAGNOSIS_ACTIONS:
-        raise HTTPException(status_code=422, detail="Tipo de acao de diagnostico invalido.")
+        raise HTTPException(status_code=422, detail="Tipo de ação de diagnóstico inválido.")
 
     exists = db.scalar(select(DiagnosisPenaltyRule).where(DiagnosisPenaltyRule.diagnosis_name == payload.diagnosis_name))
     if exists:
-        raise HTTPException(status_code=409, detail="Diagnostico ja possui regra configurada.")
+        raise HTTPException(status_code=409, detail="Diagnóstico já possui regra configurada.")
 
     rule = DiagnosisPenaltyRule(**payload.model_dump())
     db.add(rule)
@@ -68,11 +84,11 @@ def update_diagnosis_penalty_rule(
 ):
     rule = db.get(DiagnosisPenaltyRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de diagnostico nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de diagnóstico não encontrada.")
 
     updates = payload.model_dump(exclude_unset=True)
     if "action_type" in updates and updates["action_type"] not in ALLOWED_DIAGNOSIS_ACTIONS:
-        raise HTTPException(status_code=422, detail="Tipo de acao de diagnostico invalido.")
+        raise HTTPException(status_code=422, detail="Tipo de ação de diagnóstico inválido.")
 
     before = snapshot(rule)
     for field, value in updates.items():
@@ -91,9 +107,9 @@ def list_sla_penalty_rules(db: Session = Depends(get_db)):
 @router.post("/sla-penalty-rules", response_model=SlaPenaltyRuleOut, status_code=201)
 def create_sla_penalty_rule(payload: SlaPenaltyRuleCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("penalties:write"))):
     if payload.condition_type not in ALLOWED_SLA_CONDITIONS:
-        raise HTTPException(status_code=422, detail="Condicao de SLA invalida.")
+        raise HTTPException(status_code=422, detail="Condição de SLA inválida.")
     if payload.penalty_type not in ALLOWED_SLA_PENALTIES:
-        raise HTTPException(status_code=422, detail="Tipo de penalidade SLA invalido.")
+        raise HTTPException(status_code=422, detail="Tipo de penalidade SLA inválido.")
 
     rule = SlaPenaltyRule(**payload.model_dump())
     db.add(rule)
@@ -108,13 +124,13 @@ def create_sla_penalty_rule(payload: SlaPenaltyRuleCreate, db: Session = Depends
 def update_sla_penalty_rule(rule_id: int, payload: SlaPenaltyRuleUpdate, db: Session = Depends(get_db), user: User = Depends(require_permission("penalties:write"))):
     rule = db.get(SlaPenaltyRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de SLA nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de SLA não encontrada.")
 
     updates = payload.model_dump(exclude_unset=True)
     if "condition_type" in updates and updates["condition_type"] not in ALLOWED_SLA_CONDITIONS:
-        raise HTTPException(status_code=422, detail="Condicao de SLA invalida.")
+        raise HTTPException(status_code=422, detail="Condição de SLA inválida.")
     if "penalty_type" in updates and updates["penalty_type"] not in ALLOWED_SLA_PENALTIES:
-        raise HTTPException(status_code=422, detail="Tipo de penalidade SLA invalido.")
+        raise HTTPException(status_code=422, detail="Tipo de penalidade SLA inválido.")
 
     before = snapshot(rule)
     for field, value in updates.items():
@@ -142,7 +158,7 @@ def create_recurrence_classification_rule(
     user: User = Depends(require_permission("penalties:write")),
 ):
     if payload.classification not in ALLOWED_RECURRENCE_CLASSIFICATIONS:
-        raise HTTPException(status_code=422, detail="Classificacao de reincidencia invalida.")
+        raise HTTPException(status_code=422, detail="Classificação de reincidência inválida.")
     rule = RecurrenceClassificationRule(**payload.model_dump())
     db.add(rule)
     db.flush()
@@ -161,11 +177,11 @@ def update_recurrence_classification_rule(
 ):
     rule = db.get(RecurrenceClassificationRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de reincidencia nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de reincidência não encontrada.")
 
     updates = payload.model_dump(exclude_unset=True)
     if "classification" in updates and updates["classification"] not in ALLOWED_RECURRENCE_CLASSIFICATIONS:
-        raise HTTPException(status_code=422, detail="Classificacao de reincidencia invalida.")
+        raise HTTPException(status_code=422, detail="Classificação de reincidência inválida.")
 
     before = snapshot(rule)
     for field, value in updates.items():
@@ -180,7 +196,7 @@ def update_recurrence_classification_rule(
 def delete_recurrence_classification_rule(rule_id: int, db: Session = Depends(get_db), user: User = Depends(require_permission("penalties:write"))):
     rule = db.get(RecurrenceClassificationRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de reincidencia nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de reincidência não encontrada.")
 
     snapshot = RecurrenceClassificationRuleOut.model_validate(rule)
     record_audit_log(db, user, "delete", "recurrence_classification_rules", rule.id, snapshot, None)
@@ -191,11 +207,12 @@ def delete_recurrence_classification_rule(rule_id: int, db: Session = Depends(ge
 
 @router.get("/health-rules", response_model=list[HealthRuleOut])
 def list_health_rules(db: Session = Depends(get_db)):
-    return db.scalars(select(HealthRule).order_by(HealthRule.multiplier.desc())).all()
+    return db.scalars(select(HealthRule).order_by(HealthRule.id.asc())).all()
 
 
 @router.post("/health-rules", response_model=HealthRuleOut, status_code=201)
 def create_health_rule(payload: HealthRuleCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("health_rules:write"))):
+    _validate_health_rule_payload(payload.model_dump())
     rule = HealthRule(**payload.model_dump())
     db.add(rule)
     db.flush()
@@ -209,10 +226,12 @@ def create_health_rule(payload: HealthRuleCreate, db: Session = Depends(get_db),
 def update_health_rule(rule_id: int, payload: HealthRuleUpdate, db: Session = Depends(get_db), user: User = Depends(require_permission("health_rules:write"))):
     rule = db.get(HealthRule, rule_id)
     if not rule:
-        raise HTTPException(status_code=404, detail="Regra de saude operacional nao encontrada.")
+        raise HTTPException(status_code=404, detail="Regra de saúde operacional não encontrada.")
 
+    updates = payload.model_dump(exclude_unset=True)
+    _validate_health_rule_payload(updates)
     before = snapshot(rule)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    for field, value in updates.items():
         setattr(rule, field, value)
     record_audit_log(db, user, "update", "health_rules", rule.id, before, snapshot(rule))
     db.commit()

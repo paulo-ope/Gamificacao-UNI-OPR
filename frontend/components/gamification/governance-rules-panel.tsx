@@ -2,8 +2,8 @@
 
 import { Save } from "lucide-react";
 
+import { AppCombobox, AppInput, AppSwitch } from "@/components/gamification/config-ui";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { HealthRule } from "@/lib/types";
@@ -67,7 +67,7 @@ export function GovernanceRulesPanel({
         <div className="grid gap-2">
           <Label htmlFor="point-value">Valor global do ponto</Label>
           <div className="flex gap-2">
-            <Input
+            <AppInput
               id="point-value"
               inputMode="decimal"
               value={pointValue}
@@ -82,7 +82,7 @@ export function GovernanceRulesPanel({
 
         <div className="grid gap-2">
           <Label>Janela de reincidência (dias)</Label>
-          <Input
+          <AppInput
             inputMode="numeric"
             value={settingValue(localSettings, "recurrence_window_days")}
             onChange={(event) => updateLocalSetting("recurrence_window_days", event.target.value)}
@@ -93,25 +93,27 @@ export function GovernanceRulesPanel({
 
         <div className="grid gap-2">
           <Label>Ação quando confirmar reincidência</Label>
-          <select
-            className="h-10 rounded-md border border-input bg-white px-3 text-sm"
+          <AppCombobox
             value={settingValue(localSettings, "recurrence_action")}
-            onChange={(event) => {
-              updateLocalSetting("recurrence_action", event.target.value);
-              onSaveSetting({ recurrence_action: event.target.value });
+            onChange={(value) => {
+              updateLocalSetting("recurrence_action", value);
+              void onSaveSetting({ recurrence_action: value });
             }}
-          >
-            <option value="">Usar backend</option>
-            <option value="annul_original">Anular O.S origem</option>
-            <option value="subtract_original">Anular pontos fixos</option>
-            <option value="requires_review">Exigir revisão manual</option>
-            <option value="no_penalty">Não anular</option>
-          </select>
+            placeholder="Usar backend"
+            ariaLabel="Ação quando confirmar reincidência"
+            options={[
+              { value: "", label: "Usar backend", description: "Mantém a decisão padrão do backend." },
+              { value: "annul_original", label: "Anular O.S origem", description: "Remove a pontuação da ordem original." },
+              { value: "subtract_original", label: "Anular pontos fixos", description: "Aplica desconto fixo na ordem original." },
+              { value: "requires_review", label: "Exigir revisão manual", description: "Encaminha a reincidência para revisão." },
+              { value: "no_penalty", label: "Não anular", description: "Só sinaliza o caso." },
+            ]}
+          />
         </div>
 
         <div className="grid gap-2">
           <Label>Pontos fixos se anular</Label>
-          <Input
+          <AppInput
             inputMode="decimal"
             value={optionalNumberSettingValue(localSettings, "recurrence_penalty_points")}
             onChange={(event) => updateLocalSetting("recurrence_penalty_points", event.target.value)}
@@ -131,10 +133,10 @@ export function GovernanceRulesPanel({
         </div>
         <div className="mb-3 grid gap-2 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs text-slate-700 md:grid-cols-3">
           <div>
-            <span className="font-semibold text-slate-950">SLA min.</span> e o percentual mínimo de O.S no prazo para a regional entrar nessa saúde.
+            <span className="font-semibold text-slate-950">SLA min.</span> é o percentual mínimo de O.S no prazo para a regional entrar nessa saúde.
           </div>
           <div>
-            <span className="font-semibold text-slate-950">Reinc. max.</span> e o limite máximo de reincidências aceito na regional.
+            <span className="font-semibold text-slate-950">Reinc. max.</span> é o limite máximo de reincidências aceito na regional.
           </div>
           <div>
             <span className="font-semibold text-slate-950">Multiplicador</span> entra depois dos pontos líquidos: pontos líquidos x multiplicador = pontos finais.
@@ -162,14 +164,14 @@ export function GovernanceRulesPanel({
                 <TableRow key={rule.id}>
                   <TableCell className="font-medium">{rule.name}</TableCell>
                   <TableCell className="w-28">
-                    <Input
+                    <AppInput
                       type="number"
                       value={rule.min_sla}
                       onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { min_sla: Number(event.target.value || 0) }))}
                     />
                   </TableCell>
                   <TableCell className="w-28">
-                    <Input
+                    <AppInput
                       type="number"
                       value={rule.max_recurrence_rate}
                       onChange={(event) =>
@@ -178,7 +180,7 @@ export function GovernanceRulesPanel({
                     />
                   </TableCell>
                   <TableCell className="w-32">
-                    <Input
+                    <AppInput
                       type="number"
                       step="0.05"
                       value={rule.multiplier}
@@ -186,12 +188,7 @@ export function GovernanceRulesPanel({
                     />
                   </TableCell>
                   <TableCell>
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-teal-700"
-                      checked={rule.active}
-                      onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { active: event.target.checked }))}
-                    />
+                    <AppSwitch checked={rule.active} onCheckedChange={(checked) => setHealthRules(replaceById(healthRules, rule.id, { active: checked }))} />
                   </TableCell>
                   <TableCell>
                     <Button variant="outline" size="sm" onClick={() => onSaveHealthRule(rule)}>

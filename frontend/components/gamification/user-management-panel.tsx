@@ -4,9 +4,8 @@ import { KeyRound, Save, ShieldCheck, Trash2, UserCog, UserPlus, Users2 } from "
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { AppCombobox, AppInput, AppModal, AppSwitch, RowActionMenu, StatusBadge } from "@/components/gamification/config-ui";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { AuthUser } from "@/lib/types";
@@ -51,15 +50,16 @@ function SummaryCard({
 
 function statusBadge(active: boolean) {
   return active ? (
-    <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">Ativo</Badge>
+    <StatusBadge tone="success">Ativo</StatusBadge>
   ) : (
-    <Badge className="border-slate-200 bg-slate-100 text-slate-700">Inativo</Badge>
+    <StatusBadge>Inativo</StatusBadge>
   );
 }
 
 export function UserManagementPanel({ users, onCreate, onSave, onDelete }: Props) {
   const [rows, setRows] = useState(users);
   const [passwords, setPasswords] = useState<Record<number, string>>({});
+  const [pendingDeleteUserId, setPendingDeleteUserId] = useState<number | null>(null);
   const [draft, setDraft] = useState({ name: "", email: "", password: "", role: "viewer", active: true });
 
   useEffect(() => {
@@ -124,30 +124,26 @@ export function UserManagementPanel({ users, onCreate, onSave, onDelete }: Props
         <div className="grid gap-4 border-b border-slate-200 bg-slate-50/80 px-5 py-5 lg:grid-cols-[1fr_1fr_0.9fr_auto]">
           <div className="grid gap-2">
             <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Nome</label>
-            <Input className="h-11" placeholder="Nome" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
+            <AppInput className="h-11" placeholder="Nome" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
           </div>
           <div className="grid gap-2">
             <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">E-mail</label>
-            <Input className="h-11" placeholder="E-mail" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} />
+            <AppInput className="h-11" placeholder="E-mail" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} />
           </div>
           <div className="grid gap-2">
             <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Perfil</label>
-            <select
-              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm"
+            <AppCombobox
               value={draft.role}
-              onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))}
-            >
-              {roles.map((role) => (
-                <option key={role.value} value={role.value}>
-                  {role.label}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => setDraft((current) => ({ ...current, role: value }))}
+              placeholder="Selecionar perfil"
+              ariaLabel="Perfil do novo usuário"
+              options={roles.map((role) => ({ value: role.value, label: role.label }))}
+            />
           </div>
           <div className="grid gap-2">
             <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Senha inicial</label>
             <div className="flex gap-3">
-              <Input
+              <AppInput
                 className="h-11"
                 placeholder="Senha inicial"
                 type="password"
@@ -185,52 +181,38 @@ export function UserManagementPanel({ users, onCreate, onSave, onDelete }: Props
               <TableBody>
                 {rows.map((user) => (
                   <TableRow key={user.id}>
-                    <TableCell><Input value={user.name} onChange={(event) => patch(user.id, { name: event.target.value })} /></TableCell>
-                    <TableCell><Input value={user.email} onChange={(event) => patch(user.id, { email: event.target.value })} /></TableCell>
+                    <TableCell><AppInput value={user.name} onChange={(event) => patch(user.id, { name: event.target.value })} /></TableCell>
+                    <TableCell><AppInput value={user.email} onChange={(event) => patch(user.id, { email: event.target.value })} /></TableCell>
                     <TableCell>
-                      <select
-                        className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm"
+                      <AppCombobox
                         value={user.role}
-                        onChange={(event) => patch(user.id, { role: event.target.value as AuthUser["role"] })}
-                      >
-                        {roles.map((role) => (
-                          <option key={role.value} value={role.value}>
-                            {role.label}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(value) => patch(user.id, { role: value as AuthUser["role"] })}
+                        placeholder="Selecionar perfil"
+                        ariaLabel={`Perfil do usuário ${user.name}`}
+                        options={roles.map((role) => ({ value: role.value, label: role.label }))}
+                      />
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         {statusBadge(user.active)}
-                        <label className="flex items-center gap-2 text-sm text-slate-600">
-                          <input type="checkbox" checked={user.active} onChange={(event) => patch(user.id, { active: event.currentTarget.checked })} />
-                          Ativo
-                        </label>
+                        <AppSwitch checked={user.active} onCheckedChange={(checked) => patch(user.id, { active: checked })} />
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Input type="password" placeholder="Manter atual" value={passwords[user.id] ?? ""} onChange={(event) => setPasswords((current) => ({ ...current, [user.id]: event.target.value }))} />
+                      <AppInput type="password" placeholder="Manter atual" value={passwords[user.id] ?? ""} onChange={(event) => setPasswords((current) => ({ ...current, [user.id]: event.target.value }))} />
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap justify-end gap-2">
                         <Button size="sm" variant="outline" onClick={() => onSave(user.id, { name: user.name, email: user.email, role: user.role, active: user.active, password: passwords[user.id] || undefined })}>
                           <Save className="h-4 w-4" />
                           Salvar
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="border-red-200 text-red-700 hover:bg-red-50"
-                          onClick={() => {
-                            if (window.confirm(`Excluir o usuário ${user.name}? Esta ação remove o acesso definitivamente.`)) {
-                              void onDelete(user.id);
-                            }
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Excluir
-                        </Button>
+                        <RowActionMenu
+                          ariaLabel={`Ações do usuário ${user.name}`}
+                          items={[
+                            { label: "Excluir", onSelect: () => setPendingDeleteUserId(user.id), tone: "danger" },
+                          ]}
+                        />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -247,6 +229,32 @@ export function UserManagementPanel({ users, onCreate, onSave, onDelete }: Props
           </div>
         </div>
       </div>
+      <AppModal
+        open={pendingDeleteUserId != null}
+        onOpenChange={(open) => setPendingDeleteUserId(open ? pendingDeleteUserId : null)}
+        title="Excluir usuário?"
+        description={pendingDeleteUserId != null ? `Esta ação remove o acesso definitivamente para ${rows.find((user) => user.id === pendingDeleteUserId)?.name ?? "este usuário"}.` : undefined}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setPendingDeleteUserId(null)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (pendingDeleteUserId == null) return;
+                void onDelete(pendingDeleteUserId);
+                setPendingDeleteUserId(null);
+              }}
+            >
+              Excluir
+            </Button>
+          </>
+        }
+      >
+        <div className="text-sm text-slate-600">A conta deixa de ficar disponível no painel e o acesso é removido desta base.</div>
+      </AppModal>
     </section>
   );
 }

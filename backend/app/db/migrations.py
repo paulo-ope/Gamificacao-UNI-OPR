@@ -9,9 +9,8 @@ from app.models import default_percentage_for_role
 def ensure_runtime_schema(engine: Engine) -> None:
     """Small compatibility migration for local Docker/SQLite databases.
 
-    The project intentionally stays lightweight for this phase, without Alembic.
-    This keeps existing installations working when columns are added to tables
-    that were already created by earlier versions.
+    Alembic is the official migration path, but this compatibility layer keeps
+    local or older databases runnable while migrations are applied gradually.
     """
 
     inspector = inspect(engine)
@@ -168,6 +167,43 @@ def ensure_runtime_schema(engine: Engine) -> None:
                 statements.append("ALTER TABLE calculation_runs ADD COLUMN result_summary JSONB")
             else:
                 statements.append("ALTER TABLE calculation_runs ADD COLUMN result_summary JSON")
+        if "status" not in calculation_run_columns:
+            statements.append("ALTER TABLE calculation_runs ADD COLUMN status VARCHAR(20) DEFAULT 'draft' NOT NULL")
+        if "status_changed_at" not in calculation_run_columns:
+            if engine.dialect.name == "postgresql":
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN status_changed_at TIMESTAMP WITH TIME ZONE")
+            else:
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN status_changed_at DATETIME")
+        if "status_changed_by" not in calculation_run_columns:
+            statements.append("ALTER TABLE calculation_runs ADD COLUMN status_changed_by INTEGER")
+        if "status_note" not in calculation_run_columns:
+            statements.append("ALTER TABLE calculation_runs ADD COLUMN status_note TEXT")
+        if "approved_at" not in calculation_run_columns:
+            if engine.dialect.name == "postgresql":
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN approved_at TIMESTAMP WITH TIME ZONE")
+            else:
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN approved_at DATETIME")
+        if "approved_by" not in calculation_run_columns:
+            statements.append("ALTER TABLE calculation_runs ADD COLUMN approved_by INTEGER")
+        if "paid_at" not in calculation_run_columns:
+            if engine.dialect.name == "postgresql":
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN paid_at TIMESTAMP WITH TIME ZONE")
+            else:
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN paid_at DATETIME")
+        if "paid_by" not in calculation_run_columns:
+            statements.append("ALTER TABLE calculation_runs ADD COLUMN paid_by INTEGER")
+        if "executed_by" not in calculation_run_columns:
+            statements.append("ALTER TABLE calculation_runs ADD COLUMN executed_by INTEGER")
+        if "executed_at" not in calculation_run_columns:
+            if engine.dialect.name == "postgresql":
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN executed_at TIMESTAMP WITH TIME ZONE")
+            else:
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN executed_at DATETIME")
+        if "config_snapshot" not in calculation_run_columns:
+            if engine.dialect.name == "postgresql":
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN config_snapshot JSONB")
+            else:
+                statements.append("ALTER TABLE calculation_runs ADD COLUMN config_snapshot JSON")
 
     if "leadership_role_profiles" not in table_names:
         statements.append(
@@ -210,6 +246,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                 role_profile_id INTEGER REFERENCES leadership_role_profiles(id),
                 use_custom_multiplier BOOLEAN DEFAULT FALSE NOT NULL,
                 custom_multiplier FLOAT,
+                average_source VARCHAR(40) DEFAULT 'collaborators' NOT NULL,
                 active BOOLEAN DEFAULT TRUE NOT NULL,
                 collaborator_id INTEGER REFERENCES collaborators(id),
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
@@ -227,6 +264,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                 role_profile_id INTEGER,
                 use_custom_multiplier BOOLEAN DEFAULT FALSE NOT NULL,
                 custom_multiplier FLOAT,
+                average_source VARCHAR(40) DEFAULT 'collaborators' NOT NULL,
                 active BOOLEAN DEFAULT TRUE NOT NULL,
                 collaborator_id INTEGER,
                 created_at DATETIME NOT NULL,
@@ -272,6 +310,9 @@ def ensure_runtime_schema(engine: Engine) -> None:
             statements.append("ALTER TABLE leadership_profiles ADD COLUMN use_custom_multiplier BOOLEAN DEFAULT FALSE NOT NULL")
         if "custom_multiplier" not in leadership_profile_columns:
             statements.append("ALTER TABLE leadership_profiles ADD COLUMN custom_multiplier FLOAT")
+        if "average_source" not in leadership_profile_columns:
+            statements.append("ALTER TABLE leadership_profiles ADD COLUMN average_source VARCHAR(40) DEFAULT 'collaborators' NOT NULL")
+            statements.append("UPDATE leadership_profiles SET average_source = 'collaborators_and_leaders' WHERE lower(name) LIKE '%renaldo%'")
 
     if "leadership_profile_regionals" not in table_names:
         statements.append(
@@ -357,6 +398,141 @@ def ensure_runtime_schema(engine: Engine) -> None:
             else:
                 statements.append("UPDATE leadership_bonus_results SET percentage = COALESCE(percentage, 0)")
 
+    if "projection_history_snapshots" not in table_names:
+        statements.append(
+            """
+            CREATE TABLE projection_history_snapshots (
+                id SERIAL PRIMARY KEY,
+                calculation_run_id INTEGER NOT NULL REFERENCES calculation_runs(id),
+                reference_month INTEGER NOT NULL,
+                reference_year INTEGER NOT NULL,
+                regional VARCHAR(120),
+                point_value FLOAT DEFAULT 0 NOT NULL,
+                collaborators_count INTEGER DEFAULT 0 NOT NULL,
+                service_orders_count INTEGER DEFAULT 0 NOT NULL,
+                recurrence_orders INTEGER DEFAULT 0 NOT NULL,
+                recurrence_rate FLOAT DEFAULT 0 NOT NULL,
+                penalized_orders INTEGER DEFAULT 0 NOT NULL,
+                penalized_rate FLOAT DEFAULT 0 NOT NULL,
+                annulled_orders INTEGER DEFAULT 0 NOT NULL,
+                annulled_rate FLOAT DEFAULT 0 NOT NULL,
+                unscored_orders INTEGER DEFAULT 0 NOT NULL,
+                unscored_rate FLOAT DEFAULT 0 NOT NULL,
+                sla_out_orders INTEGER DEFAULT 0 NOT NULL,
+                sla_out_rate FLOAT DEFAULT 0 NOT NULL,
+                technical_value FLOAT DEFAULT 0 NOT NULL,
+                leadership_value FLOAT DEFAULT 0 NOT NULL,
+                total_projected_value FLOAT DEFAULT 0 NOT NULL,
+                gross_points FLOAT DEFAULT 0 NOT NULL,
+                penalty_points FLOAT DEFAULT 0 NOT NULL,
+                net_points FLOAT DEFAULT 0 NOT NULL,
+                final_points FLOAT DEFAULT 0 NOT NULL,
+                gross_points_per_order FLOAT DEFAULT 0 NOT NULL,
+                final_points_per_order FLOAT DEFAULT 0 NOT NULL,
+                technical_value_per_order FLOAT DEFAULT 0 NOT NULL,
+                leadership_profiles_count INTEGER DEFAULT 0 NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+                CONSTRAINT uq_projection_snapshot_run UNIQUE (calculation_run_id)
+            )
+            """
+            if is_postgres
+            else """
+            CREATE TABLE projection_history_snapshots (
+                id INTEGER PRIMARY KEY,
+                calculation_run_id INTEGER NOT NULL,
+                reference_month INTEGER NOT NULL,
+                reference_year INTEGER NOT NULL,
+                regional VARCHAR(120),
+                point_value FLOAT DEFAULT 0 NOT NULL,
+                collaborators_count INTEGER DEFAULT 0 NOT NULL,
+                service_orders_count INTEGER DEFAULT 0 NOT NULL,
+                recurrence_orders INTEGER DEFAULT 0 NOT NULL,
+                recurrence_rate FLOAT DEFAULT 0 NOT NULL,
+                penalized_orders INTEGER DEFAULT 0 NOT NULL,
+                penalized_rate FLOAT DEFAULT 0 NOT NULL,
+                annulled_orders INTEGER DEFAULT 0 NOT NULL,
+                annulled_rate FLOAT DEFAULT 0 NOT NULL,
+                unscored_orders INTEGER DEFAULT 0 NOT NULL,
+                unscored_rate FLOAT DEFAULT 0 NOT NULL,
+                sla_out_orders INTEGER DEFAULT 0 NOT NULL,
+                sla_out_rate FLOAT DEFAULT 0 NOT NULL,
+                technical_value FLOAT DEFAULT 0 NOT NULL,
+                leadership_value FLOAT DEFAULT 0 NOT NULL,
+                total_projected_value FLOAT DEFAULT 0 NOT NULL,
+                gross_points FLOAT DEFAULT 0 NOT NULL,
+                penalty_points FLOAT DEFAULT 0 NOT NULL,
+                net_points FLOAT DEFAULT 0 NOT NULL,
+                final_points FLOAT DEFAULT 0 NOT NULL,
+                gross_points_per_order FLOAT DEFAULT 0 NOT NULL,
+                final_points_per_order FLOAT DEFAULT 0 NOT NULL,
+                technical_value_per_order FLOAT DEFAULT 0 NOT NULL,
+                leadership_profiles_count INTEGER DEFAULT 0 NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                CONSTRAINT uq_projection_snapshot_run UNIQUE (calculation_run_id)
+            )
+            """
+        )
+        statements.append("CREATE INDEX IF NOT EXISTS ix_projection_history_snapshots_run ON projection_history_snapshots (calculation_run_id)")
+        statements.append("CREATE INDEX IF NOT EXISTS ix_projection_history_snapshots_period ON projection_history_snapshots (reference_year, reference_month)")
+        statements.append("CREATE INDEX IF NOT EXISTS ix_projection_history_snapshots_regional ON projection_history_snapshots (regional)")
+    else:
+        snapshot_columns = {column["name"] for column in inspector.get_columns("projection_history_snapshots")}
+        snapshot_column_definitions = {
+            "point_value": "FLOAT DEFAULT 0 NOT NULL",
+            "collaborators_count": "INTEGER DEFAULT 0 NOT NULL",
+            "service_orders_count": "INTEGER DEFAULT 0 NOT NULL",
+            "recurrence_orders": "INTEGER DEFAULT 0 NOT NULL",
+            "recurrence_rate": "FLOAT DEFAULT 0 NOT NULL",
+            "penalized_orders": "INTEGER DEFAULT 0 NOT NULL",
+            "penalized_rate": "FLOAT DEFAULT 0 NOT NULL",
+            "annulled_orders": "INTEGER DEFAULT 0 NOT NULL",
+            "annulled_rate": "FLOAT DEFAULT 0 NOT NULL",
+            "unscored_orders": "INTEGER DEFAULT 0 NOT NULL",
+            "unscored_rate": "FLOAT DEFAULT 0 NOT NULL",
+            "sla_out_orders": "INTEGER DEFAULT 0 NOT NULL",
+            "sla_out_rate": "FLOAT DEFAULT 0 NOT NULL",
+            "technical_value": "FLOAT DEFAULT 0 NOT NULL",
+            "leadership_value": "FLOAT DEFAULT 0 NOT NULL",
+            "total_projected_value": "FLOAT DEFAULT 0 NOT NULL",
+            "gross_points": "FLOAT DEFAULT 0 NOT NULL",
+            "penalty_points": "FLOAT DEFAULT 0 NOT NULL",
+            "net_points": "FLOAT DEFAULT 0 NOT NULL",
+            "final_points": "FLOAT DEFAULT 0 NOT NULL",
+            "gross_points_per_order": "FLOAT DEFAULT 0 NOT NULL",
+            "final_points_per_order": "FLOAT DEFAULT 0 NOT NULL",
+            "technical_value_per_order": "FLOAT DEFAULT 0 NOT NULL",
+            "leadership_profiles_count": "INTEGER DEFAULT 0 NOT NULL",
+        }
+        for column_name, column_type in snapshot_column_definitions.items():
+            if column_name not in snapshot_columns:
+                statements.append(f"ALTER TABLE projection_history_snapshots ADD COLUMN {column_name} {column_type}")
+
+    if "projection_settings" not in table_names:
+        statements.append(
+            """
+            CREATE TABLE projection_settings (
+                id SERIAL PRIMARY KEY,
+                key VARCHAR(120) UNIQUE NOT NULL,
+                config_json JSONB DEFAULT '{}'::jsonb NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
+            )
+            """
+            if is_postgres
+            else """
+            CREATE TABLE projection_settings (
+                id INTEGER PRIMARY KEY,
+                key VARCHAR(120) UNIQUE NOT NULL,
+                config_json JSON NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        statements.append("CREATE INDEX IF NOT EXISTS ix_projection_settings_key ON projection_settings (key)")
+
     if "recurrence_classification_rules" not in table_names:
         statements.append(
             """
@@ -412,12 +588,118 @@ def ensure_runtime_schema(engine: Engine) -> None:
             """
         )
 
+    if "collaborator_scores" in table_names:
+        collaborator_score_columns = {column["name"] for column in inspector.get_columns("collaborator_scores")}
+        if "balance_adjustment_points" not in collaborator_score_columns:
+            statements.append("ALTER TABLE collaborator_scores ADD COLUMN balance_adjustment_points FLOAT DEFAULT 0 NOT NULL")
+        if "balance_after" not in collaborator_score_columns:
+            statements.append("ALTER TABLE collaborator_scores ADD COLUMN balance_after FLOAT DEFAULT 0 NOT NULL")
+
+    if "collaborator_point_balances" not in table_names:
+        statements.append(
+            """
+            CREATE TABLE collaborator_point_balances (
+                id SERIAL PRIMARY KEY,
+                collaborator_id INTEGER UNIQUE NOT NULL REFERENCES collaborators(id),
+                balance_points FLOAT DEFAULT 0 NOT NULL,
+                updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
+            )
+            """
+            if is_postgres
+            else """
+            CREATE TABLE collaborator_point_balances (
+                id INTEGER PRIMARY KEY,
+                collaborator_id INTEGER UNIQUE NOT NULL,
+                balance_points FLOAT DEFAULT 0 NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_collaborator_point_balances_collaborator_id ON collaborator_point_balances (collaborator_id)"
+        )
+
+    if "point_balance_entries" not in table_names:
+        statements.append(
+            """
+            CREATE TABLE point_balance_entries (
+                id SERIAL PRIMARY KEY,
+                collaborator_id INTEGER NOT NULL REFERENCES collaborators(id),
+                entry_type VARCHAR(40) NOT NULL,
+                points FLOAT NOT NULL,
+                original_service_order_id INTEGER REFERENCES service_orders(id),
+                related_service_order_id INTEGER REFERENCES service_orders(id),
+                original_os_code VARCHAR(80),
+                related_os_code VARCHAR(80),
+                origin_calculation_run_id INTEGER REFERENCES calculation_runs(id),
+                applied_calculation_run_id INTEGER REFERENCES calculation_runs(id),
+                applied_reference_month INTEGER,
+                applied_reference_year INTEGER,
+                status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+                requires_review BOOLEAN DEFAULT FALSE NOT NULL,
+                recurrence_classification VARCHAR(60),
+                recurrence_action VARCHAR(40),
+                reason TEXT,
+                created_by INTEGER REFERENCES users(id),
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL
+            )
+            """
+            if is_postgres
+            else """
+            CREATE TABLE point_balance_entries (
+                id INTEGER PRIMARY KEY,
+                collaborator_id INTEGER NOT NULL,
+                entry_type VARCHAR(40) NOT NULL,
+                points FLOAT NOT NULL,
+                original_service_order_id INTEGER,
+                related_service_order_id INTEGER,
+                original_os_code VARCHAR(80),
+                related_os_code VARCHAR(80),
+                origin_calculation_run_id INTEGER,
+                applied_calculation_run_id INTEGER,
+                applied_reference_month INTEGER,
+                applied_reference_year INTEGER,
+                status VARCHAR(20) DEFAULT 'pending' NOT NULL,
+                requires_review BOOLEAN DEFAULT FALSE NOT NULL,
+                recurrence_classification VARCHAR(60),
+                recurrence_action VARCHAR(40),
+                reason TEXT,
+                created_by INTEGER,
+                created_at DATETIME NOT NULL
+            )
+            """
+        )
+        statements.append("CREATE INDEX IF NOT EXISTS ix_point_balance_entries_collaborator_id ON point_balance_entries (collaborator_id)")
+        statements.append("CREATE INDEX IF NOT EXISTS ix_point_balance_entries_entry_type ON point_balance_entries (entry_type)")
+        statements.append("CREATE INDEX IF NOT EXISTS ix_point_balance_entries_status ON point_balance_entries (status)")
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_point_balance_entries_applied_calculation_run_id ON point_balance_entries (applied_calculation_run_id)"
+        )
+    else:
+        point_balance_columns = {column["name"] for column in inspector.get_columns("point_balance_entries")}
+        if "original_os_code" not in point_balance_columns:
+            statements.append("ALTER TABLE point_balance_entries ADD COLUMN original_os_code VARCHAR(80)")
+        if "related_os_code" not in point_balance_columns:
+            statements.append("ALTER TABLE point_balance_entries ADD COLUMN related_os_code VARCHAR(80)")
+
     if not statements:
         statements = []
 
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+
+        if "calculation_runs" in inspect(engine).get_table_names():
+            connection.execute(
+                text(
+                    """
+                    UPDATE calculation_runs
+                    SET status = COALESCE(NULLIF(status, ''), 'draft'),
+                        status_changed_at = COALESCE(status_changed_at, created_at),
+                        executed_at = COALESCE(executed_at, created_at)
+                    """
+                )
+            )
 
         if "leadership_role_profiles" in inspect(engine).get_table_names() or any("CREATE TABLE leadership_role_profiles" in stmt for stmt in statements):
             defaults = [
@@ -452,7 +734,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                     for row in connection.execute(text("SELECT id, scope_type FROM leadership_role_profiles")).fetchall()
                 }
                 rows = connection.execute(
-                    text("SELECT id, role_type, multiplier, percentage, role_profile_id FROM leadership_profiles")
+                    text("SELECT id, role_type, multiplier, percentage, role_profile_id, average_source, name FROM leadership_profiles")
                 ).fetchall()
                 default_multipliers = {
                     "supervisor": 1.5,

@@ -25,6 +25,7 @@ type OrderAuditSheetProps = {
   order: AuditableOrder | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  calculationRunId?: number;
 };
 
 const recurrenceLabels: Record<RecurrenceClassification, string> = {
@@ -344,21 +345,28 @@ function RecurrenceAuditPanel({ audit }: { audit: RecurrenceAudit }) {
   );
 }
 
-export function OrderAuditSheet({ order, open, onOpenChange }: OrderAuditSheetProps) {
+export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calculationRunId }: OrderAuditSheetProps) {
+  const [detailedOrder, setDetailedOrder] = useState<AuditableOrder | null>(null);
   const [recurrenceAudit, setRecurrenceAudit] = useState<RecurrenceAudit | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || !order) return;
+    if (!open || !initialOrder) return;
 
     let cancelled = false;
+    setDetailedOrder(initialOrder);
+    setRecurrenceAudit(null);
     setAuditLoading(true);
     setAuditError(null);
-    api
-      .recurrenceAudit(order.id)
-      .then((payload) => {
-        if (!cancelled) setRecurrenceAudit(payload);
+    Promise.all([
+      api.auditOrderDetail(initialOrder.id, calculationRunId),
+      api.recurrenceAudit(initialOrder.id)
+    ])
+      .then(([detailPayload, recurrencePayload]) => {
+        if (cancelled) return;
+        setDetailedOrder(detailPayload);
+        setRecurrenceAudit(recurrencePayload);
       })
       .catch((error: Error) => {
         if (!cancelled) setAuditError(error.message);
@@ -370,9 +378,10 @@ export function OrderAuditSheet({ order, open, onOpenChange }: OrderAuditSheetPr
     return () => {
       cancelled = true;
     };
-  }, [open, order]);
+  }, [calculationRunId, initialOrder, open]);
 
-  if (!order) return null;
+  if (!initialOrder) return null;
+  const order = detailedOrder ?? initialOrder;
 
   const hasGroup = Boolean(order.group_name);
   const hasDiagnosisRule = Boolean(order.diagnosis_rule_id);

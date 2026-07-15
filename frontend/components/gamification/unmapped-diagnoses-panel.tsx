@@ -1,15 +1,21 @@
 ﻿"use client";
 
-import { ClipboardCheck, Save, Search, Settings2, X } from "lucide-react";
+import { ClipboardCheck, Info, Save, Search, Settings2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { AppCombobox, AppInput, StatusBadge } from "@/components/gamification/config-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatInteger, formatMoney } from "@/lib/format";
 import type { DiagnosisActionType, ImportedDiagnosis } from "@/lib/types";
+
+function severityTone(serviceOrdersCount: number): "danger" | "warning" | "neutral" {
+  if (serviceOrdersCount >= 50) return "danger";
+  if (serviceOrdersCount >= 10) return "warning";
+  return "neutral";
+}
 
 type Props = {
   diagnoses: ImportedDiagnosis[];
@@ -41,12 +47,14 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return diagnoses;
-    return diagnoses.filter((item) =>
-      [item.diagnosis_name, item.predominant_regional, ...item.related_subjects].some((value) =>
-        value.toLowerCase().includes(normalized)
-      )
-    );
+    const base = normalized
+      ? diagnoses.filter((item) =>
+          [item.diagnosis_name, item.predominant_regional, ...item.related_subjects].some((value) =>
+            value.toLowerCase().includes(normalized)
+          )
+        )
+      : diagnoses;
+    return [...base].sort((a, b) => b.service_orders_count - a.service_orders_count);
   }, [diagnoses, query]);
 
   function draft(item: ImportedDiagnosis) {
@@ -123,7 +131,7 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
           <Label htmlFor="diagnosis-unmapped-search">Buscar diagnóstico</Label>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <Input
+            <AppInput
               id="diagnosis-unmapped-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -134,28 +142,31 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
         </div>
       </div>
 
-      <div className="border-b bg-amber-50 px-5 py-3 text-sm text-amber-800">
+      <div className="flex items-center gap-2 border-b bg-amber-50 px-5 py-3 text-sm text-amber-800">
+        <Info className="h-4 w-4 shrink-0" />
         Defina se o diagnóstico libera, anula ou exige revisão antes de recalcular a apuração.
       </div>
 
       <div className="grid gap-3 border-b bg-white px-5 py-4 lg:grid-cols-[minmax(180px,1fr)_160px_auto_auto_auto] lg:items-end">
         <div className="grid gap-2">
           <Label>Ação para aplicar aos filtrados</Label>
-          <select
-            className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+          <AppCombobox
             value={bulkAction}
-            onChange={(event) => setBulkAction(event.target.value as DiagnosisActionType)}
-          >
-            <option value="subtract_points">Subtrair pontos</option>
-            <option value="cancel_points">Anular pontos</option>
-            <option value="no_penalty">Sem anulação</option>
-            <option value="requires_review">Revisão manual</option>
-            <option value="force_points">Forçar pontos</option>
-          </select>
+            onChange={(value) => setBulkAction(value as DiagnosisActionType)}
+            placeholder="Selecionar ação"
+            ariaLabel="Ação para aplicar aos diagnósticos filtrados"
+            options={[
+              { value: "subtract_points", label: "Subtrair pontos" },
+              { value: "cancel_points", label: "Anular pontos" },
+              { value: "no_penalty", label: "Sem anulação" },
+              { value: "requires_review", label: "Revisão manual" },
+              { value: "force_points", label: "Forçar pontos" },
+            ]}
+          />
         </div>
         <div className="grid gap-2">
           <Label>Pontos</Label>
-          <Input type="number" value={bulkPoints} onChange={(event) => setBulkPoints(event.target.value)} />
+          <AppInput type="number" value={bulkPoints} onChange={(event) => setBulkPoints(event.target.value)} />
         </div>
         <Button variant="outline" onClick={applyBulkDiagnosisToFiltered} disabled={filtered.length === 0}>
           Aplicar aos filtrados
@@ -205,28 +216,32 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
               <TableRow key={item.diagnosis_name}>
                 <TableCell className="min-w-56">
                   <div className="font-medium text-slate-950">{item.diagnosis_name}</div>
-                  <Badge className="mt-1 border-amber-200 bg-amber-50 text-amber-800">Sem regra</Badge>
+                  <StatusBadge tone="warning" className="mt-1">Sem regra</StatusBadge>
                 </TableCell>
-                <TableCell>{formatInteger(item.service_orders_count)}</TableCell>
+                <TableCell>
+                  <StatusBadge tone={severityTone(item.service_orders_count)}>{formatInteger(item.service_orders_count)}</StatusBadge>
+                </TableCell>
                 <TableCell className="min-w-80 text-xs text-slate-600">{item.related_subjects.join(" | ") || "-"}</TableCell>
                 <TableCell>{formatInteger(item.collaborators_count)}</TableCell>
                 <TableCell>{item.predominant_regional}</TableCell>
                 <TableCell className="font-medium text-teal-700">{formatMoney(item.estimated_impact)}</TableCell>
                 <TableCell className="min-w-48">
-                  <select
-                    className="h-9 w-full rounded-md border border-input bg-white px-3 text-sm"
+                  <AppCombobox
                     value={currentDraft.action_type}
-                    onChange={(event) => updateDraft(item, { action_type: event.target.value as DiagnosisActionType })}
-                  >
-                    <option value="subtract_points">Subtrair pontos</option>
-                    <option value="cancel_points">Anular pontos</option>
-                    <option value="no_penalty">Sem anulação</option>
-                    <option value="requires_review">Revisão manual</option>
-                    <option value="force_points">Forçar pontos</option>
-                  </select>
+                    onChange={(value) => updateDraft(item, { action_type: value as DiagnosisActionType })}
+                    placeholder="Selecionar ação"
+                    ariaLabel={`Ação para o diagnóstico ${item.diagnosis_name}`}
+                    options={[
+                      { value: "subtract_points", label: "Subtrair pontos" },
+                      { value: "cancel_points", label: "Anular pontos" },
+                      { value: "no_penalty", label: "Sem anulação" },
+                      { value: "requires_review", label: "Revisão manual" },
+                      { value: "force_points", label: "Forçar pontos" },
+                    ]}
+                  />
                 </TableCell>
                 <TableCell className="w-32">
-                  <Input
+                  <AppInput
                     type="number"
                     value={currentDraft.action_type === "force_points" ? currentDraft.force_points_value ?? "" : currentDraft.penalty_points}
                     onChange={(event) =>

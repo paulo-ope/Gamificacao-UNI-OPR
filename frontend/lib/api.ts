@@ -1,25 +1,35 @@
 import type {
   AppSetting,
   AuthUser,
+  AuditLog,
   AuditOrders,
   CalculationRunHistory,
+  CalculationRunSnapshot,
   CollaboratorOrderFilters,
   Collaborator,
+  CollaboratorOrderDetail,
   CollaboratorDeleteResult,
   CollaboratorRegistry,
   CollaboratorOrdersDetail,
+  CollaboratorPointBalance,
+  CollaboratorMonthlyHistoryItem,
   DashboardSummary,
+  DashboardBootstrap,
+  DashboardFilteredBreakdown,
   DiagnosisPenaltyRule,
   GamificationConfig,
   HealthRule,
   ImportedDiagnosis,
   ImportPreview,
   ImportResult,
+  ImportRun,
+  ImportServiceOrderAudit,
   LeadershipBonusSummary,
   LeadershipProfile,
   LeadershipRoleProfile,
   LoginResult,
   PenaltyRule,
+  PointBalanceEntry,
   RecurrenceAudit,
   RecurrenceClassificationRule,
   ScoringGroupDeleteResult,
@@ -37,16 +47,22 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 const TOKEN_KEY = "gamification_auth_token";
+const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
-let authToken: string | null = typeof window !== "undefined" ? window.localStorage.getItem(TOKEN_KEY) : null;
+function readStoredToken() {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(TOKEN_KEY);
+}
+
+let authToken: string | null = readStoredToken();
 
 export function setAuthToken(token: string | null) {
   authToken = token;
   if (typeof window === "undefined") return;
   if (token) {
-    window.localStorage.setItem(TOKEN_KEY, token);
+    window.sessionStorage.setItem(TOKEN_KEY, token);
   } else {
-    window.localStorage.removeItem(TOKEN_KEY);
+    window.sessionStorage.removeItem(TOKEN_KEY);
   }
 }
 
@@ -55,6 +71,23 @@ function authHeaders(): HeadersInit {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = init?.method?.toUpperCase() ?? "GET";
+  const dedupeKey = method === "GET" ? `${authToken ?? ""}:${path}` : null;
+  if (dedupeKey && inFlightGetRequests.has(dedupeKey)) {
+    return inFlightGetRequests.get(dedupeKey) as Promise<T>;
+  }
+
+  const promise = requestRaw<T>(path, init);
+  if (dedupeKey) {
+    inFlightGetRequests.set(dedupeKey, promise);
+    promise.finally(() => {
+      inFlightGetRequests.delete(dedupeKey);
+    }).catch(() => undefined);
+  }
+  return promise;
+}
+
+async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
   if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
@@ -69,7 +102,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (body) {
       try {
         const parsed = JSON.parse(body) as { detail?: string; message?: string };
-        throw new Error(parsed.detail || parsed.message || body);
+        const message = parsed.detail || parsed.message || body;
+        throw new Error(typeof message === "string" ? message : "Erro inesperado ao processar a solicitação.");
       } catch {
         throw new Error(body);
       }
@@ -78,6 +112,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: authHeaders(),
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    try {
+      const parsed = JSON.parse(body) as { detail?: string; message?: string };
+      throw new Error(parsed.detail || parsed.message || `Erro HTTP ${response.status}`);
+    } catch {
+      throw new Error(body || `Erro HTTP ${response.status}`);
+    }
+  }
+  return response.blob();
 }
 
 async function uploadRequest<T>(path: string, file: File): Promise<T> {
@@ -93,7 +144,15 @@ async function uploadRequest<T>(path: string, file: File): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(body || `Erro HTTP ${response.status}`);
+    if (body) {
+      try {
+        const parsed = JSON.parse(body) as { detail?: string; message?: string };
+        throw new Error(parsed.detail || parsed.message || "Falha ao enviar o arquivo.");
+      } catch {
+        throw new Error("Falha ao enviar o arquivo.");
+      }
+    }
+    throw new Error(`Erro HTTP ${response.status}`);
   }
 
   return response.json() as Promise<T>;
@@ -156,6 +215,7 @@ export const api = {
       `/leadership/bonus-results/calculate${calculationRunId ? `?calculation_run_id=${calculationRunId}` : ""}`,
       { method: "POST", body: JSON.stringify({}) }
     ),
+  dashboardBootstrap: () => request<DashboardBootstrap>("/dashboard/bootstrap"),
   summary: (period?: { reference_month?: number; reference_year?: number; regional?: string | null }) => {
     const params = new URLSearchParams();
     if (period?.reference_month) params.set("reference_month", String(period.reference_month));
@@ -164,7 +224,23 @@ export const api = {
     const query = params.toString();
     return request<DashboardSummary>(`/dashboard/summary${query ? `?${query}` : ""}`);
   },
-  calculationRuns: (limit = 24) => request<CalculationRunHistory[]>(`/calculation-runs?limit=${limit}`),
+  dashboardFilteredBreakdowns: (calculationRunId: number, regionals: string[]) => {
+    const params = new URLSearchParams();
+    params.set("calculation_run_id", String(calculationRunId));
+    regionals.forEach((regional) => {
+      if (regional) params.append("regional", regional);
+    });
+    return request<DashboardFilteredBreakdown>(`/dashboard/filtered-breakdowns?${params.toString()}`);
+  },
+  calculationRuns: (limit = 24, filters?: { reference_month?: number; reference_year?: number; regional?: string | null; status?: string }) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (filters?.reference_month) params.set("reference_month", String(filters.reference_month));
+    if (filters?.reference_year) params.set("reference_year", String(filters.reference_year));
+    if (filters?.regional) params.set("regional", filters.regional);
+    if (filters?.status) params.set("status", filters.status);
+    return request<CalculationRunHistory[]>(`/calculation-runs?${params.toString()}`);
+  },
   gamificationConfig: () => request<GamificationConfig>("/gamification/config"),
   saveGamificationConfig: (payload: Partial<GamificationConfig>) =>
     request<GamificationConfig>("/gamification/config", {
@@ -186,15 +262,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
-  calculate: (pointValue?: number | null, period?: { reference_month?: number; reference_year?: number; regional?: string | null }) =>
+  calculate: (
+    pointValue?: number | null,
+    period?: { reference_month?: number; reference_year?: number; regional?: string | null },
+    options?: { create_revision?: boolean; execution_note?: string | null }
+  ) =>
     request("/calculation-runs/calculate", {
       method: "POST",
       body: JSON.stringify({
         point_value: pointValue ?? undefined,
         reference_month: period?.reference_month,
         reference_year: period?.reference_year,
-        regional: period?.regional ?? undefined
+        regional: period?.regional ?? undefined,
+        create_revision: options?.create_revision ?? false,
+        execution_note: options?.execution_note ?? undefined
       })
+    }),
+  calculationRunDetail: (runId: number) => request(`/calculation-runs/${runId}`),
+  calculationRunSnapshot: (runId: number) => request<CalculationRunSnapshot>(`/calculation-runs/${runId}/snapshot`),
+  updateCalculationRunStatus: (runId: number, payload: { status: string; note?: string | null }) =>
+    request(`/calculation-runs/${runId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
     }),
   scoringGroups: () => request<ScoringGroup[]>("/scoring-groups"),
   createScoringGroup: (payload: Partial<ScoringGroup>) =>
@@ -323,7 +412,7 @@ export const api = {
       body: JSON.stringify({ value })
     }),
   seed: () => request<{ status: string }>("/service-orders/seed", { method: "POST" }),
-  serviceOrders: (limit = 10000) => request<ServiceOrder[]>(`/service-orders?limit=${limit}`),
+  serviceOrders: (limit = 500) => request<ServiceOrder[]>(`/service-orders?limit=${limit}`),
   serviceOrderPeriodSummary: () => request<ServiceOrderPeriodSummary[]>("/service-orders/period-summary"),
   serviceOrderSubjectSummary: (period: { reference_month: number; reference_year: number; regional?: string | null }) => {
     const params = new URLSearchParams();
@@ -345,6 +434,38 @@ export const api = {
   previewUpvalueServiceOrders: (file: File) =>
     uploadRequest<ImportPreview>("/imports/upvalue-service-orders/preview", file),
   importUpvalueServiceOrders: (file: File) => uploadRequest<ImportResult>("/imports/upvalue-service-orders", file),
+  importRuns: (params?: { status?: string; file_name?: string; imported_by?: number; date_from?: string; date_to?: string; limit?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.status) search.set("status", params.status);
+    if (params?.file_name) search.set("file_name", params.file_name);
+    if (params?.imported_by !== undefined) search.set("imported_by", String(params.imported_by));
+    if (params?.date_from) search.set("date_from", params.date_from);
+    if (params?.date_to) search.set("date_to", params.date_to);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const query = search.toString();
+    return request<ImportRun[]>(`/imports/runs${query ? `?${query}` : ""}`);
+  },
+  importRunDetail: (importRunId: number) => request<ImportRun>(`/imports/runs/${importRunId}`),
+  importRunAudits: (
+    importRunId: number,
+    params?: { action?: string; os_code?: string; reason?: string; limit?: number; offset?: number }
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.action) search.set("action", params.action);
+    if (params?.os_code) search.set("os_code", params.os_code);
+    if (params?.reason) search.set("reason", params.reason);
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.offset) search.set("offset", String(params.offset));
+    const query = search.toString();
+    return request<ImportServiceOrderAudit[]>(`/imports/runs/${importRunId}/audits${query ? `?${query}` : ""}`);
+  },
+  importRunErrors: (importRunId: number, params?: { limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.offset) search.set("offset", String(params.offset));
+    const query = search.toString();
+    return request<ImportServiceOrderAudit[]>(`/imports/runs/${importRunId}/errors${query ? `?${query}` : ""}`);
+  },
   collaboratorsRegistry: () => request<CollaboratorRegistry>("/collaborators/registry"),
   createCollaborator: (payload: Partial<Collaborator>) =>
     request<Collaborator>("/collaborators", {
@@ -373,6 +494,8 @@ export const api = {
       `/collaborators/${collaboratorId}/scoring-detail${query ? `?${query}` : ""}`
     );
   },
+  collaboratorStatementPdf: (collaboratorId: number, calculationRunId: number) =>
+    requestBlob(`/collaborators/${collaboratorId}/statement.pdf?calculation_run_id=${calculationRunId}`),
   auditOrders: (filters: CollaboratorOrderFilters & { collaborator_id?: number } = {}) => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {
@@ -383,8 +506,58 @@ export const api = {
     const query = params.toString();
     return request<AuditOrders>(`/audit/service-orders-scoring${query ? `?${query}` : ""}`);
   },
+  auditOrderDetail: (serviceOrderId: number, calculationRunId?: number) =>
+    request<CollaboratorOrderDetail & { collaborator_id: number; collaborator_name: string }>(
+      `/audit/service-orders/${serviceOrderId}/detail${calculationRunId ? `?calculation_run_id=${calculationRunId}` : ""}`
+    ),
   recurrenceAudit: (serviceOrderId: number) =>
-    request<RecurrenceAudit>(`/audit/service-orders/${serviceOrderId}/recurrence-audit`)
+    request<RecurrenceAudit>(`/audit/service-orders/${serviceOrderId}/recurrence-audit`),
+
+  auditLogs: (params?: { action?: string; entity?: string; entity_id?: string; user_id?: number; search?: string; limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.action) search.set("action", params.action);
+    if (params?.entity) search.set("entity", params.entity);
+    if (params?.entity_id) search.set("entity_id", params.entity_id);
+    if (params?.user_id) search.set("user_id", String(params.user_id));
+    if (params?.search) search.set("search", params.search);
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.offset) search.set("offset", String(params.offset));
+    const query = search.toString();
+    return request<AuditLog[]>(`/audit/logs${query ? `?${query}` : ""}`);
+  },
+
+  collaboratorPointBalance: (collaboratorId: number) =>
+    request<CollaboratorPointBalance>(`/collaborators/${collaboratorId}/point-balance`),
+
+  collaboratorMonthlyHistory: (collaboratorId: number) =>
+    request<CollaboratorMonthlyHistoryItem[]>(`/collaborators/${collaboratorId}/monthly-history`),
+
+  pointBalancePending: (params?: { calculation_run_id?: number; reference_month?: number; reference_year?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.calculation_run_id) search.set("calculation_run_id", String(params.calculation_run_id));
+    if (params?.reference_month) search.set("reference_month", String(params.reference_month));
+    if (params?.reference_year) search.set("reference_year", String(params.reference_year));
+    const query = search.toString();
+    return request<PointBalanceEntry[]>(`/point-balance/pending${query ? `?${query}` : ""}`);
+  },
+
+  revertPointBalanceEntry: (entryId: number, reason?: string) =>
+    request<PointBalanceEntry>(`/point-balance/entries/${entryId}/revert`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? null })
+    }),
+
+  createPointBalanceAdjustment: (payload: { collaborator_id: number; points: number; reason: string }) =>
+    request<PointBalanceEntry>("/point-balance/entries", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+
+  resolvePointBalanceReview: (entryId: number, points: number, note?: string) =>
+    request<PointBalanceEntry>(`/point-balance/entries/${entryId}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ points, note: note ?? null })
+    })
 };
 
 export { API_URL };

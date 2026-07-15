@@ -20,6 +20,7 @@ from app.services.regional import is_valid_regional, normalize_regional
 
 
 LEADERSHIP_ROLE_TYPES = {"supervisor", "regional_manager", "portfolio_manager"}
+LEADERSHIP_AVERAGE_SOURCES = {"collaborators", "collaborators_and_leaders"}
 DEFAULT_MULTIPLIERS = {
     "supervisor": 1.5,
     "regional_manager": 2.0,
@@ -35,8 +36,15 @@ DEFAULT_ROLE_PROFILES = (
 def normalize_role_type(value: str | None) -> str:
     role_type = (value or "").strip()
     if role_type not in LEADERSHIP_ROLE_TYPES:
-        raise HTTPException(status_code=422, detail="Tipo de lideranca invalido.")
+        raise HTTPException(status_code=422, detail="Tipo de liderança inválido.")
     return role_type
+
+
+def normalize_average_source(value: str | None) -> str:
+    average_source = (value or "collaborators").strip()
+    if average_source not in LEADERSHIP_AVERAGE_SOURCES:
+        raise HTTPException(status_code=422, detail="Origem da média da liderança inválida.")
+    return average_source
 
 
 def default_multiplier_for_role(role_type: str) -> float:
@@ -104,7 +112,7 @@ def normalize_regionals(values: Iterable[str]) -> list[str]:
     for value in values:
         regional = normalize_regional(value)
         if not regional or not is_valid_regional(regional):
-            raise HTTPException(status_code=422, detail=f"Regional invalida: {value}")
+            raise HTTPException(status_code=422, detail=f"Regional inválida: {value}")
         if regional not in seen:
             seen.add(regional)
             regionals.append(regional)
@@ -122,6 +130,7 @@ def serialize_profile(profile: LeadershipProfile) -> dict:
         "role_profile_name": role_profile.name if role_profile else None,
         "use_custom_multiplier": bool(getattr(profile, "use_custom_multiplier", False)),
         "custom_multiplier": float(profile.custom_multiplier) if profile.custom_multiplier is not None else None,
+        "average_source": normalize_average_source(getattr(profile, "average_source", None)),
         "active": profile.active,
         "collaborator_id": profile.collaborator_id,
         "regional_names": sorted([item.regional_name for item in profile.regionals]),
@@ -139,6 +148,18 @@ def active_profiles(db: Session) -> list[LeadershipProfile]:
             .order_by(LeadershipProfile.role_type.asc(), LeadershipProfile.name.asc())
         )
     )
+
+
+def validate_scope_regionals_required(role_type: str, regionals: list[str]) -> None:
+    """Supervisor e gerente da unidade calculam o bonus como media dos colaboradores das
+    filiais vinculadas (leadership_bonus_from_ranking acima) - sem nenhuma filial, o escopo
+    fica sempre vazio e o bonus sai R$ 0 silenciosamente. Gerente de pasta ignora as filiais
+    (usa todos os colaboradores registrados), entao nao precisa dessa exigencia."""
+    if role_type != "portfolio_manager" and not regionals:
+        raise HTTPException(
+            status_code=422,
+            detail="Selecione ao menos uma filial para supervisor ou gerente da unidade - sem filial, o bônus fica sempre R$ 0.",
+        )
 
 
 def validate_no_scope_overlap(
@@ -165,7 +186,7 @@ def validate_no_scope_overlap(
         for profile in existing:
             overlap = sorted({item.regional_name for item in profile.regionals if item.regional_name in regionals})
             if overlap:
-                conflicts.append(f"{', '.join(overlap)} ja esta vinculada a {profile.name}")
+                conflicts.append(f"{', '.join(overlap)} já está vinculada a {profile.name}")
         if conflicts:
             raise HTTPException(status_code=409, detail="; ".join(conflicts))
 
@@ -177,6 +198,20 @@ def replace_profile_regionals(db: Session, profile: LeadershipProfile, regionals
     profile.regionals = []
     for regional in regionals:
         profile.regionals.append(LeadershipProfileRegional(regional_name=regional))
+
+
+def _audit_score_from_collaborator(item: dict) -> dict:
+    return {
+        "collaborator_id": int(item["collaborator_id"]),
+        "collaborator_name": str(item["collaborator_name"]),
+        "role": str(item["role"]),
+        "regional": str(item["regional"]),
+        "source_type": str(item.get("source_type") or "collaborator"),
+        "service_orders_count": int(item["service_orders_count"]),
+        "health_multiplier": float(item["health_multiplier"]),
+        "final_points": float(item["final_points"]),
+        "estimated_payment": float(item["estimated_payment"]),
+    }
 
 
 def leadership_bonus_from_ranking(db: Session, calculation_run_id: int, ranking: list[dict], point_value: float) -> dict:
@@ -192,8 +227,14 @@ def leadership_bonus_from_ranking(db: Session, calculation_run_id: int, ranking:
             registered_scores.append(
                 {
                     "collaborator_id": int(score.get("collaborator_id") or 0),
+                    "collaborator_name": str(score.get("collaborator_name") or ""),
+                    "role": str(score.get("role") or ""),
                     "regional": regional,
+                    "service_orders_count": int(score.get("service_orders_count") or 0),
+                    "health_multiplier": float(score.get("health_multiplier") or 0),
                     "final_points": final_points,
+                    "estimated_payment": round(estimated, 2),
+                    "source_type": "collaborator",
                 }
             )
         else:
@@ -210,6 +251,7 @@ def leadership_bonus_from_ranking(db: Session, calculation_run_id: int, ranking:
 
     results = []
     all_scope_regionals = sorted({item["regional"] for item in registered_scores if item["regional"]})
+    base_scopes: dict[int, dict] = {}
     for profile in profiles:
         configured_regionals = sorted({item.regional_name for item in profile.regionals})
         role_type = effective_role_type(profile)
@@ -221,14 +263,66 @@ def leadership_bonus_from_ranking(db: Session, calculation_run_id: int, ranking:
             scope_regionals = configured_regionals
 
         scoped_collaborators = len(scoped_scores)
+        total_final_points = round(sum(float(item["final_points"]) for item in scoped_scores), 2)
         average_final_points = round(
-            sum(float(item["final_points"]) for item in scoped_scores) / scoped_collaborators,
+            total_final_points / scoped_collaborators,
             2,
         ) if scoped_collaborators else 0.0
+        base_scopes[int(profile.id)] = {
+            "profile": profile,
+            "role_type": role_type,
+            "scope_regionals": scope_regionals,
+            "scoped_scores": scoped_scores,
+            "scoped_collaborators": scoped_collaborators,
+            "total_final_points": total_final_points,
+            "average_final_points": average_final_points,
+        }
+
+    for profile in profiles:
+        base_scope = base_scopes[int(profile.id)]
+        role_type = str(base_scope["role_type"])
+        scope_regionals = list(base_scope["scope_regionals"])
+        scoped_scores = list(base_scope["scoped_scores"])
+        average_source = normalize_average_source(getattr(profile, "average_source", None))
+
+        if average_source == "collaborators_and_leaders":
+            scope_regionals_set = set(scope_regionals)
+            leadership_scores = []
+            for other_profile in profiles:
+                if other_profile.id == profile.id:
+                    continue
+                other_scope = base_scopes[int(other_profile.id)]
+                other_regionals = set(other_scope["scope_regionals"])
+                if role_type != "portfolio_manager" and scope_regionals_set and other_regionals.isdisjoint(scope_regionals_set):
+                    continue
+                leadership_scores.append(
+                    {
+                        "collaborator_id": int(other_profile.collaborator_id or 0),
+                        "collaborator_name": str(other_profile.name),
+                        "role": str(other_profile.role_profile.name if other_profile.role_profile else effective_role_type(other_profile)),
+                        "regional": ", ".join(other_scope["scope_regionals"]) or "Geral",
+                        "source_type": "leader",
+                        "service_orders_count": int(other_scope["scoped_collaborators"]),
+                        "health_multiplier": 1.0,
+                        "final_points": float(other_scope["average_final_points"]),
+                        "estimated_payment": round(float(other_scope["average_final_points"]) * float(point_value), 2),
+                    }
+                )
+            scoped_scores = scoped_scores + leadership_scores
+
+        scoped_collaborators = len(scoped_scores)
+        total_final_points = round(sum(float(item["final_points"]) for item in scoped_scores), 2)
+        average_final_points = round(total_final_points / scoped_collaborators, 2) if scoped_collaborators else 0.0
         base_amount = round(average_final_points * float(point_value), 2)
         multiplier = effective_multiplier(profile)
         role_profile = profile.role_profile
         bonus_amount = round(base_amount * multiplier, 2)
+        audit_collaborators = sorted(
+            [
+                _audit_score_from_collaborator(item) for item in scoped_scores
+            ],
+            key=lambda item: (-float(item["final_points"]), -float(item["estimated_payment"]), str(item["collaborator_name"])),
+        )
         results.append(
             {
                 "id": None,
@@ -240,12 +334,23 @@ def leadership_bonus_from_ranking(db: Session, calculation_run_id: int, ranking:
                 "role_profile_name": role_profile.name if role_profile else None,
                 "multiplier": multiplier,
                 "uses_custom_multiplier": bool(getattr(profile, "use_custom_multiplier", False)),
+                "average_source": average_source,
                 "average_final_points": average_final_points,
                 "scoped_collaborators": scoped_collaborators,
                 "point_value": float(point_value),
                 "base_amount": base_amount,
                 "bonus_amount": bonus_amount,
                 "regionals": scope_regionals,
+                "audit": {
+                    "scoped_collaborators": scoped_collaborators,
+                    "total_final_points": total_final_points,
+                    "average_final_points": average_final_points,
+                    "point_value": float(point_value),
+                    "base_amount": base_amount,
+                    "multiplier": multiplier,
+                    "bonus_amount": bonus_amount,
+                    "collaborators": audit_collaborators,
+                },
             }
         )
 
@@ -265,9 +370,11 @@ def calculate_and_store_leadership_bonus(db: Session, run: CalculationRun) -> di
         {
             "collaborator_id": score.collaborator_id,
             "collaborator_name": score.collaborator.name if score.collaborator else "",
+            "role": score.collaborator.role if score.collaborator else "",
             "regional": score.collaborator.regional if score.collaborator else "",
             "is_registered": bool(score.collaborator and score.collaborator.is_registered),
             "service_orders_count": score.service_orders_count,
+            "health_multiplier": score.health_multiplier,
             "final_points": score.final_points,
             "estimated_payment": score.estimated_payment,
         }
@@ -293,7 +400,6 @@ def calculate_and_store_leadership_bonus(db: Session, run: CalculationRun) -> di
     db.flush()
     for item, result in zip(summary["results"], result_rows):
         item["id"] = result.id
-    db.commit()
     return summary
 
 

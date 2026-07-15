@@ -4,9 +4,9 @@ import { Building2, CircleAlert, Link2, Save, Trash2, UserPlus, Users2 } from "l
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
+import { AppCombobox, AppInput, AppModal, AppSwitch, RowActionMenu, StatusBadge } from "@/components/gamification/config-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { normalizeRegional, regionalName } from "@/lib/regional";
@@ -31,9 +31,9 @@ function effectiveRegional(item: CollaboratorRegistryItem) {
 }
 
 function statusBadge(item: CollaboratorRegistryItem) {
-  if (!item.is_registered) return <Badge className="border-amber-200 bg-amber-50 text-amber-800">Pendente</Badge>;
-  if (!item.active) return <Badge className="border-slate-200 bg-slate-100 text-slate-700">Inativo</Badge>;
-  return <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">Cadastrado</Badge>;
+  if (!item.is_registered) return <StatusBadge tone="warning">Pendente</StatusBadge>;
+  if (!item.active) return <StatusBadge>Inativo</StatusBadge>;
+  return <StatusBadge tone="success">Cadastrado</StatusBadge>;
 }
 
 function SummaryCard({
@@ -80,18 +80,17 @@ function RegionalSelect({
   const displayValue = value ? regionalName(value) : "";
   const selectOptions = Array.from(new Set([displayValue, ...options].filter(Boolean)));
   return (
-    <select
-      className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-1 text-sm shadow-sm"
+    <AppCombobox
       value={displayValue}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      <option value="">Selecionar filial</option>
-      {selectOptions.map((option) => (
-        <option key={option} value={option}>
-          {regionalName(option)}
-        </option>
-      ))}
-    </select>
+      onChange={onChange}
+      placeholder="Selecionar filial"
+      ariaLabel="Selecionar filial"
+      options={selectOptions.map((option) => ({
+        value: option,
+        label: regionalName(option),
+        description: option ? `Código ${option}` : "Sem filial definida",
+      }))}
+    />
   );
 }
 
@@ -100,6 +99,8 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
   const [selectedRegional, setSelectedRegional] = useState("");
   const [activeList, setActiveList] = useState("registered");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [deleteSelectionOpen, setDeleteSelectionOpen] = useState(false);
+  const [pendingDeleteItem, setPendingDeleteItem] = useState<CollaboratorRegistryItem | null>(null);
   const [draft, setDraft] = useState({
     name: "",
     role: "Importado UpValue",
@@ -109,6 +110,21 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
   });
   const [registered, setRegistered] = useState(registry.registered);
   const [unregistered, setUnregistered] = useState(registry.unregistered);
+  const [savingIds, setSavingIds] = useState<Set<number>>(new Set());
+
+  async function saveItem(item: CollaboratorRegistryItem) {
+    if (savingIds.has(item.id)) return;
+    setSavingIds((current) => new Set(current).add(item.id));
+    try {
+      await onSave(item);
+    } finally {
+      setSavingIds((current) => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  }
 
   useEffect(() => {
     setRegistered(registry.registered);
@@ -193,10 +209,9 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
 
   async function deleteSelected() {
     if (visibleSelectedItems.length === 0) return;
-    const confirmed = window.confirm(`Apagar ${visibleSelectedItems.length} colaborador(es) selecionado(s)?`);
-    if (!confirmed) return;
     await onDeleteMany(visibleSelectedItems);
     setSelectedIds(new Set());
+    setDeleteSelectionOpen(false);
   }
 
   return (
@@ -243,7 +258,7 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
               type="button"
               variant="outline"
               className="border-red-200 text-red-700 hover:bg-red-50"
-              onClick={deleteSelected}
+              onClick={() => setDeleteSelectionOpen(true)}
               disabled={visibleSelectedItems.length === 0}
             >
               <Trash2 className="h-4 w-4" />
@@ -256,29 +271,31 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
           <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
             <div className="grid gap-2">
               <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Filtrar filial</label>
-              <select
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-1 text-sm shadow-sm"
+              <AppCombobox
                 value={selectedRegional}
-                onChange={(event) => setSelectedRegional(event.target.value)}
-              >
-                <option value="">Todas as filiais</option>
-                {normalizedRegionalOptions.map((regional) => (
-                  <option key={regional} value={regional}>
-                    {regionalName(regional)}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedRegional}
+                placeholder="Todas as filiais"
+                ariaLabel="Filtrar filial"
+                options={[
+                  { value: "", label: "Todas as filiais", description: "Exibe toda a base disponível." },
+                  ...normalizedRegionalOptions.map((regional) => ({
+                    value: regional,
+                    label: regionalName(regional),
+                    description: `Código ${regional}`,
+                  })),
+                ]}
+              />
             </div>
             <div className="grid gap-2">
               <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Buscar colaborador</label>
-              <Input className="h-11" placeholder="Nome ou filial" value={search} onChange={(event) => setSearch(event.target.value)} />
+              <AppInput className="h-11" placeholder="Nome ou filial" value={search} onChange={(event) => setSearch(event.target.value)} />
             </div>
           </div>
 
           <div className="grid gap-2">
             <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Cadastrar novo colaborador</label>
             <div className="grid gap-3 md:grid-cols-[1.3fr_1fr_auto]">
-              <Input className="h-11" placeholder="Nome do colaborador" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
+              <AppInput className="h-11" placeholder="Nome do colaborador" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
               <RegionalSelect
                 value={draft.regional || selectedRegional}
                 options={normalizedRegionalOptions}
@@ -323,12 +340,7 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
                   <TableHeader>
                     <TableRow className="bg-slate-50/80">
                       <TableHead className="w-10">
-                        <input
-                          type="checkbox"
-                          aria-label="Selecionar cadastrados visiveis"
-                          checked={allVisibleSelected}
-                          onChange={(event) => toggleAllVisible(event.currentTarget.checked)}
-                        />
+                        <AppSwitch checked={allVisibleSelected} onCheckedChange={toggleAllVisible} label={allVisibleSelected ? "Todos" : "Selecionar"} />
                       </TableHead>
                       <TableHead>Colaborador</TableHead>
                       <TableHead>Filial oficial</TableHead>
@@ -341,15 +353,10 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
                     {filteredRegistered.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell>
-                          <input
-                            type="checkbox"
-                            aria-label={`Selecionar ${item.name}`}
-                            checked={selectedIds.has(item.id)}
-                            onChange={(event) => toggleSelected(item.id, event.currentTarget.checked)}
-                          />
+                          <AppSwitch checked={selectedIds.has(item.id)} onCheckedChange={(checked) => toggleSelected(item.id, checked)} label="" />
                         </TableCell>
                         <TableCell className="min-w-56">
-                          <Input value={item.name} onChange={(event) => setRegistered(replaceById(registered, item.id, { name: event.target.value }))} />
+                          <AppInput value={item.name} onChange={(event) => setRegistered(replaceById(registered, item.id, { name: event.target.value }))} />
                         </TableCell>
                         <TableCell className="min-w-52">
                           <RegionalSelect
@@ -361,15 +368,22 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
                         <TableCell>{item.service_orders_count} O.S</TableCell>
                         <TableCell>{statusBadge(item)}</TableCell>
                         <TableCell>
-                          <div className="flex gap-2">
-                            <Button size="sm" variant="outline" onClick={() => onSave({ ...item, regional: regionalName(item.regional) })}>
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={savingIds.has(item.id)}
+                              onClick={() => saveItem({ ...item, regional: regionalName(item.regional) })}
+                            >
                               <Save className="h-4 w-4" />
-                              Salvar
+                              {savingIds.has(item.id) ? "Salvando..." : "Salvar"}
                             </Button>
-                            <Button size="sm" variant="outline" className="text-red-700" onClick={() => onDelete(item)}>
-                              <Trash2 className="h-4 w-4" />
-                              Apagar
-                            </Button>
+                            <RowActionMenu
+                              ariaLabel={`Ações do colaborador ${item.name}`}
+                              items={[
+                                { label: "Apagar", onSelect: () => setPendingDeleteItem(item), tone: "danger" },
+                              ]}
+                            />
                           </div>
                         </TableCell>
                       </TableRow>
@@ -392,12 +406,7 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
                   <TableHeader>
                     <TableRow className="bg-slate-50/80">
                       <TableHead className="w-10">
-                        <input
-                          type="checkbox"
-                          aria-label="Selecionar pendentes visiveis"
-                          checked={allVisibleSelected}
-                          onChange={(event) => toggleAllVisible(event.currentTarget.checked)}
-                        />
+                        <AppSwitch checked={allVisibleSelected} onCheckedChange={toggleAllVisible} label={allVisibleSelected ? "Todos" : "Selecionar"} />
                       </TableHead>
                       <TableHead>Colaborador</TableHead>
                       <TableHead>Filial sugerida</TableHead>
@@ -410,15 +419,10 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
                     {filteredUnregistered.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell>
-                          <input
-                            type="checkbox"
-                            aria-label={`Selecionar ${item.name}`}
-                            checked={selectedIds.has(item.id)}
-                            onChange={(event) => toggleSelected(item.id, event.currentTarget.checked)}
-                          />
+                          <AppSwitch checked={selectedIds.has(item.id)} onCheckedChange={(checked) => toggleSelected(item.id, checked)} label="" />
                         </TableCell>
                         <TableCell className="min-w-56">
-                          <Input value={item.name} onChange={(event) => setUnregistered(replaceById(unregistered, item.id, { name: event.target.value }))} />
+                          <AppInput value={item.name} onChange={(event) => setUnregistered(replaceById(unregistered, item.id, { name: event.target.value }))} />
                         </TableCell>
                         <TableCell className="min-w-52 text-sm text-slate-600">
                           <div className="font-medium text-slate-950">{regionalName(item.suggested_regional || item.regional || "-")}</div>
@@ -433,11 +437,12 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
                         </TableCell>
                         <TableCell>{item.service_orders_count} O.S</TableCell>
                         <TableCell>
-                          <div className="flex gap-2">
+                          <div className="flex justify-end gap-2">
                             <Button
                               size="sm"
+                              disabled={savingIds.has(item.id)}
                               onClick={() =>
-                                onSave({
+                                saveItem({
                                   ...item,
                                   is_registered: true,
                                   active: true,
@@ -447,12 +452,14 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
                               }
                             >
                               <Save className="h-4 w-4" />
-                              Aprovar
+                              {savingIds.has(item.id) ? "Salvando..." : "Aprovar"}
                             </Button>
-                            <Button size="sm" variant="outline" className="text-red-700" onClick={() => onDelete(item)}>
-                              <Trash2 className="h-4 w-4" />
-                              Apagar
-                            </Button>
+                            <RowActionMenu
+                              ariaLabel={`Ações do colaborador ${item.name}`}
+                              items={[
+                                { label: "Apagar", onSelect: () => setPendingDeleteItem(item), tone: "danger" },
+                              ]}
+                            />
                           </div>
                         </TableCell>
                       </TableRow>
@@ -471,6 +478,52 @@ export function CollaboratorRegistryPanel({ registry, regionalOptions, onCreate,
           </Tabs>
         </div>
       </div>
+      <AppModal
+        open={deleteSelectionOpen}
+        onOpenChange={setDeleteSelectionOpen}
+        title="Apagar colaboradores selecionados?"
+        description="Essa ação remove os registros selecionados desta lista."
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setDeleteSelectionOpen(false)}>
+              Cancelar
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void deleteSelected()}>
+              Apagar selecionados
+            </Button>
+          </>
+        }
+      >
+        <div className="text-sm text-slate-600">
+          {visibleSelectedItems.length} colaborador(es) serão removidos da visão atual.
+        </div>
+      </AppModal>
+      <AppModal
+        open={pendingDeleteItem != null}
+        onOpenChange={(open) => setPendingDeleteItem(open ? pendingDeleteItem : null)}
+        title="Apagar colaborador?"
+        description={pendingDeleteItem ? `O registro de ${pendingDeleteItem.name} será removido.` : undefined}
+        footer={
+          <>
+            <Button type="button" variant="outline" onClick={() => setPendingDeleteItem(null)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (!pendingDeleteItem) return;
+                void onDelete(pendingDeleteItem);
+                setPendingDeleteItem(null);
+              }}
+            >
+              Apagar
+            </Button>
+          </>
+        }
+      >
+        <div className="text-sm text-slate-600">A ação remove o vínculo deste colaborador na base atual.</div>
+      </AppModal>
     </section>
   );
 }

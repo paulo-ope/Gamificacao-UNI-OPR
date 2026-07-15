@@ -1,20 +1,20 @@
 const REGIONAL_CODE_MAP: Record<string, string> = {
-  "6": "UNI - JI PARANA",
-  "7": "UNI - MACHADINHO DOESTE",
-  "8": "UNI - ROLIM DE MOURA",
-  "9": "UNI - JARU",
-  "10": "UNI - OURO PRETO DOESTE",
-  "11": "UNI - NOVA BRASILANDIA DOESTE",
-  "12": "UNI - PRESIDENTE MEDICI",
-  "13": "UNI - SAO FELIPE DOESTE",
-  "14": "UNI - ALVORADA DOESTE",
-  "15": "UNI - ALTA FLORESTA DOESTE",
-  "16": "UNI - SAO FRANCISCO DO GUAPORE",
-  "17": "UNI - SAO FRANCISCO DO GUAPORE",
-  "18": "UNI - SAO FRANCISCO DO GUAPORE"
+  "6": "UNI - Ji-Paraná",
+  "7": "UNI - Machadinho D'Oeste",
+  "8": "UNI - Rolim de Moura",
+  "9": "UNI - Jaru",
+  "10": "UNI - Ouro Preto do Oeste",
+  "11": "UNI - Nova Brasilândia D'Oeste",
+  "12": "UNI - Presidente Médici",
+  "13": "UNI - São Felipe D'Oeste",
+  "14": "UNI - Alvorada D'Oeste",
+  "15": "UNI - Alta Floresta D'Oeste",
+  "16": "UNI - São Francisco do Guaporé",
+  "17": "UNI - São Francisco do Guaporé",
+  "18": "UNI - São Francisco do Guaporé"
 };
 
-const SAO_FRANCISCO_REGIONAL = "UNI - SAO FRANCISCO DO GUAPORE";
+const SAO_FRANCISCO_REGIONAL = "UNI - São Francisco do Guaporé";
 
 const REGIONAL_GROUP_ALIASES: Record<string, string> = {
   "UNI - SAO MIGUEL DO GUAPORE": SAO_FRANCISCO_REGIONAL,

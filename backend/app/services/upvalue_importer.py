@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import math
 import re
 import unicodedata
@@ -14,7 +15,9 @@ import pandas as pd
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
-from app.models import Collaborator, ImportRun, ServiceOrder
+from app.models import Collaborator, ImportRun, ImportServiceOrderAudit, ServiceOrder
+from app.services.calculation_closure import find_paid_run_for_service_order_context
+from app.services.point_balance import detect_post_payment_warranty_debits
 from app.services.regional import is_valid_regional, normalize_regional
 from app.services.sla import normalize_sla_status
 
@@ -22,6 +25,8 @@ from app.services.sla import normalize_sla_status
 SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 
 UNKNOWN_VALUE = "NAO IDENTIFICADO"
+IMPORT_SUCCESS_STATUSES = {"completed", "completed_with_warnings"}
+AUDIT_ACTIONS = {"created", "updated", "skipped", "rejected", "blocked_paid_period", "error"}
 
 
 UPVALUE_COLUMN_ALIASES: dict[str, list[str]] = {
@@ -87,6 +92,15 @@ class ParsedSpreadsheet:
     detected_columns: list[str]
     normalized_columns: list[str]
     mapped_columns: dict[str, str]
+
+
+@dataclass
+class ImportRowValidationError(ValueError):
+    code: str
+    reason: str
+
+    def __str__(self) -> str:
+        return self.reason
 
 
 def normalize_header(value: Any) -> str:
@@ -164,7 +178,7 @@ def detect_column_mapping(columns: list[str]) -> tuple[list[str], dict[str, str]
 def read_spreadsheet(filename: str, contents: bytes, preview_rows: int | None = None) -> ParsedSpreadsheet:
     extension = Path(filename).suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
-        raise ValueError("Formato nao suportado. Envie .xlsx, .xls ou .csv.")
+        raise ValueError("Formato não suportado. Envie .xlsx, .xls ou .csv.")
 
     read_kwargs = {"dtype": object}
     if preview_rows is not None:
@@ -320,7 +334,7 @@ def parse_datetime(value: Any) -> tuple[datetime | None, str | None]:
             if numeric > 1_000_000_000:
                 return datetime.fromtimestamp(numeric, tz=timezone.utc), None
         except (OverflowError, OSError, ValueError):
-            return None, "Data invalida"
+            return None, "Data inválida"
     if isinstance(value, pd.Timestamp):
         value = value.to_pydatetime()
     if isinstance(value, datetime):
@@ -332,7 +346,7 @@ def parse_datetime(value: Any) -> tuple[datetime | None, str | None]:
     dayfirst = not bool(re.match(r"^\d{4}-\d{2}-\d{2}", text))
     parsed = pd.to_datetime(text, dayfirst=dayfirst, errors="coerce")
     if pd.isna(parsed):
-        return None, "Data invalida"
+        return None, "Data inválida"
     value = parsed.to_pydatetime()
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
@@ -351,68 +365,384 @@ def build_preview(filename: str, contents: bytes) -> dict[str, Any]:
     }
 
 
-def import_upvalue_service_orders(db: Session, filename: str, contents: bytes) -> dict[str, Any]:
+def compute_file_hash(contents: bytes) -> str:
+    return hashlib.sha256(contents).hexdigest()
+
+
+def has_duplicate_successful_import(db: Session, file_hash: str, exclude_import_run_id: int | None = None) -> bool:
+    stmt = (
+        select(ImportRun.id)
+        .where(ImportRun.file_hash == file_hash)
+        .where(ImportRun.status.in_(tuple(IMPORT_SUCCESS_STATUSES)))
+        .limit(1)
+    )
+    if exclude_import_run_id is not None:
+        stmt = stmt.where(ImportRun.id != exclude_import_run_id)
+    return db.scalar(stmt) is not None
+
+
+def safe_audit_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        normalized = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return normalized.isoformat()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:.6f}".rstrip("0").rstrip(".")
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    text = str(value).strip()
+    return text or None
+
+
+def normalize_compare_value(field_name: str, value: Any) -> Any:
+    if isinstance(value, datetime):
+        normalized = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return normalized.replace(microsecond=0)
+    if isinstance(value, float):
+        return round(value, 6)
+    if isinstance(value, str):
+        text = value.strip()
+        if field_name in {"regional"}:
+            return normalize_regional(text)
+        if field_name in {"os_code", "contract_id", "customer_login"}:
+            return text.upper()
+        return text
+    return value
+
+
+def values_differ(field_name: str, old_value: Any, new_value: Any) -> bool:
+    return normalize_compare_value(field_name, old_value) != normalize_compare_value(field_name, new_value)
+
+
+def reference_date_for_payload(payload: dict[str, Any]) -> datetime | None:
+    return payload.get("closed_at") or payload.get("opened_at")
+
+
+def add_import_audit(
+    db: Session,
+    import_run: ImportRun,
+    action: str,
+    *,
+    os_code: str | None = None,
+    service_order_id: int | None = None,
+    field_name: str | None = None,
+    old_value: Any = None,
+    new_value: Any = None,
+    reason: str | None = None,
+    row_number: int | None = None,
+    created_by: int | None = None,
+) -> None:
+    if action not in AUDIT_ACTIONS:
+        raise ValueError(f"Ação de auditoria inválida: {action}")
+    db.add(
+        ImportServiceOrderAudit(
+            import_run_id=import_run.id,
+            os_code=os_code,
+            service_order_id=service_order_id,
+            action=action,
+            field_name=field_name,
+            old_value=safe_audit_value(old_value),
+            new_value=safe_audit_value(new_value),
+            reason=reason,
+            row_number=row_number,
+            created_by=created_by,
+        )
+    )
+
+
+def register_row_error(
+    errors: list[dict[str, Any]],
+    row_number: int,
+    reason: str,
+    row: pd.Series,
+) -> None:
+    errors.append({"row": row_number, "reason": reason, "data": row_to_dict(row)})
+
+
+def build_import_result(import_run: ImportRun) -> dict[str, Any]:
+    valid_rows = int(import_run.created_count + import_run.updated_count + import_run.skipped_count)
+    invalid_rows = int(import_run.rejected_count + import_run.error_rows + import_run.paid_period_blocked_count)
+    return {
+        "status": import_run.status,
+        "imported": int(import_run.created_count + import_run.updated_count),
+        "ignored": int(import_run.skipped_count + import_run.rejected_count + import_run.error_rows + import_run.paid_period_blocked_count),
+        "errors": import_run.errors,
+        "first_errors": import_run.errors[:20],
+        "detected_columns": import_run.detected_columns,
+        "mapped_columns": import_run.mapped_columns,
+        "summary": {
+            "total_rows": int(import_run.total_rows),
+            "processed_rows": int(import_run.processed_rows),
+            "created_count": int(import_run.created_count),
+            "updated_count": int(import_run.updated_count),
+            "skipped_count": int(import_run.skipped_count),
+            "rejected_count": int(import_run.rejected_count),
+            "error_count": int(import_run.error_rows),
+            "missing_date_count": int(import_run.missing_date_count),
+            "duplicate_count": int(import_run.duplicate_count),
+            "unknown_collaborator_count": int(import_run.unknown_collaborator_count),
+            "required_field_missing_count": int(import_run.required_field_missing_count),
+            "paid_period_blocked_count": int(import_run.paid_period_blocked_count),
+            "valid_rows": valid_rows,
+            "invalid_rows": invalid_rows,
+        },
+        "import_id": import_run.id,
+        "file_name": import_run.filename,
+        "file_hash": import_run.file_hash,
+        "message": import_run.notes or import_run.error_message,
+    }
+
+
+def register_failed_import_run(
+    db: Session,
+    filename: str,
+    contents: bytes,
+    reason: str,
+    imported_by: int | None = None,
+) -> ImportRun:
+    import_run = ImportRun(
+        filename=filename,
+        file_hash=compute_file_hash(contents),
+        source="upvalue",
+        status="failed",
+        total_rows=0,
+        processed_rows=0,
+        imported_rows=0,
+        rejected_count=0,
+        ignored_rows=0,
+        error_rows=1,
+        imported_by=imported_by,
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+        error_message=reason,
+        notes="Falha ao processar a importação.",
+        detected_columns=[],
+        mapped_columns={},
+        errors=[{"row": 0, "reason": reason, "data": {"file_name": filename}}],
+    )
+    db.add(import_run)
+    db.flush()
+    return import_run
+
+
+def import_upvalue_service_orders(db: Session, filename: str, contents: bytes, imported_by: int | None = None) -> dict[str, Any]:
     parsed = read_spreadsheet(filename, contents)
     total_rows = len(parsed.dataframe.index)
-    imported = 0
+    file_hash = compute_file_hash(contents)
     errors: list[dict[str, Any]] = []
+
+    import_run = ImportRun(
+        filename=filename,
+        file_hash=file_hash,
+        source="upvalue",
+        status="completed",
+        total_rows=total_rows,
+        detected_columns=parsed.detected_columns,
+        mapped_columns=parsed.mapped_columns,
+        errors=[],
+        imported_by=imported_by,
+        started_at=datetime.now(timezone.utc),
+        notes=None,
+    )
+    db.add(import_run)
+    db.flush()
+
+    if has_duplicate_successful_import(db, file_hash, exclude_import_run_id=import_run.id):
+        import_run.status = "rejected"
+        import_run.duplicate_count = 1
+        import_run.rejected_count = total_rows or 1
+        import_run.ignored_rows = import_run.rejected_count
+        import_run.error_rows = 0
+        import_run.processed_rows = 0
+        import_run.finished_at = datetime.now(timezone.utc)
+        import_run.error_message = "Arquivo já importado anteriormente."
+        import_run.notes = "Arquivo já importado anteriormente."
+        import_run.errors = [
+            {
+                "row": 0,
+                "reason": "Arquivo já importado anteriormente",
+                "data": {"file_name": filename, "file_hash": file_hash},
+            }
+        ]
+        return build_import_result(import_run)
+
+    touched_orders: list[ServiceOrder] = []
 
     for offset, (_, row) in enumerate(parsed.dataframe.iterrows(), start=2):
         try:
             payload = build_service_order_payload(row, parsed.mapped_columns, offset)
-            collaborator = get_or_create_collaborator(
-                db,
-                payload.pop("collaborator_name"),
-                payload["regional"],
-            )
-            payload["collaborator_id"] = collaborator.id
+            provided_fields = set(payload.pop("__provided_fields__", []))
+            collaborator_name = payload.pop("collaborator_name")
             existing = find_existing_service_order(db, payload)
+            target_paid_run = find_paid_run_for_service_order_context(
+                db,
+                (existing.closed_at if existing else None) or (existing.opened_at if existing else None) or reference_date_for_payload(payload),
+                existing.regional if existing else payload.get("regional"),
+            )
+            collaborator = None
+            if not target_paid_run and (existing is None or "collaborator" in provided_fields):
+                collaborator, created_collaborator = get_or_create_collaborator(
+                    db,
+                    collaborator_name,
+                    payload["regional"],
+                )
+                if created_collaborator:
+                    import_run.unknown_collaborator_count += 1
+                payload["collaborator_id"] = collaborator.id
+                if "collaborator" in provided_fields:
+                    provided_fields.add("collaborator_id")
             if existing:
+                changes: list[tuple[str, Any, Any]] = []
                 for field, value in payload.items():
-                    setattr(existing, field, value)
+                    if field not in provided_fields:
+                        continue
+                    current_value = getattr(existing, field)
+                    if values_differ(field, current_value, value):
+                        changes.append((field, current_value, value))
+                if not changes:
+                    import_run.skipped_count += 1
+                    add_import_audit(
+                        db,
+                        import_run,
+                        "skipped",
+                        os_code=existing.os_code,
+                        service_order_id=existing.id,
+                        reason="sem alterações",
+                        row_number=offset,
+                        created_by=imported_by,
+                    )
+                elif target_paid_run:
+                    import_run.paid_period_blocked_count += 1
+                    add_import_audit(
+                        db,
+                        import_run,
+                        "blocked_paid_period",
+                        os_code=existing.os_code,
+                        service_order_id=existing.id,
+                        reason="A O.S pertence a um período já marcado como pago e não foi alterada. Para revisar, crie uma revisão pós-pagamento.",
+                        row_number=offset,
+                        created_by=imported_by,
+                    )
+                    register_row_error(
+                        errors,
+                        offset,
+                        "A O.S pertence a um período já marcado como pago e não foi alterada. Para revisar, crie uma revisão pós-pagamento.",
+                        row,
+                    )
+                else:
+                    for field, old_value, new_value in changes:
+                        setattr(existing, field, new_value)
+                        add_import_audit(
+                            db,
+                            import_run,
+                            "updated",
+                            os_code=existing.os_code,
+                            service_order_id=existing.id,
+                            field_name=field,
+                            old_value=old_value,
+                            new_value=new_value,
+                            row_number=offset,
+                            created_by=imported_by,
+                        )
+                    import_run.updated_count += 1
+                    touched_orders.append(existing)
             else:
-                db.add(ServiceOrder(**payload))
-            imported += 1
-        except ValueError as exc:
-            errors.append({"row": offset, "reason": str(exc), "data": row_to_dict(row)})
+                if target_paid_run:
+                    import_run.paid_period_blocked_count += 1
+                    add_import_audit(
+                        db,
+                        import_run,
+                        "blocked_paid_period",
+                        os_code=payload.get("os_code"),
+                        reason="A O.S pertence a um período já marcado como pago e não foi criada. Para revisar, crie uma revisão pós-pagamento.",
+                        row_number=offset,
+                        created_by=imported_by,
+                    )
+                    register_row_error(
+                        errors,
+                        offset,
+                        "A O.S pertence a um período já marcado como pago e não foi criada. Para revisar, crie uma revisão pós-pagamento.",
+                        row,
+                    )
+                else:
+                    service_order = ServiceOrder(**payload)
+                    db.add(service_order)
+                    db.flush()
+                    add_import_audit(
+                        db,
+                        import_run,
+                        "created",
+                        os_code=service_order.os_code,
+                        service_order_id=service_order.id,
+                        reason="O.S criada pela importação",
+                        row_number=offset,
+                        created_by=imported_by,
+                    )
+                    import_run.created_count += 1
+                    touched_orders.append(service_order)
+            import_run.processed_rows += 1
+        except ImportRowValidationError as exc:
+            import_run.processed_rows += 1
+            import_run.rejected_count += 1
+            if exc.code == "missing_date":
+                import_run.missing_date_count += 1
+            if exc.code == "required_field_missing":
+                import_run.required_field_missing_count += 1
+            add_import_audit(
+                db,
+                import_run,
+                "rejected",
+                reason=exc.reason,
+                row_number=offset,
+                created_by=imported_by,
+            )
+            register_row_error(errors, offset, exc.reason, row)
         except Exception as exc:
-            errors.append({"row": offset, "reason": f"Erro inesperado: {exc}", "data": row_to_dict(row)})
+            import_run.processed_rows += 1
+            import_run.error_rows += 1
+            add_import_audit(
+                db,
+                import_run,
+                "error",
+                reason=f"Erro inesperado: {exc}",
+                row_number=offset,
+                created_by=imported_by,
+            )
+            register_row_error(errors, offset, f"Erro inesperado: {exc}", row)
 
-    ignored = len(errors)
+    import_run.imported_rows = import_run.created_count + import_run.updated_count
+    import_run.ignored_rows = import_run.skipped_count + import_run.rejected_count + import_run.paid_period_blocked_count + import_run.error_rows
+    import_run.errors = errors
+    import_run.finished_at = datetime.now(timezone.utc)
+    if import_run.error_rows or import_run.rejected_count or import_run.paid_period_blocked_count:
+        import_run.status = "completed_with_warnings"
+    if not import_run.imported_rows and import_run.duplicate_count:
+        import_run.status = "rejected"
+
     if errors:
-        print(f"[UpValue Import] {filename}: imported={imported} ignored={ignored} total={total_rows}")
+        print(
+            f"[UpValue Import] {filename}: created={import_run.created_count} updated={import_run.updated_count} "
+            f"skipped={import_run.skipped_count} rejected={import_run.rejected_count} "
+            f"blocked_paid={import_run.paid_period_blocked_count} errors={import_run.error_rows} total={total_rows}"
+        )
         for error in errors[:20]:
             print(f"[UpValue Import] row={error['row']} reason={error['reason']} data={error['data']}")
 
-    import_run = ImportRun(
-        filename=filename,
-        source="upvalue",
-        total_rows=total_rows,
-        imported_rows=imported,
-        ignored_rows=ignored,
-        error_rows=ignored,
-        detected_columns=parsed.detected_columns,
-        mapped_columns=parsed.mapped_columns,
-        errors=errors,
+    import_run.notes = (
+        "Importação concluída com alertas."
+        if import_run.status == "completed_with_warnings"
+        else "Importação concluída com sucesso."
     )
-    db.add(import_run)
-    db.commit()
-    db.refresh(import_run)
 
-    return {
-        "imported": imported,
-        "ignored": ignored,
-        "errors": errors,
-        "first_errors": errors[:20],
-        "detected_columns": parsed.detected_columns,
-        "mapped_columns": parsed.mapped_columns,
-        "summary": {
-            "total_rows": total_rows,
-            "valid_rows": imported,
-            "invalid_rows": ignored,
-        },
-        "import_id": import_run.id,
-    }
+    if touched_orders:
+        detect_post_payment_warranty_debits(db, touched_orders, triggered_by=imported_by)
+
+    return build_import_result(import_run)
 
 
 def build_service_order_payload(row: pd.Series, mapped_columns: dict[str, str], row_number: int) -> dict[str, Any]:
@@ -425,6 +755,33 @@ def build_service_order_payload(row: pd.Series, mapped_columns: dict[str, str], 
     def column(field: str) -> str | None:
         return mapped_columns.get(field)
 
+    provided_fields: set[str] = set()
+    for field_name in [
+        "os_code",
+        "contract_id",
+        "customer_login",
+        "customer_name",
+        "collaborator",
+        "regional",
+        "os_type",
+        "os_subject",
+        "diagnosis",
+        "status",
+        "sla_status",
+        "sla_hours",
+        "closing_time_hours",
+        "opened_at",
+        "closed_at",
+        "scheduled_at",
+        "deadline_at",
+        "has_reschedule",
+        "has_pending",
+        "is_warranty",
+        "is_recurrence",
+    ]:
+        if column(field_name):
+            provided_fields.add(field_name)
+
     opened_at, opened_error = parse_datetime(value("opened_at"))
     closed_at, closed_error = parse_datetime(value("closed_at"))
     scheduled_at, _ = parse_datetime(value("scheduled_at"))
@@ -432,19 +789,16 @@ def build_service_order_payload(row: pd.Series, mapped_columns: dict[str, str], 
     if opened_at is None and closed_at is not None:
         opened_at = closed_at
     if opened_at is None:
-        opened_at = scheduled_at or deadline_at or datetime.now(timezone.utc)
+        opened_at = scheduled_at or deadline_at
 
     os_code = normalize_text(value("os_code"))
     contract_id = normalize_text(value("contract_id"))
     customer_login = normalize_text(value("customer_login"))
     os_subject = normalize_text(value("os_subject")) or UNKNOWN_VALUE
-    diagnosis = normalize_text(value("diagnosis")) or "Nao informado"
-    normalized_diagnosis = normalize_header(diagnosis)
-    if not os_code:
-        os_code = generated_os_code(customer_login or contract_id, os_subject, opened_at, row_to_dict(row), row_number)
-
+    diagnosis = normalize_text(value("diagnosis")) or "Não informado"
+    os_type = normalize_text(value("os_type")) or UNKNOWN_VALUE
+    customer_name = normalize_text(value("customer_name")) or "Não informado"
     collaborator_name = normalize_text(value("collaborator")) or UNKNOWN_VALUE
-
     regional = normalize_regional(normalize_text(value("regional")) or UNKNOWN_VALUE)
     sla_hours = parse_duration_hours(value("sla_hours"), column("sla_hours"))
     closing_time_hours = parse_duration_hours(value("closing_time_hours"), column("closing_time_hours"))
@@ -452,18 +806,26 @@ def build_service_order_payload(row: pd.Series, mapped_columns: dict[str, str], 
     closing_time = closing_time_hours if closing_time_hours is not None else 0
     status = normalize_text(value("status"))
     if not status:
-        status = "Concluida" if closed_at else "Em andamento"
+        status = "Concluída" if closed_at else "Em andamento"
     sla_status_source = normalize_text(value("sla_status"))
     sla_status = sla_status_source if sla_status_source and parse_number(sla_status_source) is None else ""
+
+    if not any([opened_at, closed_at, scheduled_at, deadline_at]):
+        raise ImportRowValidationError("missing_date", "O.S sem data de referência")
+    if opened_at is None:
+        raise ImportRowValidationError("missing_date", "O.S sem data de referência")
+
+    if not os_code:
+        os_code = generated_os_code(customer_login or contract_id, os_subject, opened_at, row_to_dict(row), row_number)
 
     return {
         "os_code": os_code,
         "contract_id": contract_id or UNKNOWN_VALUE,
         "customer_login": customer_login or None,
-        "customer_name": normalize_text(value("customer_name")) or "Nao informado",
+        "customer_name": customer_name,
         "collaborator_name": collaborator_name,
         "regional": regional,
-        "os_type": normalize_text(value("os_type")) or UNKNOWN_VALUE,
+        "os_type": os_type,
         "os_subject": os_subject,
         "diagnosis": diagnosis,
         "status": status,
@@ -477,6 +839,7 @@ def build_service_order_payload(row: pd.Series, mapped_columns: dict[str, str], 
         "is_priority": bool(sla_hours is not None and sla_hours <= 6),
         "has_reschedule": parse_bool(value("has_reschedule")),
         "has_pending": parse_bool(value("has_pending")),
+        "__provided_fields__": sorted(provided_fields),
     }
 
 
@@ -485,7 +848,7 @@ def generated_os_code(contract_id: str, os_subject: str, opened_at: datetime, ro
     return f"UPV-{hashlib.sha1(raw).hexdigest()[:14].upper()}"
 
 
-def get_or_create_collaborator(db: Session, name: str, regional: str) -> Collaborator:
+def get_or_create_collaborator(db: Session, name: str, regional: str) -> tuple[Collaborator, bool]:
     normalized_name = normalize_header(name)
     collaborators = db.scalars(select(Collaborator)).all()
     for collaborator in collaborators:
@@ -497,7 +860,7 @@ def get_or_create_collaborator(db: Session, name: str, regional: str) -> Collabo
             if not collaborator.active:
                 collaborator.active = True
                 collaborator.is_registered = False
-            return collaborator
+            return collaborator, False
 
     collaborator = Collaborator(
         name=name,
@@ -508,7 +871,7 @@ def get_or_create_collaborator(db: Session, name: str, regional: str) -> Collabo
     )
     db.add(collaborator)
     db.flush()
-    return collaborator
+    return collaborator, True
 
 
 def find_existing_service_order(db: Session, payload: dict[str, Any]) -> ServiceOrder | None:

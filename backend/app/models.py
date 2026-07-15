@@ -18,6 +18,8 @@ LEADERSHIP_PERCENTAGE_BY_ROLE: dict[str, float] = {
     "portfolio_manager": 5.0,
 }
 
+CALCULATION_RUN_STATUSES = ("draft", "review", "approved", "paid", "cancelled")
+
 
 def default_percentage_for_role(role_type: str | None) -> float:
     return float(LEADERSHIP_PERCENTAGE_BY_ROLE.get((role_type or "").strip(), 0.0))
@@ -54,6 +56,8 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
+    import_runs: Mapped[list["ImportRun"]] = relationship(back_populates="imported_by_user")
+    import_service_order_audits: Mapped[list["ImportServiceOrderAudit"]] = relationship(back_populates="created_by_user")
 
 
 class AuditLog(Base):
@@ -83,8 +87,8 @@ class ServiceOrder(Base):
     regional: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
     os_type: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
     os_subject: Mapped[str] = mapped_column(String(180), index=True, nullable=False)
-    diagnosis: Mapped[str] = mapped_column(String(180), default="Nao informado", index=True, nullable=False)
-    status: Mapped[str] = mapped_column(String(80), default="Concluida", nullable=False)
+    diagnosis: Mapped[str] = mapped_column(String(180), default="Não informado", index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(80), default="Concluída", nullable=False)
     sla_status: Mapped[str] = mapped_column(String(80), default="Dentro do prazo", nullable=False)
     sla_hours: Mapped[float | None] = mapped_column(Float, default=24, nullable=True)
     closing_time_hours: Mapped[float | None] = mapped_column(Float, default=0, nullable=True)
@@ -98,6 +102,7 @@ class ServiceOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     collaborator: Mapped["Collaborator"] = relationship(back_populates="service_orders")
+    import_audits: Mapped[list["ImportServiceOrderAudit"]] = relationship(back_populates="service_order")
 
 
 class ScoringGroup(Base):
@@ -248,6 +253,17 @@ class CalculationRun(Base):
     source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     rules_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status_changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    status_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    executed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    config_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     scores: Mapped[list["CollaboratorScore"]] = relationship(
@@ -270,9 +286,73 @@ class CollaboratorScore(Base):
     health_status: Mapped[str] = mapped_column(String(120), default="Boa", nullable=False)
     final_points: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     estimated_payment: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    balance_adjustment_points: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    balance_after: Mapped[float] = mapped_column(Float, default=0, nullable=False)
 
     calculation_run: Mapped["CalculationRun"] = relationship(back_populates="scores")
     collaborator: Mapped["Collaborator"] = relationship(back_populates="scores")
+
+
+class CollaboratorPointBalance(Base):
+    """Saldo corrente (rolling) de pontos de garantia por colaborador."""
+
+    __tablename__ = "collaborator_point_balances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    collaborator_id: Mapped[int] = mapped_column(
+        ForeignKey("collaborators.id"), unique=True, nullable=False, index=True
+    )
+    balance_points: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    collaborator: Mapped["Collaborator"] = relationship()
+
+
+POINT_BALANCE_ENTRY_TYPES = ("post_payment_warranty_debit", "period_settlement", "manual_adjustment")
+POINT_BALANCE_ENTRY_STATUSES = ("pending", "applied", "reverted")
+
+
+class PointBalanceEntry(Base):
+    """Lançamento (ledger) de cada movimentação no saldo de pontos de um colaborador."""
+
+    __tablename__ = "point_balance_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    collaborator_id: Mapped[int] = mapped_column(ForeignKey("collaborators.id"), nullable=False, index=True)
+    entry_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    points: Mapped[float] = mapped_column(Float, nullable=False)
+
+    original_service_order_id: Mapped[int | None] = mapped_column(ForeignKey("service_orders.id"), nullable=True)
+    related_service_order_id: Mapped[int | None] = mapped_column(ForeignKey("service_orders.id"), nullable=True)
+    # Guarda o os_code (estavel entre reimportacoes) alem do FK: apagar/reimportar o periodo troca o id
+    # interno da O.S, mas o os_code sobrevive - preserva a identidade do lancamento e a deteccao de
+    # duplicidade mesmo depois que a O.S original for apagada e reimportada.
+    original_os_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    related_os_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    origin_calculation_run_id: Mapped[int | None] = mapped_column(ForeignKey("calculation_runs.id"), nullable=True)
+
+    applied_calculation_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("calculation_runs.id"), nullable=True, index=True
+    )
+    applied_reference_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    applied_reference_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    requires_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    recurrence_classification: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    recurrence_action: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    collaborator: Mapped["Collaborator"] = relationship()
+    original_service_order: Mapped["ServiceOrder | None"] = relationship(foreign_keys=[original_service_order_id])
+    related_service_order: Mapped["ServiceOrder | None"] = relationship(foreign_keys=[related_service_order_id])
+    origin_calculation_run: Mapped["CalculationRun | None"] = relationship(foreign_keys=[origin_calculation_run_id])
+    applied_calculation_run: Mapped["CalculationRun | None"] = relationship(foreign_keys=[applied_calculation_run_id])
 
 
 class LeadershipProfile(Base):
@@ -286,6 +366,7 @@ class LeadershipProfile(Base):
     role_profile_id: Mapped[int | None] = mapped_column(ForeignKey("leadership_role_profiles.id"), nullable=True, index=True)
     use_custom_multiplier: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     custom_multiplier: Mapped[float | None] = mapped_column(Float, nullable=True)
+    average_source: Mapped[str] = mapped_column(String(40), default="collaborators", nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -359,12 +440,56 @@ class ImportRun(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     source: Mapped[str] = mapped_column(String(120), default="upvalue", nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="completed", nullable=False, index=True)
     total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     imported_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duplicate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    missing_date_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unknown_collaborator_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    required_field_missing_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    paid_period_blocked_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ignored_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    imported_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     detected_columns: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     mapped_columns: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
     errors: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    imported_by_user: Mapped["User | None"] = relationship(back_populates="import_runs")
+    audits: Mapped[list["ImportServiceOrderAudit"]] = relationship(
+        back_populates="import_run",
+        cascade="all, delete-orphan",
+    )
+
+
+class ImportServiceOrderAudit(Base):
+    __tablename__ = "import_service_order_audits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    import_run_id: Mapped[int] = mapped_column(ForeignKey("imports.id"), nullable=False, index=True)
+    os_code: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    service_order_id: Mapped[int | None] = mapped_column(ForeignKey("service_orders.id"), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    field_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    old_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+
+    import_run: Mapped["ImportRun"] = relationship(back_populates="audits")
+    service_order: Mapped["ServiceOrder | None"] = relationship(back_populates="import_audits")
+    created_by_user: Mapped["User | None"] = relationship(back_populates="import_service_order_audits")

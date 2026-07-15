@@ -21,7 +21,7 @@ export function formatPoints(value: number | null | undefined) {
 export function formatSignedPoints(value: number | null | undefined) {
   const safeValue = value ?? 0;
   if (safeValue === 0) return "0 pts";
-  return `${safeValue > 0 ? "-" : "+"}${numberFormat.format(Math.abs(safeValue))} pts`;
+  return `${safeValue < 0 ? "-" : "+"}${numberFormat.format(Math.abs(safeValue))} pts`;
 }
 
 export function formatAnnulledPoints(value: number | null | undefined) {

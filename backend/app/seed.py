@@ -34,7 +34,7 @@ def remember_deleted_default_group(db: Session, name: str) -> None:
         db,
         DELETED_DEFAULT_GROUPS_SETTING,
         "|".join(sorted(deleted)),
-        "Grupos padrao removidos manualmente para o seed automatico nao recriar.",
+        "Grupos padrão removidos manualmente para o seed automático não recriar.",
     )
 
 
@@ -48,7 +48,7 @@ def forget_deleted_default_group(db: Session, name: str) -> None:
         db,
         DELETED_DEFAULT_GROUPS_SETTING,
         "|".join(sorted(deleted)),
-        "Grupos padrao removidos manualmente para o seed automatico nao recriar.",
+        "Grupos padrão removidos manualmente para o seed automático não recriar.",
     )
 
 
@@ -116,30 +116,30 @@ def ensure_setting(db: Session, key: str, value: str, description: str) -> None:
 
 
 def seed_database(db: Session, include_demo: bool = False) -> None:
-    ensure_setting(db, "point_value", "2.50", "Valor monetario pago por ponto final.")
-    ensure_setting(db, "recurrence_window_days", "30", "Janela em dias para reconhecer reincidencia operacional.")
-    ensure_setting(db, "recurrence_identity_fields", "login,contract", "Campos usados para vincular O.S do mesmo cliente na reincidencia.")
-    ensure_setting(db, "warranty_scores", "true", "Define se garantia resolvida tambem gera pontuacao.")
+    ensure_setting(db, "point_value", "2.50", "Valor monetário pago por ponto final.")
+    ensure_setting(db, "recurrence_window_days", "30", "Janela em dias para reconhecer reincidência operacional.")
+    ensure_setting(db, "recurrence_identity_fields", "login,contract", "Campos usados para vincular O.S do mesmo cliente na reincidência.")
+    ensure_setting(db, "warranty_scores", "true", "Define se garantia resolvida também gera pontuação.")
     ensure_setting(db, "warranty_mode", "score_full", "Regra de garantia: score_full, score_reduced, no_points ou requires_review.")
-    ensure_setting(db, "warranty_reduction_percentage", "0", "Percentual de reducao quando garantia pontua com reducao.")
-    ensure_setting(db, "recurrence_action", "annul_original", "Regra de reincidencia: annul_original, subtract_original, no_penalty ou requires_review.")
-    ensure_setting(db, "recurrence_penalty_points", "0", "Desconto fixo quando reincidencia usa subtract_original.")
+    ensure_setting(db, "warranty_reduction_percentage", "0", "Percentual de redução quando garantia pontua com redução.")
+    ensure_setting(db, "recurrence_action", "annul_original", "Regra de reincidência: annul_original, subtract_original, no_penalty ou requires_review.")
+    ensure_setting(db, "recurrence_penalty_points", "0", "Desconto fixo quando reincidência usa subtract_original.")
     ensure_setting(db, "payment_cap", "0", "Teto de pagamento. Zero significa sem teto.")
 
-    _get_or_create_group(db, "Manutencao", "Precificacao padrao para manutencoes operacionais.", 15)
+    _get_or_create_group(db, "Manutenção", "Precificação padrão para manutenções operacionais.", 15)
     _get_or_create_group(
         db,
-        "Ativacao / Mudanca de Endereco / Retorno",
-        "Precificacao padrao para ativacao, mudanca de endereco e retorno.",
+        "Ativação / Mudança de Endereço / Retorno",
+        "Precificação padrão para ativação, mudança de endereço e retorno.",
         10,
     )
-    _get_or_create_group(db, "Mudanca de Tecnologia", "Precificacao padrao para mudancas de tecnologia.", 15)
-    _get_or_create_group(db, "Recolhimento", "Precificacao padrao para recolhimentos.", 5)
+    _get_or_create_group(db, "Mudança de Tecnologia", "Precificação padrão para mudanças de tecnologia.", 15)
+    _get_or_create_group(db, "Recolhimento", "Precificação padrão para recolhimentos.", 5)
 
     migrate_legacy_scoring_rules(db)
 
     diagnosis_rules = [
-        ("Resolvido", 0, "no_penalty", "Diagnostico conclusivo sem penalidade."),
+        ("Resolvido", 0, "no_penalty", "Diagnóstico conclusivo sem penalidade."),
     ]
     for diagnosis_name, penalty_points, action_type, description in diagnosis_rules:
         exists = db.scalar(select(DiagnosisPenaltyRule).where(DiagnosisPenaltyRule.diagnosis_name == diagnosis_name))
@@ -169,44 +169,44 @@ def seed_database(db: Session, include_demo: bool = False) -> None:
     if not db.scalar(select(RecurrenceClassificationRule)):
         recurrence_rules = [
             {
-                "name": "Reincidencia de Manutencao",
-                "original_os_type_pattern": "Manutencao",
-                "return_os_type_pattern": "Manutencao",
+                "name": "Reincidência de Manutenção",
+                "original_os_type_pattern": "Manutenção",
+                "return_os_type_pattern": "Manutenção",
                 "classification": "reincidencia_tecnica",
                 "discount_points": True,
                 "max_days": 30,
                 "priority": 10,
-                "description": "Regra padrao: nova manutencao do mesmo vinculo dentro da janela caracteriza reincidencia.",
+                "description": "Regra padrão: nova manutenção do mesmo vínculo dentro da janela caracteriza reincidência.",
             },
             {
-                "name": "Reincidencia de Ativacao",
-                "original_os_type_pattern": "Ativacao",
-                "return_os_type_pattern": "Manutencao",
+                "name": "Reincidência de Ativação",
+                "original_os_type_pattern": "Ativação",
+                "return_os_type_pattern": "Manutenção",
                 "classification": "garantia",
                 "discount_points": True,
                 "max_days": 30,
                 "priority": 20,
-                "description": "Regra padrao: manutencao apos ativacao dentro da janela caracteriza retorno operacional.",
+                "description": "Regra padrão: manutenção após ativação dentro da janela caracteriza retorno operacional.",
             },
             {
-                "name": "Alteracao de Endereco nao reincide",
-                "original_os_type_pattern": "Mud. de Endereco",
-                "return_os_type_pattern": "Mud. de Endereco",
+                "name": "Alteração de Endereço não reincide",
+                "original_os_type_pattern": "Mud. de Endereço",
+                "return_os_type_pattern": "Mud. de Endereço",
                 "classification": "os_nao_reincidente",
                 "discount_points": False,
                 "max_days": 30,
                 "priority": 80,
-                "description": "Regra padrao: alteracao de endereco recorrente e tratada como demanda diferente.",
+                "description": "Regra padrão: alteração de endereço recorrente é tratada como demanda diferente.",
             },
             {
-                "name": "Mudanca de Tecnologia nao reincide",
+                "name": "Mudança de Tecnologia não reincide",
                 "original_os_type_pattern": "Mud. de Tecnologia",
                 "return_os_type_pattern": "Mud. de Tecnologia",
                 "classification": "os_nao_reincidente",
                 "discount_points": False,
                 "max_days": 30,
                 "priority": 90,
-                "description": "Regra padrao: mudanca de tecnologia recorrente e tratada como demanda diferente.",
+                "description": "Regra padrão: mudança de tecnologia recorrente é tratada como demanda diferente.",
             },
         ]
         for rule in recurrence_rules:
@@ -215,8 +215,8 @@ def seed_database(db: Session, include_demo: bool = False) -> None:
     health_rules = [
         ("Excelente", 90, 3, 1.2, "and"),
         ("Boa", 80, 6, 1.0, "and"),
-        ("Atencao", 70, 10, 0.8, "or"),
-        ("Critica", 0, 100, 0.6, "fallback"),
+        ("Atenção", 70, 10, 0.8, "and"),
+        ("Crítica", 0, 100, 0.6, "and"),
     ]
     for name, min_sla, max_recurrence, multiplier, operator in health_rules:
         exists = db.scalar(select(HealthRule).where(HealthRule.name == name))

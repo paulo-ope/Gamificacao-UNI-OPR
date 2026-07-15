@@ -1,10 +1,14 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.core.security import require_permission
 from app.db.session import get_db
-from app.schemas import ImportPreview, ImportResult
-from app.services.upvalue_importer import build_preview, import_upvalue_service_orders
+from app.models import ImportRun, ImportServiceOrderAudit, User
+from app.schemas import ImportPreview, ImportResult, ImportRunOut, ImportServiceOrderAuditOut
+from app.services.upvalue_importer import build_preview, import_upvalue_service_orders, register_failed_import_run
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -15,13 +19,120 @@ async def preview_upvalue_service_orders(file: UploadFile = File(...), user=Depe
     try:
         return build_preview(file.filename or "upvalue.xlsx", contents)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Não foi possível ler a planilha informada.") from exc
 
 
 @router.post("/upvalue-service-orders", response_model=ImportResult)
-async def import_upvalue_orders(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(require_permission("orders:import"))):
+async def import_upvalue_orders(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(require_permission("orders:import"))):
     contents = await file.read()
     try:
-        return import_upvalue_service_orders(db, file.filename or "upvalue.xlsx", contents)
+        result = import_upvalue_service_orders(db, file.filename or "upvalue.xlsx", contents, imported_by=user.id)
+        db.commit()
+        return result
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        db.rollback()
+        register_failed_import_run(
+            db,
+            file.filename or "upvalue.xlsx",
+            contents,
+            "Não foi possível importar a planilha informada.",
+            imported_by=user.id,
+        )
+        db.commit()
+        raise HTTPException(status_code=400, detail="Não foi possível importar a planilha informada.") from exc
+    except Exception as exc:
+        db.rollback()
+        register_failed_import_run(
+            db,
+            file.filename or "upvalue.xlsx",
+            contents,
+            "Falha inesperada ao importar a planilha.",
+            imported_by=user.id,
+        )
+        db.commit()
+        raise HTTPException(status_code=500, detail="Falha inesperada ao importar a planilha.") from exc
+
+
+@router.get("/runs", response_model=list[ImportRunOut])
+def list_import_runs(
+    status: str | None = None,
+    file_name: str | None = None,
+    imported_by: int | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("orders:read")),
+):
+    stmt = select(ImportRun).order_by(desc(ImportRun.created_at), desc(ImportRun.id))
+    if status:
+        stmt = stmt.where(ImportRun.status == status.strip().lower())
+    if file_name:
+        stmt = stmt.where(ImportRun.filename.ilike(f"%{file_name.strip()}%"))
+    if imported_by is not None:
+        stmt = stmt.where(ImportRun.imported_by == imported_by)
+    if date_from is not None:
+        stmt = stmt.where(ImportRun.created_at >= date_from)
+    if date_to is not None:
+        stmt = stmt.where(ImportRun.created_at <= date_to)
+    return list(db.scalars(stmt.limit(limit)))
+
+
+@router.get("/runs/{import_run_id}", response_model=ImportRunOut)
+def get_import_run(
+    import_run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("orders:read")),
+):
+    import_run = db.get(ImportRun, import_run_id)
+    if not import_run:
+        raise HTTPException(status_code=404, detail="Importação não encontrada.")
+    return import_run
+
+
+@router.get("/runs/{import_run_id}/audits", response_model=list[ImportServiceOrderAuditOut])
+def list_import_run_audits(
+    import_run_id: int,
+    action: str | None = None,
+    os_code: str | None = None,
+    reason: str | None = None,
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("orders:read")),
+):
+    if not db.get(ImportRun, import_run_id):
+        raise HTTPException(status_code=404, detail="Importação não encontrada.")
+    stmt = (
+        select(ImportServiceOrderAudit)
+        .where(ImportServiceOrderAudit.import_run_id == import_run_id)
+        .order_by(desc(ImportServiceOrderAudit.created_at), desc(ImportServiceOrderAudit.id))
+    )
+    if action:
+        stmt = stmt.where(ImportServiceOrderAudit.action == action.strip().lower())
+    if os_code:
+        stmt = stmt.where(ImportServiceOrderAudit.os_code == os_code.strip())
+    if reason:
+        stmt = stmt.where(ImportServiceOrderAudit.reason.ilike(f"%{reason.strip()}%"))
+    return list(db.scalars(stmt.offset(offset).limit(limit)))
+
+
+@router.get("/runs/{import_run_id}/errors", response_model=list[ImportServiceOrderAuditOut])
+def list_import_run_errors(
+    import_run_id: int,
+    limit: int = Query(default=200, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("orders:read")),
+):
+    if not db.get(ImportRun, import_run_id):
+        raise HTTPException(status_code=404, detail="Importação não encontrada.")
+    stmt = (
+        select(ImportServiceOrderAudit)
+        .where(ImportServiceOrderAudit.import_run_id == import_run_id)
+        .where(ImportServiceOrderAudit.action.in_(("error", "rejected", "blocked_paid_period")))
+        .order_by(desc(ImportServiceOrderAudit.created_at), desc(ImportServiceOrderAudit.id))
+        .offset(offset)
+        .limit(limit)
+    )
+    return list(db.scalars(stmt))

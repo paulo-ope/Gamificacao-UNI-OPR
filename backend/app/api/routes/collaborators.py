@@ -2,23 +2,28 @@ from datetime import datetime, timezone
 from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from fastapi.responses import Response
+from sqlalchemy import desc, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import get_db
 from app.core.security import require_permission
-from app.models import CalculationRun, Collaborator, ServiceOrder, User
+from app.models import CalculationRun, Collaborator, CollaboratorPointBalance, CollaboratorScore, PointBalanceEntry, ServiceOrder, User
 from app.schemas import (
     CollaboratorCreate,
     CollaboratorDeleteResult,
+    CollaboratorMonthlyHistoryItem,
     CollaboratorOut,
+    CollaboratorPointBalanceOut,
     CollaboratorRegistryOut,
     CollaboratorServiceOrdersDetailOut,
     CollaboratorUpdate,
 )
 from app.services.calculation import latest_run
+from app.services.point_balance import current_balance, serialize_entry as serialize_point_balance_entry
 from app.services.regional import is_valid_regional, normalize_regional
 from app.services.scoring_detail import get_collaborator_service_orders_detail, get_point_value
+from app.services.statement_pdf import build_collaborator_statement_pdf
 from app.services.audit_log import record_audit_log, snapshot
 
 router = APIRouter(prefix="/collaborators", tags=["collaborators"])
@@ -95,7 +100,7 @@ def delete_collaborator(
 ):
     collaborator = db.get(Collaborator, collaborator_id)
     if not collaborator:
-        raise HTTPException(status_code=404, detail="Colaborador nao encontrado.")
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
 
     linked_orders = list(db.scalars(select(ServiceOrder).where(ServiceOrder.collaborator_id == collaborator_id)))
     if linked_orders:
@@ -151,7 +156,7 @@ def collaborator_service_orders_detail(
     if calculation_run_id:
         run = db.get(CalculationRun, calculation_run_id)
         if not run:
-            raise HTTPException(status_code=404, detail="Apuracao nao encontrada.")
+            raise HTTPException(status_code=404, detail="Apuração não encontrada.")
     else:
         run = latest_run(db)
 
@@ -183,7 +188,7 @@ def collaborator_service_orders_detail(
             point_value=point_value,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Detalhamento do colaborador não encontrado para o período informado.") from exc
 
 
 @router.get("/{collaborator_id}/scoring-detail", response_model=CollaboratorServiceOrdersDetailOut)
@@ -231,6 +236,133 @@ def collaborator_scoring_detail(
     )
 
 
+@router.get("/{collaborator_id}/statement.pdf")
+def collaborator_statement_pdf(
+    collaborator_id: int,
+    calculation_run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("audit:read")),
+):
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
+
+    run = db.get(CalculationRun, calculation_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Apuração não encontrada.")
+
+    score = db.scalar(
+        select(CollaboratorScore).where(
+            CollaboratorScore.calculation_run_id == run.id,
+            CollaboratorScore.collaborator_id == collaborator_id,
+        )
+    )
+    if not score:
+        raise HTTPException(status_code=404, detail="Pontuação do colaborador não encontrada nesta apuração.")
+
+    pdf_bytes = build_collaborator_statement_pdf(db, collaborator, run, score)
+    safe_name = "".join(ch if ch.isalnum() else "-" for ch in collaborator.name.lower()).strip("-")
+    filename = f"extrato-{safe_name}-{run.reference_month:02d}-{run.reference_year}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{collaborator_id}/point-balance", response_model=CollaboratorPointBalanceOut)
+def collaborator_point_balance(
+    collaborator_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("audit:read")),
+):
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
+
+    entries = list(
+        db.scalars(
+            select(PointBalanceEntry)
+            .where(PointBalanceEntry.collaborator_id == collaborator_id)
+            .options(
+                selectinload(PointBalanceEntry.original_service_order),
+                selectinload(PointBalanceEntry.related_service_order),
+                selectinload(PointBalanceEntry.origin_calculation_run),
+                selectinload(PointBalanceEntry.applied_calculation_run),
+            )
+            .order_by(PointBalanceEntry.created_at.desc(), PointBalanceEntry.id.desc())
+        )
+    )
+    balance = db.scalar(
+        select(CollaboratorPointBalance).where(CollaboratorPointBalance.collaborator_id == collaborator_id)
+    )
+    return CollaboratorPointBalanceOut(
+        collaborator_id=collaborator_id,
+        collaborator_name=collaborator.name,
+        balance_points=current_balance(db, collaborator_id),
+        updated_at=balance.updated_at if balance else None,
+        entries=[serialize_point_balance_entry(entry, collaborator_name=collaborator.name) for entry in entries],
+    )
+
+
+@router.get("/{collaborator_id}/monthly-history", response_model=list[CollaboratorMonthlyHistoryItem])
+def collaborator_monthly_history(
+    collaborator_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("audit:read")),
+):
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
+
+    rows = list(
+        db.scalars(
+            select(CollaboratorScore)
+            .join(CalculationRun, CalculationRun.id == CollaboratorScore.calculation_run_id)
+            .where(CollaboratorScore.collaborator_id == collaborator_id)
+            .where(CalculationRun.status != "cancelled")
+            .options(selectinload(CollaboratorScore.calculation_run))
+            .order_by(desc(CalculationRun.reference_year), desc(CalculationRun.reference_month))
+        )
+    )
+
+    # Uma linha por (mes, ano, regional): prefere o fechamento pago; senao o mais recente.
+    def rank(score: CollaboratorScore) -> tuple:
+        run = score.calculation_run
+        return (1 if run.status == "paid" else 0, run.created_at)
+
+    best_by_period: dict[tuple, CollaboratorScore] = {}
+    for score in rows:
+        run = score.calculation_run
+        key = (run.reference_year, run.reference_month, run.regional)
+        current = best_by_period.get(key)
+        if current is None or rank(score) > rank(current):
+            best_by_period[key] = score
+
+    ordered = sorted(
+        best_by_period.values(),
+        key=lambda s: (s.calculation_run.reference_year, s.calculation_run.reference_month),
+        reverse=True,
+    )
+    return [
+        CollaboratorMonthlyHistoryItem(
+            reference_month=score.calculation_run.reference_month,
+            reference_year=score.calculation_run.reference_year,
+            regional=score.calculation_run.regional,
+            calculation_run_id=score.calculation_run_id,
+            status=score.calculation_run.status,
+            service_orders_count=int(score.service_orders_count),
+            gross_points=float(score.gross_points),
+            net_points=float(score.net_points),
+            final_points=float(score.final_points),
+            estimated_payment=float(score.estimated_payment),
+            balance_adjustment_points=float(score.balance_adjustment_points or 0),
+            health_multiplier=float(score.health_multiplier or 1),
+        )
+        for score in ordered
+    ]
+
+
 @router.put("/{collaborator_id}", response_model=CollaboratorOut)
 def update_collaborator(
     collaborator_id: int,
@@ -240,7 +372,7 @@ def update_collaborator(
 ):
     collaborator = db.get(Collaborator, collaborator_id)
     if not collaborator:
-        raise HTTPException(status_code=404, detail="Colaborador nao encontrado.")
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
 
     before = snapshot(collaborator)
     for field, value in payload.model_dump(exclude_unset=True).items():

@@ -1,6 +1,24 @@
 ﻿"use client";
 
-import { AlertTriangle, ClipboardCheck, Download, FileSearch, Filter, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  Clock,
+  ClipboardCheck,
+  ClipboardList,
+  Download,
+  FileSearch,
+  Filter,
+  HelpCircle,
+  type LucideIcon,
+  MinusCircle,
+  RefreshCw,
+  Repeat,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  X,
+  XCircle
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +33,17 @@ import type { AuditOrders, CollaboratorOrderDetail, ScoringGroup } from "@/lib/t
 
 type FilterMode = "all" | "scored" | "unscored" | "penalized" | "sla_out" | "recurrence" | "non_recurrent" | "diagnosis_blocked";
 type GroupMode = "group" | "subject" | "regional" | "collaborator" | "status";
+
+const MODE_LABELS: Record<FilterMode, string> = {
+  all: "Todas",
+  scored: "Pontuadas",
+  unscored: "Sem regra",
+  penalized: "O.S anuladas",
+  sla_out: "Fora prazo",
+  recurrence: "Reincidências",
+  non_recurrent: "Sem reincid.",
+  diagnosis_blocked: "Diag. bloqueados"
+};
 
 type Props = {
   calculationRunId?: number;
@@ -46,6 +75,50 @@ function recurrenceClassificationLabel(value: string | null | undefined) {
   if (value === "demandas_diferentes") return "Demandas diferentes";
   if (value === "recorrencia_operacional") return "Recorrência operacional";
   return "Sem classificação";
+}
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+type StatTone = "neutral" | "danger" | "warning" | "good" | "info";
+
+function StatCard({ icon: Icon, label, value, tone = "neutral" }: { icon: LucideIcon; label: string; value: string; tone?: StatTone }) {
+  const toneClass: Record<StatTone, string> = {
+    neutral: "border-slate-200 bg-slate-50",
+    danger: "border-red-200 bg-red-50",
+    warning: "border-amber-200 bg-amber-50",
+    good: "border-emerald-200 bg-emerald-50",
+    info: "border-blue-200 bg-blue-50"
+  };
+  const iconToneClass: Record<StatTone, string> = {
+    neutral: "bg-slate-200 text-slate-600",
+    danger: "bg-red-100 text-red-700",
+    warning: "bg-amber-100 text-amber-700",
+    good: "bg-emerald-100 text-emerald-700",
+    info: "bg-blue-100 text-blue-700"
+  };
+  const valueToneClass: Record<StatTone, string> = {
+    neutral: "text-slate-950",
+    danger: "text-red-700",
+    warning: "text-amber-800",
+    good: "text-emerald-700",
+    info: "text-blue-700"
+  };
+  return (
+    <div className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-3 py-2.5 ${toneClass[tone]}`}>
+      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconToneClass[tone]}`}>
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+        <div className={`truncate text-sm font-semibold ${valueToneClass[tone]}`}>{value}</div>
+      </div>
+    </div>
+  );
 }
 
 function csvEscape(value: unknown) {
@@ -216,6 +289,24 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     }
   }, [grouped, selectedGroupLabel]);
 
+  const activeFilterChips = useMemo(() => {
+    const chips: Array<{ key: string; label: string; onRemove: () => void }> = [];
+    if (mode !== "all") chips.push({ key: "mode", label: MODE_LABELS[mode], onRemove: () => setMode("all") });
+    if (regional) chips.push({ key: "regional", label: `Regional: ${regionalName(regional)}`, onRemove: () => setRegional("") });
+    if (collaboratorId) {
+      const found = collaboratorOptions.find((option) => String(option.id) === collaboratorId);
+      chips.push({ key: "collaborator", label: `Colaborador: ${found?.name ?? collaboratorId}`, onRemove: () => setCollaboratorId("") });
+    }
+    if (groupId) {
+      const found = activeGroups.find((group) => String(group.id) === groupId);
+      chips.push({ key: "group", label: `Grupo: ${found?.name ?? groupId}`, onRemove: () => setGroupId("") });
+    }
+    if (subject) chips.push({ key: "subject", label: `Assunto: ${subject}`, onRemove: () => setSubject("") });
+    if (sla) chips.push({ key: "sla", label: `SLA: ${sla}`, onRemove: () => setSla("") });
+    if (selectedGroupLabel) chips.push({ key: "groupLabel", label: `Grupo selecionado: ${selectedGroupLabel}`, onRemove: () => setSelectedGroupLabel(null) });
+    return chips;
+  }, [activeGroups, collaboratorId, collaboratorOptions, groupId, mode, regional, selectedGroupLabel, sla, subject]);
+
   function clearFilters() {
     setMode("all");
     setRegional("");
@@ -309,6 +400,11 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           <Button variant="outline" size="sm" onClick={() => setFiltersOpen((value) => !value)}>
             <Filter className="h-4 w-4" />
             {filtersOpen ? "Ocultar filtros" : "Filtros"}
+            {activeFilterChips.length > 0 ? (
+              <span className="ml-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-teal-600 px-1 text-[10px] font-semibold text-white">
+                {activeFilterChips.length}
+              </span>
+            ) : null}
           </Button>
           <Button variant="outline" size="sm" onClick={clearFilters} disabled={!hasFilters}>
             Limpar
@@ -322,111 +418,157 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
 
       {audit ? (
         <div className="grid shrink-0 gap-2 overflow-x-auto border-b bg-white px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-          {[
-            { label: "Total de O.S", value: `${formatInteger(audit.summary.total_service_orders)} O.S`, tone: "text-slate-950" },
-            { label: "O.S sem regra", value: `${formatInteger(audit.summary.unscored_service_orders)} O.S`, tone: "text-amber-700" },
-            { label: "O.S anuladas", value: `${formatInteger(audit.summary.annulled_service_orders)} O.S`, tone: "text-red-600" },
-            { label: "Fora prazo", value: `${formatInteger(audit.summary.sla_out_service_orders)} O.S`, tone: "text-amber-700" },
-            { label: "Pontos anulados", value: formatAnnulledPoints(audit.summary.penalty_points), tone: "text-red-600" },
-            { label: "Reincidências", value: `${formatInteger(audit.summary.recurrence_service_orders)} O.S`, tone: "text-blue-700" },
-            { label: "Diagnósticos bloqueados", value: `${formatInteger(audit.summary.diagnosis_penalized_service_orders)} O.S`, tone: "text-red-600" }
-          ].map((item) => (
-            <div key={item.label} className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</div>
-              <div className={`mt-1 truncate text-sm font-semibold ${item.tone}`}>{item.value}</div>
-            </div>
-          ))}
+          <StatCard icon={ClipboardList} label="Total de O.S" value={`${formatInteger(audit.summary.total_service_orders)} O.S`} tone="neutral" />
+          <StatCard
+            icon={HelpCircle}
+            label="O.S sem regra"
+            value={`${formatInteger(audit.summary.unscored_service_orders)} O.S`}
+            tone={audit.summary.unscored_service_orders > 0 ? "warning" : "good"}
+          />
+          <StatCard
+            icon={XCircle}
+            label="O.S anuladas"
+            value={`${formatInteger(audit.summary.annulled_service_orders)} O.S`}
+            tone={audit.summary.annulled_service_orders > 0 ? "danger" : "good"}
+          />
+          <StatCard
+            icon={Clock}
+            label="Fora prazo"
+            value={`${formatInteger(audit.summary.sla_out_service_orders)} O.S`}
+            tone={audit.summary.sla_out_service_orders > 0 ? "warning" : "good"}
+          />
+          <StatCard
+            icon={MinusCircle}
+            label="Pontos anulados"
+            value={formatAnnulledPoints(audit.summary.penalty_points)}
+            tone={audit.summary.penalty_points > 0 ? "danger" : "good"}
+          />
+          <StatCard icon={Repeat} label="Reincidências" value={`${formatInteger(audit.summary.recurrence_service_orders)} O.S`} tone="info" />
+          <StatCard
+            icon={ShieldAlert}
+            label="Diagnósticos bloqueados"
+            value={`${formatInteger(audit.summary.diagnosis_penalized_service_orders)} O.S`}
+            tone={audit.summary.diagnosis_penalized_service_orders > 0 ? "danger" : "good"}
+          />
         </div>
       ) : null}
 
       <div className="shrink-0 border-b bg-slate-50 px-4 py-3">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {[
-            ["all", "Todas"],
-            ["scored", "Pontuadas"],
-            ["unscored", "Sem regra"],
-            ["penalized", "O.S anuladas"],
-            ["sla_out", "Fora prazo"],
-            ["recurrence", "Reincidências"],
-            ["diagnosis_blocked", "Diag. bloqueados"],
-            ["non_recurrent", "Sem reincid."]
-          ].map(([value, label]) => (
-            <Button key={value} variant={mode === value ? "default" : "outline"} size="sm" onClick={() => setMode(value as FilterMode)} className="h-8 shrink-0 px-3">
-              {label}
-            </Button>
-          ))}
-
-          <select className="h-8 shrink-0 rounded-md border border-input bg-white px-2 text-xs" value={groupMode} onChange={(event) => setGroupMode(event.target.value as GroupMode)}>
-            <option value="group">Por grupo</option>
-            <option value="subject">Por assunto</option>
-            <option value="regional">Por regional</option>
-            <option value="collaborator">Por colaborador</option>
-            <option value="status">Por status</option>
-          </select>
-
-          <select className="h-8 min-w-40 shrink-0 rounded-md border border-input bg-white px-2 text-xs" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
-            <option value="">Todos os grupos</option>
-            {activeGroups.map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.name}
-              </option>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Status da O.S</div>
+          <div className="mt-1.5 flex items-center gap-2 overflow-x-auto pb-1">
+            {[
+              ["all", "Todas"],
+              ["scored", "Pontuadas"],
+              ["unscored", "Sem regra"],
+              ["penalized", "O.S anuladas"],
+              ["sla_out", "Fora prazo"],
+              ["recurrence", "Reincidências"],
+              ["diagnosis_blocked", "Diag. bloqueados"],
+              ["non_recurrent", "Sem reincid."]
+            ].map(([value, label]) => (
+              <Button key={value} variant={mode === value ? "default" : "outline"} size="sm" onClick={() => setMode(value as FilterMode)} className="h-8 shrink-0 px-3">
+                {label}
+              </Button>
             ))}
-          </select>
+          </div>
+        </div>
 
-          <div className="relative min-w-52 flex-1">
-            <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-slate-400" />
-            <Input value={subject} onChange={(event) => setSubject(event.target.value)} className="h-8 pl-7 text-xs" placeholder="Buscar assunto" list="audit-subject-options" />
-            <datalist id="audit-subject-options">
-              {subjectOptions.map((option) => (
-                <option key={option} value={option} />
+        <div className="mt-3 border-t border-slate-200 pt-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Agrupamento e busca</div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <select className="h-8 shrink-0 rounded-md border border-input bg-white px-2 text-xs" value={groupMode} onChange={(event) => setGroupMode(event.target.value as GroupMode)}>
+              <option value="group">Agrupar por grupo</option>
+              <option value="subject">Agrupar por assunto</option>
+              <option value="regional">Agrupar por regional</option>
+              <option value="collaborator">Agrupar por colaborador</option>
+              <option value="status">Agrupar por status</option>
+            </select>
+
+            <select className="h-8 min-w-40 shrink-0 rounded-md border border-input bg-white px-2 text-xs" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
+              <option value="">Todos os grupos</option>
+              {activeGroups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
               ))}
-            </datalist>
+            </select>
+
+            <div className="relative min-w-52 flex-1">
+              <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-slate-400" />
+              <Input value={subject} onChange={(event) => setSubject(event.target.value)} className="h-8 pl-7 text-xs" placeholder="Buscar assunto" list="audit-subject-options" />
+              <datalist id="audit-subject-options">
+                {subjectOptions.map((option) => (
+                  <option key={option} value={option} />
+                ))}
+              </datalist>
+            </div>
           </div>
         </div>
 
         {filtersOpen ? (
-          <div className="mt-2 grid gap-2 md:grid-cols-4">
-            <div className="grid gap-1">
-              <Label className="text-[10px] uppercase text-slate-500">Regional</Label>
-              <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={regional} onChange={(event) => setRegional(event.target.value)}>
-                <option value="">Todas as regionais</option>
-                {regionalOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {regionalName(option)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="grid gap-1">
-              <Label className="text-[10px] uppercase text-slate-500">Colaborador</Label>
-              <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={collaboratorId} onChange={(event) => setCollaboratorId(event.target.value)}>
-                <option value="">Todos os colaboradores</option>
-                {filteredCollaboratorOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.name}
-                  </option>
-                ))}
-              </select>
-              <div className="text-[11px] text-slate-500">
-                {regional ? `${filteredCollaboratorOptions.length} colaborador(es) nesta regional.` : "Selecione uma regional para reduzir a lista."}
+          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Filtros avançados</div>
+            <div className="mt-2 grid gap-3 md:grid-cols-3">
+              <div className="grid gap-1">
+                <Label className="text-[10px] uppercase text-slate-500">Regional</Label>
+                <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={regional} onChange={(event) => setRegional(event.target.value)}>
+                  <option value="">Todas as regionais</option>
+                  {regionalOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {regionalName(option)}
+                    </option>
+                  ))}
+                </select>
               </div>
-            </div>
-            <div className="grid gap-1">
-              <Label className="text-[10px] uppercase text-slate-500">SLA</Label>
-              <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={sla} onChange={(event) => setSla(event.target.value)}>
-                <option value="">Todos os SLAs</option>
-                <option value="Encerrada no Prazo">Encerrada no Prazo</option>
-                <option value="Encerrada Atrasada">Encerrada Atrasada</option>
-                <option value="No prazo">No prazo</option>
-                <option value="Fora do prazo">Fora do prazo</option>
-              </select>
-            </div>
-            <div className="flex items-end text-xs text-slate-500">
-              Filtros avançados ficam recolhidos para preservar a visão de auditoria.
+              <div className="grid gap-1">
+                <Label className="text-[10px] uppercase text-slate-500">Colaborador</Label>
+                <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={collaboratorId} onChange={(event) => setCollaboratorId(event.target.value)}>
+                  <option value="">Todos os colaboradores</option>
+                  {filteredCollaboratorOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="text-[11px] text-slate-500">
+                  {regional ? `${filteredCollaboratorOptions.length} colaborador(es) nesta regional.` : "Selecione uma regional para reduzir a lista."}
+                </div>
+              </div>
+              <div className="grid gap-1">
+                <Label className="text-[10px] uppercase text-slate-500">SLA</Label>
+                <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={sla} onChange={(event) => setSla(event.target.value)}>
+                  <option value="">Todos os SLAs</option>
+                  <option value="Encerrada no Prazo">Encerrada no Prazo</option>
+                  <option value="Encerrada Atrasada">Encerrada Atrasada</option>
+                  <option value="No prazo">No prazo</option>
+                  <option value="Fora do prazo">Fora do prazo</option>
+                </select>
+              </div>
             </div>
           </div>
         ) : null}
       </div>
+
+      {activeFilterChips.length ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b bg-white px-4 py-2">
+          <span className="text-[11px] font-medium text-slate-500">Filtros ativos:</span>
+          {activeFilterChips.map((chip) => (
+            <button
+              key={chip.key}
+              type="button"
+              onClick={chip.onRemove}
+              className="flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-medium text-teal-800 hover:bg-teal-100"
+            >
+              {chip.label}
+              <X className="h-3 w-3" />
+            </button>
+          ))}
+          <button type="button" onClick={clearFilters} className="text-[11px] font-medium text-slate-500 underline hover:text-slate-700">
+            Limpar todos
+          </button>
+        </div>
+      ) : null}
 
       {error ? <div className="mx-3 mt-2 shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
       {loading ? (
@@ -528,7 +670,8 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                         <th>Assunto / diagnóstico</th>
                         <th className="w-[170px]">Operação</th>
                         <th className="w-[100px]">Pontos</th>
-                        <th className="w-[125px]">Status</th>
+                        <th className="w-[95px]">Valor</th>
+                        <th className="w-[140px]">Status</th>
                         <th className="w-[90px]">Auditoria</th>
                       </tr>
                     </thead>
@@ -537,7 +680,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                         <tr key={order.id}>
                           <td className="font-semibold">{order.os_code}</td>
                           <td title={order.collaborator_name}>
-                            <div className="line-clamp-2">{order.collaborator_name}</div>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-semibold text-slate-700">
+                                {initials(order.collaborator_name)}
+                              </span>
+                              <div className="line-clamp-2 min-w-0">{order.collaborator_name}</div>
+                            </div>
                           </td>
                           <td title={regionalName(order.regional)}>
                             <div className="line-clamp-2">{regionalName(order.regional)}</div>
@@ -560,9 +708,28 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                             </div>
                           </td>
                           <td>
+                            <div className="font-semibold text-teal-700">{formatMoney(order.net_points * pointValue)}</div>
+                          </td>
+                          <td>
                             <Badge className={statusBadgeClass(order.scoring_status)}>{order.scoring_status}</Badge>
                             {order.recurrence_classification ? (
                               <div className="mt-1 text-[11px] text-blue-700">{recurrenceClassificationLabel(order.recurrence_classification)}</div>
+                            ) : null}
+                            {order.has_reschedule || order.has_pending ? (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {order.has_reschedule ? (
+                                  <span className="inline-flex items-center gap-0.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                                    <Repeat className="h-3 w-3" />
+                                    Reagendada
+                                  </span>
+                                ) : null}
+                                {order.has_pending ? (
+                                  <span className="inline-flex items-center gap-0.5 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                                    <Clock className="h-3 w-3" />
+                                    Pendência
+                                  </span>
+                                ) : null}
+                              </div>
                             ) : null}
                           </td>
                           <td>
@@ -623,6 +790,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setSelectedAuditOrder(null);
         }}
+        calculationRunId={calculationRunId}
       />
     </section>
   );

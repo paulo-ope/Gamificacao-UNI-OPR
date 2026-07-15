@@ -18,11 +18,15 @@ def get_gamification_config(db: Session = Depends(get_db), user: User = Depends(
 
 @router.put("/config", response_model=GamificationConfigOut)
 def save_gamification_config(payload: GamificationConfigImport, db: Session = Depends(get_db), user: User = Depends(require_permission("settings:write"))):
-    before = serialize_current_config(db)
-    result = apply_config(db, payload.model_dump(), payload.name)
-    record_audit_log(db, user, "update", "gamification_config", payload.name, before, result)
-    db.commit()
-    return result
+    try:
+        before = serialize_current_config(db)
+        result = apply_config(db, payload.model_dump(), payload.name)
+        record_audit_log(db, user, "update", "gamification_config", payload.name, before, result)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/config/export", response_model=GamificationConfigOut)
@@ -32,17 +36,25 @@ def export_gamification_config(db: Session = Depends(get_db), user: User = Depen
 
 @router.post("/config/import", response_model=GamificationConfigOut)
 def import_gamification_config(payload: GamificationConfigImport, db: Session = Depends(get_db), user: User = Depends(require_permission("settings:write"))):
-    before = serialize_current_config(db)
-    result = apply_config(db, payload.model_dump(), payload.name)
-    record_audit_log(db, user, "import", "gamification_config", payload.name, before, result)
-    db.commit()
-    return result
+    try:
+        before = serialize_current_config(db)
+        result = apply_config(db, payload.model_dump(), payload.name)
+        record_audit_log(db, user, "import", "gamification_config", payload.name, before, result)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/config/reset-default", response_model=GamificationConfigOut)
 def reset_default_gamification_config(db: Session = Depends(get_db), user: User = Depends(require_permission("settings:write"))):
-    before = serialize_current_config(db)
-    result = ensure_default_logic_config(db)
-    record_audit_log(db, user, "reset_default", "gamification_config", None, before, result)
-    db.commit()
-    return result
+    try:
+        before = serialize_current_config(db)
+        result = ensure_default_logic_config(db)
+        record_audit_log(db, user, "reset_default", "gamification_config", None, before, result)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise

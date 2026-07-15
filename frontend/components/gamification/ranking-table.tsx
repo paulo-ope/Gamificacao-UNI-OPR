@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { regionalName } from "@/lib/regional";
@@ -37,6 +38,16 @@ function formatAnnulled(value: number) {
 
 function averagePointValue(score: CollaboratorScore) {
   return score.final_points > 0 ? score.estimated_payment / score.final_points : 0;
+}
+
+function finalPointsFormula(score: CollaboratorScore) {
+  const subtotal = Math.round(score.net_points * score.health_multiplier * 100) / 100;
+  const base = `${numberFormat.format(score.net_points)} líquidos × ${score.health_multiplier.toFixed(2)}x saúde = ${numberFormat.format(subtotal)} pts`;
+  if (!score.balance_adjustment_points) {
+    return base;
+  }
+  const signal = score.balance_adjustment_points < 0 ? "−" : "+";
+  return `${base}, ${signal} ${numberFormat.format(Math.abs(score.balance_adjustment_points))} de garantia → ${numberFormat.format(score.final_points)} pts finais`;
 }
 
 function MiniMetric({
@@ -83,14 +94,14 @@ export function RankingTable({ data, onViewOrders }: RankingTableProps) {
 
   return (
     <div className="grid min-w-0 gap-2 p-2">
-      <div className="hidden rounded-md border bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid xl:grid-cols-[240px_1fr_200px] xl:items-center">
+      <div className="hidden rounded-md border bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 xl:grid xl:grid-cols-[240px_1fr_220px] xl:items-center">
         <span>Colaborador</span>
         <span>Indicadores operacionais</span>
         <span className="text-right">Resultado final</span>
       </div>
 
       {data.map((score, index) => (
-        <article key={score.id} className="grid min-w-0 gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:border-teal-200 hover:shadow-md xl:grid-cols-[240px_1fr_200px] xl:items-center">
+        <article key={score.id} className="grid min-w-0 gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:border-teal-200 hover:shadow-md xl:grid-cols-[240px_1fr_220px] xl:items-center">
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
               <span className={index < 3 ? "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-teal-700 text-xs font-semibold text-white" : "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white"}>
@@ -107,7 +118,7 @@ export function RankingTable({ data, onViewOrders }: RankingTableProps) {
             </div>
           </div>
 
-          <div className="grid min-w-0 grid-cols-4 gap-1.5 lg:grid-cols-6 2xl:grid-cols-8">
+          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(92px,1fr))] gap-1.5">
             <MiniMetric label="Total de O.S" value={`${integerFormat.format(score.service_orders_count)} O.S`} />
             <MiniMetric label="O.S pontuadas" value={`${integerFormat.format(score.scored_service_orders ?? 0)} O.S`} tone="good" />
             <MiniMetric label="O.S sem regra" value={`${integerFormat.format(score.unscored_service_orders ?? 0)} O.S`} tone="warning" />
@@ -118,16 +129,24 @@ export function RankingTable({ data, onViewOrders }: RankingTableProps) {
             <MiniMetric label="Pontos líquidos" value={formatPoints(score.net_points)} />
           </div>
 
-          <div className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-1.5 xl:grid-cols-1 xl:text-right">
-            <div className="grid min-w-0 grid-cols-2 gap-1.5 xl:grid-cols-1">
-              <MiniMetric label="Pontos finais" value={formatPoints(score.final_points)} />
-              <MiniMetric label="Valor a ser pago" value={moneyFormat.format(score.estimated_payment)} tone="money" />
-              <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 xl:col-span-1 xl:justify-end">
-                <Badge className={healthBadgeClass(score.health_status)}>{score.health_multiplier.toFixed(2)}x</Badge>
-                <span className="truncate text-xs text-slate-500">{moneyFormat.format(averagePointValue(score))}/pt medio</span>
+          <div className="flex min-w-0 items-center justify-between gap-3 xl:flex-col xl:items-end xl:justify-start xl:gap-1.5">
+            <div className="min-w-0 xl:text-right">
+              <div className="flex items-center gap-1.5 xl:justify-end">
+                <span className="text-lg font-semibold leading-none text-teal-700">{moneyFormat.format(score.estimated_payment)}</span>
+                <InfoHint ariaLabel={`Como chegamos no valor de ${score.collaborator_name}`} description={finalPointsFormula(score)} side="left" />
               </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {formatPoints(score.final_points)} {score.balance_adjustment_points ? "a pagar (após garantia)" : "finais"}
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 xl:justify-end">
+                <Badge className={healthBadgeClass(score.health_status)}>{score.health_multiplier.toFixed(2)}x saúde</Badge>
+                {score.balance_adjustment_points ? (
+                  <Badge className="border-red-200 bg-red-50 text-red-700">{numberFormat.format(score.balance_adjustment_points)} pts garantia</Badge>
+                ) : null}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">{moneyFormat.format(averagePointValue(score))}/pt médio</div>
             </div>
-            <Button variant="outline" size="sm" className="h-8 px-2" onClick={() => onViewOrders?.(score)}>
+            <Button variant="outline" size="sm" className="h-8 shrink-0 px-2" onClick={() => onViewOrders?.(score)}>
               Ver extrato
             </Button>
           </div>

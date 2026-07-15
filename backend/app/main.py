@@ -2,31 +2,21 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect
 
-from app.api.routes import audit, auth, calculation_runs, collaborators, dashboard, gamification, health, imports, leadership, rules, scoring, service_orders, settings, users
+from app.api.routes import audit, auth, calculation_runs, collaborators, dashboard, gamification, health, imports, leadership, point_balance, rules, scoring, service_orders, settings, users
 from app.core.config import get_settings
-from app.core.security import ensure_initial_admin
-from app.db.base import Base
-from app.db.migrations import ensure_runtime_schema
 from app.db.session import SessionLocal, engine
-from app.seed import seed_database
-from app.services.calculation import calculate_scores, latest_run
-from app.services.gamification_config import ensure_active_config_version
+from app.core.security import ensure_initial_admin
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    ensure_runtime_schema(engine)
-    settings_obj = get_settings()
-    with SessionLocal() as db:
-        ensure_initial_admin(db)
-    if settings_obj.auto_seed:
+    get_settings()
+    inspector = inspect(engine)
+    if inspector.has_table("users"):
         with SessionLocal() as db:
-            seed_database(db, include_demo=settings_obj.demo_seed)
-            ensure_active_config_version(db)
-            if latest_run(db) is None:
-                calculate_scores(db)
+            ensure_initial_admin(db)
     yield
 
 
@@ -55,3 +45,4 @@ app.include_router(leadership.router, prefix=settings_obj.api_prefix)
 app.include_router(calculation_runs.router, prefix=settings_obj.api_prefix)
 app.include_router(dashboard.router, prefix=settings_obj.api_prefix)
 app.include_router(settings.router, prefix=settings_obj.api_prefix)
+app.include_router(point_balance.router, prefix=settings_obj.api_prefix)

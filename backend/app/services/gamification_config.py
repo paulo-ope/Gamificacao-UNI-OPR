@@ -23,26 +23,27 @@ from app.seed import deleted_default_groups
 CONFIG_NAME = "gamification_rules_config"
 
 DEFAULT_SETTINGS = {
-    "point_value": ("2.50", "Valor monetario pago por ponto final."),
-    "recurrence_window_days": ("30", "Janela em dias para reconhecer reincidencia operacional."),
-    "recurrence_identity_fields": ("login,contract", "Campos usados para vincular O.S do mesmo cliente na reincidencia."),
-    "warranty_scores": ("true", "Compatibilidade: garantia resolvida tambem gera pontuacao."),
+    "point_value": ("2.50", "Valor monetário pago por ponto final."),
+    "recurrence_window_days": ("30", "Janela em dias para reconhecer reincidência operacional."),
+    "recurrence_identity_fields": ("login,contract", "Campos usados para vincular O.S do mesmo cliente na reincidência."),
+    "warranty_scores": ("true", "Compatibilidade: garantia resolvida também gera pontuação."),
     "warranty_mode": ("score_full", "Regra de garantia: score_full, score_reduced, no_points ou requires_review."),
-    "warranty_reduction_percentage": ("0", "Percentual de reducao quando garantia pontua com reducao."),
-    "recurrence_action": ("annul_original", "Regra de reincidencia: annul_original, subtract_original, no_penalty ou requires_review."),
-    "recurrence_penalty_points": ("0", "Desconto fixo quando reincidencia usa subtract_original."),
+    "warranty_reduction_percentage": ("0", "Percentual de redução quando garantia pontua com redução."),
+    "recurrence_action": ("annul_original", "Regra de reincidência: annul_original, subtract_original, no_penalty ou requires_review."),
+    "recurrence_penalty_points": ("0", "Desconto fixo quando reincidência usa subtract_original."),
     "payment_cap": ("0", "Teto de pagamento. Zero significa sem teto."),
+    "health_below_minimum_multiplier": ("0", "Multiplicador aplicado quando a regional não atinge nenhuma faixa ativa de saúde operacional."),
 }
 
 DEFAULT_GROUPS = [
-    ("Manutencao", "Precificacao padrao para manutencoes operacionais.", 15),
+    ("Manutenção", "Precificação padrão para manutenções operacionais.", 15),
     (
-        "Ativacao / Mudanca de Endereco / Retorno",
-        "Precificacao padrao para ativacao, mudanca de endereco e retorno.",
+        "Ativação / Mudança de Endereço / Retorno",
+        "Precificação padrão para ativação, mudança de endereço e retorno.",
         10,
     ),
-    ("Mudanca de Tecnologia", "Precificacao padrao para mudancas de tecnologia.", 15),
-    ("Recolhimento", "Precificacao padrao para recolhimentos.", 5),
+    ("Mudança de Tecnologia", "Precificação padrão para mudanças de tecnologia.", 15),
+    ("Recolhimento", "Precificação padrão para recolhimentos.", 5),
 ]
 
 
@@ -165,7 +166,7 @@ def serialize_current_config(db: Session) -> dict[str, Any]:
                 "condition_operator": rule.condition_operator,
                 "active": rule.active,
             }
-            for rule in db.scalars(select(HealthRule).order_by(HealthRule.name.asc()))
+            for rule in db.scalars(select(HealthRule).order_by(HealthRule.id.asc()))
         ],
     }
 
@@ -327,7 +328,6 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
     db.flush()
     current_config = serialize_current_config(db)
     save_config_version(db, current_config, version_name or str(config.get("name") or CONFIG_NAME))
-    db.commit()
     return serialize_current_config(db)
 
 
@@ -361,7 +361,6 @@ def ensure_default_logic_config(db: Session) -> dict[str, Any]:
     db.flush()
     current_config = serialize_current_config(db)
     save_config_version(db, current_config, CONFIG_NAME)
-    db.commit()
     return serialize_current_config(db)
 
 
@@ -370,4 +369,3 @@ def ensure_active_config_version(db: Session) -> None:
     if exists:
         return
     save_config_version(db, serialize_current_config(db), CONFIG_NAME)
-    db.commit()

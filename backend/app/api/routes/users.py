@@ -21,10 +21,10 @@ def list_users(db: Session = Depends(get_db), user: User = Depends(require_permi
 @router.post("", response_model=UserOut, status_code=201)
 def create_user(payload: UserCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("users:manage"))):
     if payload.role not in ALLOWED_ROLES:
-        raise HTTPException(status_code=422, detail="Perfil invalido.")
+        raise HTTPException(status_code=422, detail="Perfil inválido.")
     email = payload.email.strip().lower()
     if db.scalar(select(User).where(User.email == email)):
-        raise HTTPException(status_code=409, detail="Email ja cadastrado.")
+        raise HTTPException(status_code=409, detail="Email já cadastrado.")
     item = User(
         name=payload.name,
         email=email,
@@ -49,16 +49,16 @@ def update_user(
 ):
     item = db.get(User, user_id)
     if not item:
-        raise HTTPException(status_code=404, detail="Usuario nao encontrado.")
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
     before = snapshot(item)
     updates = payload.model_dump(exclude_unset=True)
     if "role" in updates and updates["role"] not in ALLOWED_ROLES:
-        raise HTTPException(status_code=422, detail="Perfil invalido.")
+        raise HTTPException(status_code=422, detail="Perfil inválido.")
     if "email" in updates and updates["email"]:
         email = str(updates["email"]).strip().lower()
         exists = db.scalar(select(User).where(User.email == email).where(User.id != user_id))
         if exists:
-            raise HTTPException(status_code=409, detail="Email ja cadastrado.")
+            raise HTTPException(status_code=409, detail="Email já cadastrado.")
         item.email = email
     if "password" in updates and updates["password"]:
         item.password_hash = hash_password(str(updates["password"]))
@@ -79,9 +79,9 @@ def delete_user(
 ):
     item = db.get(User, user_id)
     if not item:
-        raise HTTPException(status_code=404, detail="Usuario nao encontrado.")
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
     if item.id == user.id:
-        raise HTTPException(status_code=400, detail="Nao e possivel excluir o proprio usuario logado.")
+        raise HTTPException(status_code=400, detail="Não é possível excluir o próprio usuário logado.")
     before = snapshot(item)
     response = serialize_user(item)
     record_audit_log(db, user, "delete", "users", item.id, before, None)

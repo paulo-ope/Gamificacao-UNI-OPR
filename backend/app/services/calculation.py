@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
+from fastapi import HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -19,7 +20,8 @@ from app.models import (
     ScoringRule,
     ServiceOrder,
 )
-from app.services import scoring_detail
+from app.services import point_balance, scoring_detail
+from app.services.calculation_closure import build_rule_snapshot, ensure_period_not_paid, now_utc, serialize_run_status
 from app.services.regional import normalize_regional
 from app.services.sla import SLA_FORA_DO_PRAZO, SLA_NO_PRAZO, normalize_sla_status
 
@@ -157,25 +159,23 @@ def select_health_rule(rules: list[HealthRule], sla_rate: float, recurrence_rate
     if not active_rules:
         return None
 
-    critical = next((rule for rule in active_rules if normalize(rule.name).startswith("critica")), None)
-    attention = next((rule for rule in active_rules if "atencao" in normalize(rule.name)), None)
-    if attention and critical:
-        if sla_rate < attention.min_sla or recurrence_rate > attention.max_recurrence_rate:
-            return critical
+    def rule_matches(rule: HealthRule) -> bool:
+        sla_matches = sla_rate >= float(rule.min_sla)
+        # `100` means "do not restrict by recurrence yet"; smaller values activate the gate.
+        recurrence_gate_enabled = float(rule.max_recurrence_rate) < 100
+        recurrence_matches = recurrence_rate <= float(rule.max_recurrence_rate) if recurrence_gate_enabled else True
+        return sla_matches and recurrence_matches
 
     ranked = sorted(
-        [rule for rule in active_rules if rule is not critical],
+        active_rules,
         key=lambda rule: (rule.min_sla, -rule.max_recurrence_rate),
         reverse=True,
     )
     for rule in ranked:
-        if rule.condition_operator == "or":
-            if sla_rate >= rule.min_sla or recurrence_rate <= rule.max_recurrence_rate:
-                return rule
-        elif sla_rate >= rule.min_sla and recurrence_rate <= rule.max_recurrence_rate:
+        if rule_matches(rule):
             return rule
 
-    return critical or min(active_rules, key=lambda rule: rule.multiplier)
+    return None
 
 
 def calculate_regional_health(db: Session, orders: list[ServiceOrder]) -> dict[str, dict[str, float | int | str]]:
@@ -190,23 +190,61 @@ def calculate_penalty_distribution(
     return scoring_detail.calculate_penalty_distribution(db, orders, details=details)
 
 
+def cached_score_summaries(run: CalculationRun | None) -> dict[int, dict[str, float | int | str]]:
+    if not run or not isinstance(run.result_summary, dict):
+        return {}
+
+    raw_summaries = run.result_summary.get("score_summaries")
+    if not isinstance(raw_summaries, dict):
+        return {}
+
+    parsed: dict[int, dict[str, float | int | str]] = {}
+    for collaborator_id, summary in raw_summaries.items():
+        if not isinstance(summary, dict):
+            continue
+        try:
+            parsed[int(collaborator_id)] = summary
+        except (TypeError, ValueError):
+            continue
+    return parsed
+
+
 def calculate_scores(
     db: Session,
     reference_month: int | None = None,
     reference_year: int | None = None,
     regional: str | None = None,
     point_value: float | None = None,
+    executed_by: int | None = None,
+    allow_paid_revision: bool = False,
+    execution_note: str | None = None,
 ) -> CalculationRun:
-    now = datetime.now(timezone.utc)
-    month = reference_month or now.month
-    year = reference_year or now.year
+    if reference_month is None or reference_year is None:
+        raise HTTPException(status_code=422, detail="Informe explicitamente o mês e o ano da apuração.")
+    month = reference_month
+    year = reference_year
     selected_regional = normalize_regional(regional) if regional else None
+    paid_run = ensure_period_not_paid(
+        db,
+        reference_month=month,
+        reference_year=year,
+        regional=selected_regional,
+        allow_revision=allow_paid_revision,
+    )
     value_per_point = point_value if point_value is not None else get_point_value(db)
     if point_value is not None:
-        upsert_setting(db, "point_value", f"{point_value:.2f}", "Valor monetario pago por ponto final.")
+        upsert_setting(db, "point_value", f"{point_value:.2f}", "Valor monetário pago por ponto final.")
 
     orders = _period_orders(db, month, year, selected_regional)
+    if not orders:
+        period_label = f"{month:02d}/{year}"
+        scope_label = f" na regional {selected_regional}" if selected_regional else ""
+        raise HTTPException(
+            status_code=409,
+            detail=f"Nenhuma O.S encontrada para {period_label}{scope_label}. Nenhuma apuração foi salva.",
+        )
     completed_orders = [order for order in orders if scoring_detail.completed(order)]
+    point_balance.detect_post_payment_warranty_debits(db, completed_orders, triggered_by=executed_by)
     health_by_regional = calculate_regional_health(db, completed_orders)
     order_details = scoring_detail.explain_orders(db, orders, default_point_value=float(value_per_point))
     health_by_regional = scoring_detail.calculate_regional_health_from_details(db, order_details, health_by_regional)
@@ -239,11 +277,21 @@ def calculate_scores(
         source_import_id=source_import.id if source_import else None,
         source_filename=source_import.filename if source_import else None,
         rules_version_id=rules_version.id if rules_version else None,
+        status="draft",
+        status_changed_at=now_utc(),
+        status_changed_by=executed_by,
+        status_note=execution_note.strip() if execution_note else (
+            f"Revisao criada a partir do fechamento pago #{paid_run.id}." if paid_run and allow_paid_revision else None
+        ),
+        executed_by=executed_by,
+        executed_at=now_utc(),
+        config_snapshot=build_rule_snapshot(db),
     )
     db.add(run)
     db.flush()
 
     result_summary = {
+        "dashboard_cache_version": 3,
         "total_service_orders": len(orders),
         "gross_points": 0.0,
         "penalty_points": 0.0,
@@ -251,6 +299,7 @@ def calculate_scores(
         "final_points": 0.0,
         "estimated_payment": 0.0,
     }
+    cached_score_summaries: dict[str, dict[str, float | int | str]] = {}
 
     for collaborator in collaborators:
         collaborator_details = details_by_collaborator.get(collaborator.id, [])
@@ -259,14 +308,41 @@ def calculate_scores(
             health_by_regional,
             collaborator.regional,
         )
-        multiplier = float(health.get("multiplier", 1.0))
+        official_regional = _official_collaborator_regional(collaborator, effective_regional)
+        if official_regional and official_regional in health_by_regional:
+            health = health_by_regional[official_regional]
+            effective_regional = official_regional
+        multiplier = float(health.get("multiplier", 0.0))
         summary = scoring_detail.summarize_details(
             collaborator_details,
             multiplier,
             float(value_per_point),
         )
-        summary["regional"] = _official_collaborator_regional(collaborator, effective_regional)
-        summary["health_status"] = str(health.get("health_status", "Boa"))
+        summary["regional"] = official_regional or effective_regional
+        summary["health_status"] = str(health.get("health_status", scoring_detail.HEALTH_BELOW_MINIMUM_STATUS))
+
+        # Previa nao-destrutiva do saldo de garantias pendentes: nao consome nada aqui - o consumo
+        # so acontece quando este fechamento efetivamente vira "paid" (calculation_runs.py).
+        pre_balance_final_points = float(summary["final_points"])
+        pre_balance_estimated_payment = float(summary["estimated_payment"])
+        balance_preview = point_balance.preview_pending_adjustment(db, collaborator.id, pre_balance_final_points)
+        summary["balance_adjustment_points"] = balance_preview["adjustment_points"]
+        summary["balance_after"] = balance_preview["projected_balance"]
+        # Preserva os valores "brutos" (antes do saldo) em cache para o momento em que este fechamento
+        # for de fato marcado como pago: apply_pending_entries_for_paid_run precisa partir do bruto,
+        # nao do valor ja ajustado pela previa do rascunho.
+        summary["gross_final_points"] = round(pre_balance_final_points, 2)
+        summary["gross_estimated_payment"] = round(pre_balance_estimated_payment, 2)
+        if balance_preview["adjustment_points"]:
+            effective_rate = (
+                pre_balance_estimated_payment / pre_balance_final_points
+                if pre_balance_final_points
+                else float(value_per_point)
+            )
+            summary["final_points"] = round(max(balance_preview["projected_balance"], 0.0), 2)
+            summary["estimated_payment"] = round(summary["final_points"] * effective_rate, 2)
+
+        cached_score_summaries[str(collaborator.id)] = dict(summary)
         result_summary["gross_points"] = round(float(result_summary["gross_points"]) + float(summary["gross_points"]), 2)
         result_summary["penalty_points"] = round(float(result_summary["penalty_points"]) + float(summary["penalty_points"]), 2)
         result_summary["net_points"] = round(float(result_summary["net_points"]) + float(summary["net_points"]), 2)
@@ -288,12 +364,75 @@ def calculate_scores(
                 health_status=str(summary["health_status"]),
                 final_points=float(summary["final_points"]),
                 estimated_payment=float(summary["estimated_payment"]),
+                balance_adjustment_points=float(summary["balance_adjustment_points"]),
+                balance_after=float(summary["balance_after"]),
             )
         )
 
+    average_points = scoring_detail.average_group_default_points(db)
+    total_collaborators = len({int(item["collaborator_id"]) for item in order_details if scoring_detail.is_identified_collaborator_detail(item)})
+    unscored_count = sum(1 for item in order_details if item["is_unscored"])
+    closure_pending_os_codes = {
+        str(item["os_code"])
+        for item in order_details
+        if item["is_unscored"]
+        or (
+            item["diagnosis"]
+            and item["diagnosis_rule_id"] is None
+            and str(item["diagnosis"]).strip().lower() != "não informado"
+        )
+    }
+    result_summary["score_summaries"] = cached_score_summaries
+    result_summary["cards"] = {
+        "total_collaborators": total_collaborators,
+        "total_service_orders": len(orders),
+        "scored_service_orders": sum(1 for item in order_details if item["is_scored"]),
+        "unscored_service_orders": unscored_count,
+        "penalized_service_orders": sum(1 for item in order_details if item["is_penalized"]),
+        "warranty_service_orders": sum(1 for item in order_details if item["recurrence_classification"] in scoring_detail.RECURRENCE_DISCOUNT_CLASSIFICATIONS),
+        "recurrence_service_orders": sum(1 for item in order_details if item["recurrence_classification"] in scoring_detail.RECURRENCE_DISCOUNT_CLASSIFICATIONS),
+        "rescheduled_service_orders": sum(1 for item in order_details if item["has_reschedule"]),
+        "pending_service_orders": sum(1 for item in order_details if item["has_pending"]),
+        "sla_out_service_orders": sum(1 for item in order_details if item["is_sla_out_of_time"]),
+        "annulled_service_orders": sum(1 for item in order_details if item["is_annulled"]),
+        "diagnosis_penalized_service_orders": sum(1 for item in order_details if float(item["diagnosis_penalty_points"]) > 0),
+        "manual_review_service_orders": sum(1 for item in order_details if item["requires_manual_review"]),
+        "diagnosis_unmapped_service_orders": sum(
+            1
+            for item in order_details
+            if item["diagnosis"]
+            and item["diagnosis_rule_id"] is None
+            and str(item["diagnosis"]).strip().lower() != "não informado"
+        ),
+        "closure_pending_service_orders": len(closure_pending_os_codes),
+        "gross_points": round(float(result_summary["gross_points"]), 2),
+        "penalty_points": round(float(result_summary["penalty_points"]), 2),
+        "final_points": round(float(result_summary["final_points"]), 2),
+        "estimated_payment": round(float(result_summary["estimated_payment"]), 2),
+        "lost_points": round(sum(float(item["penalty_points"]) for item in order_details), 2),
+        "lost_payment": round(
+            sum(float(item["penalty_points"]) * float(item.get("point_value", value_per_point)) for item in order_details),
+            2,
+        ),
+        "unscored_estimated_payment": round(sum(average_points for item in order_details if item["is_unscored"]) * float(value_per_point), 2),
+        "orders_without_scoring_rule": unscored_count,
+    }
+    result_summary["health_by_regional"] = list(health_by_regional.values())
+    result_summary["penalty_distribution"] = calculate_penalty_distribution(db, orders, details=order_details)
+    result_summary.update(
+        scoring_detail.financial_breakdowns(
+            db,
+            orders,
+            float(value_per_point),
+            details=order_details,
+            health_by_regional=health_by_regional,
+            collaborator_context=cached_score_summaries,
+        )
+    )
+
     run.result_summary = result_summary
-    db.commit()
-    return latest_run(db)
+    db.flush()
+    return run
 
 
 def latest_run(db: Session) -> CalculationRun | None:
@@ -333,13 +472,27 @@ def _run_extra_summaries(db: Session, run: CalculationRun) -> dict[int, dict[str
             health_by_regional,
             score.collaborator.regional,
         )
+        official_regional = _official_collaborator_regional(score.collaborator, effective_regional)
+        if official_regional and official_regional in health_by_regional:
+            health = health_by_regional[official_regional]
+            effective_regional = official_regional
         summaries[score.collaborator_id] = scoring_detail.summarize_details(
             collaborator_details,
             float(health.get("multiplier", score.health_multiplier)),
             run.point_value,
         )
-        summaries[score.collaborator_id]["regional"] = _official_collaborator_regional(score.collaborator, effective_regional)
+        summaries[score.collaborator_id]["regional"] = official_regional or effective_regional
         summaries[score.collaborator_id]["health_status"] = str(health.get("health_status", score.health_status))
+        # summarize_details recalcula final_points/estimated_payment BRUTOS (sem saber de
+        # nenhum debito de garantia). Este e um caminho de contingencia (so roda quando o
+        # cache score_summaries do run esta ausente) - se o colaborador JA teve um debito
+        # aplicado de verdade (persistido em CollaboratorScore por _apply_point_balance_after_payment),
+        # os valores oficiais sao os da linha do banco, nao a reconta bruta feita aqui.
+        # Sem isto, um fechamento pago sem cache mostraria o valor pre-desconto.
+        summaries[score.collaborator_id]["final_points"] = float(score.final_points)
+        summaries[score.collaborator_id]["estimated_payment"] = float(score.estimated_payment)
+        summaries[score.collaborator_id]["balance_adjustment_points"] = float(score.balance_adjustment_points or 0)
+        summaries[score.collaborator_id]["balance_after"] = float(score.balance_after or 0)
     return summaries
 
 
@@ -352,7 +505,9 @@ def serialize_run(
         return None
 
     if extra_summaries is None:
-        extra_summaries = _run_extra_summaries(db, run) if db else {}
+        extra_summaries = cached_score_summaries(run)
+        if not extra_summaries and db:
+            extra_summaries = _run_extra_summaries(db, run)
     scores_with_orders = [
         score
         for score in run.scores
@@ -374,6 +529,7 @@ def serialize_run(
         "rules_version_id": run.rules_version_id,
         "result_summary": run.result_summary,
         "created_at": run.created_at,
+        **serialize_run_status(run),
         "scores": [
             {
                 "id": score.id,
@@ -390,6 +546,10 @@ def serialize_run(
                 "health_status": str(extra_summaries.get(score.collaborator_id, {}).get("health_status", score.health_status)),
                 "final_points": float(extra_summaries.get(score.collaborator_id, {}).get("final_points", score.final_points)),
                 "estimated_payment": float(extra_summaries.get(score.collaborator_id, {}).get("estimated_payment", score.estimated_payment)),
+                "balance_adjustment_points": float(
+                    extra_summaries.get(score.collaborator_id, {}).get("balance_adjustment_points", score.balance_adjustment_points)
+                ),
+                "balance_after": float(extra_summaries.get(score.collaborator_id, {}).get("balance_after", score.balance_after)),
                 "scored_service_orders": int(extra_summaries.get(score.collaborator_id, {}).get("scored_service_orders", 0)),
                 "unscored_service_orders": int(extra_summaries.get(score.collaborator_id, {}).get("unscored_service_orders", 0)),
                 "penalized_service_orders": int(extra_summaries.get(score.collaborator_id, {}).get("penalized_service_orders", 0)),

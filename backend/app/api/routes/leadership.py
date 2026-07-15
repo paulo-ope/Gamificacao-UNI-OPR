@@ -31,12 +31,14 @@ from app.services.leadership_bonus import (
     default_multiplier_for_role,
     ensure_default_role_profiles,
     effective_multiplier,
+    normalize_average_source,
     normalize_regionals,
     normalize_role_type,
     replace_profile_regionals,
     serialize_profile,
     serialize_role_profile,
     validate_no_scope_overlap,
+    validate_scope_regionals_required,
 )
 
 router = APIRouter(prefix="/leadership", tags=["leadership"])
@@ -44,8 +46,6 @@ router = APIRouter(prefix="/leadership", tags=["leadership"])
 
 @router.get("/profiles", response_model=list[LeadershipProfileOut])
 def list_leadership_profiles(db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:read"))):
-    ensure_default_role_profiles(db)
-    db.commit()
     profiles = list(
         db.scalars(
             select(LeadershipProfile)
@@ -58,8 +58,6 @@ def list_leadership_profiles(db: Session = Depends(get_db), user: User = Depends
 
 @router.get("/role-profiles", response_model=list[LeadershipRoleProfileOut])
 def list_leadership_role_profiles(db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:read"))):
-    ensure_default_role_profiles(db)
-    db.commit()
     profiles = list(
         db.scalars(
             select(LeadershipRoleProfile)
@@ -67,6 +65,16 @@ def list_leadership_role_profiles(db: Session = Depends(get_db), user: User = De
             .order_by(LeadershipRoleProfile.name.asc())
         )
     )
+    return [serialize_role_profile(profile) for profile in profiles]
+
+
+@router.post("/role-profiles/ensure-defaults", response_model=list[LeadershipRoleProfileOut])
+def ensure_leadership_role_profiles(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("settings:write")),
+):
+    profiles = ensure_default_role_profiles(db)
+    db.commit()
     return [serialize_role_profile(profile) for profile in profiles]
 
 
@@ -103,7 +111,7 @@ def update_leadership_role_profile(
         .where(LeadershipRoleProfile.id == role_profile_id)
     )
     if not role_profile:
-        raise HTTPException(status_code=404, detail="Perfil de cargo da lideranca nao encontrado.")
+        raise HTTPException(status_code=404, detail="Perfil de cargo da liderança não encontrado.")
 
     before = serialize_role_profile(role_profile)
     if payload.name is not None:
@@ -140,7 +148,7 @@ def delete_leadership_role_profile(
         .where(LeadershipRoleProfile.id == role_profile_id)
     )
     if not role_profile:
-        raise HTTPException(status_code=404, detail="Perfil de cargo da lideranca nao encontrado.")
+        raise HTTPException(status_code=404, detail="Perfil de cargo da liderança não encontrado.")
     if role_profile.leaders:
         raise HTTPException(status_code=409, detail="Existem lideres vinculados a este perfil. Reatribua-os antes de excluir.")
     before = serialize_role_profile(role_profile)
@@ -161,9 +169,10 @@ def create_leadership_profile(
     if payload.role_profile_id is not None:
         role_profile = db.get(LeadershipRoleProfile, payload.role_profile_id)
         if not role_profile:
-            raise HTTPException(status_code=404, detail="Perfil de cargo da lideranca nao encontrado.")
+            raise HTTPException(status_code=404, detail="Perfil de cargo da liderança não encontrado.")
     role_type = normalize_role_type(role_profile.scope_type if role_profile else payload.role_type)
     regionals = normalize_regionals(payload.regional_names)
+    validate_scope_regionals_required(role_type, regionals)
     validate_no_scope_overlap(db, role_type, regionals)
     profile = LeadershipProfile(
         name=payload.name.strip(),
@@ -172,6 +181,7 @@ def create_leadership_profile(
         role_profile_id=role_profile.id if role_profile else None,
         use_custom_multiplier=bool(payload.use_custom_multiplier),
         custom_multiplier=float(payload.custom_multiplier) if payload.custom_multiplier is not None else None,
+        average_source=normalize_average_source(payload.average_source),
         multiplier=float(
             payload.custom_multiplier
             if payload.use_custom_multiplier and payload.custom_multiplier is not None
@@ -206,14 +216,14 @@ def update_leadership_profile(
         .where(LeadershipProfile.id == profile_id)
     )
     if not profile:
-        raise HTTPException(status_code=404, detail="Perfil de lideranca nao encontrado.")
+        raise HTTPException(status_code=404, detail="Perfil de liderança não encontrado.")
 
     before = serialize_profile(profile)
     role_profile = profile.role_profile
     if payload.role_profile_id is not None:
         role_profile = db.get(LeadershipRoleProfile, payload.role_profile_id)
         if not role_profile:
-            raise HTTPException(status_code=404, detail="Perfil de cargo da lideranca nao encontrado.")
+            raise HTTPException(status_code=404, detail="Perfil de cargo da liderança não encontrado.")
         profile.role_profile_id = role_profile.id
     role_type = normalize_role_type(
         role_profile.scope_type if role_profile else (payload.role_type if payload.role_type is not None else profile.role_type)
@@ -228,16 +238,21 @@ def update_leadership_profile(
         profile.use_custom_multiplier = payload.use_custom_multiplier
     if payload.custom_multiplier is not None or payload.use_custom_multiplier is False:
         profile.custom_multiplier = float(payload.custom_multiplier) if payload.custom_multiplier is not None else None
+    if payload.average_source is not None:
+        profile.average_source = normalize_average_source(payload.average_source)
     if payload.active is not None:
         profile.active = payload.active
     if payload.collaborator_id is not None:
         profile.collaborator_id = payload.collaborator_id
     if payload.regional_names is not None:
         regionals = normalize_regionals(payload.regional_names)
+        validate_scope_regionals_required(role_type, regionals)
         validate_no_scope_overlap(db, role_type, regionals, profile_id=profile.id)
         replace_profile_regionals(db, profile, regionals)
     else:
-        validate_no_scope_overlap(db, role_type, [item.regional_name for item in profile.regionals], profile_id=profile.id)
+        existing_regionals = [item.regional_name for item in profile.regionals]
+        validate_scope_regionals_required(role_type, existing_regionals)
+        validate_no_scope_overlap(db, role_type, existing_regionals, profile_id=profile.id)
 
     profile.multiplier = effective_multiplier(profile)
 
@@ -261,7 +276,7 @@ def delete_leadership_profile(
         .where(LeadershipProfile.id == profile_id)
     )
     if not profile:
-        raise HTTPException(status_code=404, detail="Perfil de lideranca nao encontrado.")
+        raise HTTPException(status_code=404, detail="Perfil de liderança não encontrado.")
     before = serialize_profile(profile)
     has_results = db.scalar(
         select(LeadershipBonusResult.id)
@@ -287,16 +302,21 @@ def calculate_leadership_bonus_results(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("calculation:run")),
 ):
-    run = db.get(CalculationRun, calculation_run_id) if calculation_run_id else latest_run(db)
-    if not run:
-        raise HTTPException(status_code=404, detail="Calculo de referencia nao encontrado.")
-    run = db.scalar(
-        select(CalculationRun)
-        .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
-        .where(CalculationRun.id == run.id)
-    )
-    if not run:
-        raise HTTPException(status_code=404, detail="Calculo de referencia nao encontrado.")
-    summary = calculate_and_store_leadership_bonus(db, run)
-    record_audit_log(db, user, "calculate", "leadership_bonus_results", run.id, None, summary)
-    return summary
+    try:
+        run = db.get(CalculationRun, calculation_run_id) if calculation_run_id else latest_run(db)
+        if not run:
+            raise HTTPException(status_code=404, detail="Cálculo de referência não encontrado.")
+        run = db.scalar(
+            select(CalculationRun)
+            .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
+            .where(CalculationRun.id == run.id)
+        )
+        if not run:
+            raise HTTPException(status_code=404, detail="Cálculo de referência não encontrado.")
+        summary = calculate_and_store_leadership_bonus(db, run)
+        record_audit_log(db, user, "calculate", "leadership_bonus_results", run.id, None, summary)
+        db.commit()
+        return summary
+    except Exception:
+        db.rollback()
+        raise

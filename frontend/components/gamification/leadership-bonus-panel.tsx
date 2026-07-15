@@ -28,7 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import { cn } from "@/lib/utils";
-import type { LeadershipProfile, LeadershipRoleProfile, LeadershipRoleType } from "@/lib/types";
+import type { LeadershipAverageSource, LeadershipProfile, LeadershipRoleProfile, LeadershipRoleType } from "@/lib/types";
 
 type DraftRoleProfile = {
   id?: number;
@@ -46,6 +46,7 @@ type DraftLeader = {
   use_custom_multiplier: boolean;
   custom_multiplier: number | null;
   multiplier: number;
+  average_source: LeadershipAverageSource;
   active: boolean;
   collaborator_id: number | null;
   regional_names: string[];
@@ -76,6 +77,16 @@ const ROLE_SCOPE_HINTS: Record<LeadershipRoleType, string> = {
   portfolio_manager: "Usa a média geral dos pontos finais da operação no período.",
 };
 
+const AVERAGE_SOURCE_LABELS: Record<LeadershipAverageSource, string> = {
+  collaborators: "Colaboradores",
+  collaborators_and_leaders: "Colaboradores + líderes",
+};
+
+const AVERAGE_SOURCE_HINTS: Record<LeadershipAverageSource, string> = {
+  collaborators: "Média formada somente pelos colaboradores das filiais vinculadas.",
+  collaborators_and_leaders: "Média formada pelos colaboradores e líderes ativos no mesmo escopo.",
+};
+
 const DEFAULT_MULTIPLIERS: Record<LeadershipRoleType, number> = {
   supervisor: 1.5,
   regional_manager: 2,
@@ -99,6 +110,7 @@ function buildLeaderDraft(): DraftLeader {
     use_custom_multiplier: false,
     custom_multiplier: null,
     multiplier: DEFAULT_MULTIPLIERS.supervisor,
+    average_source: "collaborators",
     active: true,
     collaborator_id: null,
     regional_names: [],
@@ -168,7 +180,9 @@ function RegionalMultiSelect({
       >
         <div className="min-w-0">
           <div className="text-sm font-medium text-slate-900">
-            {selected.length > 0 ? `${selected.length} filial(is) selecionada(s)` : "Selecionar filiais"}
+            {selected.length > 0
+              ? `${selected.length} ${selected.length === 1 ? "filial selecionada" : "filiais selecionadas"}`
+              : "Selecionar filiais"}
           </div>
           <div className="truncate text-xs text-slate-500">
             {selected.length > 0
@@ -374,6 +388,7 @@ export function LeadershipBonusPanel({
         use_custom_multiplier: leader.use_custom_multiplier,
         custom_multiplier: leader.custom_multiplier,
         multiplier: leader.multiplier,
+        average_source: leader.average_source ?? "collaborators",
         active: leader.active,
         collaborator_id: leader.collaborator_id,
         regional_names: uniqueRegionals(leader.regional_names),
@@ -536,6 +551,7 @@ export function LeadershipBonusPanel({
                       <TableHead>Líder</TableHead>
                       <TableHead>Perfil / cargo</TableHead>
                       <TableHead>Filiais</TableHead>
+                      <TableHead>Origem da média</TableHead>
                       <TableHead>Multiplicador</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Ações</TableHead>
@@ -567,6 +583,10 @@ export function LeadershipBonusPanel({
                             </div>
                           </TableCell>
                           <TableCell>
+                            <div className="font-medium text-slate-900">{AVERAGE_SOURCE_LABELS[leader.average_source ?? "collaborators"]}</div>
+                            <div className="mt-1 text-sm text-slate-500">{AVERAGE_SOURCE_HINTS[leader.average_source ?? "collaborators"]}</div>
+                          </TableCell>
+                          <TableCell>
                             <div className="font-semibold text-teal-700">{formatNumber(leader.multiplier)}x</div>
                             <div className="mt-1 text-sm text-slate-500">
                               {leader.use_custom_multiplier ? "Personalizado" : "Herdado do perfil"}
@@ -590,7 +610,7 @@ export function LeadershipBonusPanel({
                     })}
                     {profiles.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="py-10 text-center text-sm text-slate-500">
+                        <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
                           Nenhum líder cadastrado até o momento.
                         </TableCell>
                       </TableRow>
@@ -658,7 +678,7 @@ export function LeadershipBonusPanel({
           </SheetHeader>
 
           <div className="grid gap-5 overflow-y-auto px-6 py-6">
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-3">
               <div className="grid gap-2">
                 <Label>Nome do perfil</Label>
                 <Input
@@ -810,6 +830,27 @@ export function LeadershipBonusPanel({
                   ))}
                 </select>
               </div>
+              <div className="grid gap-2">
+                <Label>Média calculada por</Label>
+                <select
+                  value={leaderDraft.average_source}
+                  disabled={readOnly}
+                  onChange={(event) =>
+                    setLeaderDraft((current) => ({
+                      ...current,
+                      average_source: event.target.value as LeadershipAverageSource,
+                    }))
+                  }
+                  className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm"
+                >
+                  {Object.entries(AVERAGE_SOURCE_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-500">{AVERAGE_SOURCE_HINTS[leaderDraft.average_source]}</p>
+              </div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
@@ -928,6 +969,7 @@ export function LeadershipBonusPanel({
                       use_custom_multiplier: payload.use_custom_multiplier,
                       custom_multiplier: payload.use_custom_multiplier ? payload.custom_multiplier : null,
                       multiplier: payload.multiplier,
+                      average_source: payload.average_source,
                       active: payload.active,
                       collaborator_id: payload.collaborator_id,
                       regional_names: payload.regional_names,

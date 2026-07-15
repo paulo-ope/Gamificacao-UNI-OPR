@@ -1,17 +1,23 @@
 ﻿"use client";
 
-import { ClipboardList, Link2, Plus, Save, Search, X } from "lucide-react";
+import { ClipboardList, Info, Link2, Plus, Save, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { AppCombobox, AppInput, StatusBadge } from "@/components/gamification/config-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { ScoringGroup, UnmappedSubject } from "@/lib/types";
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
 const moneyFormat = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+function severityTone(serviceOrdersCount: number): "danger" | "warning" | "neutral" {
+  if (serviceOrdersCount >= 50) return "danger";
+  if (serviceOrdersCount >= 10) return "warning";
+  return "neutral";
+}
 
 type Props = {
   groups: ScoringGroup[];
@@ -28,12 +34,14 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
 
   const filteredSubjects = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return subjects;
-    return subjects.filter((subject) =>
-      [subject.os_type, subject.os_subject, subject.predominant_regional].some((value) =>
-        value.toLowerCase().includes(normalized)
-      )
-    );
+    const base = normalized
+      ? subjects.filter((subject) =>
+          [subject.os_type, subject.os_subject, subject.predominant_regional].some((value) =>
+            value.toLowerCase().includes(normalized)
+          )
+        )
+      : subjects;
+    return [...base].sort((a, b) => b.service_orders_count - a.service_orders_count);
   }, [query, subjects]);
 
   function subjectKey(subject: UnmappedSubject) {
@@ -101,7 +109,7 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
           <Label htmlFor="unmapped-search">Buscar assunto</Label>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-            <Input
+            <AppInput
               id="unmapped-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -112,25 +120,24 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
         </div>
       </div>
 
-      <div className="border-b bg-amber-50 px-5 py-3 text-sm text-amber-800">
+      <div className="flex items-center gap-2 border-b bg-amber-50 px-5 py-3 text-sm text-amber-800">
+        <Info className="h-4 w-4 shrink-0" />
         Vincule cada assunto ao grupo correto e recalcule para atualizar ranking, auditoria e valor a ser pago.
       </div>
 
       <div className="grid gap-3 border-b bg-white px-5 py-4 lg:grid-cols-[minmax(240px,1fr)_auto_auto_auto] lg:items-end">
         <div className="grid gap-2">
           <Label>Aplicar grupo aos assuntos filtrados</Label>
-          <select
-            className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
+          <AppCombobox
             value={bulkGroupId}
-            onChange={(event) => setBulkGroupId(event.target.value)}
-          >
-            <option value="">Selecione um grupo</option>
-            {groups.map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.name} ({numberFormat.format(group.default_points)} pts)
-              </option>
-            ))}
-          </select>
+            onChange={setBulkGroupId}
+            placeholder="Selecione um grupo"
+            ariaLabel="Aplicar grupo aos assuntos filtrados"
+            options={groups.map((group) => ({
+              value: String(group.id),
+              label: `${group.name} (${numberFormat.format(group.default_points)} pts)`,
+            }))}
+          />
         </div>
         <Button variant="outline" onClick={applyBulkGroupToFiltered} disabled={!bulkGroupId || filteredSubjects.length === 0}>
           Aplicar aos filtrados
@@ -180,9 +187,9 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
                   <TableCell className="min-w-44">{subject.os_type}</TableCell>
                   <TableCell className="min-w-80 font-medium text-slate-950">{subject.os_subject}</TableCell>
                   <TableCell>
-                    <Badge className="border-amber-200 bg-amber-50 text-amber-700">
+                    <StatusBadge tone={severityTone(subject.service_orders_count)}>
                       {numberFormat.format(subject.service_orders_count)}
-                    </Badge>
+                    </StatusBadge>
                   </TableCell>
                   <TableCell>{numberFormat.format(subject.collaborators_count)}</TableCell>
                   <TableCell>{subject.predominant_regional}</TableCell>
@@ -190,18 +197,16 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
                     {moneyFormat.format(subject.estimated_financial_impact)}
                   </TableCell>
                   <TableCell className="min-w-64">
-                    <select
-                      className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm"
-                      value={selectedGroups[key] || ""}
-                      onChange={(event) => updateSubjectGroup(subject, event.target.value)}
-                    >
-                      <option value="">Selecionar grupo</option>
-                      {groups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.name} ({numberFormat.format(group.default_points)} pts)
-                        </option>
-                      ))}
-                    </select>
+                    <AppCombobox
+                      value={selectedGroups[key] ? String(selectedGroups[key]) : ""}
+                      onChange={(value) => updateSubjectGroup(subject, value)}
+                      placeholder="Selecionar grupo"
+                      ariaLabel={`Grupo destino do assunto ${subject.os_subject}`}
+                      options={groups.map((group) => ({
+                        value: String(group.id),
+                        label: `${group.name} (${numberFormat.format(group.default_points)} pts)`,
+                      }))}
+                    />
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">

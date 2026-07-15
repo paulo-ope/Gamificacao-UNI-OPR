@@ -69,6 +69,8 @@ export type CollaboratorScore = {
   health_status: string;
   final_points: number;
   estimated_payment: number;
+  balance_adjustment_points: number;
+  balance_after: number;
   scored_service_orders: number;
   unscored_service_orders: number;
   penalized_service_orders: number;
@@ -121,6 +123,17 @@ export type CalculationRun = {
   source_filename: string | null;
   rules_version_id: number | null;
   result_summary: Record<string, unknown> | null;
+  config_snapshot: Record<string, unknown> | null;
+  status: "draft" | "review" | "approved" | "paid" | "cancelled";
+  status_changed_at: string | null;
+  status_changed_by: number | null;
+  status_note: string | null;
+  approved_at: string | null;
+  approved_by: number | null;
+  paid_at: string | null;
+  paid_by: number | null;
+  executed_at: string | null;
+  executed_by: number | null;
   created_at: string;
   scores: CollaboratorScore[];
 };
@@ -134,6 +147,16 @@ export type CalculationRunHistory = {
   source_import_id: number | null;
   source_filename: string | null;
   rules_version_id: number | null;
+  status: "draft" | "review" | "approved" | "paid" | "cancelled";
+  status_changed_at: string | null;
+  status_changed_by: number | null;
+  status_note: string | null;
+  approved_at: string | null;
+  approved_by: number | null;
+  paid_at: string | null;
+  paid_by: number | null;
+  executed_at: string | null;
+  executed_by: number | null;
   created_at: string;
   collaborators_count: number;
   service_orders_count: number;
@@ -144,6 +167,11 @@ export type CalculationRunHistory = {
   estimated_payment: number;
   top_collaborator_name: string | null;
   top_collaborator_points: number | null;
+};
+
+export type CalculationRunSnapshot = {
+  id: number;
+  config_snapshot: Record<string, unknown> | null;
 };
 
 export type ServiceOrder = {
@@ -229,7 +257,26 @@ export type DashboardSummary = {
   top_unmapped_subjects: FinancialBreakdownItem[];
 };
 
+export type DashboardFilteredBreakdown = {
+  calculation_run_id: number;
+  regionals: string[];
+  penalty_distribution: PenaltyDistributionItem[];
+  cost_by_regional: FinancialBreakdownItem[];
+  cost_by_group: FinancialBreakdownItem[];
+  top_unmapped_subjects: FinancialBreakdownItem[];
+};
+
+export type DashboardBootstrap = {
+  reference_month: number | null;
+  reference_year: number | null;
+  regional: string | null;
+  point_value: number;
+  has_calculation_run: boolean;
+  calculation_run_id: number | null;
+};
+
 export type LeadershipRoleType = "supervisor" | "regional_manager" | "portfolio_manager";
+export type LeadershipAverageSource = "collaborators" | "collaborators_and_leaders";
 
 export type LeadershipRoleProfile = {
   id: number;
@@ -251,11 +298,35 @@ export type LeadershipProfile = {
   role_profile_name: string | null;
   use_custom_multiplier: boolean;
   custom_multiplier: number | null;
+  average_source: LeadershipAverageSource;
   active: boolean;
   collaborator_id: number | null;
   regional_names: string[];
   created_at: string;
   updated_at: string;
+};
+
+export type LeadershipAverageAuditCollaborator = {
+  collaborator_id: number;
+  collaborator_name: string;
+  role: string;
+  regional: string;
+  source_type: "collaborator" | "leader";
+  service_orders_count: number;
+  health_multiplier: number;
+  final_points: number;
+  estimated_payment: number;
+};
+
+export type LeadershipAverageAudit = {
+  scoped_collaborators: number;
+  total_final_points: number;
+  average_final_points: number;
+  point_value: number;
+  base_amount: number;
+  multiplier: number;
+  bonus_amount: number;
+  collaborators: LeadershipAverageAuditCollaborator[];
 };
 
 export type LeadershipBonusResult = {
@@ -268,12 +339,14 @@ export type LeadershipBonusResult = {
   role_profile_name: string | null;
   multiplier: number;
   uses_custom_multiplier: boolean;
+  average_source: LeadershipAverageSource;
   average_final_points: number;
   scoped_collaborators: number;
   point_value: number;
   base_amount: number;
   bonus_amount: number;
   regionals: string[];
+  audit: LeadershipAverageAudit | null;
 };
 
 export type LeadershipPendingCollaborator = {
@@ -309,8 +382,6 @@ export type ScoringGroupDeleteResult = {
   deleted_group_name: string;
   moved_subject_rules: number;
   deleted_subject_rules: number;
-  moved_legacy_rules: number;
-  deleted_legacy_rules: number;
 };
 
 export type ScoringRule = {
@@ -502,6 +573,7 @@ export type ImportPreview = {
 };
 
 export type ImportResult = {
+  status: string;
   imported: number;
   ignored: number;
   errors: ImportErrorItem[];
@@ -510,10 +582,133 @@ export type ImportResult = {
   mapped_columns: Record<string, string>;
   summary: {
     total_rows: number;
+    processed_rows: number;
+    created_count: number;
+    updated_count: number;
+    skipped_count: number;
+    rejected_count: number;
+    error_count: number;
+    missing_date_count: number;
+    duplicate_count: number;
+    unknown_collaborator_count: number;
+    required_field_missing_count: number;
+    paid_period_blocked_count: number;
     valid_rows: number;
     invalid_rows: number;
   };
   import_id: number | null;
+  file_name: string | null;
+  file_hash: string | null;
+  message: string | null;
+};
+
+export type ImportRun = {
+  id: number;
+  filename: string;
+  file_hash: string | null;
+  source: string;
+  status: string;
+  total_rows: number;
+  processed_rows: number;
+  imported_rows: number;
+  created_count: number;
+  updated_count: number;
+  skipped_count: number;
+  rejected_count: number;
+  duplicate_count: number;
+  missing_date_count: number;
+  unknown_collaborator_count: number;
+  required_field_missing_count: number;
+  paid_period_blocked_count: number;
+  ignored_rows: number;
+  error_rows: number;
+  imported_by: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error_message: string | null;
+  notes: string | null;
+  detected_columns: string[];
+  mapped_columns: Record<string, string>;
+  errors: Record<string, unknown>[];
+  created_at: string;
+};
+
+export type ImportServiceOrderAudit = {
+  id: number;
+  import_run_id: number;
+  os_code: string | null;
+  service_order_id: number | null;
+  action: string;
+  field_name: string | null;
+  old_value: string | null;
+  new_value: string | null;
+  reason: string | null;
+  row_number: number | null;
+  created_at: string;
+  created_by: number | null;
+};
+
+export type CollaboratorMonthlyHistoryItem = {
+  reference_month: number;
+  reference_year: number;
+  regional: string | null;
+  calculation_run_id: number;
+  status: string;
+  service_orders_count: number;
+  gross_points: number;
+  net_points: number;
+  final_points: number;
+  estimated_payment: number;
+  balance_adjustment_points: number;
+  health_multiplier: number;
+};
+
+export type AuditLog = {
+  id: number;
+  user_id: number | null;
+  user_name: string | null;
+  user_email: string | null;
+  action: string;
+  entity: string;
+  entity_id: string | null;
+  before_data: Record<string, unknown> | null;
+  after_data: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type PointBalanceEntry = {
+  id: number;
+  collaborator_id: number;
+  collaborator_name: string | null;
+  entry_type: "post_payment_warranty_debit" | "period_settlement" | "manual_adjustment";
+  points: number;
+  original_service_order_id: number | null;
+  original_os_code: string | null;
+  related_service_order_id: number | null;
+  related_os_code: string | null;
+  origin_calculation_run_id: number | null;
+  origin_run_month: number | null;
+  origin_run_year: number | null;
+  origin_run_status: string | null;
+  applied_calculation_run_id: number | null;
+  applied_run_status: string | null;
+  applied_reference_month: number | null;
+  applied_reference_year: number | null;
+  status: "pending" | "applied" | "reverted";
+  requires_review: boolean;
+  recurrence_classification: string | null;
+  recurrence_action: string | null;
+  reason: string | null;
+  created_by: number | null;
+  created_at: string;
+};
+
+export type CollaboratorPointBalance = {
+  collaborator_id: number;
+  collaborator_name: string | null;
+  balance_points: number;
+  updated_at: string | null;
+  entries: PointBalanceEntry[];
 };
 
 export type CollaboratorOrderDetail = {

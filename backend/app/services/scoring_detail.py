@@ -8,6 +8,7 @@ from typing import Any, Iterable
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.performance import performance_step
 from app.models import (
     AppSetting,
     Collaborator,
@@ -38,6 +39,9 @@ UNKNOWN_COLLABORATOR_NAMES = {
     normalize("NÃO INFORMADO"),
 }
 
+HEALTH_BELOW_MINIMUM_STATUS = "Abaixo da faixa minima"
+HEALTH_BELOW_MINIMUM_MULTIPLIER_SETTING = "health_below_minimum_multiplier"
+
 
 def is_identified_collaborator_detail(detail: dict[str, Any]) -> bool:
     name = normalize(str(detail.get("collaborator_name") or ""))
@@ -60,6 +64,10 @@ def _safe_float(value: str | int | float | None, default: float) -> float:
 
 def get_point_value(db: Session) -> float:
     return _safe_float(get_setting(db, "point_value", "2.50"), 2.50)
+
+
+def get_health_below_minimum_multiplier(db: Session) -> float:
+    return max(0.0, _safe_float(get_setting(db, HEALTH_BELOW_MINIMUM_MULTIPLIER_SETTING, "0"), 0.0))
 
 
 def completed(order: ServiceOrder) -> bool:
@@ -108,6 +116,31 @@ def period_orders(db: Session, reference_month: int, reference_year: int, region
     return sorted(real_service_orders(filtered), key=lambda item: item.closed_at or item.opened_at)
 
 
+def period_orders_for_aggregation(db: Session, reference_month: int, reference_year: int, regional: str | None = None) -> list[ServiceOrder]:
+    stmt = select(ServiceOrder)
+    period_start = datetime(reference_year, reference_month, 1)
+    if reference_month == 12:
+        period_end = datetime(reference_year + 1, 1, 1)
+    else:
+        period_end = datetime(reference_year, reference_month + 1, 1)
+    stmt = stmt.where(
+        or_(
+            and_(ServiceOrder.closed_at >= period_start, ServiceOrder.closed_at < period_end),
+            and_(
+                ServiceOrder.closed_at.is_(None),
+                ServiceOrder.opened_at >= period_start,
+                ServiceOrder.opened_at < period_end,
+            ),
+        )
+    )
+    orders = list(db.scalars(stmt))
+    return [
+        order
+        for order in real_service_orders(orders)
+        if not regional or same_regional(order.regional, regional)
+    ]
+
+
 def active_scoring_rules(db: Session) -> list[ScoringSubjectRule]:
     return list(
         db.scalars(
@@ -141,7 +174,12 @@ def matching_scoring_rule(order: ServiceOrder, rules: Iterable[ScoringSubjectRul
     os_subject = normalize(order.os_subject)
 
     if isinstance(rules, dict):
-        return rules["exact"].get((os_type, os_subject)) or rules["subject_unique"].get(os_subject)
+        # Exige match exato de (tipo, assunto). O antigo fallback por assunto unico emprestava a
+        # pontuacao de uma regra de OUTRO tipo quando o assunto coincidia - o que pontuava
+        # indevidamente O.S de um tipo sem regra. Como normalize() ja trata acento/maiuscula do
+        # tipo, uma variacao legitima de tipo casa exatamente aqui; uma O.S sem regra para o seu
+        # tipo deve ficar "Sem regra" (0 pts) e ser sinalizada, nao herdar pontos de outro tipo.
+        return rules["exact"].get((os_type, os_subject))
 
     return matching_scoring_rule(order, build_scoring_rule_lookup(rules))
 
@@ -166,8 +204,8 @@ def rule_application_label(rule: ScoringSubjectRule | None) -> str | None:
     if not rule or not rule.group:
         return None
     if not rule.use_group_default and rule.custom_points is not None:
-        return "Pontos especificos do assunto"
-    return "Pontuacao padrao do grupo"
+        return "Pontos específicos do assunto"
+    return "Pontuação padrão do grupo"
 
 
 def order_points(order: ServiceOrder, rules: Iterable[ScoringSubjectRule] | dict[str, dict]) -> float:
@@ -213,7 +251,7 @@ def matching_diagnosis_rule(
     rules: Iterable[DiagnosisPenaltyRule],
 ) -> DiagnosisPenaltyRule | None:
     normalized = normalize(diagnosis_name)
-    if not normalized or normalized == normalize("Nao informado"):
+    if not normalized or normalized == normalize("Não informado"):
         return None
     for rule in rules:
         if normalize(rule.diagnosis_name) == normalized:
@@ -265,7 +303,7 @@ def _order_date(order: ServiceOrder):
 
 def _meaningful(value: str | None) -> bool:
     normalized = normalize(value)
-    return bool(normalized and normalized not in {normalize("Nao informado"), normalize("NAO IDENTIFICADO")})
+    return bool(normalized and normalized not in {normalize("Não informado"), normalize("NAO IDENTIFICADO")})
 
 
 def _contains_pattern(value: str | None, pattern: str | None) -> bool:
@@ -287,11 +325,11 @@ def _diagnosis_action_label(action_type: str | None) -> str:
     labels = {
         "subtract_points": "descontar pontos",
         "cancel_points": "anular pontos",
-        "no_penalty": "nao penalizar",
-        "requires_review": "exigir revisao manual",
-        "force_points": "forcar pontuacao",
+        "no_penalty": "não penalizar",
+        "requires_review": "exigir revisão manual",
+        "force_points": "forçar pontuação",
     }
-    return labels.get(action_type or "", action_type or "acao nao informada")
+    return labels.get(action_type or "", action_type or "ação não informada")
 
 
 def _sla_penalty_label(penalty_type: str | None) -> str:
@@ -299,10 +337,10 @@ def _sla_penalty_label(penalty_type: str | None) -> str:
         "subtract_points": "descontar pontos",
         "percentage_reduction": "reduzir percentual",
         "cancel_points": "anular pontos",
-        "requires_review": "exigir revisao manual",
-        "none": "nao penalizar",
+        "requires_review": "exigir revisão manual",
+        "none": "não penalizar",
     }
-    return labels.get(penalty_type or "", penalty_type or "acao nao informada")
+    return labels.get(penalty_type or "", penalty_type or "ação não informada")
 
 
 def _safe_contract_identity(value: str | None) -> bool:
@@ -355,7 +393,7 @@ def _recurrence_identity_label(order: ServiceOrder) -> tuple[str, str]:
         return "login", str(order.customer_login)
     if _safe_contract_identity(order.contract_id):
         return "ID contrato", str(order.contract_id)
-    return "sem referencia valida", "Login/ID contrato nao importado"
+    return "sem referência válida", "Login/ID contrato não importado"
 
 
 def _recurrence_identity_label_for_fields(order: ServiceOrder, fields: list[str]) -> tuple[str, str]:
@@ -366,7 +404,7 @@ def _recurrence_identity_label_for_fields(order: ServiceOrder, fields: list[str]
             return "ID contrato", str(order.contract_id)
         if field in {"cliente", "customer"} and _meaningful(order.customer_name):
             return "cliente", str(order.customer_name)
-    return "sem referencia valida", "Campos de vinculo configurados nao encontrados na O.S"
+    return "sem referência válida", "Campos de vínculo configurados não encontrados na O.S"
 
 
 def _configured_recurrence_identity_label(fields: list[str]) -> str:
@@ -487,7 +525,7 @@ def classify_recurrence_pair(
     for rule in rules:
         if _meaningful(rule.ignore_diagnosis_pattern) and _contains_pattern(later.diagnosis, rule.ignore_diagnosis_pattern):
             evidence.append(f"Regra configurada: {rule.name}")
-            evidence.append(f"Diagnostico de retorno ignorado: {later.diagnosis}")
+            evidence.append(f"Diagnóstico de retorno ignorado: {later.diagnosis}")
             return {
                 "classification": "os_nao_reincidente",
                 "discount_points": False,
@@ -504,21 +542,21 @@ def classify_recurrence_pair(
         if match_side:
             evidence.append(f"Regra aplicada na O.S {match_side}")
         if rule.os_type_pattern:
-            evidence.append(f"Tipo Geral contem '{rule.os_type_pattern}'")
+            evidence.append(f"Tipo Geral contém '{rule.os_type_pattern}'")
         if rule.os_subject_pattern:
-            evidence.append(f"Assunto contem '{rule.os_subject_pattern}'")
+            evidence.append(f"Assunto contém '{rule.os_subject_pattern}'")
         if rule.diagnosis_pattern:
-            evidence.append(f"Diagnostico contem '{rule.diagnosis_pattern}'")
+            evidence.append(f"Diagnóstico contém '{rule.diagnosis_pattern}'")
         if rule.original_os_type_pattern:
-            evidence.append(f"O.S original tipo contem '{rule.original_os_type_pattern}'")
+            evidence.append(f"O.S original tipo contém '{rule.original_os_type_pattern}'")
         if rule.original_os_subject_pattern:
-            evidence.append(f"O.S original assunto contem '{rule.original_os_subject_pattern}'")
+            evidence.append(f"O.S original assunto contém '{rule.original_os_subject_pattern}'")
         if rule.return_os_type_pattern:
-            evidence.append(f"O.S retorno tipo contem '{rule.return_os_type_pattern}'")
+            evidence.append(f"O.S retorno tipo contém '{rule.return_os_type_pattern}'")
         if rule.return_os_subject_pattern:
-            evidence.append(f"O.S retorno assunto contem '{rule.return_os_subject_pattern}'")
+            evidence.append(f"O.S retorno assunto contém '{rule.return_os_subject_pattern}'")
         if rule.return_diagnosis_pattern:
-            evidence.append(f"O.S retorno diagnostico contem '{rule.return_diagnosis_pattern}'")
+            evidence.append(f"O.S retorno diagnóstico contém '{rule.return_diagnosis_pattern}'")
         return {
             "classification": rule.classification,
             "discount_points": rule.discount_points,
@@ -530,7 +568,7 @@ def classify_recurrence_pair(
         }
 
     if _is_non_technical(original) or _is_non_technical(later):
-        evidence.append("Tipo/assunto indica fluxo operacional ou demanda diferente, nao falha tecnica")
+        evidence.append("Tipo/assunto indica fluxo operacional ou demanda diferente, não falha técnica")
         return {
             "classification": "os_nao_reincidente",
             "discount_points": False,
@@ -542,7 +580,7 @@ def classify_recurrence_pair(
         }
 
     if same_diagnosis:
-        evidence.append(f"Mesmo diagnostico tecnico: {later.diagnosis}")
+        evidence.append(f"Mesmo diagnóstico técnico: {later.diagnosis}")
     if same_subject:
         evidence.append(f"Mesmo assunto tecnico: {later.os_subject}")
     if later_is_flagged_return:
@@ -555,8 +593,8 @@ def classify_recurrence_pair(
             "discount_points": False,
             "evidence": evidence
             + [
-                "Nenhuma regra de reincidencia aplicada",
-                "Retorno encontrado dentro da janela, mas sem regra ativa para classificar como reincidencia",
+                "Nenhuma regra de reincidência aplicada",
+                "Retorno encontrado dentro da janela, mas sem regra ativa para classificar como reincidência",
             ],
             "related_order": later,
             "days_between": days_between,
@@ -564,11 +602,11 @@ def classify_recurrence_pair(
             "rule_name": None,
         }
     if has_technical_relation:
-        evidence.append("Nenhuma regra de reincidencia aplicada")
-        evidence.append("Retorno encontrado, mas fora da janela configurada para classificacao")
+        evidence.append("Nenhuma regra de reincidência aplicada")
+        evidence.append("Retorno encontrado, mas fora da janela configurada para classificação")
 
     if _meaningful(original.os_subject) and _meaningful(later.os_subject):
-        evidence.append(f"Mesmo {identity_type}, mas tipo/assunto/diagnostico nao demonstram repeticao tecnica")
+        evidence.append(f"Mesmo {identity_type}, mas tipo/assunto/diagnóstico não demonstram repetição técnica")
         return {
             "classification": "demandas_diferentes",
             "discount_points": False,
@@ -579,7 +617,7 @@ def classify_recurrence_pair(
             "rule_name": None,
         }
 
-    evidence.append("Sem diagnostico/assunto suficiente para afirmar relacao tecnica")
+    evidence.append("Sem diagnóstico/assunto suficiente para afirmar relação técnica")
     return {
         "classification": "nao_identificado",
         "discount_points": False,
@@ -595,6 +633,7 @@ def recurrence_penalties(
     db: Session,
     orders: list[ServiceOrder],
     scoring_rules: Iterable[ScoringSubjectRule] | dict[str, dict],
+    include_explanations: bool = True,
 ) -> dict[int, dict[str, Any]]:
     action = get_setting(db, "recurrence_action", "annul_original")
     window_days = int(_safe_float(get_setting(db, "recurrence_window_days", "30"), 30))
@@ -626,7 +665,10 @@ def recurrence_penalties(
             )
             if completed(order)
         ],
-        key=lambda item: _order_date(item) or item.opened_at,
+        # Ordenar pela MESMA data usada na comparacao da janela (later_date = opened_at or closed_at,
+        # linha ~688). Ordenar por _order_date (closed_at) quebraria a monotonicidade e o `break`
+        # poderia pular uma reincidencia valida (O.S que abriu cedo mas fechou tarde).
+        key=lambda item: item.opened_at or item.closed_at,
     )
 
     orders_by_login: dict[str, list[ServiceOrder]] = defaultdict(list)
@@ -684,15 +726,15 @@ def recurrence_penalties(
         if not selected_discounts:
             points = 0.0
             requires_review = False
-            reason = f"Classificacao {selected['classification']} pela O.S {later_order.os_code}, sem desconto"
+            reason = f"Classificação {selected['classification']} pela O.S {later_order.os_code}, sem desconto"
         elif normalized_action in {normalize("no_penalty"), normalize("nao_penaliza")}:
             points = 0.0
             requires_review = False
-            reason = f"{selected['classification']} identificada pela O.S {later_order.os_code}, sem desconto por configuracao"
+            reason = f"{selected['classification']} identificada pela O.S {later_order.os_code}, sem desconto por configuração"
         elif normalized_action == normalize("requires_review"):
             points = 0.0
             requires_review = True
-            reason = f"{selected['classification']} pela O.S {later_order.os_code} exige revisao manual"
+            reason = f"{selected['classification']} pela O.S {later_order.os_code} exige revisão manual"
         elif normalized_action == normalize("subtract_original"):
             points = abs(float(configured_points))
             requires_review = False
@@ -700,7 +742,7 @@ def recurrence_penalties(
         else:
             points = order_points(original, scoring_rules)
             requires_review = False
-            reason = f"Anulacao por {selected['classification']} da O.S {later_order.os_code}: -{points:g}"
+            reason = f"Anulação por {selected['classification']} da O.S {later_order.os_code}: -{points:g}"
 
         current = penalties.setdefault(
             original.id,
@@ -719,8 +761,9 @@ def recurrence_penalties(
             },
         )
         current["points"] += points
-        current["reasons"].append(reason)
-        current["reasons"].extend([f"Evidencia: {evidence}" for evidence in selected["evidence"]])
+        if include_explanations:
+            current["reasons"].append(reason)
+            current["reasons"].extend([f"Evidência: {evidence}" for evidence in selected["evidence"]])
         current["requires_review"] = bool(current["requires_review"] or requires_review)
         current["discount_applied"] = bool(current["discount_applied"] or points > 0)
 
@@ -762,29 +805,28 @@ def select_health_rule(rules: list[HealthRule], sla_rate: float, recurrence_rate
     if not active_rules:
         return None
 
-    critical = next((rule for rule in active_rules if normalize(rule.name).startswith("critica")), None)
-    attention = next((rule for rule in active_rules if "atencao" in normalize(rule.name)), None)
-    if attention and critical:
-        if sla_rate < attention.min_sla or recurrence_rate > attention.max_recurrence_rate:
-            return critical
+    def rule_matches(rule: HealthRule) -> bool:
+        sla_matches = sla_rate >= float(rule.min_sla)
+        # `100` means "do not restrict by recurrence yet"; smaller values activate the gate.
+        recurrence_gate_enabled = float(rule.max_recurrence_rate) < 100
+        recurrence_matches = recurrence_rate <= float(rule.max_recurrence_rate) if recurrence_gate_enabled else True
+        return sla_matches and recurrence_matches
 
     ranked = sorted(
-        [rule for rule in active_rules if rule is not critical],
+        active_rules,
         key=lambda rule: (rule.min_sla, -rule.max_recurrence_rate),
         reverse=True,
     )
     for rule in ranked:
-        if rule.condition_operator == "or":
-            if sla_rate >= rule.min_sla or recurrence_rate <= rule.max_recurrence_rate:
-                return rule
-        elif sla_rate >= rule.min_sla and recurrence_rate <= rule.max_recurrence_rate:
+        if rule_matches(rule):
             return rule
 
-    return critical or min(active_rules, key=lambda rule: rule.multiplier)
+    return None
 
 
 def calculate_regional_health(db: Session, orders: list[ServiceOrder]) -> dict[str, dict[str, float | int | str]]:
     rules = list(db.scalars(select(HealthRule).where(HealthRule.active.is_(True))))
+    below_minimum_multiplier = get_health_below_minimum_multiplier(db)
     grouped: dict[str, list[ServiceOrder]] = defaultdict(list)
     for order in orders:
         if not is_valid_regional(order.regional):
@@ -804,10 +846,10 @@ def calculate_regional_health(db: Session, orders: list[ServiceOrder]) -> dict[s
 
         health[regional] = {
             "regional": regional,
-            "health_status": rule.name if rule else "Sem regra",
+            "health_status": rule.name if rule else HEALTH_BELOW_MINIMUM_STATUS,
             "sla_rate": sla_rate,
             "recurrence_rate": recurrence_rate,
-            "multiplier": float(rule.multiplier) if rule else 1.0,
+            "multiplier": float(rule.multiplier) if rule else below_minimum_multiplier,
             "total_orders": total,
             "pending_orders": pending,
             "rescheduled_orders": rescheduled,
@@ -821,6 +863,7 @@ def calculate_regional_health_from_details(
     base_health: dict[str, dict[str, float | int | str]],
 ) -> dict[str, dict[str, float | int | str]]:
     rules = list(db.scalars(select(HealthRule).where(HealthRule.active.is_(True))))
+    below_minimum_multiplier = get_health_below_minimum_multiplier(db)
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for detail in details:
         if not is_identified_collaborator_detail(detail) or not is_valid_regional(str(detail["regional"])):
@@ -837,10 +880,10 @@ def calculate_regional_health_from_details(
             regional,
             {
                 "regional": regional,
-                "health_status": "Sem regra",
+                "health_status": HEALTH_BELOW_MINIMUM_STATUS,
                 "sla_rate": 0,
                 "recurrence_rate": 0,
-                "multiplier": 1.0,
+                "multiplier": below_minimum_multiplier,
                 "total_orders": len(regional_details),
                 "pending_orders": 0,
                 "rescheduled_orders": 0,
@@ -857,8 +900,8 @@ def calculate_regional_health_from_details(
         item["recurrence_rate"] = recurrence_rate
         item["recurrence_orders"] = recurrences
         rule = select_health_rule(rules, float(item.get("sla_rate", 0)), recurrence_rate)
-        item["health_status"] = rule.name if rule else item.get("health_status", "Sem regra")
-        item["multiplier"] = float(rule.multiplier) if rule else float(item.get("multiplier", 1.0))
+        item["health_status"] = rule.name if rule else HEALTH_BELOW_MINIMUM_STATUS
+        item["multiplier"] = float(rule.multiplier) if rule else below_minimum_multiplier
     return health
 
 
@@ -887,6 +930,7 @@ def explain_order(
     warranty_mode: str,
     warranty_reduction_percentage: float,
     default_point_value: float,
+    include_explanations: bool = True,
 ) -> dict[str, Any]:
     scoring_rule = matching_scoring_rule(order, scoring_rules)
     diagnosis_rule = matching_diagnosis_rule(order.diagnosis, diagnosis_rules)
@@ -907,7 +951,7 @@ def explain_order(
     calculation_reasons: list[str] = []
     non_scoring_reasons: list[str] = []
     scoring_status = "Pontuada"
-    diagnosis_name = order.diagnosis or "Nao informado"
+    diagnosis_name = order.diagnosis or "Não informado"
     diagnosis_handles_penalty = False
     normalized_warranty_mode = normalize(warranty_mode)
     group_base_points = float(scoring_rule.group.default_points) if scoring_rule and scoring_rule.group else 0.0
@@ -924,7 +968,7 @@ def explain_order(
     recurrence_suppresses_point_penalties = has_recurrence_penalty
 
     if is_completed:
-        calculation_reasons.append(f"SLA original da planilha: {order.sla_status or 'Nao informado'}")
+        calculation_reasons.append(f"SLA original da planilha: {order.sla_status or 'Não informado'}")
         calculation_reasons.append(f"SLA normalizado: {normalized_sla_status}")
 
     if not order.collaborator_id:
@@ -932,7 +976,7 @@ def explain_order(
         non_scoring_reasons.append("O.S sem colaborador vinculado")
     elif not is_completed:
         scoring_status = "Ignorada"
-        non_scoring_reasons.append(f"Status nao finalizado: {order.status}")
+        non_scoring_reasons.append(f"Status não finalizado: {order.status}")
     elif not scoring_rule:
         scoring_status = "Sem regra"
         non_scoring_reasons.append("Assunto real do UpValue sem regra ativa na matriz")
@@ -941,25 +985,25 @@ def explain_order(
         normalize("nao_pontua"),
     }:
         scoring_status = "Ignorada"
-        non_scoring_reasons.append("Garantia/reincidencia configurada para nao pontuar")
+        non_scoring_reasons.append("Garantia/reincidência configurada para não pontuar")
     else:
         base_points = effective_rule_points(scoring_rule)
         calculation_reasons.append(f"Assunto vinculado ao grupo {scoring_rule.group.name}")
         if not scoring_rule.use_group_default and scoring_rule.custom_points is not None:
             calculation_reasons.append(f"Regra aplicada: {order.os_subject}")
-            calculation_reasons.append(f"Pontuacao base do grupo: {group_base_points:g}")
+            calculation_reasons.append(f"Pontuação base do grupo: {group_base_points:g}")
             calculation_reasons.append(f"Sobrescrita do assunto aplicada: {base_points:g}")
         else:
             calculation_reasons.append(f"Regra aplicada: {order.os_subject}")
-            calculation_reasons.append(f"Pontuacao base do grupo aplicada: {base_points:g}")
+            calculation_reasons.append(f"Pontuação base do grupo aplicada: {base_points:g}")
         if order.is_warranty or order.is_recurrence:
             scoring_status = "Garantia pontuada"
             if normalized_warranty_mode == normalize("requires_review"):
                 requires_manual_review = True
-                scoring_status = "Revisao manual"
-                calculation_reasons.append("Garantia/reincidencia exige revisao manual")
+                scoring_status = "Revisão manual"
+                calculation_reasons.append("Garantia/reincidência exige revisão manual")
             else:
-                calculation_reasons.append("Garantia/reincidencia resolvida configurada para pontuar")
+                calculation_reasons.append("Garantia/reincidência resolvida configurada para pontuar")
 
     if is_completed:
         if diagnosis_rule:
@@ -968,9 +1012,9 @@ def explain_order(
             configured_points = abs(float(diagnosis_rule.penalty_points))
             if recurrence_suppresses_point_penalties and action_type in {"subtract_points", "cancel_points"}:
                 diagnosis_penalty_reason = (
-                    f"Diagnostico {diagnosis_name} possui regra configurada para "
-                    f"{_diagnosis_action_label(action_type)}, porem nao foi aplicado porque a O.S ja teve "
-                    "pontuacao anulada por Garantia/Reincidencia"
+                    f"Diagnóstico {diagnosis_name} possui regra configurada para "
+                    f"{_diagnosis_action_label(action_type)}, porém não foi aplicado porque a O.S já teve "
+                    "pontuação anulada por Garantia/Reincidência"
                 )
                 calculation_reasons.append(diagnosis_penalty_reason)
             elif action_type == "subtract_points":
@@ -979,32 +1023,32 @@ def explain_order(
                     diagnosis_penalty_points = configured_points
                     penalty_points += diagnosis_penalty_points
                     diagnosis_penalty_reason = (
-                        f"Diagnostico {diagnosis_name} aplicou -{diagnosis_penalty_points:g} pontos"
+                        f"Diagnóstico {diagnosis_name} aplicou -{diagnosis_penalty_points:g} pontos"
                     )
                     penalty_reasons.append(diagnosis_penalty_reason)
-                    penalty_items.append({"name": f"Diagnostico: {diagnosis_name}", "points": diagnosis_penalty_points})
+                    penalty_items.append({"name": f"Diagnóstico: {diagnosis_name}", "points": diagnosis_penalty_points})
                 else:
-                    diagnosis_penalty_reason = f"Diagnostico {diagnosis_name} possui penalidade, mas a O.S nao tem pontuacao base"
+                    diagnosis_penalty_reason = f"Diagnóstico {diagnosis_name} possui penalidade, mas a O.S não tem pontuação base"
                     calculation_reasons.append(diagnosis_penalty_reason)
             elif action_type == "cancel_points":
                 diagnosis_handles_penalty = True
                 diagnosis_penalty_points = base_points
                 penalty_points += diagnosis_penalty_points
-                diagnosis_penalty_reason = f"Diagnostico {diagnosis_name} anulou a pontuacao base"
+                diagnosis_penalty_reason = f"Diagnóstico {diagnosis_name} anulou a pontuação base"
                 penalty_reasons.append(diagnosis_penalty_reason)
-                penalty_items.append({"name": f"Diagnostico: {diagnosis_name}", "points": diagnosis_penalty_points})
+                penalty_items.append({"name": f"Diagnóstico: {diagnosis_name}", "points": diagnosis_penalty_points})
                 if base_points > 0:
-                    scoring_status = "Anulada por diagnostico"
+                    scoring_status = "Anulada por diagnóstico"
             elif action_type == "requires_review":
                 requires_manual_review = True
-                diagnosis_penalty_reason = f"Diagnostico {diagnosis_name} exige revisao manual"
+                diagnosis_penalty_reason = f"Diagnóstico {diagnosis_name} exige revisão manual"
                 penalty_reasons.append(diagnosis_penalty_reason)
                 if scoring_status == "Pontuada":
-                    scoring_status = "Revisao manual"
+                    scoring_status = "Revisão manual"
             elif action_type == "force_points":
                 forced_points = float(diagnosis_rule.force_points_value or 0)
                 base_points = forced_points
-                diagnosis_penalty_reason = f"Diagnostico {diagnosis_name} forcou pontuacao para {forced_points:g}"
+                diagnosis_penalty_reason = f"Diagnóstico {diagnosis_name} forçou pontuação para {forced_points:g}"
                 calculation_reasons.append(diagnosis_penalty_reason)
                 if scoring_status in {"Sem regra", "Ignorada"} and forced_points > 0:
                     scoring_status = "Pontuada"
@@ -1012,28 +1056,28 @@ def explain_order(
                         reason for reason in non_scoring_reasons if "sem regra" not in normalize(reason)
                     ]
             else:
-                diagnosis_penalty_reason = f"Diagnostico {diagnosis_name} marcado como sem penalidade"
+                diagnosis_penalty_reason = f"Diagnóstico {diagnosis_name} marcado como sem penalidade"
                 calculation_reasons.append(diagnosis_penalty_reason)
-        elif normalize(diagnosis_name) and normalize(diagnosis_name) != normalize("Nao informado"):
-            calculation_reasons.append(f"Diagnostico {diagnosis_name} sem regra de penalidade configurada")
+        elif normalize(diagnosis_name) and normalize(diagnosis_name) != normalize("Não informado"):
+            calculation_reasons.append(f"Diagnóstico {diagnosis_name} sem regra de penalidade configurada")
 
         if order.is_warranty or order.is_recurrence:
             if normalized_warranty_mode == normalize("score_reduced") and base_points > 0:
                 points = round(base_points * (abs(float(warranty_reduction_percentage)) / 100), 2)
                 if recurrence_suppresses_point_penalties and points > 0:
                     calculation_reasons.append(
-                        "Reducao de garantia/reincidencia importada ignorada porque a O.S ja teve pontuacao anulada por Garantia/Reincidencia"
+                        "Redução de garantia/reincidência importada ignorada porque a O.S já teve pontuação anulada por Garantia/Reincidência"
                     )
                 elif points > 0:
                     penalty_points += points
-                    penalty_reasons.append(f"Garantia/reincidencia pontua com reducao de {warranty_reduction_percentage:g}%: -{points:g}")
-                    penalty_items.append({"name": "Garantia/Reincidencia", "points": points})
+                    penalty_reasons.append(f"Garantia/reincidência pontua com redução de {warranty_reduction_percentage:g}%: -{points:g}")
+                    penalty_items.append({"name": "Garantia/Reincidência", "points": points})
 
         if sla_rule and base_points > 0:
             if recurrence_suppresses_point_penalties and sla_rule.penalty_type in {"subtract_points", "percentage_reduction", "cancel_points"}:
                 sla_penalty_reason = (
                     f"SLA possui regra configurada para {_sla_penalty_label(sla_rule.penalty_type)}, "
-                    "porem nao foi aplicado porque a O.S ja teve pontuacao anulada por Garantia/Reincidencia"
+                    "porém não foi aplicado porque a O.S já teve pontuação anulada por Garantia/Reincidência"
                 )
                 calculation_reasons.append(sla_penalty_reason)
             elif sla_rule.penalty_type == "subtract_points":
@@ -1041,17 +1085,17 @@ def explain_order(
                 sla_penalty_reason = f"SLA fora do prazo aplicou {sla_penalty_points:g} pontos anulados"
             elif sla_rule.penalty_type == "percentage_reduction":
                 sla_penalty_points = round(base_points * (abs(float(sla_rule.penalty_value)) / 100), 2)
-                sla_penalty_reason = f"SLA fora do prazo reduziu {abs(float(sla_rule.penalty_value)):g}% da pontuacao"
+                sla_penalty_reason = f"SLA fora do prazo reduziu {abs(float(sla_rule.penalty_value)):g}% da pontuação"
             elif sla_rule.penalty_type == "cancel_points":
                 sla_penalty_points = base_points
-                sla_penalty_reason = "SLA fora do prazo anulou a pontuacao base"
+                sla_penalty_reason = "SLA fora do prazo anulou a pontuação base"
                 if base_points > 0:
                     scoring_status = "Anulada por SLA"
             elif sla_rule.penalty_type == "requires_review":
                 requires_manual_review = True
-                sla_penalty_reason = "SLA fora do prazo exige revisao manual"
+                sla_penalty_reason = "SLA fora do prazo exige revisão manual"
                 if scoring_status == "Pontuada":
-                    scoring_status = "Revisao manual"
+                    scoring_status = "Revisão manual"
             else:
                 sla_penalty_reason = "SLA fora do prazo configurado sem penalidade"
                 calculation_reasons.append(sla_penalty_reason)
@@ -1065,26 +1109,31 @@ def explain_order(
         else:
             calculation_reasons.append(f"SLA no prazo identificado por status {normalized_sla_status}, sem penalidade")
 
+        pre_recurrence_status = scoring_status
         if recurrence:
             points = recurrence_penalty_points
             penalty_points += points
             penalty_reasons.extend(recurrence["reasons"])
             if points > 0:
-                penalty_items.append({"name": "Reincidencias", "points": points})
+                penalty_items.append({"name": "Reincidências", "points": points})
             if recurrence.get("requires_review"):
                 requires_manual_review = True
                 if scoring_status == "Pontuada":
-                    scoring_status = "Revisao manual"
+                    scoring_status = "Revisão manual"
             if base_points > 0 and penalty_points >= base_points:
-                scoring_status = "Anulada por reincidencia"
+                scoring_status = "Anulada por reincidência"
 
-        if recurrence and recurrence_classification not in RECURRENCE_DISCOUNT_CLASSIFICATIONS:
-            scoring_status = "Pontuada" if base_points > 0 else scoring_status
+        # Um par de reincidencia sem regra de desconto (ex.: "demandas_diferentes") nao deve
+        # apagar uma anulacao por SLA/diagnostico que ja tenha acontecido antes desta O.S passar
+        # pela analise de reincidencia - so desfaz o rotulo "Anulada por reincidência" que ESTE
+        # bloco acabou de aplicar, restaurando o status anterior em vez de forcar "Pontuada".
+        if recurrence and recurrence_classification not in RECURRENCE_DISCOUNT_CLASSIFICATIONS and scoring_status == "Anulada por reincidência":
+            scoring_status = pre_recurrence_status
 
     if (
         base_points > 0
         and penalty_points > 0
-        and scoring_status not in {"Anulada por reincidencia", "Anulada por diagnostico", "Anulada por SLA"}
+        and scoring_status not in {"Anulada por reincidência", "Anulada por diagnóstico", "Anulada por SLA"}
     ):
         scoring_status = "Penalizada"
 
@@ -1131,7 +1180,7 @@ def explain_order(
         "recurrence_discount_applied": bool(recurrence.get("discount_applied")) if recurrence else False,
         "recurrence_related_os_code": recurrence.get("related_os_code") if recurrence else None,
         "recurrence_days_between": recurrence.get("days_between") if recurrence else None,
-        "recurrence_evidence": recurrence.get("evidence", []) if recurrence else [],
+        "recurrence_evidence": recurrence.get("evidence", []) if recurrence and include_explanations else [],
         "recurrence_penalty_points": round(recurrence_penalty_points, 2),
         "recurrence_rule_id": recurrence.get("rule_id") if recurrence else None,
         "recurrence_rule_name": recurrence.get("rule_name") if recurrence else None,
@@ -1153,13 +1202,13 @@ def explain_order(
         "diagnosis_force_points_value": diagnosis_rule.force_points_value if diagnosis_rule else None,
         "requires_manual_review": requires_manual_review,
         "scoring_status": scoring_status,
-        "penalty_reasons": penalty_reasons,
-        "penalty_items": penalty_items,
-        "reasons": reasons,
-        "is_scored": base_points > 0 and scoring_status in {"Pontuada", "Garantia pontuada", "Penalizada", "Revisao manual"},
+        "penalty_reasons": penalty_reasons if include_explanations else [],
+        "penalty_items": penalty_items if include_explanations else [],
+        "reasons": reasons if include_explanations else [],
+        "is_scored": base_points > 0 and scoring_status in {"Pontuada", "Garantia pontuada", "Penalizada", "Revisão manual"},
         "is_unscored": scoring_status == "Sem regra",
         "is_penalized": penalty_points > 0,
-        "is_annulled": scoring_status in {"Anulada por reincidencia", "Anulada por diagnostico", "Anulada por SLA"},
+        "is_annulled": scoring_status in {"Anulada por reincidência", "Anulada por diagnóstico", "Anulada por SLA"},
         "is_sla_out_of_time": is_sla_out,
     }
 
@@ -1168,12 +1217,18 @@ def explain_orders(
     db: Session,
     orders: list[ServiceOrder],
     default_point_value: float | None = None,
+    include_explanations: bool = True,
 ) -> list[dict[str, Any]]:
     scoring_rules = active_scoring_rules(db)
     scoring_lookup = build_scoring_rule_lookup(scoring_rules)
     diagnosis_rules = active_diagnosis_rules(db)
     sla_rules = active_sla_penalty_rules(db)
-    recurrence_by_original_id = recurrence_penalties(db, orders, scoring_lookup)
+    recurrence_by_original_id = recurrence_penalties(
+        db,
+        orders,
+        scoring_lookup,
+        include_explanations=include_explanations,
+    )
     legacy_warranty_scores = normalize(get_setting(db, "warranty_scores", "true")) in {"true", "1", "sim", "yes"}
     warranty_mode = get_setting(db, "warranty_mode", "score_full" if legacy_warranty_scores else "no_points")
     warranty_reduction_percentage = float(get_setting(db, "warranty_reduction_percentage", "0"))
@@ -1189,6 +1244,7 @@ def explain_orders(
             warranty_mode,
             warranty_reduction_percentage,
             default_point_value,
+            include_explanations=include_explanations,
         )
         for order in orders
     ]
@@ -1203,10 +1259,22 @@ def summarize_details(
     penalty = round(sum(float(item["penalty_points"]) for item in details), 2)
     net = round(sum(float(item["net_points"]) for item in details), 2)
     final = round(net * health_multiplier, 2)
-    estimated = round(
-        sum(float(item["net_points"]) * health_multiplier * float(item.get("point_value", point_value)) for item in details),
-        2,
-    )
+
+    # Quando todas as O.S usam o mesmo valor de ponto (o caso comum, sem override por
+    # assunto/grupo), deriva estimated_payment diretamente de `final` para que a conta
+    # feita por um auditor (final_points * valor do ponto) sempre bata exatamente com o
+    # valor exibido - em vez de arredondar duas somas independentes, que podem divergir
+    # por 1 centavo. So cai no somatorio ponderado quando ha de fato taxas diferentes
+    # entre as O.S (override de valor do ponto por assunto/grupo).
+    rates = {round(float(item.get("point_value", point_value)), 6) for item in details}
+    if len(rates) <= 1:
+        uniform_rate = next(iter(rates), float(point_value))
+        estimated = round(final * uniform_rate, 2)
+    else:
+        estimated = round(
+            sum(float(item["net_points"]) * health_multiplier * float(item.get("point_value", point_value)) for item in details),
+            2,
+        )
 
     return {
         "total_service_orders": len(details),
@@ -1225,7 +1293,7 @@ def summarize_details(
             1
             for item in details
             if item["diagnosis"]
-            and normalize(str(item["diagnosis"])) != normalize("Nao informado")
+            and normalize(str(item["diagnosis"])) != normalize("Não informado")
             and not item["diagnosis_rule_id"]
         ),
         "gross_points": gross,
@@ -1244,10 +1312,11 @@ def summarize_audit_details(
     point_value: float,
 ) -> dict[str, float | int]:
     health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
+    below_minimum_multiplier = get_health_below_minimum_multiplier(db)
     final_points = round(
         sum(
             float(item["net_points"])
-            * float(health_by_regional.get(normalize_regional(str(item["regional"])), {}).get("multiplier", 1.0))
+            * float(health_by_regional.get(normalize_regional(str(item["regional"])), {}).get("multiplier", below_minimum_multiplier))
             for item in details
         ),
         2,
@@ -1272,7 +1341,7 @@ def summarize_audit_details(
             1
             for item in details
             if item["diagnosis"]
-            and normalize(str(item["diagnosis"])) != normalize("Nao informado")
+            and normalize(str(item["diagnosis"])) != normalize("Não informado")
             and not item["diagnosis_rule_id"]
         ),
         "gross_points": gross,
@@ -1282,7 +1351,7 @@ def summarize_audit_details(
         "estimated_payment": round(
             sum(
                 float(item["net_points"])
-                * float(health_by_regional.get(normalize_regional(str(item["regional"])), {}).get("multiplier", 1.0))
+                * float(health_by_regional.get(normalize_regional(str(item["regional"])), {}).get("multiplier", below_minimum_multiplier))
                 * float(item.get("point_value", point_value))
                 for item in details
             ),
@@ -1294,7 +1363,7 @@ def summarize_audit_details(
 def build_audit_group_label(detail: dict[str, Any], mode: str) -> str:
     mode = mode if mode in {"group", "subject", "regional", "collaborator", "status"} else "group"
     if mode == "group":
-        return str(detail.get("group_name") or "Sem regra de pontuacao")
+        return str(detail.get("group_name") or "Sem regra de pontuação")
     if mode == "subject":
         return f"{detail.get('os_type') or ''} - {detail.get('os_subject') or ''}"
     if mode == "regional":
@@ -1312,6 +1381,7 @@ def calculate_audit_group_summaries(
     modes: Iterable[str] | None = None,
 ) -> dict[str, list[dict[str, float | int | str]]]:
     health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
+    below_minimum_multiplier = get_health_below_minimum_multiplier(db)
     summaries: dict[str, list[dict[str, float | int | str]]] = {}
     available_modes = {"group", "subject", "regional", "collaborator", "status"}
     selected_modes = [mode for mode in (modes or ["group"]) if mode in available_modes] or ["group"]
@@ -1332,7 +1402,7 @@ def calculate_audit_group_summaries(
                     "penalized_service_orders": 0,
                 },
             )
-            multiplier = float(health_by_regional.get(normalize_regional(str(detail["regional"])), {}).get("multiplier", 1.0))
+            multiplier = float(health_by_regional.get(normalize_regional(str(detail["regional"])), {}).get("multiplier", below_minimum_multiplier))
             item_point_value = float(detail.get("point_value", point_value))
             item["service_orders_count"] = int(item["service_orders_count"]) + 1
             item["base_points"] = float(item["base_points"]) + float(detail["base_points"])
@@ -1369,7 +1439,7 @@ def calculate_penalty_distribution(
             totals[name] += float(penalty["points"])
             counts[name] += 1
 
-    for fixed_name in ("Reincidencias", "SLA fora do prazo"):
+    for fixed_name in ("Reincidências", "SLA fora do prazo"):
         totals.setdefault(fixed_name, 0.0)
         counts.setdefault(fixed_name, 0)
 
@@ -1501,7 +1571,7 @@ def get_collaborator_service_orders_detail(
 ) -> dict[str, Any]:
     collaborator = db.get(Collaborator, collaborator_id)
     if not collaborator:
-        raise ValueError("Colaborador nao encontrado.")
+        raise ValueError("Colaborador não encontrado.")
 
     all_period_orders = period_orders(db, reference_month, reference_year, regional)
     orders = prefilter_orders_for_detail_processing(
@@ -1513,12 +1583,16 @@ def get_collaborator_service_orders_detail(
         os_subject=os_subject,
         status_sla=status_sla,
     )
-    health_by_regional = calculate_regional_health(db, [order for order in all_period_orders if completed(order)])
     value_per_point = point_value if point_value is not None else get_point_value(db)
     details = explain_orders(db, orders, default_point_value=float(value_per_point))
+    health_by_regional = calculate_regional_health(db, [order for order in all_period_orders if completed(order)])
+    health_by_regional = calculate_regional_health_from_details(db, details, health_by_regional)
     effective_regional, health = health_for_details(details, health_by_regional, collaborator.regional)
     official_regional = normalize_regional(collaborator.regional) if collaborator.is_registered and is_valid_regional(collaborator.regional) else None
-    multiplier = float(health.get("multiplier", 1.0))
+    if official_regional and official_regional in health_by_regional:
+        health = health_by_regional[official_regional]
+        effective_regional = official_regional
+    multiplier = float(health.get("multiplier", get_health_below_minimum_multiplier(db)))
     summary = summarize_details(details, multiplier, value_per_point)
     filtered_base = filter_details(
         details,
@@ -1577,43 +1651,53 @@ def get_period_audit(
     page: int = 1,
     page_size: int = 100,
 ) -> dict[str, Any]:
-    period_base_orders = period_orders(db, reference_month, reference_year, regional)
-    orders = prefilter_orders_for_detail_processing(
-        db,
-        period_base_orders,
-        collaborator_id=collaborator_id,
-        group_id=group_id,
-        os_type=os_type,
-        os_subject=os_subject,
-        status_sla=status_sla,
-    )
+    with performance_step("audit.get_period_audit", "load_period_orders"):
+        period_base_orders = period_orders(db, reference_month, reference_year, regional)
+    with performance_step("audit.get_period_audit", "prefilter_orders"):
+        orders = prefilter_orders_for_detail_processing(
+            db,
+            period_base_orders,
+            collaborator_id=collaborator_id,
+            group_id=group_id,
+            os_type=os_type,
+            os_subject=os_subject,
+            status_sla=status_sla,
+        )
     value_per_point = point_value if point_value is not None else get_point_value(db)
-    details = explain_orders(db, orders, default_point_value=float(value_per_point))
-    filtered_base = filter_details(
-        details,
-        only_scored=only_scored,
-        only_unscored=only_unscored,
-        only_penalized=only_penalized,
-        only_sla_out=only_sla_out,
-        only_warranty=only_warranty,
-        only_recurrence=only_recurrence,
-        only_non_recurrent=only_non_recurrent,
-        only_diagnosis_blocked=only_diagnosis_blocked,
-        os_type=os_type,
-        os_subject=os_subject,
-        status_sla=status_sla,
-        group_id=group_id,
-        collaborator_id=collaborator_id,
-        regional=regional,
-    )
+    with performance_step("audit.get_period_audit", "explain_orders"):
+        summary_details = explain_orders(
+            db,
+            orders,
+            default_point_value=float(value_per_point),
+            include_explanations=False,
+        )
+    with performance_step("audit.get_period_audit", "filter_details"):
+        filtered_base = filter_details(
+            summary_details,
+            only_scored=only_scored,
+            only_unscored=only_unscored,
+            only_penalized=only_penalized,
+            only_sla_out=only_sla_out,
+            only_warranty=only_warranty,
+            only_recurrence=only_recurrence,
+            only_non_recurrent=only_non_recurrent,
+            only_diagnosis_blocked=only_diagnosis_blocked,
+            os_type=os_type,
+            os_subject=os_subject,
+            status_sla=status_sla,
+            group_id=group_id,
+            collaborator_id=collaborator_id,
+            regional=regional,
+        )
     requested_group_mode = audit_group_mode if audit_group_mode in {"group", "subject", "regional", "collaborator", "status"} else "group"
-    group_summaries = calculate_audit_group_summaries(
-        db,
-        filtered_base,
-        period_base_orders,
-        float(value_per_point),
-        modes=[requested_group_mode],
-    )
+    with performance_step("audit.get_period_audit", "group_summaries"):
+        group_summaries = calculate_audit_group_summaries(
+            db,
+            filtered_base,
+            period_base_orders,
+            float(value_per_point),
+            modes=[requested_group_mode],
+        )
     filtered = filtered_base
     if audit_group_label:
         filtered = [item for item in filtered_base if build_audit_group_label(item, requested_group_mode) == audit_group_label]
@@ -1625,13 +1709,15 @@ def get_period_audit(
         page = total_pages
     start = (page - 1) * page_size
     paginated = filtered[start : start + page_size]
+    with performance_step("audit.get_period_audit", "summarize"):
+        summary = summarize_audit_details(db, filtered, period_base_orders, value_per_point)
     return {
         "period": {
             "reference_month": reference_month,
             "reference_year": reference_year,
             "regional": regional,
         },
-        "summary": summarize_audit_details(db, filtered, period_base_orders, value_per_point),
+        "summary": summary,
         "orders": paginated,
         "group_summaries": group_summaries,
         "total_orders": total_orders,
@@ -1648,7 +1734,7 @@ def get_recurrence_audit(db: Session, service_order_id: int) -> dict[str, Any]:
         .where(ServiceOrder.id == service_order_id)
     )
     if not target:
-        raise ValueError("O.S nao encontrada.")
+        raise ValueError("O.S não encontrada.")
 
     all_orders = sorted(
         real_service_orders(
@@ -1664,8 +1750,8 @@ def get_recurrence_audit(db: Session, service_order_id: int) -> dict[str, Any]:
     identity = _recurrence_identity_for_fields(target, identity_fields)
     if not identity:
         related_orders = [target]
-        identity_type = "Vinculo configurado"
-        identity_value = f"{_configured_recurrence_identity_label(identity_fields)} nao importado"
+        identity_type = "Vínculo configurado"
+        identity_value = f"{_configured_recurrence_identity_label(identity_fields)} não importado"
     else:
         identity_kind, _ = identity.split(":", 1)
         if identity_kind == "login":
@@ -1720,7 +1806,7 @@ def get_recurrence_audit(db: Session, service_order_id: int) -> dict[str, Any]:
         or (
             []
             if identity
-            else [f"Os campos de vinculo configurados ({_configured_recurrence_identity_label(identity_fields)}) nao foram encontrados nesta O.S."]
+            else [f"Os campos de vínculo configurados ({_configured_recurrence_identity_label(identity_fields)}) não foram encontrados nesta O.S."]
         ),
         "current_order": current_detail,
         "origin_order": origin_detail,
@@ -1735,6 +1821,7 @@ def financial_breakdowns(
     point_value: float,
     details: list[dict[str, Any]] | None = None,
     health_by_regional: dict[str, dict[str, float | int | str]] | None = None,
+    collaborator_context: dict[int, dict[str, float | int | str]] | None = None,
 ) -> dict[str, list[dict[str, float | int | str]]]:
     details = details if details is not None else explain_orders(db, orders)
     health_by_regional = health_by_regional or calculate_regional_health(db, [order for order in orders if completed(order)])
@@ -1746,12 +1833,17 @@ def financial_breakdowns(
     scoring_subject_totals: dict[str, dict[str, float | int | str]] = {}
     unmapped_subject_totals: dict[str, dict[str, float | int | str]] = {}
     estimated_unmapped_points = average_group_default_points(db)
+    below_minimum_multiplier = get_health_below_minimum_multiplier(db)
 
     for detail in details:
         if not is_identified_collaborator_detail(detail):
             continue
-        regional = normalize_regional(str(detail["regional"]))
-        multiplier = float(health_by_regional.get(regional, {}).get("multiplier", 1.0))
+        collaborator_id = int(detail["collaborator_id"])
+        context = collaborator_context.get(collaborator_id) if collaborator_context is not None else None
+        if collaborator_context is not None and context is None:
+            continue
+        regional = normalize_regional(str((context or {}).get("regional") or detail["regional"]))
+        multiplier = float((context or {}).get("health_multiplier", health_by_regional.get(regional, {}).get("multiplier", below_minimum_multiplier)))
         detail_point_value = float(detail.get("point_value", point_value))
         estimated = round(float(detail["net_points"]) * multiplier * detail_point_value, 2)
         penalty_impact = round(float(detail["penalty_points"]) * multiplier * detail_point_value, 2)
@@ -1783,7 +1875,6 @@ def financial_breakdowns(
         subject_item["net_points"] = round(float(subject_item["net_points"]) + float(detail["net_points"]), 2)
         subject_item["estimated_payment"] = round(float(subject_item["estimated_payment"]) + estimated, 2)
 
-        collaborator_id = int(detail["collaborator_id"])
         collaborator_item = collaborator_totals.setdefault(
             collaborator_id,
             {
@@ -1878,14 +1969,31 @@ def unmapped_subjects(
     reference_year: int,
     regional: str | None = None,
 ) -> list[dict[str, Any]]:
-    orders = real_service_orders(period_orders(db, reference_month, reference_year, regional))
-    details = [detail for detail in explain_orders(db, orders) if detail["is_unscored"]]
+    orders = period_orders_for_aggregation(db, reference_month, reference_year, regional)
+    scoring_lookup = build_scoring_rule_lookup(active_scoring_rules(db))
+    diagnosis_rules = all_diagnosis_rules(db)
     point_value = get_point_value(db)
     estimated_points_per_order = average_group_default_points(db)
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
 
-    for detail in details:
-        key = (str(detail["os_type"]), str(detail["os_subject"]))
+    for order in orders:
+        if not order.collaborator_id or not completed(order):
+            continue
+        if matching_scoring_rule(order, scoring_lookup):
+            continue
+        diagnosis_rule = matching_diagnosis_rule(order.diagnosis, diagnosis_rules)
+        if (
+            diagnosis_rule
+            and diagnosis_rule.action_type == "force_points"
+            and diagnosis_rule.force_points_value is not None
+            and float(diagnosis_rule.force_points_value) > 0
+        ):
+            continue
+
+        key = (
+            str(order.os_type or "Não informado").strip() or "Não informado",
+            str(order.os_subject or "Não informado").strip() or "Não informado",
+        )
         item = grouped.setdefault(
             key,
             {
@@ -1897,8 +2005,8 @@ def unmapped_subjects(
             },
         )
         item["service_orders_count"] += 1
-        item["collaborator_ids"].add(detail["collaborator_id"])
-        item["regionals"].append(normalize_regional(str(detail["regional"])))
+        item["collaborator_ids"].add(order.collaborator_id)
+        item["regionals"].append(normalize_regional(str(order.regional)))
 
     result = []
     for item in grouped.values():
@@ -1920,6 +2028,61 @@ def unmapped_subjects(
     return sorted(result, key=lambda item: item["service_orders_count"], reverse=True)
 
 
+def unmapped_diagnosis_stats_from_orders(db: Session, orders: list[ServiceOrder]) -> list[dict[str, Any]]:
+    point_value = get_point_value(db)
+    average_points = average_group_default_points(db)
+    rules_by_name = {normalize(rule.diagnosis_name): rule for rule in all_diagnosis_rules(db)}
+    grouped: dict[str, dict[str, Any]] = {}
+
+    for order in orders:
+        diagnosis_name = str(order.diagnosis or "Não informado")
+        if normalize(diagnosis_name) == normalize("Não informado"):
+            continue
+        key = normalize(diagnosis_name)
+        if rules_by_name.get(key):
+            continue
+        item = grouped.setdefault(
+            key,
+            {
+                "diagnosis_name": diagnosis_name,
+                "service_orders_count": 0,
+                "subjects": [],
+                "collaborator_ids": set(),
+                "regionals": [],
+            },
+        )
+        item["service_orders_count"] += 1
+        item["subjects"].append(str(order.os_subject or "Não informado"))
+        if order.collaborator_id:
+            item["collaborator_ids"].add(order.collaborator_id)
+        item["regionals"].append(normalize_regional(str(order.regional)))
+
+    result: list[dict[str, Any]] = []
+    for item in grouped.values():
+        subject_counts = Counter(item["subjects"])
+        regional_counts = Counter(item["regionals"])
+        count = int(item["service_orders_count"])
+        result.append(
+            {
+                "diagnosis_name": item["diagnosis_name"],
+                "service_orders_count": count,
+                "subjects_count": len(subject_counts),
+                "collaborators_count": len(item["collaborator_ids"]),
+                "predominant_regional": regional_counts.most_common(1)[0][0] if regional_counts else "-",
+                "related_subjects": [subject for subject, _ in subject_counts.most_common(5)],
+                "action_type": None,
+                "penalty_points": None,
+                "force_points_value": None,
+                "estimated_impact": round(count * average_points * point_value, 2),
+                "active": None,
+                "rule_id": None,
+                "has_rule": False,
+            }
+        )
+
+    return sorted(result, key=lambda item: item["service_orders_count"], reverse=True)
+
+
 def imported_diagnosis_stats(
     db: Session,
     reference_month: int,
@@ -1927,6 +2090,10 @@ def imported_diagnosis_stats(
     regional: str | None = None,
     only_unmapped: bool = False,
 ) -> list[dict[str, Any]]:
+    if only_unmapped:
+        orders = period_orders_for_aggregation(db, reference_month, reference_year, regional)
+        return unmapped_diagnosis_stats_from_orders(db, orders)
+
     orders = real_service_orders(period_orders(db, reference_month, reference_year, regional))
     details = explain_orders(db, orders)
     point_value = get_point_value(db)
@@ -1935,8 +2102,8 @@ def imported_diagnosis_stats(
     grouped: dict[str, dict[str, Any]] = {}
 
     for detail in details:
-        diagnosis_name = str(detail["diagnosis"] or "Nao informado")
-        if normalize(diagnosis_name) == normalize("Nao informado"):
+        diagnosis_name = str(detail["diagnosis"] or "Não informado")
+        if normalize(diagnosis_name) == normalize("Não informado"):
             continue
 
         key = normalize(diagnosis_name)

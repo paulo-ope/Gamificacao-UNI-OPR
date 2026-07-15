@@ -98,8 +98,8 @@ class ServiceOrderBase(BaseModel):
     regional: str
     os_type: str
     os_subject: str
-    diagnosis: str = "Nao informado"
-    status: str = "Concluida"
+    diagnosis: str = "Não informado"
+    status: str = "Concluída"
     sla_status: str = "Dentro do prazo"
     sla_hours: float | None = 24
     closing_time_hours: float | None = 0
@@ -518,10 +518,35 @@ class AppSettingUpdate(BaseModel):
 
 
 class CalculationRequest(BaseModel):
-    reference_month: int | None = None
-    reference_year: int | None = None
+    reference_month: int | None = Field(default=None, ge=1, le=12)
+    reference_year: int | None = Field(default=None, ge=2000, le=2100)
     regional: str | None = None
     point_value: float | None = None
+    create_revision: bool = False
+    execution_note: str | None = None
+
+
+class CalculationRunStatusFields(BaseModel):
+    status: str
+    status_changed_at: datetime | None = None
+    status_changed_by: int | None = None
+    status_note: str | None = None
+    approved_at: datetime | None = None
+    approved_by: int | None = None
+    paid_at: datetime | None = None
+    paid_by: int | None = None
+    executed_at: datetime | None = None
+    executed_by: int | None = None
+
+
+class CalculationRunStatusUpdate(BaseModel):
+    status: str = Field(..., min_length=1)
+    note: str | None = None
+
+
+class CalculationRunSnapshotOut(BaseModel):
+    id: int
+    config_snapshot: dict | None = None
 
 
 class CollaboratorScoreOut(BaseModel):
@@ -539,6 +564,8 @@ class CollaboratorScoreOut(BaseModel):
     health_status: str
     final_points: float
     estimated_payment: float
+    balance_adjustment_points: float = 0
+    balance_after: float = 0
     scored_service_orders: int = 0
     unscored_service_orders: int = 0
     penalized_service_orders: int = 0
@@ -553,7 +580,7 @@ class CollaboratorScoreOut(BaseModel):
     diagnosis_unmapped_service_orders: int = 0
 
 
-class CalculationRunOut(BaseModel):
+class CalculationRunOut(CalculationRunStatusFields):
     id: int
     reference_month: int
     reference_year: int
@@ -563,11 +590,12 @@ class CalculationRunOut(BaseModel):
     source_filename: str | None = None
     rules_version_id: int | None = None
     result_summary: dict | None = None
+    config_snapshot: dict | None = None
     created_at: datetime
     scores: list[CollaboratorScoreOut] = []
 
 
-class CalculationRunHistoryOut(BaseModel):
+class CalculationRunHistoryOut(CalculationRunStatusFields):
     id: int
     reference_month: int
     reference_year: int
@@ -595,6 +623,7 @@ class LeadershipProfileBase(BaseModel):
     role_profile_id: int | None = None
     use_custom_multiplier: bool = False
     custom_multiplier: float | None = Field(default=None, ge=0)
+    average_source: str = "collaborators"
     active: bool = True
     collaborator_id: int | None = None
     regional_names: list[str] = Field(default_factory=list)
@@ -611,6 +640,7 @@ class LeadershipProfileUpdate(BaseModel):
     role_profile_id: int | None = None
     use_custom_multiplier: bool | None = None
     custom_multiplier: float | None = Field(default=None, ge=0)
+    average_source: str | None = None
     active: bool | None = None
     collaborator_id: int | None = None
     regional_names: list[str] | None = None
@@ -652,6 +682,7 @@ class LeadershipProfileOut(BaseModel):
     role_profile_name: str | None = None
     use_custom_multiplier: bool = False
     custom_multiplier: float | None = None
+    average_source: str = "collaborators"
     active: bool
     collaborator_id: int | None = None
     regional_names: list[str] = []
@@ -659,6 +690,29 @@ class LeadershipProfileOut(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class LeadershipAverageAuditCollaboratorOut(BaseModel):
+    collaborator_id: int
+    collaborator_name: str
+    role: str
+    regional: str
+    source_type: str = "collaborator"
+    service_orders_count: int
+    health_multiplier: float
+    final_points: float
+    estimated_payment: float
+
+
+class LeadershipAverageAuditOut(BaseModel):
+    scoped_collaborators: int
+    total_final_points: float
+    average_final_points: float
+    point_value: float
+    base_amount: float
+    multiplier: float
+    bonus_amount: float
+    collaborators: list[LeadershipAverageAuditCollaboratorOut] = []
 
 
 class LeadershipBonusResultOut(BaseModel):
@@ -671,12 +725,14 @@ class LeadershipBonusResultOut(BaseModel):
     role_profile_name: str | None = None
     multiplier: float
     uses_custom_multiplier: bool = False
+    average_source: str = "collaborators"
     average_final_points: float
     scoped_collaborators: int
     point_value: float
     base_amount: float
     bonus_amount: float
     regionals: list[str]
+    audit: LeadershipAverageAuditOut | None = None
 
 
 class LeadershipPendingCollaboratorOut(BaseModel):
@@ -736,6 +792,24 @@ class DashboardSummary(BaseModel):
     top_unmapped_subjects: list[dict[str, float | int | str]] = []
 
 
+class DashboardFilteredBreakdownOut(BaseModel):
+    calculation_run_id: int
+    regionals: list[str] = []
+    penalty_distribution: list[PenaltyDistributionItem] = []
+    cost_by_regional: list[dict[str, float | int | str]] = []
+    cost_by_group: list[dict[str, float | int | str]] = []
+    top_unmapped_subjects: list[dict[str, float | int | str]] = []
+
+
+class DashboardBootstrapOut(BaseModel):
+    reference_month: int | None = None
+    reference_year: int | None = None
+    regional: str | None = None
+    point_value: float = 0
+    has_calculation_run: bool = False
+    calculation_run_id: int | None = None
+
+
 class ImportErrorItem(BaseModel):
     row: int
     reason: str
@@ -753,11 +827,23 @@ class ImportPreview(BaseModel):
 
 class ImportSummary(BaseModel):
     total_rows: int
+    processed_rows: int
+    created_count: int
+    updated_count: int
+    skipped_count: int
+    rejected_count: int
+    error_count: int
+    missing_date_count: int
+    duplicate_count: int
+    unknown_collaborator_count: int
+    required_field_missing_count: int
+    paid_period_blocked_count: int
     valid_rows: int
     invalid_rows: int
 
 
 class ImportResult(BaseModel):
+    status: str
     imported: int
     ignored: int
     errors: list[ImportErrorItem]
@@ -766,6 +852,139 @@ class ImportResult(BaseModel):
     mapped_columns: dict[str, str]
     summary: ImportSummary
     import_id: int | None = None
+    file_name: str | None = None
+    file_hash: str | None = None
+    message: str | None = None
+
+
+class ImportRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    filename: str
+    file_hash: str | None = None
+    source: str
+    status: str
+    total_rows: int
+    processed_rows: int
+    imported_rows: int
+    created_count: int
+    updated_count: int
+    skipped_count: int
+    rejected_count: int
+    duplicate_count: int
+    missing_date_count: int
+    unknown_collaborator_count: int
+    required_field_missing_count: int
+    paid_period_blocked_count: int
+    ignored_rows: int
+    error_rows: int
+    imported_by: int | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    notes: str | None = None
+    detected_columns: list[str]
+    mapped_columns: dict[str, str]
+    errors: list[dict] = []
+    created_at: datetime
+
+
+class ImportServiceOrderAuditOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    import_run_id: int
+    os_code: str | None = None
+    service_order_id: int | None = None
+    action: str
+    field_name: str | None = None
+    old_value: str | None = None
+    new_value: str | None = None
+    reason: str | None = None
+    row_number: int | None = None
+    created_at: datetime
+    created_by: int | None = None
+
+
+class CollaboratorMonthlyHistoryItem(BaseModel):
+    reference_month: int
+    reference_year: int
+    regional: str | None = None
+    calculation_run_id: int
+    status: str
+    service_orders_count: int
+    gross_points: float
+    net_points: float
+    final_points: float
+    estimated_payment: float
+    balance_adjustment_points: float = 0
+    health_multiplier: float = 1
+
+
+class AuditLogOut(BaseModel):
+    id: int
+    user_id: int | None = None
+    user_name: str | None = None
+    user_email: str | None = None
+    action: str
+    entity: str
+    entity_id: str | None = None
+    before_data: dict | None = None
+    after_data: dict | None = None
+    created_at: datetime
+
+
+class PointBalanceEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    collaborator_id: int
+    collaborator_name: str | None = None
+    entry_type: str
+    points: float
+    original_service_order_id: int | None = None
+    original_os_code: str | None = None
+    related_service_order_id: int | None = None
+    related_os_code: str | None = None
+    origin_calculation_run_id: int | None = None
+    origin_run_month: int | None = None
+    origin_run_year: int | None = None
+    origin_run_status: str | None = None
+    applied_calculation_run_id: int | None = None
+    applied_run_status: str | None = None
+    applied_reference_month: int | None = None
+    applied_reference_year: int | None = None
+    status: str
+    requires_review: bool = False
+    recurrence_classification: str | None = None
+    recurrence_action: str | None = None
+    reason: str | None = None
+    created_by: int | None = None
+    created_at: datetime
+
+
+class CollaboratorPointBalanceOut(BaseModel):
+    collaborator_id: int
+    collaborator_name: str | None = None
+    balance_points: float
+    updated_at: datetime | None = None
+    entries: list[PointBalanceEntryOut] = []
+
+
+class PointBalanceRevertRequest(BaseModel):
+    reason: str | None = None
+
+
+class PointBalanceManualAdjustmentRequest(BaseModel):
+    collaborator_id: int
+    points: float = Field(..., description="Positivo = crédito, negativo = débito")
+    reason: str = Field(..., min_length=1)
+
+
+class PointBalanceResolveReviewRequest(BaseModel):
+    points: float = Field(..., description="Valor do débito confirmado (deve ser negativo)")
+    note: str | None = None
 
 
 class CollaboratorDetailIdentity(BaseModel):
