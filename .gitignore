@@ -20,3 +20,8 @@ Thumbs.db
 postgres_data/
 .local-dev.db*
 backend/.tmp-delete-group-test.db-journal
+
+backups/
+outputs/
+tmp_spreadsheet/
+BACKUP_MANIFEST.json
