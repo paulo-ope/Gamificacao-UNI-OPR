@@ -13,6 +13,7 @@ import { DashboardCharts } from "@/components/gamification/dashboard-charts";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { LogicConfigurationPanel } from "@/components/gamification/logic-configuration-panel";
 import { LeadershipBonusPanel } from "@/components/gamification/leadership-bonus-panel";
+import { ModuleSidebar } from "@/components/gamification/module-sidebar";
 import { PointBalancePanel } from "@/components/gamification/point-balance-panel";
 import { RankingTable } from "@/components/gamification/ranking-table";
 import { UnmappedDiagnosesPanel } from "@/components/gamification/unmapped-diagnoses-panel";
@@ -1330,7 +1331,7 @@ export default function GamificacaoPage() {
             <Button
               onClick={login}
               disabled={busy || !loginEmail.trim() || !loginPassword.trim()}
-              className="h-11 rounded-lg bg-teal-600 font-semibold shadow-sm transition hover:bg-teal-700 disabled:bg-slate-300"
+              className="h-11 rounded-lg bg-primary font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:bg-slate-300"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               {busy ? "Entrando..." : "Entrar"}
@@ -1341,68 +1342,26 @@ export default function GamificacaoPage() {
     );
   }
 
+  const visibleTabs = new Set<string>(["closure", "ranking", "audit", "balance", "history", "import"]);
+  if (can("orders:import") || can("scoring:write")) visibleTabs.add("pending");
+  if (can("scoring:write")) visibleTabs.add("config");
+
   return (
     <main className="min-h-dvh bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_24%),radial-gradient(circle_at_top_right,rgba(37,99,235,0.08),transparent_20%),linear-gradient(180deg,#f8fbff_0%,#f8fafc_42%,#f8fafc_100%)]">
-      <div className="mx-auto flex min-h-dvh w-full max-w-[1680px] flex-col gap-4 px-2 py-3 sm:px-4">
-        <header className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white/95 shadow-[0_18px_60px_-32px_rgba(15,23,42,0.35)] backdrop-blur">
-          <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-cyan-400 via-teal-400 to-blue-600" />
-          <div className="absolute -left-10 top-10 h-40 w-40 rounded-full bg-cyan-100/40 blur-3xl" />
-          <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-blue-100/40 blur-3xl" />
-
-          <div className="relative grid gap-4 px-5 py-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,400px)] xl:items-center">
-            <div className="flex min-w-0 items-start gap-4">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-slate-200/80 bg-white shadow-[0_12px_28px_-20px_rgba(15,23,42,0.55)]">
-                <img src="/brand/uni-logo.png" alt="UNI Internet" className="max-h-9 w-auto object-contain" />
-              </div>
-
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  <span>UNI Workspace</span>
-                  <span className="h-1 w-1 rounded-full bg-slate-300" />
-                  <span>Operação</span>
-                  <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">Módulo ativo</Badge>
-                </div>
-
-                <div className="mt-2.5 flex flex-wrap items-center gap-3">
-                  <h1 className="text-[32px] font-semibold leading-none tracking-tight text-slate-950">Gamificação Operacional</h1>
-                  <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">Fechamento e auditoria</span>
-                </div>
-
-                <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                  Camada operacional da UNI para fechamento, auditoria, valor a ser pago e governança da apuração.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid gap-3">
-              <div className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Ambiente</div>
-                    <div className="mt-1 truncate text-base font-semibold text-slate-950">{currentUser.name}</div>
-                    <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-slate-500">{currentUser.role}</div>
-                  </div>
-                  <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700">
-                    Sessão ativa
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-                {can("calculation:run") ? (
-                  <Button onClick={recalculate} disabled={busy || loading} className="h-11 w-full rounded-2xl bg-teal-600 px-4 shadow-sm hover:bg-teal-700 sm:w-auto">
-                    <RefreshCw className={busy ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-                    {summary?.run?.status === "paid" ? "Criar revisão" : "Recalcular pontuação"}
-                  </Button>
-                ) : null}
-                <Button type="button" variant="outline" onClick={logout} className="h-11 rounded-2xl border-slate-300 bg-white px-4">
-                  Sair
-                </Button>
-              </div>
-            </div>
-          </div>
-        </header>
-
+      <div className="flex min-h-dvh w-full">
+        <ModuleSidebar
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          visibleTabs={visibleTabs}
+          user={currentUser}
+          onLogout={logout}
+          canRecalculate={can("calculation:run")}
+          onRecalculate={recalculate}
+          recalculating={busy || loading}
+          isPaidPeriod={summary?.run?.status === "paid"}
+        />
+        <div className="min-w-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4 px-2 py-3 sm:px-4">
         {error ? (
           <div className="rounded-2xl border border-red-200 bg-[linear-gradient(180deg,#fff5f5_0%,#fef2f2_100%)] px-4 py-3 text-sm text-red-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <div className="flex items-start gap-3">
@@ -1498,36 +1457,6 @@ export default function GamificacaoPage() {
                                 : "Período analisado"}
                 </Badge>
               </div>
-              <TabsList className="mt-3 flex h-auto w-full justify-start gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50/80 p-2">
-                <TabsTrigger value="closure" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                  Fechamento
-                </TabsTrigger>
-                <TabsTrigger value="ranking" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                  Ranking
-                </TabsTrigger>
-                {can("orders:import") || can("scoring:write") ? (
-                  <TabsTrigger value="pending" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                    Pendências
-                  </TabsTrigger>
-                ) : null}
-                {can("scoring:write") ? (
-                  <TabsTrigger value="config" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                    Configuração
-                  </TabsTrigger>
-                ) : null}
-                <TabsTrigger value="audit" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                  Auditoria
-                </TabsTrigger>
-                <TabsTrigger value="balance" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                  Saldo de pontos
-                </TabsTrigger>
-                <TabsTrigger value="history" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                  Histórico
-                </TabsTrigger>
-                <TabsTrigger value="import" className="h-10 rounded-xl border border-transparent px-4 text-sm font-semibold text-slate-600 data-[state=active]:border-emerald-200 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-800 data-[state=active]:shadow-none">
-                  Período
-                </TabsTrigger>
-              </TabsList>
             </section>
 
             <TabsContent value="closure" className="mt-0 flex-1 pr-1">
@@ -2950,6 +2879,8 @@ export default function GamificacaoPage() {
             </TabsContent>
           </Tabs>
         )}
+          </div>
+        </div>
       </div>
 
       <CollaboratorOrdersSheet

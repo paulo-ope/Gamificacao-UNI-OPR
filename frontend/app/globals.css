@@ -4,25 +4,38 @@
 
 @layer base {
   :root {
+    /* Padrão visual oficial UNI Workspace (PADRAO_VISUAL_OFICIAL_UNI_OPR.md) */
+
+    /* Neutras: base clara, branco predominante, cinza frio para texto/borda/fundo */
     --background: 210 20% 98%;
     --foreground: 224 30% 12%;
     --card: 0 0% 100%;
     --card-foreground: 224 30% 12%;
     --popover: 0 0% 100%;
     --popover-foreground: 224 30% 12%;
-    --primary: 174 72% 30%;
+
+    /* Primária: azul/ciano da UNI - CTA principal, foco, seleção ativa */
+    --primary: 198 93% 40%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 214 24% 92%;
-    --secondary-foreground: 224 30% 16%;
+
+    /* Secundária: tons de azul claro/ciano suave - superfícies e painéis de apoio */
+    --secondary: 202 60% 94%;
+    --secondary-foreground: 202 45% 22%;
+
     --muted: 215 22% 94%;
     --muted-foreground: 215 16% 40%;
+
+    /* Semânticas: atenção (âmbar) */
     --accent: 38 91% 56%;
     --accent-foreground: 224 30% 13%;
+
+    /* Semânticas: erro/destrutivo */
     --destructive: 0 74% 48%;
     --destructive-foreground: 0 0% 100%;
+
     --border: 214 22% 84%;
     --input: 214 22% 84%;
-    --ring: 174 72% 30%;
+    --ring: 198 93% 40%;
   }
 
   * {
