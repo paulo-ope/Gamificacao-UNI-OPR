@@ -26,6 +26,8 @@ def serialize_user(user: User) -> dict:
         "created_at": user.created_at,
         "updated_at": user.updated_at,
         "permissions": sorted(permissions_for_role(user.role)),
+        "collaborator_id": user.collaborator_id,
+        "collaborator_name": user.collaborator.name if user.collaborator else None,
     }
 
 

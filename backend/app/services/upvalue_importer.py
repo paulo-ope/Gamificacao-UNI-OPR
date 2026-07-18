@@ -848,9 +848,15 @@ def generated_os_code(contract_id: str, os_subject: str, opened_at: datetime, ro
     return f"UPV-{hashlib.sha1(raw).hexdigest()[:14].upper()}"
 
 
-def get_or_create_collaborator(db: Session, name: str, regional: str) -> tuple[Collaborator, bool]:
+def get_or_create_collaborator(
+    db: Session, name: str, regional: str, *, collaborators_cache: list[Collaborator] | None = None
+) -> tuple[Collaborator, bool]:
+    """`collaborators_cache`, se informado, evita buscar todos os colaboradores do banco a cada chamada -
+    quem passar deve ter carregado a lista uma vez por rodada de importação e reaproveitado aqui (importa
+    muito em lotes grandes, ex. importação retroativa da API do IXC com dezenas de milhares de O.S.). Sem
+    isso, mantém o comportamento de sempre (busca do zero) - não muda nada para quem já chama sem o cache."""
     normalized_name = normalize_header(name)
-    collaborators = db.scalars(select(Collaborator)).all()
+    collaborators = collaborators_cache if collaborators_cache is not None else db.scalars(select(Collaborator)).all()
     for collaborator in collaborators:
         if normalize_header(collaborator.name) == normalized_name:
             if regional and (collaborator.regional != regional or not is_valid_regional(collaborator.regional)):
@@ -871,6 +877,8 @@ def get_or_create_collaborator(db: Session, name: str, regional: str) -> tuple[C
     )
     db.add(collaborator)
     db.flush()
+    if collaborators_cache is not None:
+        collaborators_cache.append(collaborator)
     return collaborator, True
 
 

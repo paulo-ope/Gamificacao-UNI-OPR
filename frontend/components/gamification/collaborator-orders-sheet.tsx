@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Clock,
   Download,
+  Eye,
   FileSearch,
   FileText,
   History,
@@ -146,6 +147,7 @@ export function CollaboratorOrdersSheet({
   const [pointBalance, setPointBalance] = useState<CollaboratorPointBalance | null>(null);
   const [balanceHistoryOpen, setBalanceHistoryOpen] = useState(false);
   const [generatingStatement, setGeneratingStatement] = useState(false);
+  const [previewingStatement, setPreviewingStatement] = useState(false);
   const [statementError, setStatementError] = useState<string | null>(null);
   const activeGroups = useMemo(() => groups.filter((group) => group.active !== false), [groups]);
 
@@ -375,6 +377,34 @@ export function CollaboratorOrdersSheet({
     }
   }
 
+  async function previewStatementPdf() {
+    if (!score || !calculationRunId) return;
+    setPreviewingStatement(true);
+    setStatementError(null);
+    // Abre a aba em branco JÁ, de forma síncrona, ainda dentro do clique - se abrir só depois do
+    // fetch (await) abaixo, o navegador não reconhece mais como consequência direta da interação
+    // do usuário e bloqueia como pop-up (achado real: aconteceu exatamente isso testando). Assim
+    // que o PDF chega, só troca a URL dessa aba que já está aberta.
+    const previewWindow = window.open("", "_blank");
+    try {
+      const blob = await api.collaboratorStatementPdf(score.collaborator_id, calculationRunId);
+      const url = URL.createObjectURL(blob);
+      if (previewWindow) {
+        previewWindow.location.href = url;
+      } else {
+        setStatementError("O navegador bloqueou a aba de visualização. Permita pop-ups para este site e tente novamente.");
+      }
+      // Revoga só depois de um tempo (não imediatamente): a aba precisa de um instante pra
+      // carregar o blob antes dele ser liberado da memória.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      previewWindow?.close();
+      setStatementError(err instanceof Error ? err.message : "Erro ao gerar o extrato em PDF.");
+    } finally {
+      setPreviewingStatement(false);
+    }
+  }
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="sm:max-w-[min(1500px,96vw)]">
@@ -414,17 +444,30 @@ export function CollaboratorOrdersSheet({
                     </div>
                   </div>
                   <div className="flex flex-col items-start gap-1 xl:items-end">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={!calculationRunId || generatingStatement}
-                      onClick={() => void downloadStatementPdf()}
-                      title={!calculationRunId ? "Selecione um fechamento para gerar o extrato em PDF." : undefined}
-                    >
-                      <FileText className={`h-4 w-4 ${generatingStatement ? "animate-pulse" : ""}`} />
-                      {generatingStatement ? "Gerando extrato..." : "Gerar extrato para envio (PDF)"}
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!calculationRunId || previewingStatement || generatingStatement}
+                        onClick={() => void previewStatementPdf()}
+                        title={!calculationRunId ? "Selecione um fechamento para visualizar o extrato em PDF." : undefined}
+                      >
+                        <Eye className={`h-4 w-4 ${previewingStatement ? "animate-pulse" : ""}`} />
+                        {previewingStatement ? "Abrindo..." : "Visualizar extrato (PDF)"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={!calculationRunId || generatingStatement || previewingStatement}
+                        onClick={() => void downloadStatementPdf()}
+                        title={!calculationRunId ? "Selecione um fechamento para gerar o extrato em PDF." : undefined}
+                      >
+                        <FileText className={`h-4 w-4 ${generatingStatement ? "animate-pulse" : ""}`} />
+                        {generatingStatement ? "Gerando extrato..." : "Baixar extrato para envio (PDF)"}
+                      </Button>
+                    </div>
                     {statementError ? <span className="text-xs text-red-600">{statementError}</span> : null}
                   </div>
                 </div>

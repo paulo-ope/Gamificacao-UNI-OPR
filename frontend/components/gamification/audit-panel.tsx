@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Avatar } from "@/components/gamification/config-ui";
 import { OrderAuditSheet } from "@/components/gamification/order-audit-drawer";
 import { api } from "@/lib/api";
 import { formatAnnulledPoints, formatHours, formatInteger, formatMoney, formatPoints } from "@/lib/format";
@@ -75,13 +76,6 @@ function recurrenceClassificationLabel(value: string | null | undefined) {
   if (value === "demandas_diferentes") return "Demandas diferentes";
   if (value === "recorrencia_operacional") return "Recorrência operacional";
   return "Sem classificação";
-}
-
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
 type StatTone = "neutral" | "danger" | "warning" | "good" | "info";
@@ -681,9 +675,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                           <td className="font-semibold">{order.os_code}</td>
                           <td title={order.collaborator_name}>
                             <div className="flex min-w-0 items-center gap-2">
-                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-semibold text-slate-700">
-                                {initials(order.collaborator_name)}
-                              </span>
+                              <Avatar name={order.collaborator_name} size="sm" />
                               <div className="line-clamp-2 min-w-0">{order.collaborator_name}</div>
                             </div>
                           </td>

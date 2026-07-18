@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -38,9 +38,18 @@ class Collaborator(Base):
     regional: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_registered: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # Foto de perfil guardada como bytes direto no banco (sem infraestrutura de arquivo neste
+    # projeto - ver docs/plano-integracao-ixc.md não se aplica aqui, decisão registrada na
+    # migration 20260717_0008). `photo_content_type` (ex: "image/jpeg") é necessário pra servir
+    # com o Content-Type correto - sem isso o navegador não sabe renderizar os bytes crus.
+    photo: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    photo_content_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
     service_orders: Mapped[list["ServiceOrder"]] = relationship(back_populates="collaborator")
     scores: Mapped[list["CollaboratorScore"]] = relationship(back_populates="collaborator")
+    portal_user: Mapped["User | None"] = relationship(back_populates="collaborator", uselist=False)
 
 
 class User(Base):
@@ -52,12 +61,19 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(30), default="viewer", nullable=False, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Vínculo direto com o colaborador que este usuário representa no /portal - substitui a
+    # heurística por nome/e-mail aproximado (achado real: sem vínculo direto, um usuário sem match
+    # caía no fallback "primeiro colocado do ranking", vazando dados de outro colaborador).
+    # Único (um colaborador só pode estar vinculado a um usuário) e nullable (nem todo usuário
+    # representa um colaborador - admin/operator/viewer internos não precisam de vínculo).
+    collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id"), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
     import_runs: Mapped[list["ImportRun"]] = relationship(back_populates="imported_by_user")
     import_service_order_audits: Mapped[list["ImportServiceOrderAudit"]] = relationship(back_populates="created_by_user")
+    collaborator: Mapped[Collaborator | None] = relationship(back_populates="portal_user")
 
 
 class AuditLog(Base):

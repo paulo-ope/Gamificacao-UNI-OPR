@@ -94,7 +94,7 @@ type Props = {
 };
 
 type Mode = "simple" | "advanced";
-type ConfigSection = "governance" | "categories" | "groups" | "subjects" | "diagnoses" | "recurrence" | "sla" | "advanced";
+type ConfigSection = "governance" | "categories" | "groups" | "subjects" | "diagnoses" | "recurrence" | "sla" | "integration" | "advanced";
 type SubjectFilter = "all" | "scored" | "not_scored" | "without_group";
 type DiagnosisFilter = "all" | "annuls_points" | "without_rule";
 type RecurrenceClassificationValue = RecurrenceClassificationRule["classification"];
@@ -111,8 +111,13 @@ const ADVANCED_SECTIONS: Array<{ value: ConfigSection; label: string; help: stri
   ...SIMPLE_SECTIONS,
   { value: "recurrence", label: "Reincidência", help: "Fluxo e regras completas." },
   { value: "sla", label: "SLA/Saúde", help: "Prazo e multiplicadores." },
+  { value: "integration", label: "Integração IXC", help: "Sincronização automática e recálculo." },
   { value: "advanced", label: "Avançado", help: "JSON, histórico e restauração." }
 ];
+
+const IXC_SYNC_ENABLED_KEY = "ixc_sync_enabled";
+const IXC_SYNC_INTERVAL_MINUTES_KEY = "ixc_sync_interval_minutes";
+const IXC_SYNC_AUTO_RECALCULATE_KEY = "ixc_sync_auto_recalculate";
 
 
 function replaceById<T extends { id: number }>(items: T[], id: number, patch: Partial<T>) {
@@ -837,6 +842,10 @@ export function LogicConfigurationPanel({
 
   async function saveSubjectRule(rule: ScoringSubjectRule) {
     const latestRule = subjectRules.find((item) => item.id === rule.id) ?? rule;
+    if (!latestRule.os_type.trim()) {
+      setError("Informe o Tipo Geral do assunto antes de salvar.");
+      return;
+    }
     await onSaveSubjectRule(latestRule);
   }
 
@@ -1485,22 +1494,20 @@ export function LogicConfigurationPanel({
                       <div className="text-xs text-slate-500">Tipo Geral: {rule.os_type}</div>
                     </TableCell>
                     <TableCell className="min-w-56">
-                      <Input
-                        list="logic-os-type-options"
+                      <AppCombobox
                         value={rule.os_type}
-                        onChange={(event) =>
+                        onChange={(value) =>
                           setSubjectRules(
                             replaceById(subjectRules, rule.id, {
-                              os_type: event.target.value
+                              os_type: value
                             })
                           )
                         }
+                        placeholder="Selecionar Tipo Geral"
+                        ariaLabel={`Tipo Geral do assunto ${rule.os_subject}`}
+                        options={osTypeOptions.map((type) => ({ value: type, label: type }))}
                       />
-                      <datalist id="logic-os-type-options">
-                        {osTypeOptions.map((type) => (
-                          <option key={type} value={type} />
-                        ))}
-                      </datalist>
+                      {!rule.os_type.trim() ? <p className="mt-1 text-xs text-red-600">Tipo Geral é obrigatório.</p> : null}
                     </TableCell>
                     <TableCell className="min-w-72">
                       <AppCombobox
@@ -2273,6 +2280,69 @@ export function LogicConfigurationPanel({
                   description="Sem regra, o motor usa somente a evidência técnica padrão encontrada nas O.S."
                 />
               ) : null}
+            </div>
+          </section>
+          ) : null}
+
+          {configSection === "integration" ? (
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+            <div className="panel-header">
+              <div>
+                <h3 className="panel-title">Integração IXC</h3>
+                <p className="panel-subtitle">
+                  Controla a sincronização automática de O.S com a API do IXC, sem precisar reiniciar o sistema.
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-4 p-5 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Sincronização automática</Label>
+                <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                  <AppSwitch
+                    checked={(localSettings[IXC_SYNC_ENABLED_KEY] ?? "true") === "true"}
+                    onCheckedChange={(checked) => {
+                      const value = checked ? "true" : "false";
+                      setLocalSettings({ ...localSettings, [IXC_SYNC_ENABLED_KEY]: value });
+                      void saveSettings({ [IXC_SYNC_ENABLED_KEY]: value });
+                    }}
+                  />
+                  <span className="text-sm text-slate-700">
+                    {(localSettings[IXC_SYNC_ENABLED_KEY] ?? "true") === "true" ? "Ligada" : "Desligada"}
+                  </span>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label>Intervalo entre sincronizações (minutos)</Label>
+                <Input
+                  inputMode="numeric"
+                  value={localSettings[IXC_SYNC_INTERVAL_MINUTES_KEY] ?? ""}
+                  onChange={(event) => setLocalSettings({ ...localSettings, [IXC_SYNC_INTERVAL_MINUTES_KEY]: event.target.value })}
+                  onBlur={(event) => saveSettings({ [IXC_SYNC_INTERVAL_MINUTES_KEY]: event.target.value })}
+                  placeholder="Ex.: 20"
+                />
+              </div>
+              <div className="grid gap-2 md:col-span-2">
+                <Label>Recalcular pontuação automaticamente</Label>
+                <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                  <AppSwitch
+                    checked={(localSettings[IXC_SYNC_AUTO_RECALCULATE_KEY] ?? "true") === "true"}
+                    onCheckedChange={(checked) => {
+                      const value = checked ? "true" : "false";
+                      setLocalSettings({ ...localSettings, [IXC_SYNC_AUTO_RECALCULATE_KEY]: value });
+                      void saveSettings({ [IXC_SYNC_AUTO_RECALCULATE_KEY]: value });
+                    }}
+                  />
+                  <span className="text-sm text-slate-700">
+                    {(localSettings[IXC_SYNC_AUTO_RECALCULATE_KEY] ?? "true") === "true"
+                      ? "Recalcula o rascunho do mês atual sempre que a sincronização trouxer O.S novas ou atualizadas."
+                      : "Desligado - use o botão \"Recalcular pontuação\" manualmente."}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Só afeta o período atual, ainda não pago (rascunho). Um período já pago nunca é alterado
+                  automaticamente - para revisar um pago, use "Criar revisão" manualmente.
+                </p>
+              </div>
             </div>
           </section>
           ) : null}

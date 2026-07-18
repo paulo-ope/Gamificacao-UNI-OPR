@@ -113,12 +113,41 @@ export function AppCombobox({
           sideOffset={8}
           avoidCollisions
           collisionPadding={12}
-          style={{ width: "var(--radix-popover-trigger-width)" }}
-          className="z-50 flex max-h-[min(24rem,var(--radix-popover-content-available-height))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
+          // pointerEvents: "auto" é essencial quando este combobox é usado dentro de um AppModal/
+          // AppDrawer: o Radix Dialog (base do Sheet/Dialog) trava o <body> inteiro com
+          // `pointer-events: none` enquanto está aberto (mecanismo de scroll-lock via
+          // react-remove-scroll, visto ao vivo: <body data-scroll-locked="1" style="pointer-events:
+          // none">), e só reativa pointer-events explicitamente no PRÓPRIO conteúdo do Dialog. Este
+          // Popover vive num portal SEPARADO (irmão do Dialog no body, não descendente dele), então
+          // herda o `none` do body e fica com clique E scroll bloqueados por dentro - mesmo estando
+          // visualmente por cima (z-index não tem nenhum efeito sobre isso). Achado real: usuário
+          // reportou que nem clicar nem rolar a lista funcionava dentro do drawer de colaborador.
+          style={{ width: "var(--radix-popover-trigger-width)", pointerEvents: "auto" }}
+          // z-[90]: precisa ficar ACIMA de qualquer modal/drawer do app - AppModal usa z-[80], o
+          // Dialog/Sheet do shadcn usam z-[70] (ver dialog.tsx/sheet.tsx). Com z-50 (padrão anterior),
+          // o popover deste combobox renderizava visualmente atrás do modal/drawer quando usado
+          // dentro de um (mesmo empilhamento via portal no body).
+          className="z-[90] flex max-h-[min(24rem,var(--radix-popover-content-available-height))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
         >
           <Command className="flex min-h-0 flex-1 flex-col border-0 shadow-none">
             <CommandInput value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} className="h-10 shrink-0" />
-            <CommandList className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
+            {/*
+              onWheel manual: o Radix Dialog/Sheet (AppModal/AppDrawer) usa react-remove-scroll, que
+              registra um `shards` allowlist só com o próprio contentRef do Dialog e bloqueia o wheel
+              de qualquer outro alvo via `document.addEventListener('wheel', ..., {passive:false})` +
+              `preventDefault()`. O popover deste combobox vive num portal separado (irmão do conteúdo
+              do Dialog, não descendente), então nunca entra nesse allowlist e o scroll nativo desta
+              lista fica bloqueado mesmo com o fix de pointer-events acima (aquele é CSS; este
+              bloqueio é feito em JS). stopPropagation() não resolve, pois o listener já roda antes de
+              qualquer handler nosso. Por isso movemos scrollTop manualmente aqui - isso não é afetado
+              pelo preventDefault do listener alheio, que só suprime o scroll NATIVO do navegador.
+            */}
+            <CommandList
+              className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto"
+              onWheel={(event) => {
+                event.currentTarget.scrollTop += event.deltaY;
+              }}
+            >
               {filtered.map((option) => {
                 const checked = option.value === value;
                 return (
@@ -326,6 +355,71 @@ export function StatusBadge({
             ? "border-blue-200 bg-blue-50 text-blue-700"
             : "border-slate-200 bg-slate-50 text-slate-700";
   return <Badge className={cn(toneClass, className)}>{children}</Badge>;
+}
+
+// Substitui as versões duplicadas de "iniciais em círculo colorido" que existiam soltas em
+// audit-panel.tsx e point-balance-panel.tsx (com tamanho/cor diferentes entre si) por um único
+// componente compartilhado. Mostra a foto (se `photoUrl` vier preenchido - já como object URL de
+// um blob buscado com autenticação, não uma URL pública) e cai pras iniciais coloridas (hash simples
+// do nome, pra variar a cor em vez do tom fixo único que os dois lugares antigos usavam).
+const AVATAR_COLOR_CLASSES = [
+  "bg-teal-600",
+  "bg-sky-600",
+  "bg-violet-600",
+  "bg-rose-600",
+  "bg-amber-600",
+  "bg-emerald-600",
+  "bg-indigo-600",
+];
+
+const AVATAR_SIZE_CLASSES: Record<"sm" | "md" | "lg", string> = {
+  sm: "h-6 w-6 text-[10px]",
+  md: "h-8 w-8 text-[11px]",
+  lg: "h-11 w-11 text-sm",
+};
+
+function initialsFromName(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+}
+
+function colorClassForName(name: string) {
+  let hash = 0;
+  for (let index = 0; index < name.length; index += 1) {
+    hash = (hash * 31 + name.charCodeAt(index)) >>> 0;
+  }
+  return AVATAR_COLOR_CLASSES[hash % AVATAR_COLOR_CLASSES.length];
+}
+
+export function Avatar({
+  name,
+  photoUrl,
+  size = "md",
+  className,
+}: {
+  name: string;
+  photoUrl?: string | null;
+  size?: "sm" | "md" | "lg";
+  className?: string;
+}) {
+  const sizeClass = AVATAR_SIZE_CLASSES[size];
+  if (photoUrl) {
+    return <img src={photoUrl} alt={name} className={cn("shrink-0 rounded-full object-cover", sizeClass, className)} />;
+  }
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-full font-semibold text-white",
+        sizeClass,
+        colorClassForName(name || "?"),
+        className
+      )}
+    >
+      {initialsFromName(name || "?")}
+    </div>
+  );
 }
 
 export function EmptyState({

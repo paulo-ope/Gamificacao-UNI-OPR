@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.performance import performance_step
 from app.core.security import require_permission
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models import CalculationRun, DiagnosisPenaltyRule, ScoringGroup, ScoringRule, ScoringSubjectRule, ServiceOrder, User
 from app.seed import forget_deleted_default_group, remember_deleted_default_group
 from app.schemas import (
@@ -30,8 +30,9 @@ from app.schemas import (
     ImportedDiagnosisOut,
     UnmappedSubjectOut,
 )
-from app.services.calculation import latest_run
+from app.services.calculation import latest_run, recalculate_current_period
 from app.services.scoring_detail import (
+    cascade_os_type_for_subject,
     effective_rule_point_value,
     effective_rule_points,
     get_point_value,
@@ -158,7 +159,25 @@ def _delete_legacy_subject_rule(db: Session, os_type: str, os_subject: str) -> N
         db.delete(legacy_rule)
 
 
-def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> ScoringSubjectRule:
+def _reconcile_duplicate_subject_rules(db: Session, os_subject: str, keep_rule_id: int) -> None:
+    """Tipo Geral é uma classificação do assunto (`os_subject`), não deveria conviver com mais de uma
+    regra pro mesmo assunto sob um `os_type` diferente. Quando o Tipo Geral de um assunto é definido/
+    corrigido, apaga qualquer outra `ScoringSubjectRule` órfã que ainda exista pro mesmo assunto sob o
+    tipo antigo - sem isso, cada correção de Tipo Geral reacumula duplicatas (achado real: foi preciso
+    limpar 41 regras órfãs à mão nesta mesma sessão antes desta função existir)."""
+    stale_rules = list(
+        db.scalars(
+            select(ScoringSubjectRule)
+            .where(ScoringSubjectRule.os_subject == os_subject)
+            .where(ScoringSubjectRule.id != keep_rule_id)
+        )
+    )
+    for stale in stale_rules:
+        _delete_legacy_subject_rule(db, stale.os_type, stale.os_subject)
+        db.delete(stale)
+
+
+def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> tuple[ScoringSubjectRule, int]:
     group = db.get(ScoringGroup, payload.group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
@@ -179,6 +198,7 @@ def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> Scori
             active=True,
         )
         db.add(rule)
+        db.flush()
     else:
         rule.group_id = payload.group_id
         rule.use_group_default = True
@@ -187,7 +207,12 @@ def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> Scori
         rule.updated_at = datetime.now(timezone.utc)
 
     _sync_legacy_subject_rule(db, rule)
-    return rule
+    _reconcile_duplicate_subject_rules(db, rule.os_subject, rule.id)
+    # Vincular um assunto sempre carimba o Tipo Geral escolhido nas O.S já importadas com esse
+    # assunto - sem isso, O.S antigas ficam com o os_type velho (setor/pendente) e nunca casam com a
+    # regra recém-criada (achado real - ver docs/plano-integracao-ixc.md).
+    cascaded = cascade_os_type_for_subject(db, payload.os_subject, payload.os_type)
+    return rule, cascaded
 
 
 def _configure_diagnosis_rule(db: Session, payload: DiagnosisConfigureRequest) -> DiagnosisPenaltyRule:
@@ -339,8 +364,17 @@ def create_scoring_subject_rule(payload: ScoringSubjectRuleCreate, db: Session =
     db.add(rule)
     db.flush()
     _sync_legacy_subject_rule(db, rule)
+    _reconcile_duplicate_subject_rules(db, rule.os_subject, rule.id)
+    cascaded = cascade_os_type_for_subject(db, rule.os_subject, rule.os_type)
     record_audit_log(db, user, "create", "scoring_subject_rules", rule.id, None, snapshot(rule))
     db.commit()
+    if cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note=f'Recálculo automático após cadastrar o Tipo Geral do assunto "{rule.os_subject}".',
+            )
     db.refresh(rule)
     rule = db.scalar(
         select(ScoringSubjectRule).options(selectinload(ScoringSubjectRule.group)).where(ScoringSubjectRule.id == rule.id)
@@ -365,8 +399,21 @@ def update_scoring_subject_rule(rule_id: int, payload: ScoringSubjectRuleUpdate,
         setattr(rule, field, value)
     rule.updated_at = datetime.now(timezone.utc)
     _sync_legacy_subject_rule(db, rule, previous_os_type, previous_os_subject)
+
+    cascaded = 0
+    if "os_type" in updates and updates["os_type"] != previous_os_type:
+        _reconcile_duplicate_subject_rules(db, rule.os_subject, rule.id)
+        cascaded = cascade_os_type_for_subject(db, rule.os_subject, rule.os_type)
+
     record_audit_log(db, user, "update", "scoring_subject_rules", rule.id, before, snapshot(rule))
     db.commit()
+    if cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note=f'Recálculo automático após corrigir o Tipo Geral do assunto "{rule.os_subject}".',
+            )
     rule = db.scalar(
         select(ScoringSubjectRule).options(selectinload(ScoringSubjectRule.group)).where(ScoringSubjectRule.id == rule.id)
     )
@@ -421,10 +468,17 @@ def list_unmapped_subjects_alias(
 
 @router.post("/scoring-matrix/subjects/link-to-group", response_model=ScoringSubjectRuleOut)
 def link_subject_to_group(payload: SubjectLinkToGroupRequest, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
-    rule = _link_subject_rule(db, payload)
+    rule, cascaded = _link_subject_rule(db, payload)
     db.flush()
     record_audit_log(db, user, "link_to_group", "scoring_subject_rules", rule.id, None, snapshot(rule))
     db.commit()
+    if cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note=f'Recálculo automático após classificar o Tipo Geral do assunto "{payload.os_subject}".',
+            )
     rule = db.scalar(
         select(ScoringSubjectRule).options(selectinload(ScoringSubjectRule.group)).where(ScoringSubjectRule.id == rule.id)
     )
@@ -433,11 +487,20 @@ def link_subject_to_group(payload: SubjectLinkToGroupRequest, db: Session = Depe
 
 @router.post("/scoring-matrix/subjects/link-to-group/bulk", response_model=list[ScoringSubjectRuleOut])
 def link_subjects_to_group_bulk(payload: SubjectLinkToGroupBulkRequest, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
-    rules = [_link_subject_rule(db, item) for item in payload.items]
+    results = [_link_subject_rule(db, item) for item in payload.items]
+    rules = [rule for rule, _ in results]
+    total_cascaded = sum(count for _, count in results)
     db.flush()
     for rule in rules:
         record_audit_log(db, user, "link_to_group", "scoring_subject_rules", rule.id, None, snapshot(rule))
     db.commit()
+    if total_cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note="Recálculo automático após classificar o Tipo Geral de assuntos em lote.",
+            )
     rule_ids = [rule.id for rule in rules]
     persisted_rules = list(
         db.scalars(

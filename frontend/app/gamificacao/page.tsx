@@ -277,6 +277,12 @@ export default function GamificacaoPage() {
   const [calculationRuns, setCalculationRuns] = useState<CalculationRunHistory[]>([]);
   const [groups, setGroups] = useState<ScoringGroup[]>([]);
   const [subjectRules, setSubjectRules] = useState<ScoringSubjectRule[]>([]);
+  // Tipos Gerais já usados por alguma regra cadastrada - sugestões pro campo obrigatório de Tipo
+  // Geral na tela de assuntos sem regra (não é uma lista fechada, só sugestão).
+  const unmappedOsTypeOptions = useMemo(
+    () => Array.from(new Set(subjectRules.map((rule) => rule.os_type).filter(Boolean))).sort(),
+    [subjectRules]
+  );
   const [unmappedSubjects, setUnmappedSubjects] = useState<UnmappedSubject[]>([]);
   const [importedDiagnoses, setImportedDiagnoses] = useState<ImportedDiagnosis[]>([]);
   const [unmappedDiagnoses, setUnmappedDiagnoses] = useState<ImportedDiagnosis[]>([]);
@@ -314,6 +320,14 @@ export default function GamificacaoPage() {
   const [leadershipProfilesLoaded, setLeadershipProfilesLoaded] = useState(false);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [rulesSupportLoaded, setRulesSupportLoaded] = useState(false);
+  // Uma vez que o painel montou com dados reais, ele nunca mais deve ser desmontado por um
+  // refresh subsequente (ex: refreshAfterCollaboratorRegistryChange) - senão um Dialog/Drawer do
+  // Radix aberto dentro dele é arrancado da árvore em pleno meio da animação de fechamento,
+  // deixando o overlay "fantasma" cobrindo a tela. Esses refs controlam a renderização do
+  // esqueleto de carregamento apenas na primeira carga; refreshes usam o painel já montado.
+  const collaboratorRegistryEverLoadedRef = useRef(false);
+  const leadershipProfilesEverLoadedRef = useRef(false);
+  const usersEverLoadedRef = useRef(false);
   const authBootstrapRef = useRef(false);
   const initialLoadRef = useRef(false);
   const serviceOrdersLoadKeyRef = useRef<string | null>(null);
@@ -332,10 +346,10 @@ export default function GamificacaoPage() {
 
   const resetLazyData = useCallback(() => {
     setCalculationRuns([]);
-    setCollaboratorRegistry({ registered: [], unregistered: [] });
-    setLeadershipProfiles([]);
-    setLeadershipRoleProfiles([]);
-    setUsers([]);
+    // collaboratorRegistry/leadershipProfiles/leadershipRoleProfiles/users NÃO são zerados aqui:
+    // os dados antigos ficam visíveis (levemente desatualizados) até o refetch concluir, em vez de
+    // piscar para uma lista vazia - e, principalmente, em vez de forçar o desmonte do painel
+    // correspondente (ver collaboratorRegistryEverLoadedRef acima).
     setConfigSubjectSummaries([]);
     setUnmappedSubjects([]);
     setImportedDiagnoses([]);
@@ -443,12 +457,18 @@ export default function GamificacaoPage() {
     pendingLoadKeyRef.current = loadKey;
     setTabBusy("pending", true);
     try {
-      const [unmappedData, unmappedDiagnosisData] = await Promise.all([
+      // subjectRules tambem e buscado aqui (nao so quando a aba Configuração abre) porque o seletor
+      // de Tipo Geral desta aba depende dele pra sugerir os tipos ja cadastrados - sem isso, o
+      // combobox aparecia vazio ("Nenhuma opção encontrada") pra quem nunca tinha aberto Configuração
+      // nesta sessão (achado real).
+      const [unmappedData, unmappedDiagnosisData, subjectRuleData] = await Promise.all([
         api.unmappedSubjects(runId),
-        api.unmappedDiagnoses(runId)
+        api.unmappedDiagnoses(runId),
+        api.scoringSubjectRules()
       ]);
       setUnmappedSubjects(unmappedData);
       setUnmappedDiagnoses(unmappedDiagnosisData);
+      setSubjectRules(subjectRuleData);
       setPendingDataLoaded(true);
     } finally {
       pendingLoadKeyRef.current = null;
@@ -478,6 +498,7 @@ export default function GamificacaoPage() {
       const collaboratorRegistryData = await api.collaboratorsRegistry();
       setCollaboratorRegistry(collaboratorRegistryData);
       setCollaboratorRegistryLoaded(true);
+      collaboratorRegistryEverLoadedRef.current = true;
     } finally {
       setTabBusy("collaborators", false);
     }
@@ -491,6 +512,7 @@ export default function GamificacaoPage() {
       setLeadershipRoleProfiles(roleProfiles);
       setLeadershipProfiles(leaders);
       setLeadershipProfilesLoaded(true);
+      leadershipProfilesEverLoadedRef.current = true;
     } finally {
       setTabBusy("leadership", false);
     }
@@ -502,6 +524,7 @@ export default function GamificacaoPage() {
     try {
       setUsers(await api.users());
       setUsersLoaded(true);
+      usersEverLoadedRef.current = true;
     } finally {
       setTabBusy("users", false);
     }
@@ -643,6 +666,9 @@ export default function GamificacaoPage() {
     if (activeTab === "config") {
       if (configTab === "collaborators") {
         void loadCollaboratorRegistryData().catch((err: Error) => setError(err.message));
+        // Carrega usuários junto (se o perfil atual puder gerenciá-los) pra habilitar a seção
+        // "Acesso ao portal" no drawer de colaborador sem depender de visitar a aba Usuários antes.
+        void loadUsersData().catch((err: Error) => setError(err.message));
         return;
       }
       if (configTab === "leadership") {
@@ -651,6 +677,8 @@ export default function GamificacaoPage() {
       }
       if (configTab === "users") {
         void loadUsersData().catch((err: Error) => setError(err.message));
+        // Precisa da lista de colaboradores pro combobox "Colaborador vinculado" desta aba.
+        void loadCollaboratorRegistryData().catch((err: Error) => setError(err.message));
         return;
       }
     }
@@ -1008,17 +1036,51 @@ export default function GamificacaoPage() {
     setSelectedRegionals(values.map((value) => normalizeRegional(value)).filter(Boolean));
   }
 
-  async function withFeedback(action: () => Promise<void>, success: string) {
+  async function withFeedback<T>(action: () => Promise<T>, success: string | (() => string)): Promise<T | undefined> {
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      await action();
-      setMessage(success);
+      const result = await action();
+      setMessage(typeof success === "function" ? success() : success);
+      return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro inesperado.");
+      return undefined;
     } finally {
       setBusy(false);
+    }
+  }
+
+  // O backend agora recusa (409) recalcular tanto um período já pago quanto um período que não é
+  // mais o mês corrente (fuso de Porto Velho) mesmo sem ter sido pago - em ambos os casos, exige
+  // "create_revision" explícito. Em vez de prever isso no cliente (duplicando a regra de fuso
+  // horário aqui), tenta sem revisão primeiro e só pergunta ao usuário se o backend recusar por um
+  // desses dois motivos - qualquer outro erro sobe normalmente.
+  const CLOSED_PERIOD_MESSAGE_MARKERS = ["já está marcado como pago", "não é mais o mês corrente"];
+
+  async function calculateWithRevisionPrompt(
+    value: number | null,
+    period: { reference_month?: number; reference_year?: number; regional?: string | null },
+    revisionExecutionNote: string
+  ): Promise<boolean> {
+    try {
+      await api.calculate(value, period);
+      return false;
+    } catch (err) {
+      const messageText = err instanceof Error ? err.message : "";
+      const isClosedPeriod = CLOSED_PERIOD_MESSAGE_MARKERS.some((marker) => messageText.includes(marker));
+      if (!isClosedPeriod) throw err;
+      const shouldCreateRevision = await confirm({
+        title: "Período já encerrado",
+        description: `${messageText} Deseja criar uma revisão em rascunho sem alterar o fechamento original?`,
+        confirmLabel: "Criar revisão"
+      });
+      if (!shouldCreateRevision) {
+        throw new Error("Recálculo cancelado para preservar o período encerrado.");
+      }
+      await api.calculate(value, period, { create_revision: true, execution_note: revisionExecutionNote });
+      return true;
     }
   }
 
@@ -1026,6 +1088,7 @@ export default function GamificacaoPage() {
     if (calculationInFlightRef.current) return;
     calculationInFlightRef.current = true;
     try {
+      let wasRevision = false;
       await withFeedback(async () => {
         const safePeriod = {
           reference_month: analysisPeriod.reference_month ?? summary?.run?.reference_month ?? bootstrap?.reference_month ?? undefined,
@@ -1036,52 +1099,45 @@ export default function GamificacaoPage() {
           throw new Error("Selecione um periodo valido antes de recalcular a pontuacao.");
         }
         const value = parseOptionalNumber(pointValue);
-        const currentRunMatchesPeriod =
-          summary?.run &&
-          summary.run.reference_month === safePeriod.reference_month &&
-          summary.run.reference_year === safePeriod.reference_year &&
-          (summary.run.regional ?? null) === (safePeriod.regional ?? null);
-        const shouldCreateRevision =
-          currentRunMatchesPeriod && summary?.run?.status === "paid"
-            ? await confirm({
-                title: "Fechamento já pago",
-                description: "Este período já foi marcado como pago. Deseja criar uma nova revisão em rascunho sem alterar o fechamento pago?",
-                confirmLabel: "Criar revisão"
-              })
-            : false;
-        if (currentRunMatchesPeriod && summary?.run?.status === "paid" && !shouldCreateRevision) {
-          throw new Error("Recalculo cancelado para preservar o fechamento pago.");
-        }
         if (value !== null) {
           await api.updateSetting("point_value", value.toFixed(2));
         }
-        await api.calculate(value, safePeriod, {
-          create_revision: shouldCreateRevision,
-          execution_note: shouldCreateRevision ? "Revisão pós-pagamento criada pela interface." : undefined
-        });
+        wasRevision = await calculateWithRevisionPrompt(value, safePeriod, "Revisão criada pela interface para um período já encerrado.");
         setAnalysisPeriod(safePeriod);
         await loadAll(safePeriod, { refreshRuleBasics: false });
-      }, summary?.run?.status === "paid" ? "Revisão em rascunho criada para o período pago." : "Pontuação recalculada com matriz operacional.");
+      }, () => (wasRevision ? "Revisão em rascunho criada para o período encerrado." : "Pontuação recalculada com matriz operacional."));
     } finally {
       calculationInFlightRef.current = false;
     }
   }
 
   async function refreshAfterCollaboratorRegistryChange() {
-    // Um fechamento pago é imutável: recalcular sem "create_revision" seria rejeitado pelo
-    // backend (409) e, como esse erro interrompia esta função ANTES de recarregar a lista de
-    // colaboradores, a aprovação parecia ter falhado mesmo já tendo sido salva no banco.
+    // Um fechamento encerrado (pago, ou que já não é mais o mês corrente no fuso de Porto Velho) é
+    // imutável: recalcular sem "create_revision" seria rejeitado pelo backend (409) e, como esse
+    // erro interrompia esta função ANTES de recarregar a lista de colaboradores, a aprovação
+    // parecia ter falhado mesmo já tendo sido salva no banco. O caso "pago" já era evitado
+    // proativamente (só tenta se status !== "paid"); o caso "mês já virou" só dá pra saber
+    // reativamente (não duplicamos aqui a regra de fuso horário do backend), então é ignorado
+    // silenciosamente - o dashboard só não atualiza para aquele período específico.
     if (summary?.run && summary.run.status !== "paid") {
-      await api.calculate(summary.run.point_value ?? summary.point_value, {
-        reference_month: summary.run.reference_month,
-        reference_year: summary.run.reference_year,
-        regional: summary.run.regional
-      });
+      try {
+        await api.calculate(summary.run.point_value ?? summary.point_value, {
+          reference_month: summary.run.reference_month,
+          reference_year: summary.run.reference_year,
+          regional: summary.run.regional
+        });
+      } catch (err) {
+        const messageText = err instanceof Error ? err.message : "";
+        if (!messageText.includes("não é mais o mês corrente")) {
+          throw err;
+        }
+      }
     }
     await loadAll(undefined, { refreshRuleBasics: false });
   }
 
   async function calculatePeriod(month: number, year: number) {
+    let wasRevision = false;
     await withFeedback(async () => {
       const value = parseOptionalNumber(pointValue);
       const requestedPeriod = {
@@ -1089,32 +1145,14 @@ export default function GamificacaoPage() {
         reference_year: year,
         regional: summary?.run?.regional
       };
-      const isCurrentPaidRun =
-        summary?.run?.status === "paid" &&
-        summary.run.reference_month === month &&
-        summary.run.reference_year === year &&
-        (summary.run.regional ?? null) === (requestedPeriod.regional ?? null);
-      const shouldCreateRevision = isCurrentPaidRun
-        ? await confirm({
-            title: "Fechamento já pago",
-            description: "Este período já foi marcado como pago. Deseja criar uma nova revisão em rascunho sem alterar o fechamento pago?",
-            confirmLabel: "Criar revisão"
-          })
-        : false;
-      if (isCurrentPaidRun && !shouldCreateRevision) {
-        throw new Error("Recalculo cancelado para preservar o fechamento pago.");
-      }
       if (value !== null) {
         await api.updateSetting("point_value", value.toFixed(2));
       }
-      await api.calculate(value, requestedPeriod, {
-        create_revision: shouldCreateRevision,
-        execution_note: shouldCreateRevision ? "Revisão pós-pagamento criada pela seleção de período." : undefined
-      });
+      wasRevision = await calculateWithRevisionPrompt(value, requestedPeriod, "Revisão criada pela seleção de período para um período já encerrado.");
       const period = { reference_month: month, reference_year: year, regional: summary?.run?.regional };
       setAnalysisPeriod(period);
       await loadAll(period, { refreshRuleBasics: false });
-    }, summary?.run?.status === "paid" ? "Revisão em rascunho criada para o período pago." : "Período recalculado com janela de reincidência.");
+    }, () => (wasRevision ? "Revisão em rascunho criada para o período encerrado." : "Período recalculado com janela de reincidência."));
   }
 
   async function viewPeriod(month: number, year: number) {
@@ -2320,11 +2358,12 @@ export default function GamificacaoPage() {
                   <UnmappedSubjectsPanel
                     groups={groups}
                     subjects={unmappedSubjects}
-                    onLinkSubject={(subject, groupId) =>
+                    osTypeOptions={unmappedOsTypeOptions}
+                    onLinkSubject={(subject, groupId, osType) =>
                       withFeedback(async () => {
                         await api.linkSubjectToGroup({
                           group_id: groupId,
-                          os_type: subject.os_type,
+                          os_type: osType,
                           os_subject: subject.os_subject
                         });
                         await loadAll();
@@ -2335,14 +2374,14 @@ export default function GamificacaoPage() {
                         await api.linkSubjectsToGroups(
                           items.map((item) => ({
                             group_id: item.groupId,
-                            os_type: item.subject.os_type,
+                            os_type: item.osType,
                             os_subject: item.subject.os_subject
                           }))
                         );
                         await loadAll();
                       }, `${items.length} assunto(s) vinculados em massa.`)
                     }
-                    onCreateGroupForSubject={(subject) =>
+                    onCreateGroupForSubject={(subject, osType) =>
                       withFeedback(async () => {
                         const group = await api.createScoringGroup({
                           name: `Grupo - ${subject.os_subject}`.slice(0, 150),
@@ -2352,7 +2391,7 @@ export default function GamificacaoPage() {
                         });
                         await api.linkSubjectToGroup({
                           group_id: group.id,
-                          os_type: subject.os_type,
+                          os_type: osType,
                           os_subject: subject.os_subject
                         });
                         await loadAll();
@@ -2590,7 +2629,7 @@ export default function GamificacaoPage() {
                   </TabsContent>
 
                   <TabsContent value="collaborators" className="mt-0">
-                    {!collaboratorRegistryLoaded && tabLoading.collaborators ? (
+                    {!collaboratorRegistryEverLoadedRef.current && tabLoading.collaborators ? (
                       <div className="panel p-8 text-sm text-slate-500">Carregando cadastro de colaboradores...</div>
                     ) : (
                     <CollaboratorRegistryPanel
@@ -2598,12 +2637,13 @@ export default function GamificacaoPage() {
                       regionalOptions={collaboratorRegionalOptions}
                       onCreate={(payload) =>
                         withFeedback(async () => {
-                          await api.createCollaborator({
+                          const created = await api.createCollaborator({
                             ...payload,
                             role: payload.role || "Importado UpValue",
                             regional: regionalName(payload.regional),
                           });
                           await refreshAfterCollaboratorRegistryChange();
+                          return created.id;
                         }, "Colaborador cadastrado e cálculos atualizados.")
                       }
                       onSave={(item: CollaboratorRegistryItem) =>
@@ -2614,6 +2654,8 @@ export default function GamificacaoPage() {
                             regional: regionalName(item.regional),
                             active: item.active,
                             is_registered: item.is_registered,
+                            phone: item.phone,
+                            email: item.email,
                           });
                           await refreshAfterCollaboratorRegistryChange();
                         }, item.is_registered ? "Cadastro do colaborador salvo e cálculos atualizados." : "Colaborador mantido como pendente.")
@@ -2635,11 +2677,44 @@ export default function GamificacaoPage() {
                           await refreshAfterCollaboratorRegistryChange();
                         }, `${items.length} colaborador(es) removido(s).`)
                       }
+                      canManagePortalAccess={can("users:manage")}
+                      unlinkedUsers={users.filter((item) => item.collaborator_id == null)}
+                      onCreatePortalUser={({ collaboratorId, email, password }) =>
+                        withFeedback(async () => {
+                          const collaborator = [...collaboratorRegistry.registered, ...collaboratorRegistry.unregistered].find(
+                            (item) => item.id === collaboratorId
+                          );
+                          await api.createUser({
+                            name: collaborator?.name || email,
+                            email,
+                            password,
+                            role: "collaborator",
+                            active: true,
+                            collaborator_id: collaboratorId,
+                          });
+                          setUsers(await api.users());
+                          await refreshAfterCollaboratorRegistryChange();
+                        }, "Acesso ao portal criado.")
+                      }
+                      onLinkPortalUser={({ userId, collaboratorId }) =>
+                        withFeedback(async () => {
+                          await api.updateUser(userId, { collaborator_id: collaboratorId });
+                          setUsers(await api.users());
+                          await refreshAfterCollaboratorRegistryChange();
+                        }, "Colaborador vinculado ao acesso do portal.")
+                      }
+                      onUnlinkPortalUser={(userId) =>
+                        withFeedback(async () => {
+                          await api.updateUser(userId, { collaborator_id: null });
+                          setUsers(await api.users());
+                          await refreshAfterCollaboratorRegistryChange();
+                        }, "Vínculo com o portal removido.")
+                      }
                     />
                     )}
                   </TabsContent>
                   <TabsContent value="leadership" className="mt-0">
-                    {!leadershipProfilesLoaded && tabLoading.leadership ? (
+                    {!leadershipProfilesEverLoadedRef.current && tabLoading.leadership ? (
                       <div className="panel p-8 text-sm text-slate-500">Carregando liderança e bonificação...</div>
                     ) : (
                       <LeadershipBonusPanel
@@ -2717,11 +2792,12 @@ export default function GamificacaoPage() {
                   </TabsContent>
                   {can("users:manage") ? (
                     <TabsContent value="users" className="mt-0">
-                      {!usersLoaded && tabLoading.users ? (
+                      {!usersEverLoadedRef.current && tabLoading.users ? (
                         <div className="panel p-8 text-sm text-slate-500">Carregando usuários...</div>
                       ) : (
                       <UserManagementPanel
                         users={users}
+                        collaborators={[...collaboratorRegistry.registered, ...collaboratorRegistry.unregistered]}
                         onCreate={(payload) =>
                           withFeedback(async () => {
                             await api.createUser(payload);
@@ -2753,11 +2829,12 @@ export default function GamificacaoPage() {
                 <UnmappedSubjectsPanel
                   groups={groups}
                   subjects={unmappedSubjects}
-                  onLinkSubject={(subject, groupId) =>
+                  osTypeOptions={unmappedOsTypeOptions}
+                  onLinkSubject={(subject, groupId, osType) =>
                     withFeedback(async () => {
                       await api.linkSubjectToGroup({
                         group_id: groupId,
-                        os_type: subject.os_type,
+                        os_type: osType,
                         os_subject: subject.os_subject
                       });
                       await loadAll();
@@ -2768,14 +2845,14 @@ export default function GamificacaoPage() {
                       await api.linkSubjectsToGroups(
                         items.map((item) => ({
                           group_id: item.groupId,
-                          os_type: item.subject.os_type,
+                          os_type: item.osType,
                           os_subject: item.subject.os_subject
                         }))
                       );
                       await loadAll();
                     }, `${items.length} assunto(s) vinculados em massa.`)
                   }
-                  onCreateGroupForSubject={(subject) =>
+                  onCreateGroupForSubject={(subject, osType) =>
                     withFeedback(async () => {
                       const group = await api.createScoringGroup({
                         name: `Grupo - ${subject.os_subject}`.slice(0, 150),
@@ -2785,7 +2862,7 @@ export default function GamificacaoPage() {
                       });
                       await api.linkSubjectToGroup({
                         group_id: group.id,
-                        os_type: subject.os_type,
+                        os_type: osType,
                         os_subject: subject.os_subject
                       });
                       await loadAll();

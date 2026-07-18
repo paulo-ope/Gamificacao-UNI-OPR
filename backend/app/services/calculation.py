@@ -20,10 +20,21 @@ from app.models import (
     ScoringRule,
     ServiceOrder,
 )
+import logging
+
 from app.services import point_balance, scoring_detail
-from app.services.calculation_closure import build_rule_snapshot, ensure_period_not_paid, now_utc, serialize_run_status
+from app.services.calculation_closure import (
+    build_rule_snapshot,
+    ensure_period_not_closed,
+    now_porto_velho,
+    now_utc,
+    serialize_run_status,
+)
+from app.services.leadership_bonus import calculate_and_store_leadership_bonus
 from app.services.regional import normalize_regional
 from app.services.sla import SLA_FORA_DO_PRAZO, SLA_NO_PRAZO, normalize_sla_status
+
+logger = logging.getLogger("calculation")
 
 
 def normalize(value: str | None) -> str:
@@ -224,7 +235,7 @@ def calculate_scores(
     month = reference_month
     year = reference_year
     selected_regional = normalize_regional(regional) if regional else None
-    paid_run = ensure_period_not_paid(
+    paid_run = ensure_period_not_closed(
         db,
         reference_month=month,
         reference_year=year,
@@ -572,3 +583,36 @@ def serialize_run(
             for score in scores
         ],
     }
+
+
+def recalculate_current_period(
+    db: Session,
+    triggered_by: int | None = None,
+    execution_note: str = "Recálculo automático após atualização de dados.",
+) -> None:
+    """Recalcula automaticamente só o rascunho do mês/ano corrente (nunca período já pago ou já
+    encerrado por ter virado o mês - `calculate_scores` recusa com um erro claro nesses casos, e esse
+    erro é só logado, não interrompe quem chamou). "Mês corrente" é sempre decidido no fuso de Porto
+    Velho (não UTC) - usar o relógio UTC do container erraria a virada do mês em até 4h (achado real,
+    ver docs/plano-integracao-ixc.md).
+
+    Compartilhada por dois gatilhos: a sincronização periódica com o IXC (`ixc_scheduler.py`) e uma
+    correção de Tipo Geral que afeta O.S já importadas (`api/routes/scoring.py`) - ambos querem que o
+    efeito da mudança apareça no fechamento corrente sem precisar de um clique manual."""
+    now = now_porto_velho()
+    try:
+        run = calculate_scores(
+            db,
+            reference_month=now.month,
+            reference_year=now.year,
+            regional=None,
+            executed_by=triggered_by,
+            allow_paid_revision=False,
+            execution_note=execution_note,
+        )
+        calculate_and_store_leadership_bonus(db, run)
+        db.commit()
+        logger.info("Recálculo automático do período %02d/%d concluído (run #%s).", now.month, now.year, run.id)
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao recalcular automaticamente o período %02d/%d", now.month, now.year)

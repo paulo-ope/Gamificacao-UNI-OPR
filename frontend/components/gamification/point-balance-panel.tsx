@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, ScrollText, Search, Shi
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Avatar } from "@/components/gamification/config-ui";
 import { CollaboratorBalanceHistorySheet } from "@/components/gamification/collaborator-balance-history-sheet";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Input } from "@/components/ui/input";
@@ -32,13 +33,6 @@ type CollaboratorGroup = {
 
 type StatusFilter = "all" | "review";
 type SortMode = "severity" | "name" | "recent";
-
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-}
 
 function StatCard({
   icon: Icon,
@@ -273,9 +267,7 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
                 <TableRow key={group.collaboratorId}>
                   <TableCell className="font-medium text-slate-900">
                     <div className="flex items-center gap-2.5">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-semibold text-white">
-                        {initials(group.collaboratorName)}
-                      </div>
+                      <Avatar name={group.collaboratorName} size="md" />
                       <button
                         type="button"
                         className="text-left underline decoration-dotted underline-offset-2 hover:text-teal-700"

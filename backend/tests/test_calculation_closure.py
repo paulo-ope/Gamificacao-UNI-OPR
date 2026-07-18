@@ -58,7 +58,13 @@ def test_same_collaborator_cannot_be_paid_twice_via_aggregate_and_regional_runs(
     db_session.commit()
 
     def calculate(regional):
-        resp = client.post("/api/calculation-runs/calculate", json={"reference_month": 6, "reference_year": 2026, "regional": regional})
+        # create_revision=True: 06/2026 e um mes fixo no passado (nao o mes corrente de verdade),
+        # entao precisa bypassar a trava de "periodo ja encerrado por ter virado o mes" - o foco
+        # deste teste e a protecao contra pagamento duplicado, nao o bloqueio de periodo passado.
+        resp = client.post(
+            "/api/calculation-runs/calculate",
+            json={"reference_month": 6, "reference_year": 2026, "regional": regional, "create_revision": True},
+        )
         assert resp.status_code == 200, resp.text
         return resp.json()
 

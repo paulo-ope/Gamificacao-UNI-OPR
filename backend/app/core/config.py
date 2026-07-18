@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     initial_admin_email: str = ""
     initial_admin_password: str = ""
     debug_performance: bool = False
+    ixc_api_base_url: str = ""
+    ixc_api_token: str = ""
+    ixc_api_verify_ssl: bool = True
+    ixc_sync_enabled: bool = False
+    ixc_sync_interval_minutes: int = 20
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

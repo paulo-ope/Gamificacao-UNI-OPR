@@ -27,6 +27,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opr:opr@db:5432/opr_gamification}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY}
+      IXC_API_BASE_URL: ${IXC_API_BASE_URL:-}
+      IXC_API_TOKEN: ${IXC_API_TOKEN:-}
+      IXC_API_VERIFY_SSL: ${IXC_API_VERIFY_SSL:-true}
+      IXC_SYNC_ENABLED: ${IXC_SYNC_ENABLED:-false}
+      IXC_SYNC_INTERVAL_MINUTES: ${IXC_SYNC_INTERVAL_MINUTES:-20}
     ports:
       - "8000:8000"
     depends_on:

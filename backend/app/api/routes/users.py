@@ -5,12 +5,27 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import serialize_user
 from app.core.security import hash_password, require_permission
 from app.db.session import get_db
-from app.models import AuditLog, User
+from app.models import AuditLog, Collaborator, User
 from app.schemas import UserCreate, UserOut, UserUpdate
 from app.services.audit_log import record_audit_log, snapshot
 
 router = APIRouter(prefix="/users", tags=["users"])
-ALLOWED_ROLES = {"viewer", "operator", "admin"}
+ALLOWED_ROLES = {"viewer", "operator", "admin", "collaborator", "regional_manager_viewer"}
+
+
+def _resolve_collaborator_link(db: Session, collaborator_id: int | None, current_user_id: int | None) -> Collaborator | None:
+    """Valida um `collaborator_id` recebido em create/update de usuário: precisa existir e não
+    pode já estar vinculado a outro usuário (vínculo é 1-para-1, ver models.py User.collaborator_id).
+    """
+    if collaborator_id is None:
+        return None
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
+    existing = db.scalar(select(User).where(User.collaborator_id == collaborator_id))
+    if existing and existing.id != current_user_id:
+        raise HTTPException(status_code=409, detail=f"Este colaborador já está vinculado ao usuário {existing.email}.")
+    return collaborator
 
 
 @router.get("", response_model=list[UserOut])
@@ -25,12 +40,14 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), user: User =
     email = payload.email.strip().lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(status_code=409, detail="Email já cadastrado.")
+    _resolve_collaborator_link(db, payload.collaborator_id, current_user_id=None)
     item = User(
         name=payload.name,
         email=email,
         password_hash=hash_password(payload.password),
         role=payload.role,
         active=payload.active,
+        collaborator_id=payload.collaborator_id,
     )
     db.add(item)
     db.flush()
@@ -62,6 +79,9 @@ def update_user(
         item.email = email
     if "password" in updates and updates["password"]:
         item.password_hash = hash_password(str(updates["password"]))
+    if "collaborator_id" in updates:
+        _resolve_collaborator_link(db, updates["collaborator_id"], current_user_id=item.id)
+        item.collaborator_id = updates["collaborator_id"]
     for field in ("name", "role", "active"):
         if field in updates and updates[field] is not None:
             setattr(item, field, updates[field])

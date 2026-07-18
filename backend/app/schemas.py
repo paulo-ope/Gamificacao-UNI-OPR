@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _reject_blank(value: str | None) -> str | None:
+    """Rejeita string vazia/só espaço em campos essenciais - por padrão o Pydantic só exige que a
+    chave esteja presente, não que tenha conteúdo (achado real: dava pra salvar um cadastro de
+    assunto ou colaborador com campo essencial em branco). `None` passa direto (usado pelos schemas
+    de update, onde o campo é opcional e `None` significa "não alterar")."""
+    if value is None:
+        return value
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Este campo é obrigatório e não pode ficar em branco.")
+    return stripped
 
 
 class LoginRequest(BaseModel):
@@ -15,6 +28,7 @@ class UserBase(BaseModel):
     email: str
     role: str = "viewer"
     active: bool = True
+    collaborator_id: int | None = None
 
 
 class UserCreate(UserBase):
@@ -27,6 +41,7 @@ class UserUpdate(BaseModel):
     role: str | None = None
     active: bool | None = None
     password: str | None = None
+    collaborator_id: int | None = None
 
 
 class UserOut(UserBase):
@@ -34,6 +49,7 @@ class UserOut(UserBase):
     created_at: datetime
     updated_at: datetime
     permissions: list[str] = []
+    collaborator_name: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +66,10 @@ class CollaboratorBase(BaseModel):
     regional: str
     active: bool = True
     is_registered: bool = True
+    phone: str | None = None
+    email: str | None = None
+
+    _validate_not_blank = field_validator("name", "role", "regional")(_reject_blank)
 
 
 class CollaboratorCreate(CollaboratorBase):
@@ -62,6 +82,10 @@ class CollaboratorUpdate(BaseModel):
     regional: str | None = None
     active: bool | None = None
     is_registered: bool | None = None
+    phone: str | None = None
+    email: str | None = None
+
+    _validate_not_blank = field_validator("name", "role", "regional")(_reject_blank)
 
 
 class CollaboratorOut(CollaboratorBase):
@@ -75,6 +99,9 @@ class CollaboratorRegistryItem(CollaboratorOut):
     suggested_regional: str | None = None
     suggested_role: str | None = None
     has_linked_orders: bool = False
+    has_photo: bool = False
+    portal_user_id: int | None = None
+    portal_user_email: str | None = None
 
 
 class CollaboratorRegistryOut(BaseModel):
@@ -231,6 +258,8 @@ class ScoringSubjectRuleBase(BaseModel):
     use_group_default: bool = True
     active: bool = True
 
+    _validate_not_blank = field_validator("os_type", "os_subject")(_reject_blank)
+
 
 class ScoringSubjectRuleCreate(ScoringSubjectRuleBase):
     pass
@@ -245,6 +274,8 @@ class ScoringSubjectRuleUpdate(BaseModel):
     point_value_override: float | None = None
     use_group_default: bool | None = None
     active: bool | None = None
+
+    _validate_not_blank = field_validator("os_type", "os_subject")(_reject_blank)
 
 
 class ScoringSubjectRuleOut(ScoringSubjectRuleBase):
@@ -458,6 +489,8 @@ class SubjectLinkToGroupRequest(BaseModel):
     group_id: int
     os_type: str
     os_subject: str
+
+    _validate_not_blank = field_validator("os_type", "os_subject")(_reject_blank)
 
 
 class SubjectLinkToGroupBulkRequest(BaseModel):
@@ -1157,3 +1190,189 @@ class AuditServiceOrdersOut(BaseModel):
     page: int = 1
     page_size: int = 100
     total_pages: int = 1
+
+
+class PortalPeriodOut(BaseModel):
+    calculation_run_id: int | None = None
+    reference_month: int | None = None
+    reference_year: int | None = None
+    status: str | None = None
+    updated_at: datetime | None = None
+
+
+class PortalCollaboratorOut(BaseModel):
+    id: int
+    name: str
+    role: str | None = None
+    regional: str
+
+
+class PortalScoreOut(BaseModel):
+    collaborator_id: int
+    collaborator_name: str
+    role: str | None = None
+    regional: str
+    service_orders_count: int
+    gross_points: float
+    penalty_points: float
+    net_points: float
+    health_multiplier: float
+    health_status: str
+    final_points: float
+    estimated_payment: float
+    scored_service_orders: int
+    unscored_service_orders: int
+    penalized_service_orders: int
+    warranty_service_orders: int
+    recurrence_service_orders: int
+    rescheduled_service_orders: int
+    pending_service_orders: int
+    sla_out_service_orders: int
+    annulled_service_orders: int
+    diagnosis_penalized_service_orders: int
+    manual_review_service_orders: int
+    diagnosis_unmapped_service_orders: int
+
+
+class PortalRankingItemOut(BaseModel):
+    position: int
+    collaborator_id: int
+    collaborator_name: str
+    role: str | None = None
+    regional: str
+    final_points: float
+    estimated_payment: float
+    service_orders_count: int
+    scored_service_orders: int
+    penalty_points: float
+    is_current_user: bool = False
+
+
+class PortalSummaryOut(BaseModel):
+    user: UserOut
+    collaborator: PortalCollaboratorOut | None = None
+    period: PortalPeriodOut
+    score: PortalScoreOut | None = None
+    regional_position: int | None = None
+    regional_total: int = 0
+    general_position: int | None = None
+    general_total: int = 0
+    next_position_gap: float | None = None
+    ranking: list[PortalRankingItemOut] = []
+    message: str | None = None
+
+
+class PortalOrderOut(BaseModel):
+    id: int
+    os_code: str
+    opened_at: datetime
+    closed_at: datetime | None = None
+    os_type: str
+    os_subject: str
+    diagnosis: str | None = None
+    status: str
+    sla_status: str
+    base_points: float = 0
+    penalty_points: float = 0
+    net_points: float = 0
+    status_label: str
+    reason: str | None = None
+
+
+class PortalRulesOut(BaseModel):
+    groups: list[dict] = []
+    subjects: list[dict] = []
+    diagnosis_rules: list[dict] = []
+    sla_rules: list[dict] = []
+    recurrence_rules: list[dict] = []
+
+
+class PortalSimulationOut(BaseModel):
+    current_position: int | None = None
+    simulated_position: int | None = None
+    extra_points: float
+    points_to_next: float | None = None
+    disclaimer: str
+
+
+class PortalRegionalOverviewOut(BaseModel):
+    regional: str
+    collaborators: int
+    service_orders: int
+    scored_service_orders: int
+    final_points: float
+    estimated_payment: float
+    penalty_points: float
+    health_average: float
+
+
+class PortalOverviewOut(BaseModel):
+    period: PortalPeriodOut
+    total_collaborators: int = 0
+    total_regionals: int = 0
+    total_service_orders: int = 0
+    scored_service_orders: int = 0
+    final_points: float = 0
+    estimated_payment: float = 0
+    penalty_points: float = 0
+    unscored_service_orders: int = 0
+    manual_review_service_orders: int = 0
+    regional_summary: list[PortalRegionalOverviewOut] = []
+    ranking: list[PortalRankingItemOut] = []
+    alerts: list[str] = []
+    message: str | None = None
+
+
+class PortalAuditOrderOut(BaseModel):
+    os_code: str
+    os_type: str
+    os_subject: str
+    group_name: str | None = None
+    base_points: float
+    net_points: float
+    penalty_points: float
+    status_label: str
+    reason: str | None = None
+
+
+class PortalAuditHistoryOut(BaseModel):
+    reference_month: int
+    reference_year: int
+    final_points: float
+    estimated_payment: float
+    service_orders_count: int
+
+
+class PortalAuditBreakdownOut(BaseModel):
+    label: str
+    service_orders: int
+    base_points: float
+    penalty_points: float
+    net_points: float
+
+
+class PortalAuditOut(BaseModel):
+    gross_points: float = 0
+    penalty_points: float = 0
+    net_points: float = 0
+    health_multiplier: float = 1
+    final_points: float = 0
+    estimated_payment: float = 0
+    health_status: str = "Nao informado"
+    service_orders_count: int = 0
+    scored_service_orders: int = 0
+    unscored_service_orders: int = 0
+    penalized_service_orders: int = 0
+    warranty_service_orders: int = 0
+    recurrence_service_orders: int = 0
+    pending_service_orders: int = 0
+    sla_out_service_orders: int = 0
+    manual_review_service_orders: int = 0
+    points_to_next_position: float | None = None
+    top_positive_orders: list[PortalAuditOrderOut] = []
+    attention_orders: list[PortalAuditOrderOut] = []
+    groups: list[PortalAuditBreakdownOut] = []
+    subjects: list[PortalAuditBreakdownOut] = []
+    orders: list[PortalAuditOrderOut] = []
+    history: list[PortalAuditHistoryOut] = []
+    message: str | None = None

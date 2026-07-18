@@ -206,3 +206,49 @@ def test_real_recurrence_discount_still_annuls_the_original_order(db_session, ma
     assert detail["scoring_status"] == "Anulada por reincidência"
     assert detail["net_points"] == 0
     assert detail["is_annulled"] is True
+
+
+def test_cascade_os_type_for_subject_updates_only_matching_subject(db_session, make_collaborator):
+    """Regression: ServiceOrder.os_type is stamped once at import time and never rewritten
+    afterward - correcting a subject's Tipo Geral via the rule (ScoringSubjectRule) used to
+    only affect FUTURE imports, leaving already-imported orders permanently unmatched
+    against the corrected rule until someone ran a manual bulk UPDATE (this happened for
+    real, ~15k rows, before this cascade existed). `cascade_os_type_for_subject` must
+    rewrite every existing order for that exact os_subject, and touch nothing else."""
+    collaborator = make_collaborator()
+    stale_order_1 = ServiceOrder(
+        os_code="OS-1", contract_id="C1", customer_login="cli1", customer_name="X",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Suporte Externo", os_subject="Reativação de Suspensão Temporária - Externo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    stale_order_2 = ServiceOrder(
+        os_code="OS-2", contract_id="C1", customer_login="cli2", customer_name="X",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="PENDENTE DE CLASSIFICAÇÃO", os_subject="Reativação de Suspensão Temporária - Externo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 2, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    unrelated_order = ServiceOrder(
+        os_code="OS-3", contract_id="C1", customer_login="cli3", customer_name="X",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Suporte Externo", os_subject="Um Assunto Completamente Diferente",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 3, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    db_session.add_all([stale_order_1, stale_order_2, unrelated_order])
+    db_session.flush()
+
+    changed = sd.cascade_os_type_for_subject(
+        db_session, "Reativação de Suspensão Temporária - Externo", "Outros"
+    )
+    db_session.flush()
+
+    assert changed == 2
+    assert stale_order_1.os_type == "Outros"
+    assert stale_order_2.os_type == "Outros"
+    assert unrelated_order.os_type == "Suporte Externo", "assunto diferente nao deveria ser afetado"
+
+    # Idempotente: rodar de novo depois que ja esta tudo corrigido nao acha mais nada pra mudar.
+    assert sd.cascade_os_type_for_subject(db_session, "Reativação de Suspensão Temporária - Externo", "Outros") == 0

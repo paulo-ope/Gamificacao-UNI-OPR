@@ -4,7 +4,7 @@ import unicodedata
 
 
 SAO_FRANCISCO_REGIONAL = "UNI - SAO FRANCISCO DO GUAPORE"
-INVALID_REGIONAL_CODES = {"0", "1"}
+INVALID_REGIONAL_CODES = {"0", "1", "5"}  # "5" = filial "geral de cadastro" do IXC, não é uma regional operacional
 
 REGIONAL_CODE_MAP: dict[str, str] = {
     "6": "UNI - JI PARANA",

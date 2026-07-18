@@ -9,23 +9,218 @@ export type Permission =
   | "health_rules:write"
   | "settings:write"
   | "calculation:run"
-  | "users:manage";
+  | "users:manage"
+  | "portal:read_self"
+  | "portal:read_regional_ranking"
+  | "portal:simulate_self"
+  | "portal:read_rules"
+  | "portal:read_regional_summary"
+  | "portal:read_overview";
 
 export type AuthUser = {
   id: number;
   name: string;
   email: string;
-  role: "viewer" | "operator" | "admin";
+  role: "collaborator" | "regional_manager_viewer" | "viewer" | "operator" | "admin";
   active: boolean;
   created_at: string;
   updated_at: string;
   permissions: Permission[];
+  collaborator_id: number | null;
+  collaborator_name: string | null;
 };
 
 export type LoginResult = {
   access_token: string;
   token_type: string;
   user: AuthUser;
+};
+
+export type PortalPeriod = {
+  calculation_run_id: number | null;
+  reference_month: number | null;
+  reference_year: number | null;
+  status: string | null;
+  updated_at: string | null;
+};
+
+export type PortalCollaborator = {
+  id: number;
+  name: string;
+  role: string | null;
+  regional: string;
+};
+
+export type PortalScore = {
+  collaborator_id: number;
+  collaborator_name: string;
+  role: string | null;
+  regional: string;
+  service_orders_count: number;
+  gross_points: number;
+  penalty_points: number;
+  net_points: number;
+  health_multiplier: number;
+  health_status: string;
+  final_points: number;
+  estimated_payment: number;
+  scored_service_orders: number;
+  unscored_service_orders: number;
+  penalized_service_orders: number;
+  warranty_service_orders: number;
+  recurrence_service_orders: number;
+  rescheduled_service_orders: number;
+  pending_service_orders: number;
+  sla_out_service_orders: number;
+  annulled_service_orders: number;
+  diagnosis_penalized_service_orders: number;
+  manual_review_service_orders: number;
+  diagnosis_unmapped_service_orders: number;
+};
+
+export type PortalRankingItem = {
+  position: number;
+  collaborator_id: number;
+  collaborator_name: string;
+  role: string | null;
+  regional: string;
+  final_points: number;
+  estimated_payment: number;
+  service_orders_count: number;
+  scored_service_orders: number;
+  penalty_points: number;
+  is_current_user: boolean;
+};
+
+export type PortalSummary = {
+  user: AuthUser;
+  collaborator: PortalCollaborator | null;
+  period: PortalPeriod;
+  score: PortalScore | null;
+  regional_position: number | null;
+  regional_total: number;
+  general_position: number | null;
+  general_total: number;
+  next_position_gap: number | null;
+  ranking: PortalRankingItem[];
+  message: string | null;
+};
+
+export type PortalOrder = {
+  id: number;
+  os_code: string;
+  opened_at: string;
+  closed_at: string | null;
+  os_type: string;
+  os_subject: string;
+  group_name: string | null;
+  diagnosis: string | null;
+  status: string;
+  sla_status: string;
+  base_points: number;
+  penalty_points: number;
+  net_points: number;
+  status_label: string;
+  reason: string | null;
+};
+
+export type PortalAuditOrder = {
+  os_code: string;
+  os_type: string;
+  os_subject: string;
+  group_name: string | null;
+  base_points: number;
+  net_points: number;
+  penalty_points: number;
+  status_label: string;
+  reason: string | null;
+};
+
+export type PortalAuditBreakdown = {
+  label: string;
+  service_orders: number;
+  base_points: number;
+  penalty_points: number;
+  net_points: number;
+};
+
+export type PortalAuditHistory = {
+  reference_month: number;
+  reference_year: number;
+  final_points: number;
+  estimated_payment: number;
+  service_orders_count: number;
+};
+
+export type PortalAudit = {
+  gross_points: number;
+  penalty_points: number;
+  net_points: number;
+  health_multiplier: number;
+  final_points: number;
+  estimated_payment: number;
+  health_status: string;
+  service_orders_count: number;
+  scored_service_orders: number;
+  unscored_service_orders: number;
+  penalized_service_orders: number;
+  warranty_service_orders: number;
+  recurrence_service_orders: number;
+  pending_service_orders: number;
+  sla_out_service_orders: number;
+  manual_review_service_orders: number;
+  points_to_next_position: number | null;
+  top_positive_orders: PortalAuditOrder[];
+  attention_orders: PortalAuditOrder[];
+  groups: PortalAuditBreakdown[];
+  subjects: PortalAuditBreakdown[];
+  orders: PortalAuditOrder[];
+  history: PortalAuditHistory[];
+  message: string | null;
+};
+
+export type PortalRules = {
+  groups: Array<Record<string, string | number | boolean | null>>;
+  subjects: Array<Record<string, string | number | boolean | null>>;
+  diagnosis_rules: Array<Record<string, string | number | boolean | null>>;
+  sla_rules: Array<Record<string, string | number | boolean | null>>;
+  recurrence_rules: Array<Record<string, string | number | boolean | null>>;
+};
+
+export type PortalSimulation = {
+  current_position: number | null;
+  simulated_position: number | null;
+  extra_points: number;
+  points_to_next: number | null;
+  disclaimer: string;
+};
+
+export type PortalRegionalOverview = {
+  regional: string;
+  collaborators: number;
+  service_orders: number;
+  scored_service_orders: number;
+  final_points: number;
+  estimated_payment: number;
+  penalty_points: number;
+  health_average: number;
+};
+
+export type PortalOverview = {
+  period: PortalPeriod;
+  total_collaborators: number;
+  total_regionals: number;
+  total_service_orders: number;
+  scored_service_orders: number;
+  final_points: number;
+  estimated_payment: number;
+  penalty_points: number;
+  unscored_service_orders: number;
+  manual_review_service_orders: number;
+  regional_summary: PortalRegionalOverview[];
+  ranking: PortalRankingItem[];
+  alerts: string[];
+  message: string | null;
 };
 
 export type MetricCards = {
@@ -92,6 +287,8 @@ export type Collaborator = {
   regional: string;
   active: boolean;
   is_registered: boolean;
+  phone: string | null;
+  email: string | null;
 };
 
 export type CollaboratorRegistryItem = Collaborator & {
@@ -99,6 +296,9 @@ export type CollaboratorRegistryItem = Collaborator & {
   suggested_regional: string | null;
   suggested_role: string | null;
   has_linked_orders: boolean;
+  has_photo: boolean;
+  portal_user_id: number | null;
+  portal_user_email: string | null;
 };
 
 export type CollaboratorRegistry = {

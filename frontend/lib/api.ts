@@ -3,6 +3,7 @@ import type {
   AuthUser,
   AuditLog,
   AuditOrders,
+  PortalAudit,
   CalculationRunHistory,
   CalculationRunSnapshot,
   CollaboratorOrderFilters,
@@ -30,6 +31,11 @@ import type {
   LoginResult,
   PenaltyRule,
   PointBalanceEntry,
+  PortalOrder,
+  PortalOverview,
+  PortalRules,
+  PortalSimulation,
+  PortalSummary,
   RecurrenceAudit,
   RecurrenceClassificationRule,
   ScoringGroupDeleteResult,
@@ -99,19 +105,27 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    if (body) {
-      try {
-        const parsed = JSON.parse(body) as { detail?: string; message?: string };
-        const message = parsed.detail || parsed.message || body;
-        throw new Error(typeof message === "string" ? message : "Erro inesperado ao processar a solicitação.");
-      } catch {
-        throw new Error(body);
-      }
-    }
-    throw new Error(`Erro HTTP ${response.status}`);
+    throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
   }
 
   return response.json() as Promise<T>;
+}
+
+// O corpo de erro do backend normalmente e um JSON `{"detail": "..."}` - extrai so o texto legivel.
+// Nota: parsing e o throw precisam estar em blocos try/catch SEPARADOS - um throw dentro do mesmo
+// try que faz o parsing e capturado pelo catch da mesma instrucao, entao o fallback (texto cru,
+// as vezes o JSON inteiro sem parsear) sempre "vencia" mesmo quando o parsing tinha dado certo
+// (achado real: apareceu um `{"detail":"..."}` cru numa caixa de confirmacao em vez do texto).
+function extractApiErrorMessage(body: string, fallback: string): string {
+  if (!body) return fallback;
+  try {
+    const parsed = JSON.parse(body) as { detail?: string; message?: string };
+    if (typeof parsed.detail === "string" && parsed.detail) return parsed.detail;
+    if (typeof parsed.message === "string" && parsed.message) return parsed.message;
+  } catch {
+    // corpo nao e JSON valido - cai no fallback abaixo (texto cru)
+  }
+  return body || fallback;
 }
 
 async function requestBlob(path: string): Promise<Blob> {
@@ -121,12 +135,7 @@ async function requestBlob(path: string): Promise<Blob> {
   });
   if (!response.ok) {
     const body = await response.text();
-    try {
-      const parsed = JSON.parse(body) as { detail?: string; message?: string };
-      throw new Error(parsed.detail || parsed.message || `Erro HTTP ${response.status}`);
-    } catch {
-      throw new Error(body || `Erro HTTP ${response.status}`);
-    }
+    throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
   }
   return response.blob();
 }
@@ -144,15 +153,7 @@ async function uploadRequest<T>(path: string, file: File): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    if (body) {
-      try {
-        const parsed = JSON.parse(body) as { detail?: string; message?: string };
-        throw new Error(parsed.detail || parsed.message || "Falha ao enviar o arquivo.");
-      } catch {
-        throw new Error("Falha ao enviar o arquivo.");
-      }
-    }
-    throw new Error(`Erro HTTP ${response.status}`);
+    throw new Error(extractApiErrorMessage(body, "Falha ao enviar o arquivo."));
   }
 
   return response.json() as Promise<T>;
@@ -165,13 +166,20 @@ export const api = {
       body: JSON.stringify({ email, password })
     }),
   me: () => request<AuthUser>("/auth/me"),
+  portalSummary: () => request<PortalSummary>("/portal/summary"),
+  portalOverview: () => request<PortalOverview>("/portal/overview"),
+  portalOrders: (limit = 80) => request<PortalOrder[]>(`/portal/my-orders?limit=${limit}`),
+  portalAudit: () => request<PortalAudit>("/portal/my-audit"),
+  portalRules: () => request<PortalRules>("/portal/rules"),
+  portalSimulation: (extraPoints: number) =>
+    request<PortalSimulation>(`/portal/simulation?extra_points=${encodeURIComponent(String(extraPoints))}`),
   users: () => request<AuthUser[]>("/users"),
-  createUser: (payload: { name?: string; email?: string; role?: string; active?: boolean; password: string }) =>
+  createUser: (payload: { name?: string; email?: string; role?: string; active?: boolean; password: string; collaborator_id?: number | null }) =>
     request<AuthUser>("/users", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  updateUser: (id: number, payload: { name?: string; email?: string; role?: string; active?: boolean; password?: string }) =>
+  updateUser: (id: number, payload: { name?: string; email?: string; role?: string; active?: boolean; password?: string; collaborator_id?: number | null }) =>
     request<AuthUser>(`/users/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload)
@@ -481,6 +489,12 @@ export const api = {
     request<CollaboratorDeleteResult>(`/collaborators/${id}`, {
       method: "DELETE",
       body: JSON.stringify({})
+    }),
+  uploadCollaboratorPhoto: (id: number, file: File) => uploadRequest<Collaborator>(`/collaborators/${id}/photo`, file),
+  collaboratorPhoto: (id: number) => requestBlob(`/collaborators/${id}/photo`),
+  deleteCollaboratorPhoto: (id: number) =>
+    request<Collaborator>(`/collaborators/${id}/photo`, {
+      method: "DELETE"
     }),
   collaboratorOrdersDetail: (collaboratorId: number, filters: CollaboratorOrderFilters = {}) => {
     const params = new URLSearchParams();

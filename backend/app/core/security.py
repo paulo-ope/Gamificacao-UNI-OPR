@@ -18,8 +18,35 @@ from app.db.session import get_db
 from app.models import User
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    "viewer": {"dashboard:read", "audit:read", "orders:read", "scoring:read"},
-    "operator": {"dashboard:read", "audit:read", "orders:read", "scoring:read", "orders:import"},
+    "collaborator": {"portal:read_self", "portal:read_regional_ranking", "portal:simulate_self", "portal:read_rules"},
+    "regional_manager_viewer": {
+        "portal:read_self",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+        "portal:read_regional_summary",
+    },
+    "viewer": {
+        "dashboard:read",
+        "audit:read",
+        "orders:read",
+        "scoring:read",
+        "portal:read_self",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+    },
+    "operator": {
+        "dashboard:read",
+        "audit:read",
+        "orders:read",
+        "scoring:read",
+        "orders:import",
+        "portal:read_self",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+    },
     "admin": {
         "dashboard:read",
         "audit:read",
@@ -32,6 +59,12 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "settings:write",
         "calculation:run",
         "users:manage",
+        "portal:read_self",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+        "portal:read_regional_summary",
+        "portal:read_overview",
     },
 }
 

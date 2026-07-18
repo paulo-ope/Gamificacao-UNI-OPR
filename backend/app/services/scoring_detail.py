@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.performance import performance_step
@@ -781,6 +781,19 @@ def sla_inside(order: ServiceOrder) -> bool:
     return order.closing_time_hours <= order.sla_hours
 
 
+def sla_display_label(order: ServiceOrder) -> str:
+    """Rótulo de SLA pra exibição/filtro, com o MESMO critério que decide a penalidade (`sla_inside`).
+
+    `order.sla_status` (texto) vem sempre vazio para O.S da API do IXC (decisão de projeto, ver
+    docs/plano-integracao-ixc.md seção 6) - sem esse fallback, qualquer tela mostraria/filtraria
+    "NAO_IDENTIFICADO" mesmo quando o sistema já determinou dentro/fora do prazo pelas horas.
+    """
+    label = sla_status_label(order.sla_status)
+    if label == "NAO_IDENTIFICADO" and order.sla_hours is not None and order.closing_time_hours is not None:
+        label = SLA_FORA_DO_PRAZO if not sla_inside(order) else SLA_NO_PRAZO
+    return label
+
+
 def sla_rule_applies(order: ServiceOrder, rule: SlaPenaltyRule) -> bool:
     if rule.condition_type == "status_sla_out_of_time":
         return not sla_inside(order)
@@ -831,6 +844,11 @@ def calculate_regional_health(db: Session, orders: list[ServiceOrder]) -> dict[s
     for order in orders:
         if not is_valid_regional(order.regional):
             continue
+        # O.S de colaborador não cadastrado (ex.: alguém do back office que fecha uma O.S externa sem
+        # ter feito o atendimento) não deve influenciar o SLA/saúde da regional - decisão do dono do
+        # produto, ver docs/plano-integracao-ixc.md.
+        if not order.collaborator or not order.collaborator.is_registered:
+            continue
         grouped[normalize_regional(order.regional)].append(order)
 
     health: dict[str, dict[str, float | int | str]] = {}
@@ -867,6 +885,10 @@ def calculate_regional_health_from_details(
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for detail in details:
         if not is_identified_collaborator_detail(detail) or not is_valid_regional(str(detail["regional"])):
+            continue
+        # Mesma regra de `calculate_regional_health`: colaborador não cadastrado não deve contar pro
+        # SLA/saúde da regional.
+        if not detail.get("collaborator_is_registered"):
             continue
         grouped[normalize_regional(str(detail["regional"]))].append(detail)
 
@@ -937,7 +959,7 @@ def explain_order(
     sla_rule = matching_sla_penalty_rule(order, sla_rules)
     is_completed = completed(order)
     is_sla_out = not sla_inside(order)
-    normalized_sla_status = sla_status_label(order.sla_status)
+    normalized_sla_status = sla_display_label(order)
     base_points = 0.0
     penalty_points = 0.0
     diagnosis_penalty_points = 0.0
@@ -968,7 +990,7 @@ def explain_order(
     recurrence_suppresses_point_penalties = has_recurrence_penalty
 
     if is_completed:
-        calculation_reasons.append(f"SLA original da planilha: {order.sla_status or 'Não informado'}")
+        calculation_reasons.append(f"SLA original importado: {order.sla_status or 'Não informado'}")
         calculation_reasons.append(f"SLA normalizado: {normalized_sla_status}")
 
     if not order.collaborator_id:
@@ -1145,6 +1167,7 @@ def explain_order(
         "id": order.id,
         "collaborator_id": order.collaborator_id,
         "collaborator_name": order.collaborator.name if order.collaborator else "NAO IDENTIFICADO",
+        "collaborator_is_registered": bool(order.collaborator.is_registered) if order.collaborator else False,
         "os_code": order.os_code,
         "contract_id": order.contract_id,
         "customer_login": order.customer_login,
@@ -1468,7 +1491,7 @@ def prefilter_orders_for_detail_processing(
     if status_sla:
         normalized_filter = sla_status_label(status_sla)
         if normalized_filter != "NAO_IDENTIFICADO":
-            filtered = [order for order in filtered if sla_status_label(order.sla_status) == normalized_filter]
+            filtered = [order for order in filtered if sla_display_label(order) == normalized_filter]
         else:
             filtered = [order for order in filtered if normalize(status_sla) in normalize(order.sla_status)]
     if group_id:
@@ -2026,6 +2049,23 @@ def unmapped_subjects(
         )
 
     return sorted(result, key=lambda item: item["service_orders_count"], reverse=True)
+
+
+def cascade_os_type_for_subject(db: Session, os_subject: str, new_os_type: str) -> int:
+    """Reescreve o `os_type` de toda `service_order` já importada com este `os_subject`, para que
+    corrigir o Tipo Geral de um assunto valha imediatamente para as O.S antigas, não só para as
+    futuras. `ServiceOrder.os_type` é gravado uma única vez na importação e nunca reescrito depois -
+    sem esta cascata, o casamento de regra (`matching_scoring_rule`, que exige `(order.os_type,
+    os_subject)` batendo exatamente com `(rule.os_type, os_subject)`) nunca reconhecia a correção nas
+    O.S já importadas, e ficavam órfãs até alguém rodar uma correção manual em massa no banco (achado
+    real - ver docs/plano-integracao-ixc.md). Retorna quantas linhas foram alteradas."""
+    result = db.execute(
+        update(ServiceOrder)
+        .where(ServiceOrder.os_subject == os_subject)
+        .where(ServiceOrder.os_type != new_os_type)
+        .values(os_type=new_os_type)
+    )
+    return result.rowcount or 0
 
 
 def unmapped_diagnosis_stats_from_orders(db: Session, orders: list[ServiceOrder]) -> list[dict[str, Any]]:
