@@ -31,7 +31,7 @@ class UserBase(BaseModel):
     collaborator_id: int | None = None
     managed_regional: str | None = None
     managed_regionals: list[str] = []
-    access_profile_ids: list[int] = []
+    access_profile_ids: list[int] | None = None
 
 
 class UserCreate(UserBase):
