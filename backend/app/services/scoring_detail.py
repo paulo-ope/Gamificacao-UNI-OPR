@@ -778,7 +778,10 @@ def sla_inside(order: ServiceOrder) -> bool:
         return True
     if order.sla_hours is None or order.closing_time_hours is None:
         return False
-    return order.closing_time_hours <= order.sla_hours
+    # Arredonda pra hora cheia antes de comparar - o mesmo criterio do relatorio de BI usado pela
+    # operacao, que nao considera "fora do prazo" quando o fechamento estourou por poucos minutos
+    # (ex.: 72,34h contra um SLA de 72h).
+    return round(order.closing_time_hours) <= order.sla_hours
 
 
 def sla_display_label(order: ServiceOrder) -> str:
@@ -800,7 +803,7 @@ def sla_rule_applies(order: ServiceOrder, rule: SlaPenaltyRule) -> bool:
     if rule.condition_type == "sla_hours_greater_than":
         if order.sla_hours is None or order.closing_time_hours is None:
             return False
-        return order.closing_time_hours > order.sla_hours
+        return round(order.closing_time_hours) > order.sla_hours
     if rule.condition_type == "closed_after_deadline":
         return not sla_inside(order)
     return False
@@ -1183,8 +1186,12 @@ def explain_order(
         "closing_time_hours": order.closing_time_hours,
         "opened_at": order.opened_at,
         "closed_at": order.closed_at,
+        # Flags de exibição mutuamente exclusivas (decisão do dono do produto): uma O.S mostra UMA
+        # etiqueta - garantia OU reincidência, nunca as duas. "garantia" NÃO liga is_recurrence
+        # aqui; a matemática de desconto/saúde continua tratando garantia como descontável via
+        # RECURRENCE_DISCOUNT_CLASSIFICATIONS (não mudou).
         "is_warranty": order.is_warranty or recurrence_classification == "garantia",
-        "is_recurrence": order.is_recurrence or recurrence_classification in {"reincidencia_tecnica", "garantia"},
+        "is_recurrence": order.is_recurrence or recurrence_classification == "reincidencia_tecnica",
         "has_reschedule": order.has_reschedule,
         "has_pending": order.has_pending,
         "group_id": scoring_rule.group_id if scoring_rule else None,
@@ -1457,6 +1464,11 @@ def calculate_penalty_distribution(
     totals: dict[str, float] = defaultdict(float)
     counts: dict[str, int] = defaultdict(int)
     for detail in details:
+        # Mesma regra de calculate_regional_health: O.S de colaborador nao cadastrado nao deve
+        # aparecer nos graficos de analise (distribuicao de pontos anulados), so nos indicadores
+        # operacionais brutos (ex: cards de pendencia) onde ela ja e tratada separadamente.
+        if not detail.get("collaborator_is_registered"):
+            continue
         for penalty in detail["penalty_items"]:
             name = str(penalty["name"])
             totals[name] += float(penalty["points"])

@@ -1,0 +1,41 @@
+"use client";
+
+import { BarChart3, CalendarDays, ClipboardList, Gauge, ListChecks, Menu, Settings2 } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
+
+export type OperationTab = "overview" | "sla" | "calendar" | "progress" | "details" | "teams";
+
+const ITEMS: Array<{ value: OperationTab; label: string; description: string; icon: typeof Gauge }> = [
+  { value: "overview", label: "Visão Geral", description: "Indicadores do período", icon: Gauge },
+  { value: "sla", label: "SLA", description: "Prazos e produtividade", icon: BarChart3 },
+  { value: "calendar", label: "Calendário", description: "Produção mensal", icon: CalendarDays },
+  { value: "progress", label: "Andamento", description: "Todo o backlog aberto", icon: ListChecks },
+  { value: "details", label: "Detalhes de O.S.", description: "Drill-through e busca", icon: ClipboardList },
+  { value: "teams", label: "Configurações", description: "Modelos, jornadas, metas e assuntos", icon: Settings2 }
+];
+
+export function OperationsModuleSidebar({ activeTab, detailsCount, canManage, visibleTabs, onChange }: { activeTab: OperationTab; detailsCount: number; canManage: boolean; visibleTabs: OperationTab[]; onChange: (tab: OperationTab) => void }) {
+  const visibleItems = ITEMS.filter((item) => visibleTabs.includes(item.value) && (item.value !== "teams" || canManage));
+  return (
+    <Sheet>
+      <SheetTrigger asChild><Button type="button" size="icon" variant="outline" aria-label="Abrir menu do módulo"><Menu className="h-5 w-5" /></Button></SheetTrigger>
+      <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r bg-slate-950 p-0 text-white sm:max-w-sm">
+        <SheetHeader className="border-slate-800 bg-slate-950"><SheetTitle className="text-white">Operação Analítica</SheetTitle><SheetDescription className="text-slate-400">Navegação modular do UNI Workspace</SheetDescription></SheetHeader>
+        <nav className="flex-1 space-y-1 p-3" aria-label="Navegação da Operação Analítica">
+          {visibleItems.map((item) => { const Icon = item.icon; const selected = activeTab === item.value; return (
+            <SheetClose asChild key={item.value}>
+              <button type="button" onClick={() => onChange(item.value)} className={cn("flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors", selected ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-900 hover:text-white")}>
+                <span className={cn("flex h-9 w-9 items-center justify-center rounded-lg", selected ? "bg-white/15" : "bg-slate-900")}><Icon className="h-4 w-4" /></span>
+                <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{item.label}{item.value === "details" ? ` (${detailsCount})` : ""}</span><span className={cn("block text-[11px]", selected ? "text-blue-100" : "text-slate-500")}>{item.description}</span></span>
+              </button>
+            </SheetClose>
+          ); })}
+        </nav>
+        <div className="border-t border-slate-800 p-4 text-[11px] text-slate-500">Novos módulos podem ser adicionados a este menu sem alterar a navegação principal.</div>
+      </SheetContent>
+    </Sheet>
+  );
+}

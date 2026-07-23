@@ -250,8 +250,8 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
 
       <div className="table-frame overflow-hidden rounded-[20px] border border-slate-200 bg-white">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+            <TableRow className="border-slate-700 hover:bg-slate-900">
               <TableHead>Colaborador</TableHead>
               <TableHead>Garantias pendentes</TableHead>
               <TableHead>Impacto total no pagamento</TableHead>
@@ -270,7 +270,7 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
                       <Avatar name={group.collaboratorName} size="md" />
                       <button
                         type="button"
-                        className="text-left underline decoration-dotted underline-offset-2 hover:text-teal-700"
+                        className="text-left underline decoration-dotted underline-offset-2 hover:text-blue-700"
                         onClick={() => setHistoryCollaboratorId(group.collaboratorId)}
                         title="Detalhar todas as garantias deste colaborador"
                       >

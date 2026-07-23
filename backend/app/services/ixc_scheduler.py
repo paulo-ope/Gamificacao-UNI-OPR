@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.modules.operations.ixc_ingestion import import_current_month_period, import_open_backlog
+from app.modules.operations.period import OPERATIONS_TIMEZONE
+from app.modules.operations.scope import PRIMARY_IXC_SECTOR_IDS, normalize_ixc_sector_ids
 from app.services.calculation import get_setting, recalculate_current_period, upsert_setting
-from app.services.ixc_client import get_ixc_client
-from app.services.ixc_importer import sync_ixc_service_orders
+from app.services.ixc_client import IxcClient, get_ixc_client
+from app.services.operations_sync import run_operations_to_service_orders_sync
 
 logger = logging.getLogger("ixc_sync")
 if not logger.handlers:
@@ -23,6 +29,8 @@ if not logger.handlers:
 # Sem isso, uma falha silenciosa (token expirado, IXC fora do ar) só é percebida quando alguém notar que
 # os números não batem - já aconteceu nesta integração (ver docs/plano-integracao-ixc.md).
 IXC_SYNC_LAST_SUCCESS_AT_KEY = "ixc_sync_last_success_at"
+IXC_SYNC_LAST_ATTEMPT_AT_KEY = "ixc_sync_last_attempt_at"
+IXC_SYNC_NEXT_ALLOWED_AT_KEY = "ixc_sync_next_allowed_at"
 IXC_SYNC_LAST_ERROR_KEY = "ixc_sync_last_error"
 IXC_SYNC_LAST_ERROR_AT_KEY = "ixc_sync_last_error_at"
 IXC_SYNC_CONSECUTIVE_FAILURES_KEY = "ixc_sync_consecutive_failures"
@@ -33,24 +41,135 @@ IXC_SYNC_CONSECUTIVE_FAILURES_KEY = "ixc_sync_consecutive_failures"
 IXC_SYNC_ENABLED_KEY = "ixc_sync_enabled"
 IXC_SYNC_INTERVAL_MINUTES_KEY = "ixc_sync_interval_minutes"
 IXC_SYNC_AUTO_RECALCULATE_KEY = "ixc_sync_auto_recalculate"
+IXC_SYNC_SECTOR_IDS_KEY = "ixc_sync_sector_ids"
+
+# A varredura de backlog aberto (`import_open_backlog`) particiona a consulta por setor x status
+# (3 setores x 9 códigos = ~27 chamadas sequenciais ao IXC) - rodar isso em TODO ciclo do polling
+# (a cada poucos minutos) prendia a conexão/transação do banco por dezenas de segundos e deixava
+# outras requisições (ex.: o resumo do dashboard) esperando na fila. A importação do período
+# (hoje/ontem, ~4 chamadas) continua todo ciclo; a varredura de backlog roda só a cada
+# `IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES` (configurável, mesmo padrão AppSetting das outras
+# chaves desta sincronização).
+IXC_SYNC_LAST_BACKLOG_SWEEP_AT_KEY = "ixc_sync_last_backlog_sweep_at"
+IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES_KEY = "ixc_sync_backlog_sweep_interval_minutes"
+IXC_SYNC_DEFAULT_BACKLOG_SWEEP_INTERVAL_MINUTES = 60
 
 
 def _current_sync_enabled(default: bool) -> bool:
-    with SessionLocal() as db:
-        raw = get_setting(db, IXC_SYNC_ENABLED_KEY, "")
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, IXC_SYNC_ENABLED_KEY, "")
+    except SQLAlchemyError:
+        logger.warning("Sincronizacao IXC pausada: configuracoes do banco ainda nao estao acessiveis.")
+        return False
     if not raw:
         return default
     return raw.strip().lower() in {"true", "1", "sim", "yes"}
 
 
 def _current_interval_minutes(default: int) -> int:
-    with SessionLocal() as db:
-        raw = get_setting(db, IXC_SYNC_INTERVAL_MINUTES_KEY, "")
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, IXC_SYNC_INTERVAL_MINUTES_KEY, "")
+    except SQLAlchemyError:
+        return max(default, 1)
     try:
         minutes = int(raw)
     except (TypeError, ValueError):
         return default
     return max(minutes, 1)
+
+
+def _current_sector_ids() -> list[str]:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, IXC_SYNC_SECTOR_IDS_KEY, "")
+    except SQLAlchemyError:
+        return list(PRIMARY_IXC_SECTOR_IDS)
+    if not raw:
+        return list(PRIMARY_IXC_SECTOR_IDS)
+    try:
+        return normalize_ixc_sector_ids(raw.split(","))
+    except ValueError:
+        logger.warning("Escopo de setores IXC invalido em app_settings; usando setores principais.")
+        return list(PRIMARY_IXC_SECTOR_IDS)
+
+
+def _parse_sync_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _setting_timestamp(key: str) -> datetime | None:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, key, "")
+    except SQLAlchemyError:
+        return None
+    return _parse_sync_timestamp(raw)
+
+
+def _sync_wait_seconds(next_allowed_at: datetime | None, interval_minutes: int, *, now: datetime | None = None) -> float:
+    interval_seconds = max(interval_minutes, 1) * 60
+    if next_allowed_at is None:
+        return float(interval_seconds)
+
+    if next_allowed_at.tzinfo is None:
+        next_allowed_at = next_allowed_at.replace(tzinfo=timezone.utc)
+    else:
+        next_allowed_at = next_allowed_at.astimezone(timezone.utc)
+
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    else:
+        current_time = current_time.astimezone(timezone.utc)
+
+    return max((next_allowed_at - current_time).total_seconds(), 0.0)
+
+
+def _seconds_until_next_sync(default_interval_minutes: int) -> float:
+    current_interval = _current_interval_minutes(default=default_interval_minutes)
+    now = datetime.now(timezone.utc)
+    next_allowed_at = _setting_timestamp(IXC_SYNC_NEXT_ALLOWED_AT_KEY)
+    if next_allowed_at is None:
+        next_allowed_at = now + timedelta(minutes=max(current_interval, 1))
+        with SessionLocal() as db:
+            upsert_setting(
+                db,
+                IXC_SYNC_NEXT_ALLOWED_AT_KEY,
+                next_allowed_at.isoformat(),
+                description="Proximo horario em que a sincronizacao automatica pode consultar o IXC.",
+            )
+            db.commit()
+    return _sync_wait_seconds(next_allowed_at, current_interval, now=now)
+
+
+def _record_sync_attempt_started(interval_minutes: int | None = None) -> None:
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        upsert_setting(
+            db,
+            IXC_SYNC_LAST_ATTEMPT_AT_KEY,
+            now.isoformat(),
+            description="Ultima tentativa de sincronizacao automatica com o IXC.",
+        )
+        if interval_minutes is not None:
+            next_allowed_at = now + timedelta(minutes=max(interval_minutes, 1))
+            upsert_setting(
+                db,
+                IXC_SYNC_NEXT_ALLOWED_AT_KEY,
+                next_allowed_at.isoformat(),
+                description="Proximo horario em que a sincronizacao automatica pode consultar o IXC.",
+            )
+        db.commit()
 
 
 def _auto_recalculate_enabled() -> bool:
@@ -59,20 +178,79 @@ def _auto_recalculate_enabled() -> bool:
     return raw.strip().lower() in {"true", "1", "sim", "yes"}
 
 
-def run_ixc_sync_once() -> dict | None:
-    """Roda uma sincronização e faz commit. Retorna None se IXC não estiver configurado."""
+def _backlog_sweep_interval_minutes(db: Session) -> int:
+    raw = get_setting(db, IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES_KEY, "")
+    try:
+        return max(int(raw), 1)
+    except (TypeError, ValueError):
+        return IXC_SYNC_DEFAULT_BACKLOG_SWEEP_INTERVAL_MINUTES
+
+
+def _should_run_backlog_sweep(db: Session) -> bool:
+    last_swept_at = _parse_sync_timestamp(get_setting(db, IXC_SYNC_LAST_BACKLOG_SWEEP_AT_KEY, ""))
+    if last_swept_at is None:
+        return True
+    interval = timedelta(minutes=_backlog_sweep_interval_minutes(db))
+    return datetime.now(timezone.utc) - last_swept_at >= interval
+
+
+def _run_operations_ixc_import_cycle(db: Session, client: IxcClient) -> dict:
+    """Único ponto do sistema que consulta O.S. no IXC (`fetch_service_orders`). Importa para
+    `operations_orders` (módulo de operações analíticas) o dia de hoje e o de ontem (pega O.S. que
+    atravessam a meia-noite) todo ciclo, e periodicamente (não todo ciclo - ver
+    `IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES_KEY`) o backlog aberto corrente. Em seguida projeta o
+    resultado em `service_orders` (ver `run_operations_to_service_orders_sync`) - a gamificação não
+    faz mais nenhuma chamada direta ao IXC, ela só lê o que o módulo operations já importou.
+    """
+    today = datetime.now(OPERATIONS_TIMEZONE).date()
+    yesterday = today - timedelta(days=1)
+    sector_ids = _current_sector_ids()
+
+    operations_imports = []
+    for day in (yesterday, today):
+        operations_imports.append(
+            import_current_month_period(
+                db, client, date_from=day, date_to=day, imported_by=None, sector_ids=sector_ids,
+            )
+        )
+
+    ran_backlog_sweep = _should_run_backlog_sweep(db)
+    if ran_backlog_sweep:
+        operations_imports.append(
+            import_open_backlog(db, client, imported_by=None, sector_ids=sector_ids)
+        )
+        upsert_setting(db, IXC_SYNC_LAST_BACKLOG_SWEEP_AT_KEY, datetime.now(timezone.utc).isoformat())
+    db.commit()
+
+    service_orders_sync = run_operations_to_service_orders_sync(db, imported_by=None)
+    db.commit()
+
+    return {
+        "operations_imports": operations_imports,
+        "ran_backlog_sweep": ran_backlog_sweep,
+        "service_orders_sync": service_orders_sync,
+    }
+
+
+def run_ixc_sync_once(interval_minutes: int | None = None) -> dict | None:
+    """Roda um ciclo completo (importação analítica do IXC + projeção para `service_orders`) e faz
+    commit. Retorna None se IXC não estiver configurado."""
     settings = get_settings()
     if not settings.ixc_api_base_url or not settings.ixc_api_token:
         return None
 
+    _record_sync_attempt_started(interval_minutes=interval_minutes)
     client = get_ixc_client()
     with SessionLocal() as db:
         try:
-            result = sync_ixc_service_orders(db, client)
+            result = _run_operations_ixc_import_cycle(db, client)
             upsert_setting(db, IXC_SYNC_LAST_SUCCESS_AT_KEY, datetime.now(timezone.utc).isoformat())
             upsert_setting(db, IXC_SYNC_CONSECUTIVE_FAILURES_KEY, "0")
             db.commit()
-            logger.info("Sincronização IXC concluída: %s", result.get("summary"))
+            logger.info(
+                "Sincronização IXC concluída: %s",
+                result["service_orders_sync"].get("summary"),
+            )
         except Exception as exc:
             db.rollback()
             logger.exception("Falha na sincronização periódica com o IXC")
@@ -86,7 +264,7 @@ def run_ixc_sync_once() -> dict | None:
             db.commit()
             return None
 
-    summary = result.get("summary") or {}
+    summary = result["service_orders_sync"].get("summary") or {}
     touched = int(summary.get("created_count", 0)) + int(summary.get("updated_count", 0))
     if touched > 0 and _auto_recalculate_enabled():
         with SessionLocal() as db:
@@ -106,6 +284,13 @@ async def run_ixc_sync_loop(interval_minutes: int, initial_enabled: bool = True)
     """
     while True:
         if _current_sync_enabled(default=initial_enabled):
-            await asyncio.to_thread(run_ixc_sync_once)
+            wait_seconds = _seconds_until_next_sync(default_interval_minutes=interval_minutes)
+            if wait_seconds > 0:
+                logger.info("Proxima sincronizacao IXC em %.0f segundos.", wait_seconds)
+                await asyncio.sleep(wait_seconds)
+                continue
+            current_interval = _current_interval_minutes(default=interval_minutes)
+            await asyncio.to_thread(run_ixc_sync_once, current_interval)
+
         current_interval = _current_interval_minutes(default=interval_minutes)
         await asyncio.sleep(current_interval * 60)

@@ -189,8 +189,8 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
 
       <div className="table-frame">
         <Table>
-        <TableHeader>
-          <TableRow>
+        <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+          <TableRow className="border-slate-700 hover:bg-slate-900">
             <TableHead>Diagnóstico</TableHead>
             <TableHead>Qtd O.S</TableHead>
             <TableHead>Assuntos relacionados</TableHead>
@@ -224,7 +224,7 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
                 <TableCell className="min-w-80 text-xs text-slate-600">{item.related_subjects.join(" | ") || "-"}</TableCell>
                 <TableCell>{formatInteger(item.collaborators_count)}</TableCell>
                 <TableCell>{item.predominant_regional}</TableCell>
-                <TableCell className="font-medium text-teal-700">{formatMoney(item.estimated_impact)}</TableCell>
+                <TableCell className="font-medium text-blue-700">{formatMoney(item.estimated_impact)}</TableCell>
                 <TableCell className="min-w-48">
                   <AppCombobox
                     value={currentDraft.action_type}

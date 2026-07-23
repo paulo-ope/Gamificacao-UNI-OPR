@@ -14,11 +14,14 @@ type DashboardChartsProps = {
 };
 
 export function DashboardCharts({ ranking, penalties, health }: DashboardChartsProps) {
-  const scatterItems = ranking.filter((item) => item.service_orders_count > 0);
+  // Mesma regra já aplicada à saúde por regional no backend: colaborador não cadastrado não conta
+  // nos gráficos de análise (só pontos/O.S de quem está formalmente cadastrado).
+  const registeredRanking = ranking.filter((item) => item.is_registered !== false);
+  const scatterItems = registeredRanking.filter((item) => item.service_orders_count > 0);
   const maxScatterOrders = Math.max(...scatterItems.map((item) => item.service_orders_count), 0);
   const maxScatterPoints = Math.max(...scatterItems.map((item) => item.final_points), 0);
   const regionalPoints = new Map<string, { final_points: number; collaborators: number; estimated_payment: number }>();
-  ranking.forEach((item) => {
+  registeredRanking.forEach((item) => {
     const key = normalizeRegional(item.regional);
     const current = regionalPoints.get(key) ?? { final_points: 0, collaborators: 0, estimated_payment: 0 };
     current.final_points += item.final_points;
@@ -51,7 +54,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         ? Math.max(12, Math.min(34, 10 + (item.recurrence_service_orders ?? item.warranty_service_orders ?? 0) * 1.5))
         : Math.max(8, Math.min(24, 8 + Math.abs(item.penalty_points) / 40))
   });
-  const rankingData = [...ranking]
+  const rankingData = [...registeredRanking]
     .sort((a, b) => b.final_points - a.final_points)
     .slice(0, 15)
     .sort((a, b) => a.final_points - b.final_points);
@@ -75,7 +78,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
       {
         type: "bar",
         data: rankingData.map((item) => item.final_points),
-        itemStyle: { color: "#0f766e", borderRadius: [0, 4, 4, 0] },
+        itemStyle: { color: "#2563eb", borderRadius: [0, 4, 4, 0] },
         label: { show: true, position: "right", color: "#0f172a", formatter: ({ value }: { value: number }) => formatPoints(value) }
       }
     ]
@@ -101,12 +104,16 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         ].join("<br />");
       }
     },
-    grid: { left: 168, right: 132, top: 12, bottom: 24 },
+    // grid.left mais folgado que a largura do rótulo (label width 170 vs grid.left 230, ~60px de
+    // respiro) - com os dois quase iguais (168 vs 150) o rótulo de valor de barras bem curtas
+    // (poucos O.S) ficava colado/sobrepondo o texto truncado do eixo (achado real, ver print do
+    // usuário). Rótulo de valor também encurtado (sem repetir "anulados", já é o título do painel).
+    grid: { left: 230, right: 110, top: 12, bottom: 24 },
     xAxis: { type: "value", axisLabel: { color: "#475569" } },
     yAxis: {
       type: "category",
       data: penaltyData.map((item) => item.name),
-      axisLabel: { color: "#334155", width: 150, overflow: "truncate" }
+      axisLabel: { color: "#334155", width: 170, overflow: "truncate" }
     },
     series: [
       {
@@ -116,10 +123,11 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         label: {
           show: true,
           position: "right",
+          distance: 8,
           color: "#0f172a",
           formatter: ({ dataIndex }: { dataIndex: number }) => {
             const item = penaltyData[dataIndex];
-            return `${item.service_orders_count} O.S / ${formatAnnulledPoints(item.value)}`;
+            return `${item.service_orders_count} O.S · ${formatAnnulledPoints(item.value)}`;
           }
         }
       }
@@ -209,7 +217,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         data: scatterItems
           .filter((item) => (item.recurrence_service_orders ?? item.warranty_service_orders ?? 0) === 0)
           .map(scatterPoint),
-        itemStyle: { color: "#0f766e", opacity: 0.78, borderColor: "#ffffff", borderWidth: 1 }
+        itemStyle: { color: "#059669", opacity: 0.78, borderColor: "#ffffff", borderWidth: 1 }
       },
       {
         name: "Com reincidência",
@@ -218,7 +226,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         data: scatterItems
           .filter((item) => (item.recurrence_service_orders ?? item.warranty_service_orders ?? 0) > 0)
           .map(scatterPoint),
-        itemStyle: { color: "#4f46e5", opacity: 0.82, borderColor: "#ffffff", borderWidth: 1 }
+        itemStyle: { color: "#dc2626", opacity: 0.82, borderColor: "#ffffff", borderWidth: 1 }
       }
     ]
   };
@@ -284,7 +292,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         })),
         symbolSize: (_value: [number, number], params: { data: { total_orders: number } }) =>
           Math.max(12, Math.min(42, 10 + Math.sqrt(params.data.total_orders || 0) / 2)),
-        itemStyle: { color: "#0f766e", opacity: 0.8, borderColor: "#ffffff", borderWidth: 1 },
+        itemStyle: { color: "#2563eb", opacity: 0.8, borderColor: "#ffffff", borderWidth: 1 },
         label: { show: false },
         emphasis: {
           label: {

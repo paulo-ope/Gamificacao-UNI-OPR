@@ -135,6 +135,29 @@ def ensure_no_overlapping_paid_period(db: Session, run: CalculationRun) -> None:
         )
 
 
+def ensure_no_unregistered_payable_collaborators(run: CalculationRun) -> None:
+    """Trava de segurança final antes de marcar como PAGO: mesmo com o cálculo já zerando o
+    estimated_payment de colaboradores não cadastrados (ver calculation.py), esta checagem
+    independe dessa lógica e barra o pagamento se, por qualquer motivo (dado antigo, edição
+    manual, regressão futura), sobrar um valor a pagar para alguém sem cadastro formal. Cadastrar
+    o colaborador (ou reduzir o valor a zero) é o único jeito de destravar."""
+    offenders = [
+        score
+        for score in run.scores
+        if score.collaborator and not score.collaborator.is_registered and float(score.estimated_payment) > 0
+    ]
+    if offenders:
+        names = ", ".join(sorted({score.collaborator.name for score in offenders}))
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{len(offenders)} colaborador(es) não cadastrado(s) ainda têm valor a pagar neste fechamento "
+                f"({names}). Cadastre-os na aba Configuração antes de marcar como pago - eles não podem ser "
+                "pagos sem cadastro formal."
+            ),
+        )
+
+
 def update_run_status(db: Session, run: CalculationRun, next_status: str, user: User, note: str | None = None) -> CalculationRun:
     current_status = normalize_run_status(run.status)
     target_status = normalize_run_status(next_status)
@@ -142,6 +165,7 @@ def update_run_status(db: Session, run: CalculationRun, next_status: str, user: 
     ensure_status_change_permission(user, target_status)
     if target_status == "paid":
         ensure_no_overlapping_paid_period(db, run)
+        ensure_no_unregistered_payable_collaborators(run)
 
     changed_at = now_utc()
     run.status = target_status

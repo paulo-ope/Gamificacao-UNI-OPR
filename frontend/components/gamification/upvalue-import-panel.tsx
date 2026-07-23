@@ -242,7 +242,7 @@ export function UpvalueImportPanel({
               Período de análise
             </span>
             {activePeriodKey ? (
-              <span className="inline-flex rounded-md border border-teal-200 bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700">
+              <span className="inline-flex rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
                 Em uso: {currentPeriod?.reference_month && currentPeriod?.reference_year ? periodLabel({
                   reference_month: currentPeriod.reference_month,
                   reference_year: currentPeriod.reference_year
@@ -268,7 +268,7 @@ export function UpvalueImportPanel({
           <div className="flex flex-col gap-2 border-b bg-slate-50/70 px-4 py-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-                <Database className="h-4 w-4 text-teal-700" />
+                <Database className="h-4 w-4 text-blue-700" />
                 Períodos importados
               </h3>
               <p className="text-xs text-slate-500">
@@ -294,8 +294,8 @@ export function UpvalueImportPanel({
 
           <div className="overflow-x-auto">
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead>Período</TableHead>
                   <TableHead>O.S na base</TableHead>
                   <TableHead>Primeira O.S</TableHead>
@@ -312,12 +312,12 @@ export function UpvalueImportPanel({
                     const isCalculating = key === calculatingPeriodKey;
                     const isViewing = key === viewingPeriodKey;
                     return (
-                      <TableRow key={key} className={isActive ? "bg-teal-50/60" : undefined}>
+                      <TableRow key={key} className={isActive ? "bg-blue-50/60" : undefined}>
                         <TableCell className="font-semibold">
                           <div className="flex flex-wrap items-center gap-2">
                             <span>{periodLabel(period)}</span>
                             {isActive ? (
-                              <span className="rounded-full border border-teal-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-teal-700">
+                              <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-blue-700">
                                 Em uso
                               </span>
                             ) : null}
@@ -539,8 +539,8 @@ export function UpvalueImportPanel({
           <div className="rounded-md border">
             <div className="border-b px-4 py-3 text-sm font-semibold">Auditoria básica da última importação</div>
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead>Ação</TableHead>
                   <TableHead>O.S</TableHead>
                   <TableHead>Linha</TableHead>
@@ -565,7 +565,7 @@ export function UpvalueImportPanel({
           <div className="rounded-lg border bg-white">
             <div className="border-b bg-slate-50/70 px-4 py-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-                <UploadCloud className="h-4 w-4 text-teal-700" />
+                <UploadCloud className="h-4 w-4 text-blue-700" />
                 Incorporar nova base operacional
               </h3>
               <p className="text-xs text-slate-500">Área administrativa para validar e importar planilhas Excel ou CSV.</p>
@@ -594,7 +594,7 @@ export function UpvalueImportPanel({
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="rounded-md border">
                 <div className="flex items-center gap-2 border-b px-4 py-3 text-sm font-semibold">
-                  <FileSpreadsheet className="h-4 w-4 text-teal-700" />
+                  <FileSpreadsheet className="h-4 w-4 text-blue-700" />
                   Colunas detectadas
                 </div>
                 <div className="max-h-56 overflow-auto p-3">
@@ -611,8 +611,8 @@ export function UpvalueImportPanel({
               <div className="rounded-md border">
                 <div className="border-b px-4 py-3 text-sm font-semibold">Mapeamento sugerido</div>
                 <Table>
-                  <TableHeader>
-                    <TableRow>
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
                       <TableHead>Campo do sistema</TableHead>
                       <TableHead>Coluna UpValue</TableHead>
                     </TableRow>
@@ -632,8 +632,8 @@ export function UpvalueImportPanel({
             <div className="rounded-md border">
               <div className="border-b px-4 py-3 text-sm font-semibold">Primeiras linhas</div>
               <Table>
-                <TableHeader>
-                  <TableRow>
+                <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                  <TableRow className="border-slate-700 hover:bg-slate-900">
                     {sampleColumns.map((column) => (
                       <TableHead key={column}>{column}</TableHead>
                     ))}
@@ -659,8 +659,8 @@ export function UpvalueImportPanel({
           <div className="rounded-md border">
             <div className="border-b px-4 py-3 text-sm font-semibold">Linhas ignoradas</div>
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead>Linha</TableHead>
                   <TableHead>Motivo</TableHead>
                   <TableHead>Dados</TableHead>

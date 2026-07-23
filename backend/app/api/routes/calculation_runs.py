@@ -190,6 +190,10 @@ def _apply_point_balance_after_payment(db: Session, run: CalculationRun, user: U
         effective_rate = (gross_estimated_payment / gross_final_points) if gross_final_points else float(run.point_value)
         new_final_points = round(max(float(result["balance_after"]), 0.0), 2)
         new_estimated_payment = round(new_final_points * effective_rate, 2)
+        # Garantia explicita (independente da aritmetica acima): colaborador nao cadastrado nunca
+        # sai daqui com valor a pagar, mesmo no recomputo oficial feito ao marcar como pago.
+        if not score.collaborator.is_registered:
+            new_estimated_payment = 0.0
 
         if (
             float(score.final_points) != new_final_points
@@ -242,7 +246,7 @@ def _refresh_stale_draft_previews(db: Session, collaborator_ids: set[int], exclu
             select(CalculationRun)
             .where(CalculationRun.status.in_(["draft", "review", "approved"]))
             .where(CalculationRun.id != exclude_run_id)
-            .options(selectinload(CalculationRun.scores))
+            .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
         )
     )
     for stale_run in stale_runs:
@@ -265,6 +269,8 @@ def _refresh_stale_draft_previews(db: Session, collaborator_ids: set[int], exclu
             effective_rate = (gross_estimated_payment / gross_final_points) if gross_final_points else float(stale_run.point_value)
             new_final_points = round(max(float(preview["projected_balance"]), 0.0), 2)
             new_estimated_payment = round(new_final_points * effective_rate, 2)
+            if not score.collaborator.is_registered:
+                new_estimated_payment = 0.0
 
             score.balance_adjustment_points = float(preview["adjustment_points"])
             score.balance_after = float(preview["projected_balance"])

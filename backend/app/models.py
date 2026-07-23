@@ -40,6 +40,10 @@ class Collaborator(Base):
     is_registered: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # Vincula o colaborador ao id do funcionario/tecnico no IXC (su_rh_funcionarios / campo
+    # id_tecnico nas O.S.). Usado para casar o mesmo colaborador entre a gamificacao e o modulo
+    # de operacoes analiticas sem depender de comparacao de nome (nome pode divergir/ter typo).
+    ixc_employee_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True, index=True)
     # Foto de perfil guardada como bytes direto no banco (sem infraestrutura de arquivo neste
     # projeto - ver docs/plano-integracao-ixc.md não se aplica aqui, decisão registrada na
     # migration 20260717_0008). `photo_content_type` (ex: "image/jpeg") é necessário pra servir
@@ -67,6 +71,17 @@ class User(Base):
     # Único (um colaborador só pode estar vinculado a um usuário) e nullable (nem todo usuário
     # representa um colaborador - admin/operator/viewer internos não precisam de vínculo).
     collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id"), unique=True, nullable=True)
+    # Vínculo por regional pro perfil "regional_manager_viewer" - esse usuário não representa UM
+    # colaborador (não tem O.S própria), ele acompanha a equipe inteira de uma filial. Guardado como
+    # texto livre (normalizado na leitura via services/regional.normalize_regional, igual toda outra
+    # comparação de regional no sistema), não como FK - não existe uma tabela de "regional" própria.
+    managed_regional: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Sucessor de managed_regional: permite um gestor regional cobrir várias filiais ao mesmo
+    # tempo (mesmo caso de uso que LeadershipProfileRegional resolve pra líderes). Lista de texto
+    # livre em JSON em vez de tabela filha própria - não há necessidade de join em SQL, é só lida
+    # em Python depois do usuário já carregado. managed_regional (singular) fica só como legado de
+    # leitura pra contas antigas ainda não migradas; toda escrita nova usa managed_regionals.
+    managed_regionals: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -74,6 +89,53 @@ class User(Base):
     import_runs: Mapped[list["ImportRun"]] = relationship(back_populates="imported_by_user")
     import_service_order_audits: Mapped[list["ImportServiceOrderAudit"]] = relationship(back_populates="created_by_user")
     collaborator: Mapped[Collaborator | None] = relationship(back_populates="portal_user")
+    access_profiles: Mapped[list["AccessProfile"]] = relationship(
+        secondary="user_access_profiles",
+        back_populates="users",
+    )
+
+
+class AccessProfile(Base):
+    __tablename__ = "access_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    legacy_role: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    permissions: Mapped[list["AccessProfilePermission"]] = relationship(
+        back_populates="profile",
+        cascade="all, delete-orphan",
+    )
+    users: Mapped[list[User]] = relationship(
+        secondary="user_access_profiles",
+        back_populates="access_profiles",
+    )
+
+
+class AccessProfilePermission(Base):
+    __tablename__ = "access_profile_permissions"
+    __table_args__ = (UniqueConstraint("profile_id", "permission", name="uq_access_profile_permission"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+
+    profile: Mapped[AccessProfile] = relationship(back_populates="permissions")
+
+
+class UserAccessProfile(Base):
+    __tablename__ = "user_access_profiles"
+    __table_args__ = (UniqueConstraint("user_id", "profile_id", name="uq_user_access_profile"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class AuditLog(Base):

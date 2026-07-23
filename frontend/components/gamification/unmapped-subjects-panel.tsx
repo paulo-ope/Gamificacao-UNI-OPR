@@ -245,8 +245,8 @@ export function UnmappedSubjectsPanel({
 
       <div className="table-frame">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+            <TableRow className="border-slate-700 hover:bg-slate-900">
               <TableHead>Tipo Geral</TableHead>
               <TableHead>Assunto</TableHead>
               <TableHead>Qtd O.S</TableHead>
@@ -291,7 +291,7 @@ export function UnmappedSubjectsPanel({
                   </TableCell>
                   <TableCell>{numberFormat.format(subject.collaborators_count)}</TableCell>
                   <TableCell>{subject.predominant_regional}</TableCell>
-                  <TableCell className="font-medium text-teal-700">
+                  <TableCell className="font-medium text-blue-700">
                     {moneyFormat.format(subject.estimated_financial_impact)}
                   </TableCell>
                   <TableCell className="min-w-64">

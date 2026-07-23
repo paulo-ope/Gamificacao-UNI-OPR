@@ -1,21 +1,21 @@
 ﻿"use client";
 
-import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronUp, CircleDollarSign, ClipboardList, Download, HelpCircle, Loader2, LockKeyhole, Mail, MapPin, MinusCircle, RefreshCw, Search, Send, Settings2, ShieldAlert, Trophy, UsersRound, Wallet, XCircle } from "lucide-react";
+import { ClipboardList, HelpCircle, Loader2, LockKeyhole, Mail, RefreshCw, Settings2, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuditPanel } from "@/components/gamification/audit-panel";
 import { AuditTrailPanel } from "@/components/gamification/audit-trail-panel";
 import { ClosureHistoryPanel } from "@/components/gamification/closure-history-panel";
+import { ClosureTab } from "@/components/gamification/closure-tab";
 import { CollaboratorRegistryPanel } from "@/components/gamification/collaborator-registry-panel";
 import { CollaboratorOrdersSheet } from "@/components/gamification/collaborator-orders-sheet";
 import { AppDrawer } from "@/components/gamification/config-ui";
-import { DashboardCharts } from "@/components/gamification/dashboard-charts";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { LogicConfigurationPanel } from "@/components/gamification/logic-configuration-panel";
 import { LeadershipBonusPanel } from "@/components/gamification/leadership-bonus-panel";
 import { ModuleSidebar } from "@/components/gamification/module-sidebar";
 import { PointBalancePanel } from "@/components/gamification/point-balance-panel";
-import { RankingTable } from "@/components/gamification/ranking-table";
+import { RankingTab } from "@/components/gamification/ranking-tab";
 import { UnmappedDiagnosesPanel } from "@/components/gamification/unmapped-diagnoses-panel";
 import { UnmappedSubjectsPanel } from "@/components/gamification/unmapped-subjects-panel";
 import { UpvalueImportPanel } from "@/components/gamification/upvalue-import-panel";
@@ -23,11 +23,14 @@ import { UserManagementPanel } from "@/components/gamification/user-management-p
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { StatusToast } from "@/components/ui/status-toast";
 import { api, setAuthToken } from "@/lib/api";
+import { useClosureActions } from "@/hooks/use-closure-actions";
+import { useClosureData } from "@/hooks/use-closure-data";
 import { useConfirm } from "@/hooks/use-confirm";
+import { formatMoney, formatNumber, formatPoints, leadershipAverageSourceLabel, leadershipRoleLabel, pluralizeFilial } from "@/lib/gamificacao-helpers";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type {
   CalculationRunHistory,
@@ -53,8 +56,6 @@ import type {
   UnmappedSubject
 } from "@/lib/types";
 
-const numberFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
-const moneyFormat = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 type AnalysisPeriod = { reference_month?: number; reference_year?: number; regional?: string | null };
 
 const TAB_HELP: Record<string, string> = {
@@ -68,87 +69,9 @@ const TAB_HELP: Record<string, string> = {
   import: "Permite definir ou consultar o mês de referência usado nas análises da competência."
 };
 
-const SECTION_HELP = {
-  summary: "Consolida os valores principais do período, separando técnicos, liderança e total a pagar.",
-  details: "Agrupa os blocos usados para conferência operacional e financeira do fechamento.",
-  alerts: "Sinaliza inconsistências, itens sem regra ou pontos que exigem revisão.",
-  leadership: "Resume o valor calculado para liderança com base no resultado auditado dos técnicos.",
-  financial: "Mostra a decomposição dos valores do período por dimensão operacional.",
-  financialRegional: "Distribui o valor estimado por regional dentro do recorte atual.",
-  financialGroup: "Distribui o valor estimado por grupo ou tipo de serviço no recorte atual.",
-  financialSubjects: "Aponta assuntos recorrentes que ainda não possuem regra aplicada.",
-  chartArea: "Apresenta indicadores visuais para leitura rápida da saúde da base e do desempenho operacional.",
-  filteredCharts: "Mostra os resultados considerando os filtros selecionados, como filial, regional ou período."
-} as const;
-
-function formatNumber(value: number) {
-  return numberFormat.format(value);
-}
-
-function formatMoney(value: number) {
-  return moneyFormat.format(value);
-}
-
-function formatPoints(value: number) {
-  return `${formatNumber(value)} pts`;
-}
-
-function calculationStatusMeta(status: string | undefined) {
-  switch (status) {
-    case "review":
-      return {
-        label: "Em conferência",
-        className: "w-fit border-amber-200 bg-white text-amber-700"
-      };
-    case "approved":
-      return {
-        label: "Aprovado",
-        className: "w-fit border-sky-200 bg-white text-sky-700"
-      };
-    case "paid":
-      return {
-        label: "Pago",
-        className: "w-fit border-emerald-200 bg-white text-emerald-700"
-      };
-    case "cancelled":
-      return {
-        label: "Cancelado",
-        className: "w-fit border-rose-200 bg-white text-rose-700"
-      };
-    case "draft":
-    default:
-      return {
-        label: "Rascunho",
-        className: "w-fit border-slate-200 bg-white text-slate-700"
-      };
-  }
-}
-
-function leadershipRoleLabel(value: string) {
-  if (value === "supervisor") return "Supervisor";
-  if (value === "regional_manager") return "Gerente da unidade";
-  if (value === "portfolio_manager") return "Gerente de pasta";
-  return value;
-}
-
-function leadershipAverageSourceLabel(value: string | undefined) {
-  if (value === "collaborators_and_leaders") return "Colaboradores + líderes";
-  return "Colaboradores";
-}
-
 function leadershipAuditSourceLabel(value: string | undefined) {
   if (value === "leader") return "Líder";
   return "Colaborador";
-}
-
-function pluralizeFilial(count: number, suffix: "" | " selecionada" | " coberta" = "") {
-  const suffixPlural = suffix ? `${suffix}s` : "";
-  return count === 1 ? `filial${suffix}` : `filiais${suffixPlural}`;
-}
-
-function summarizeLabels(items: string[], visibleCount = 2) {
-  if (items.length <= visibleCount) return { visible: items, remaining: 0 };
-  return { visible: items.slice(0, visibleCount), remaining: items.length - visibleCount };
 }
 
 function parseOptionalNumber(value: string) {
@@ -163,107 +86,6 @@ function parseOptionalNumber(value: string) {
 
 function replaceById<T extends { id: number }>(items: T[], id: number, nextItem: T) {
   return items.map((item) => (item.id === id ? nextItem : item));
-}
-
-function FinancialTable({
-  title,
-  rows,
-  labelKey,
-  collapsed,
-  onToggle
-}: {
-  title: string;
-  rows: Array<Record<string, string | number | undefined>>;
-  labelKey: "regional" | "group" | "os_subject";
-  collapsed: boolean;
-  onToggle: () => void;
-}) {
-  const totalOrders = rows.reduce((total, row) => total + Number(row.orders ?? 0), 0);
-  const totalPayment = rows.reduce((total, row) => total + Number(row.estimated_payment ?? 0), 0);
-  const helpText =
-    labelKey === "regional"
-      ? SECTION_HELP.financialRegional
-      : labelKey === "group"
-        ? SECTION_HELP.financialGroup
-        : SECTION_HELP.financialSubjects;
-
-  return (
-    <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-4 py-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-semibold text-slate-950">{title}</h3>
-              <InfoHint ariaLabel={`Ajuda sobre ${title}`} description={helpText} />
-            </div>
-            <p className="mt-1 text-sm text-slate-500">{formatNumber(rows.length)} item(ns)</p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-8 w-8 rounded-xl p-0 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-            onClick={onToggle}
-            title={collapsed ? "Expandir todos" : "Recolher todos"}
-            aria-label={collapsed ? "Expandir todos" : "Recolher todos"}
-          >
-            {collapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-          </Button>
-        </div>
-
-        <div className="mt-3 grid grid-cols-2 gap-3">
-          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">O.S</div>
-            <div className="mt-1 text-lg font-semibold text-slate-950">{formatNumber(totalOrders)} O.S</div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Valor a ser pago</div>
-            <div className="mt-1 text-lg font-semibold text-teal-700">{formatMoney(totalPayment)}</div>
-          </div>
-        </div>
-      </div>
-      {!collapsed ? (
-        <div className="table-frame px-2 py-2">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Dimensão</TableHead>
-                <TableHead>O.S</TableHead>
-                <TableHead>Valor a ser pago</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.slice(0, 8).map((row, index) => (
-                <TableRow key={`${title}-${index}`}>
-                  <TableCell className="min-w-52">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600">
-                        {index + 1}
-                      </div>
-                      <div className="font-medium text-slate-900">
-                        {labelKey === "regional" ? regionalName(String(row[labelKey] ?? "-")) : String(row[labelKey] ?? "-")}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="font-medium text-slate-700">{formatNumber(Number(row.orders ?? 0))} O.S</TableCell>
-                  <TableCell className="font-semibold text-teal-700">{formatMoney(Number(row.estimated_payment ?? 0))}</TableCell>
-                </TableRow>
-              ))}
-              {rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={3} className="py-6 text-center text-sm text-slate-500">
-                    Nenhum dado para os filtros atuais.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
-      ) : (
-        <div className="border-t bg-slate-50/70 px-4 py-3 text-sm text-slate-500">Painel recolhido. Use a seta para abrir os itens do recorte atual.</div>
-      )}
-    </div>
-  );
 }
 
 export default function GamificacaoPage() {
@@ -311,7 +133,6 @@ export default function GamificacaoPage() {
   const [selectedRegionals, setSelectedRegionals] = useState<string[]>([]);
   const [rankingSearch, setRankingSearch] = useState("");
   const [chartPenalties, setChartPenalties] = useState<PenaltyDistributionItem[]>([]);
-  const [financialCollapsed, setFinancialCollapsed] = useState(true);
   const [filteredBreakdowns, setFilteredBreakdowns] = useState<DashboardFilteredBreakdown | null>(null);
   const [serviceOrdersLoaded, setServiceOrdersLoaded] = useState(false);
   const [pendingDataLoaded, setPendingDataLoaded] = useState(false);
@@ -715,69 +536,6 @@ export default function GamificacaoPage() {
     summary,
   ]);
 
-  const closure = useMemo(() => {
-    if (!summary) {
-      return {
-        ready: false,
-        pendingCount: 0,
-        pendingItems: [],
-        isClosed: false
-      };
-    }
-
-    const pendingItems = [
-      {
-        label: "O.S sem regra de pontuação",
-        value: summary.cards.unscored_service_orders,
-        tab: "pending",
-        icon: HelpCircle,
-        help: "Assuntos importados que ainda não estão vinculados a um grupo."
-      },
-      {
-        label: "Diagnósticos sem regra",
-        value: summary.cards.diagnosis_unmapped_service_orders,
-        tab: "pending",
-        icon: ShieldAlert,
-        help: "Diagnósticos encontrados sem regra de liberação ou anulação."
-      },
-      {
-        label: "Colaboradores pendentes de cadastro",
-        value: summary.leadership_bonus?.pending_collaborators.length ?? 0,
-        tab: "config" as const,
-        configSubTab: "collaborators" as const,
-        icon: UsersRound,
-        help: "Colaboradores com produção no período que ainda não estão formalmente cadastrados."
-      }
-    ];
-    const pendingCount = pendingItems.reduce((total, item) => total + item.value, 0);
-    const isClosed = summary.run?.status === "paid" || summary.run?.status === "cancelled";
-
-    return {
-      ready: pendingCount === 0,
-      pendingCount,
-      pendingItems,
-      isClosed
-    };
-  }, [summary]);
-
-  const closureFinancials = useMemo(() => {
-    const technicianAmount = summary?.cards.estimated_payment ?? 0;
-    const leadershipAmount = summary?.leadership_bonus?.total_bonus_amount ?? 0;
-    return {
-      technicianAmount,
-      leadershipAmount,
-      totalAmount: technicianAmount + leadershipAmount
-    };
-  }, [summary]);
-
-  const closureBalanceImpact = useMemo(() => {
-    const affected = (summary?.ranking ?? []).filter((score) => (score.balance_adjustment_points ?? 0) < 0);
-    return {
-      collaboratorCount: affected.length,
-      points: affected.reduce((total, score) => total + (score.balance_adjustment_points ?? 0), 0)
-    };
-  }, [summary]);
-
   const regionalOptions = useMemo(() => {
     if (!summary) return [];
     return Array.from(new Set(summary.ranking.map((score) => normalizeRegional(score.regional)).filter(Boolean))).sort((a, b) =>
@@ -822,7 +580,11 @@ export default function GamificacaoPage() {
   const filteredRanking = useMemo(() => {
     if (!summary) return [];
     const search = rankingSearch.trim().toLowerCase();
+    // Mesma regra já aplicada nos gráficos de análise (ver dashboard-charts.tsx): colaborador não
+    // cadastrado não entra no ranking - ele aparece no cadastro de pendentes (CollaboratorRegistryPanel)
+    // até ser efetivamente registrado, não misturado aqui como se fosse alguém já formalizado.
     return summary.ranking.filter((score) => {
+      if (score.is_registered === false) return false;
       const matchesRegional = selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(score.regional));
       const matchesSearch = !search || score.collaborator_name.toLowerCase().includes(search);
       return matchesRegional && matchesSearch;
@@ -927,7 +689,10 @@ export default function GamificacaoPage() {
 
   const rankingScope = useMemo(() => {
     if (!summary) return [];
+    // Mesma regra do ranking (ver filteredRanking acima): totais desta tela não contam colaborador
+    // não cadastrado.
     return summary.ranking.filter((score) => {
+      if (score.is_registered === false) return false;
       return selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(score.regional));
     });
   }, [selectedRegionals, summary]);
@@ -954,29 +719,6 @@ export default function GamificacaoPage() {
   );
 
   const outsideRankingCount = Math.max(rankingPeriodTotalOrders - rankingScopeTotals.serviceOrders, 0);
-  const chartHealth = useMemo(() => {
-    if (!summary) return [];
-    return selectedRegionals.length > 0
-      ? summary.health_by_regional.filter((item) => selectedRegionals.includes(normalizeRegional(item.regional)))
-      : summary.health_by_regional;
-  }, [selectedRegionals, summary]);
-  const chartContext = useMemo(() => {
-    const serviceOrders = chartHealth.reduce((total, item) => total + item.total_orders, 0);
-    const recurrenceOrders = chartHealth.reduce((total, item) => total + (item.recurrence_orders ?? 0), 0);
-    const recurrenceRate = serviceOrders > 0 ? (recurrenceOrders / serviceOrders) * 100 : 0;
-    return {
-      serviceOrders,
-      recurrenceOrders,
-      recurrenceRate,
-      collaborators: filteredRanking.length,
-      label:
-        selectedRegionals.length === 0
-          ? "Todas as regionais"
-          : selectedRegionals.length === 1
-            ? regionalName(selectedRegionals[0])
-            : `${selectedRegionals.length} regionais`
-    };
-  }, [chartHealth, filteredRanking.length, selectedRegionals]);
 
   const filteredFinancials = useMemo(() => {
     if (!summary) {
@@ -1052,6 +794,23 @@ export default function GamificacaoPage() {
     }
   }
 
+  const { closure, closureFinancials, closureBalanceImpact, chartHealth, chartContext, financialCollapsed, setFinancialCollapsed } = useClosureData(
+    summary,
+    selectedRegionals,
+    filteredRanking.length
+  );
+
+  const { advanceRunStatus, exportPaymentCsv } = useClosureActions({
+    summary,
+    currentUser,
+    selectedRegionals,
+    confirm,
+    withFeedback,
+    setError,
+    loadAll,
+    setHistoryLoaded
+  });
+
   // O backend agora recusa (409) recalcular tanto um período já pago quanto um período que não é
   // mais o mês corrente (fuso de Porto Velho) mesmo sem ter sido pago - em ambos os casos, exige
   // "create_revision" explícito. Em vez de prever isso no cliente (duplicando a regra de fuso
@@ -1096,7 +855,7 @@ export default function GamificacaoPage() {
           regional: analysisPeriod.regional ?? summary?.run?.regional ?? bootstrap?.regional ?? undefined
         };
         if (!safePeriod.reference_month || !safePeriod.reference_year) {
-          throw new Error("Selecione um periodo valido antes de recalcular a pontuacao.");
+          throw new Error("Selecione um período válido antes de recalcular a pontuação.");
         }
         const value = parseOptionalNumber(pointValue);
         if (value !== null) {
@@ -1163,139 +922,6 @@ export default function GamificacaoPage() {
     }, "Período de análise alterado.");
   }
 
-  async function advanceRunStatus(nextStatus: "review" | "approved" | "paid" | "cancelled", successMessage: string) {
-    const runId = summary?.run?.id;
-    if (!runId) {
-      setError("Nenhum fechamento calculado para avançar o status. Recalcule o período primeiro.");
-      return;
-    }
-    if (nextStatus === "paid") {
-      const confirmed = await confirm({
-        title: "Marcar como pago",
-        description:
-          "Marcar este fechamento como PAGO é definitivo e não pode ser revertido. " +
-          "A partir daqui, débitos de garantia pendentes dos colaboradores serão aplicados. Deseja continuar?",
-        confirmLabel: "Marcar como pago",
-        tone: "danger"
-      });
-      if (!confirmed) return;
-    }
-    if (nextStatus === "cancelled") {
-      const confirmed = await confirm({
-        title: "Cancelar fechamento",
-        description: "Cancelar este fechamento? Ele não poderá mais ser aprovado ou pago.",
-        confirmLabel: "Cancelar fechamento",
-        tone: "danger"
-      });
-      if (!confirmed) return;
-    }
-    await withFeedback(async () => {
-      await api.updateCalculationRunStatus(runId, { status: nextStatus });
-      const period = {
-        reference_month: summary?.run?.reference_month,
-        reference_year: summary?.run?.reference_year,
-        regional: summary?.run?.regional
-      };
-      await loadAll(period, { refreshRuleBasics: false });
-      setHistoryLoaded(false);
-    }, successMessage);
-  }
-
-  function exportPaymentCsv() {
-    if (!summary || currentUser?.role === "viewer") return;
-    const healthByRegional = new Map(
-      summary.health_by_regional.map((item) => [normalizeRegional(item.regional), item])
-    );
-    const paymentRows = summary.ranking.filter((score) => {
-      const matchesRegional = selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(score.regional));
-      return matchesRegional && score.is_registered !== false;
-    });
-    const leadershipRows = (summary.leadership_bonus?.results ?? []).filter((item) => {
-      return selectedRegionals.length === 0 || item.regionals.some((regional) => selectedRegionals.includes(normalizeRegional(regional)));
-    });
-    const pendingRows = (summary.leadership_bonus?.pending_collaborators ?? []).filter((item) => {
-      return selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(item.suggested_regional || item.regional));
-    });
-    const rows = [
-      ["Pagamento de técnicos"],
-      [
-        "Colaborador",
-        "Regional",
-        "Tipo",
-        "O.S",
-        "Pontos brutos",
-        "Pontos anulados",
-        "Pontos líquidos",
-        "SLA da base (%)",
-        "Multiplicador saúde",
-        "Pontos finais",
-        "Valor a ser pago"
-      ],
-      ...paymentRows.map((score) => {
-        const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
-        return [
-          score.collaborator_name,
-          regionalName(score.regional),
-          "Técnico",
-          formatNumber(score.service_orders_count),
-          formatPoints(score.gross_points),
-          formatPoints(score.penalty_points),
-          formatPoints(score.net_points),
-          regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
-          `${formatNumber(score.health_multiplier)}x`,
-          formatPoints(score.final_points),
-          formatMoney(score.estimated_payment)
-        ];
-      }),
-      [],
-      ["Bonificação de liderança"],
-      [
-        "Liderança",
-        "Regionais",
-        "Tipo",
-        "Origem da média",
-        "Pessoas na média",
-        "Soma dos pontos",
-        "Média final",
-        "Multiplicador",
-        "Valor a ser pago"
-      ],
-      ...leadershipRows.map((item) => [
-        item.name,
-        item.regionals.map((regional) => regionalName(regional)).join(", "),
-        leadershipRoleLabel(item.role_type),
-        leadershipAverageSourceLabel(item.average_source),
-        formatNumber(item.audit?.scoped_collaborators ?? item.scoped_collaborators),
-        `${formatNumber(item.audit?.total_final_points ?? item.average_final_points * item.scoped_collaborators)} pts`,
-        `${formatNumber(item.average_final_points)} pts`,
-        `${formatNumber(item.multiplier)}x`,
-        formatMoney(item.bonus_amount)
-      ]),
-      [],
-      ["Pendentes de cadastro"],
-      ["Nome identificado", "Regional sugerida", "O.S", "Valor potencial", "Status"],
-      ...pendingRows.map((item) => [
-        item.name,
-        regionalName(item.suggested_regional || item.regional),
-        `${formatNumber(item.service_orders_count)} O.S`,
-        formatMoney(item.estimated_payment),
-        "Pendente de cadastro"
-      ])
-    ];
-    const csv = rows
-      .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(";"))
-      .join("\r\n");
-    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `pagamentos-gamificação-${summary.run?.reference_month ?? "período"}-${summary.run?.reference_year ?? "atual"}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  }
-
   async function login() {
     setBusy(true);
     setError(null);
@@ -1341,7 +967,7 @@ export default function GamificacaoPage() {
                   placeholder="Digite seu e-mail"
                   value={loginEmail}
                   onChange={(event) => setLoginEmail(event.target.value)}
-                  className="h-11 rounded-lg border-slate-200 bg-slate-50 pl-10 shadow-sm transition focus-visible:bg-white focus-visible:ring-teal-500"
+                  className="h-11 rounded-lg border-slate-200 bg-slate-50 pl-10 shadow-sm transition focus-visible:bg-white focus-visible:ring-blue-500"
                 />
               </div>
             </label>
@@ -1357,7 +983,7 @@ export default function GamificacaoPage() {
                   onKeyDown={(event) => {
                     if (event.key === "Enter") void login();
                   }}
-                  className="h-11 rounded-lg border-slate-200 bg-slate-50 pl-10 shadow-sm transition focus-visible:bg-white focus-visible:ring-teal-500"
+                  className="h-11 rounded-lg border-slate-200 bg-slate-50 pl-10 shadow-sm transition focus-visible:bg-white focus-visible:ring-blue-500"
                 />
               </div>
             </label>
@@ -1385,8 +1011,8 @@ export default function GamificacaoPage() {
   if (can("scoring:write")) visibleTabs.add("config");
 
   return (
-    <main className="min-h-dvh bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_24%),radial-gradient(circle_at_top_right,rgba(37,99,235,0.08),transparent_20%),linear-gradient(180deg,#f8fbff_0%,#f8fafc_42%,#f8fafc_100%)]">
-      <div className="flex min-h-dvh w-full">
+    <main className="h-dvh overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_24%),radial-gradient(circle_at_top_right,rgba(37,99,235,0.08),transparent_20%),linear-gradient(180deg,#f8fbff_0%,#f8fafc_42%,#f8fafc_100%)]">
+      <div className="flex h-full w-full">
         <ModuleSidebar
           activeTab={activeTab}
           onTabChange={setActiveTab}
@@ -1399,33 +1025,15 @@ export default function GamificacaoPage() {
           isPaidPeriod={summary?.run?.status === "paid"}
         />
         <div className="min-w-0 flex-1 overflow-y-auto">
+          <StatusToast
+            error={error}
+            message={message}
+            busy={busy}
+            busyLabel="Salvando alterações..."
+            onDismissError={() => setError(null)}
+            onDismissMessage={() => setMessage(null)}
+          />
           <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4 px-2 py-3 sm:px-4">
-        {error ? (
-          <div className="rounded-2xl border border-red-200 bg-[linear-gradient(180deg,#fff5f5_0%,#fef2f2_100%)] px-4 py-3 text-sm text-red-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-red-600 shadow-sm">
-                <AlertTriangle className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-red-500">Atenção</div>
-                <div className="mt-1 text-sm font-medium text-red-700">{error}</div>
-              </div>
-            </div>
-          </div>
-        ) : null}
-        {message ? (
-          <div className="rounded-2xl border border-emerald-200 bg-[linear-gradient(180deg,#f0fdf9_0%,#ecfdf5_100%)] px-4 py-3 text-sm text-emerald-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 shadow-sm">
-                <CheckCircle2 className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-600">Atualização concluída</div>
-                <div className="mt-1 text-sm font-medium text-emerald-700">{message}</div>
-              </div>
-            </div>
-          </div>
-        ) : null}
 
         {loading && !bootstrap ? (
           <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -1502,496 +1110,31 @@ export default function GamificacaoPage() {
                 !summary ? (
                   <div className="panel p-8 text-sm text-slate-500">Carregando resumo executivo e indicadores do fechamento...</div>
                 ) : (
-                <div className="grid gap-4">
-                  <section className="overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-sm">
-                    <div
-                      className={
-                        closure.ready || closure.isClosed
-                          ? "grid gap-5 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.08),transparent_22%),linear-gradient(180deg,#ffffff_0%,#fbfdff_100%)] p-5"
-                          : "grid gap-5 bg-[radial-gradient(circle_at_top_left,rgba(245,158,11,0.08),transparent_22%),linear-gradient(180deg,#ffffff_0%,#fbfdff_100%)] p-5"
-                      }
-                    >
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            {closure.isClosed ? (
-                              <Badge className={summary.run?.status === "paid" ? "w-fit border-emerald-200 bg-white text-emerald-700" : "w-fit border-rose-200 bg-white text-rose-700"}>
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                {summary.run?.status === "paid" ? "Fechamento pago" : "Fechamento cancelado"}
-                              </Badge>
-                            ) : (
-                              <Badge
-                                className={
-                                  closure.ready
-                                    ? "w-fit border-emerald-200 bg-white text-emerald-700"
-                                    : "w-fit border-amber-200 bg-white text-amber-700"
-                                }
-                              >
-                                {closure.ready ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                                {closure.ready ? "Fechamento liberado" : "Fechamento com pendência"}
-                              </Badge>
-                            )}
-                            <Badge className="w-fit border-slate-200 bg-white text-slate-700">
-                              <CalendarDays className="h-3.5 w-3.5" />
-                              {summary.run ? `${summary.run.reference_month}/${summary.run.reference_year}` : "Sem cálculo"}
-                            </Badge>
-                            {summary.run ? (
-                              <Badge className={calculationStatusMeta(summary.run.status).className}>
-                                <ClipboardList className="h-3.5 w-3.5" />
-                                {calculationStatusMeta(summary.run.status).label}
-                              </Badge>
-                            ) : null}
-                          </div>
-                          <div className="mt-3 flex items-center gap-2">
-                            <h2 className="text-2xl font-semibold leading-tight text-slate-950">
-                              {closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}
-                            </h2>
-                            <InfoHint
-                              ariaLabel={`Ajuda sobre ${closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}`}
-                              description={SECTION_HELP.summary}
-                            />
-                          </div>
-                          {closure.isClosed && closure.pendingCount > 0 ? (
-                            <p className="mt-2 text-sm text-amber-700">
-                              Este fechamento tinha {formatNumber(closure.pendingCount)} pendência(s) de governança registrada(s) no momento do pagamento. Veja abaixo.
-                            </p>
-                          ) : null}
-                          {summary.run?.status_note ? (
-                            <p className="mt-2 text-sm text-slate-500">{summary.run.status_note}</p>
-                          ) : null}
-                        </div>
-                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-                          {currentUser.role !== "viewer" ? (
-                            <Button type="button" variant="outline" onClick={exportPaymentCsv} className="w-full bg-white sm:w-auto">
-                              <Download className="h-4 w-4" />
-                              Exportar pagamento
-                            </Button>
-                          ) : null}
-                          {summary.run && can("calculation:run") ? (
-                            <>
-                              {summary.run.status === "draft" ? (
-                                <Button
-                                  type="button"
-                                  onClick={() => advanceRunStatus("review", "Fechamento enviado para conferência.")}
-                                  disabled={busy}
-                                  className="w-full bg-amber-600 text-white hover:bg-amber-700 sm:w-auto"
-                                >
-                                  <Send className="h-4 w-4" />
-                                  Enviar para conferência
-                                </Button>
-                              ) : null}
-                              {summary.run.status === "review" && currentUser.role === "admin" ? (
-                                <Button
-                                  type="button"
-                                  onClick={() => advanceRunStatus("approved", "Fechamento aprovado.")}
-                                  disabled={busy}
-                                  className="w-full bg-sky-600 text-white hover:bg-sky-700 sm:w-auto"
-                                >
-                                  <CheckCircle2 className="h-4 w-4" />
-                                  Aprovar fechamento
-                                </Button>
-                              ) : null}
-                              {summary.run.status === "approved" && currentUser.role === "admin" ? (
-                                <Button
-                                  type="button"
-                                  onClick={() => advanceRunStatus("paid", "Fechamento marcado como pago.")}
-                                  disabled={busy}
-                                  className="w-full bg-emerald-600 text-white hover:bg-emerald-700 sm:w-auto"
-                                >
-                                  <Wallet className="h-4 w-4" />
-                                  Marcar como pago
-                                </Button>
-                              ) : null}
-                              {["draft", "review", "approved"].includes(summary.run.status) ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  onClick={() => advanceRunStatus("cancelled", "Fechamento cancelado.")}
-                                  disabled={busy}
-                                  className="w-full bg-white text-rose-600 hover:bg-rose-50 sm:w-auto"
-                                >
-                                  <XCircle className="h-4 w-4" />
-                                  Cancelar
-                                </Button>
-                              ) : null}
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      <div className="grid gap-3 lg:grid-cols-3">
-                        {[
-                          {
-                            label: "Técnicos",
-                            value: formatMoney(closureFinancials.technicianAmount),
-                            help: "Valor a ser pago aos colaboradores técnicos",
-                            icon: UsersRound,
-                            tone: "text-teal-700",
-                            className: "border-slate-200 bg-white"
-                          },
-                          {
-                            label: "Liderança",
-                            value: formatMoney(closureFinancials.leadershipAmount),
-                            help: "Bonificação sobre as filiais vinculadas",
-                            icon: Trophy,
-                            tone: "text-blue-700",
-                            className: "border-slate-200 bg-white"
-                          },
-                          {
-                            label: "Total a pagar",
-                            value: formatMoney(closureFinancials.totalAmount),
-                            help: "Técnicos + liderança",
-                            icon: CircleDollarSign,
-                            tone: "text-slate-950",
-                            className: "border-slate-900/10 bg-[linear-gradient(135deg,#0f172a_0%,#111827_65%,#0b1220_100%)] text-white shadow-[0_18px_40px_-24px_rgba(2,6,23,0.9)]"
-                          }
-                        ].map((item) => {
-                          const Icon = item.icon;
-                          const isTotal = item.label === "Total a pagar";
-                          return (
-                            <div key={item.label} className={`min-w-0 rounded-[22px] border p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${item.className}`}>
-                              <div className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] ${isTotal ? "text-slate-300" : "text-slate-500"}`}>
-                                <Icon className="h-4 w-4" />
-                                <span className="truncate">{item.label}</span>
-                              </div>
-                              <div className={`mt-3 truncate text-[32px] font-semibold leading-none ${isTotal ? "text-white" : item.tone}`}>{item.value}</div>
-                              <div className={`mt-2 text-sm ${isTotal ? "text-slate-300" : "text-slate-500"}`}>{item.help}</div>
-                              {isTotal ? (
-                                <div className="mt-4 inline-flex w-fit rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200">
-                                  Pronto para exportação
-                                </div>
-                              ) : (
-                                <div className="mt-4 h-px w-full bg-slate-100" />
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                        {[
-                          {
-                            label: "Total de O.S",
-                            value: `${formatNumber(summary.cards.total_service_orders)} O.S`,
-                            icon: ClipboardList,
-                            tone: "text-slate-800"
-                          },
-                          {
-                            label: "Regras pendentes",
-                            value: `${formatNumber(closure.pendingCount)} item(ns)`,
-                            icon: AlertTriangle,
-                            tone: closure.pendingCount > 0 ? "text-amber-700" : "text-emerald-700"
-                          },
-                          {
-                            label: "Pontos finais",
-                            value: formatPoints(summary.cards.final_points),
-                            icon: BarChart3,
-                            tone: "text-blue-700"
-                          },
-                          {
-                            label: "Pontos anulados",
-                            value: `${formatNumber(summary.cards.penalty_points)} pts anulados`,
-                            icon: AlertTriangle,
-                            tone: summary.cards.penalty_points > 0 ? "text-red-700" : "text-slate-700"
-                          },
-                          {
-                            label: "Descontos de garantia",
-                            value: closureBalanceImpact.collaboratorCount > 0 ? formatPoints(Math.abs(closureBalanceImpact.points)) : "Sem descontos",
-                            sub: closureBalanceImpact.collaboratorCount > 0 ? `em ${formatNumber(closureBalanceImpact.collaboratorCount)} colaborador(es)` : undefined,
-                            icon: MinusCircle,
-                            tone: closureBalanceImpact.collaboratorCount > 0 ? "text-red-700" : "text-slate-700",
-                            onClick: closureBalanceImpact.collaboratorCount > 0 ? () => setActiveTab("balance") : undefined
-                          }
-                        ].map((item) => {
-                          const Icon = item.icon;
-                          const content = (
-                            <>
-                              <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                                <Icon className="h-3.5 w-3.5" />
-                                <span className="truncate">{item.label}</span>
-                              </div>
-                              <div className={`mt-3 truncate text-[28px] font-semibold leading-none ${item.tone}`}>{item.value}</div>
-                              {item.sub ? <div className="mt-1 truncate text-xs text-slate-500">{item.sub}</div> : null}
-                            </>
-                          );
-                          if (item.onClick) {
-                            return (
-                              <button
-                                key={item.label}
-                                type="button"
-                                onClick={item.onClick}
-                                className="min-w-0 rounded-[20px] border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-teal-300 hover:bg-teal-50/40"
-                              >
-                                {content}
-                              </button>
-                            );
-                          }
-                          return (
-                            <div key={item.label} className="min-w-0 rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                              {content}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </section>
-
-                  <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                    <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-5 py-5">
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                          <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Conferência detalhada</div>
-                          <div className="mt-1 flex items-center gap-2">
-                            <h2 className="text-[22px] font-semibold leading-tight text-slate-950">Detalhamento do fechamento</h2>
-                            <InfoHint ariaLabel="Ajuda sobre Detalhamento do fechamento" description={SECTION_HELP.details} />
-                          </div>
-                        </div>
-                        <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-medium text-slate-600">
-                          O resumo executivo acima continua como referência principal da competência.
-                        </div>
-                      </div>
-                    </div>
-
-                    <Accordion className="gap-0 bg-white">
-                      <AccordionItem value="closure-pending" defaultOpen={closure.pendingCount > 0} className="rounded-none border-0 border-b">
-                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
-                          <AccordionTrigger asChild>
-                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
-                              <div className="flex min-w-0 items-start gap-3">
-                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-700">
-                                  <AlertTriangle className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-sm font-semibold text-slate-950">
-                                    {closure.isClosed ? "Pendências registradas no fechamento" : "Alertas e pendências"}
-                                  </div>
-                                </div>
-                              </div>
-                              <Badge className={closure.pendingCount > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}>
-                                {closure.pendingCount > 0 ? `${formatNumber(closure.pendingCount)} pendência(s)` : "Sem pendências"}
-                              </Badge>
-                            </button>
-                          </AccordionTrigger>
-                          <InfoHint ariaLabel="Ajuda sobre Alertas e pendências" description={SECTION_HELP.alerts} />
-                        </div>
-                        <AccordionContent className="px-5 pb-5">
-                          {closure.pendingCount > 0 ? (
-                            <div className="grid gap-3 rounded-[20px] border border-slate-200 bg-slate-50/60 p-3 md:grid-cols-2">
-                              {closure.pendingItems.map((item) => {
-                                const Icon = item.icon;
-                                return (
-                                  <button
-                                    key={item.label}
-                                    className="rounded-[18px] border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-teal-300 hover:bg-teal-50/40"
-                                    onClick={() => {
-                                      setActiveTab(item.tab);
-                                      if ("configSubTab" in item && item.configSubTab) setConfigTab(item.configSubTab);
-                                    }}
-                                  >
-                                    <div className="flex items-center justify-between gap-3">
-                                      <div className={item.value > 0 ? "text-2xl font-semibold text-amber-700" : "text-2xl font-semibold text-emerald-700"}>
-                                        {formatNumber(item.value)}
-                                      </div>
-                                      <div
-                                        className={
-                                          item.value > 0
-                                            ? "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700"
-                                            : "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"
-                                        }
-                                      >
-                                        <Icon className="h-4 w-4" />
-                                      </div>
-                                    </div>
-                                    <div className="mt-1 text-sm font-semibold text-slate-950">{item.label}</div>
-                                    <div className="mt-2 text-xs text-slate-500">{item.help}</div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-3 rounded-lg border bg-emerald-50/60 px-4 py-4 text-sm text-slate-700">
-                              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                              Todas as O.S do período possuem regra de assunto ou diagnóstico aplicada.
-                            </div>
-                          )}
-                        </AccordionContent>
-                      </AccordionItem>
-
-                      <AccordionItem value="closure-leadership" className="rounded-none border-0 border-b">
-                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
-                          <AccordionTrigger asChild>
-                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
-                              <div className="flex min-w-0 items-start gap-3">
-                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
-                                  <Trophy className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-sm font-semibold text-slate-950">Bonificação de liderança</div>
-                                </div>
-                              </div>
-                              <Badge className="border-blue-200 bg-blue-50 text-blue-700">{formatMoney(summary.leadership_bonus?.total_bonus_amount ?? 0)}</Badge>
-                            </button>
-                          </AccordionTrigger>
-                          <InfoHint ariaLabel="Ajuda sobre Bonificação de liderança" description={SECTION_HELP.leadership} />
-                        </div>
-                        <AccordionContent className="px-5 pb-5">
-                          <div className="grid gap-3 rounded-[20px] border border-slate-200 bg-slate-50/60 p-3 md:grid-cols-3">
-                            {[
-                              ["Valor da liderança", formatMoney(summary.leadership_bonus?.total_bonus_amount ?? 0)],
-                              ["Perfis ativos", `${formatNumber(summary.leadership_bonus?.results.length ?? 0)} líder(es)`],
-                              ["Filiais cobertas", `${formatNumber(leadershipCoveredRegionals)} ${pluralizeFilial(leadershipCoveredRegionals)}`]
-                            ].map(([label, value]) => (
-                              <div key={label} className="rounded-[18px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</div>
-                                <div className="mt-2 text-xl font-semibold text-slate-950">{value}</div>
-                              </div>
-                            ))}
-                          </div>
-                          <div className="mt-4 flex flex-col gap-3 rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:flex-row sm:items-center sm:justify-between">
-                            <div>
-                              <div className="text-sm font-semibold text-slate-950">Ranking de liderança separado do fechamento</div>
-                              <p className="mt-1 text-sm text-slate-500">
-                                A lista detalhada de líderes agora fica na aba Ranking, em uma visão própria para comparação e conferência.
-                              </p>
-                            </div>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="rounded-xl border-slate-300"
-                              onClick={() => {
-                                setActiveTab("ranking");
-                                setRankingTab("leaders");
-                              }}
-                            >
-                              Ver ranking de líderes
-                            </Button>
-                          </div>
-                        </AccordionContent>
-                      </AccordionItem>
-
-                      <AccordionItem value="closure-financial-breakdown" className="rounded-none border-0 border-b">
-                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
-                          <AccordionTrigger asChild>
-                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
-                              <div className="flex min-w-0 items-start gap-3">
-                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-700">
-                                  <CircleDollarSign className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-sm font-semibold text-slate-950">Detalhamento financeiro</div>
-                                </div>
-                              </div>
-                              <Badge className="border-slate-200 bg-slate-50 text-slate-700">3 painéis</Badge>
-                            </button>
-                          </AccordionTrigger>
-                          <InfoHint ariaLabel="Ajuda sobre Detalhamento financeiro" description={SECTION_HELP.financial} />
-                        </div>
-                        <AccordionContent className="px-5 pb-5">
-                          <div className="grid min-w-0 gap-4 xl:grid-cols-3">
-                            <FinancialTable
-                              title="Valor a ser pago por regional"
-                              rows={filteredFinancials.cost_by_regional}
-                              labelKey="regional"
-                              collapsed={financialCollapsed}
-                              onToggle={() => setFinancialCollapsed((value) => !value)}
-                            />
-                            <FinancialTable
-                              title="Valor a ser pago por grupo"
-                              rows={filteredFinancials.cost_by_group}
-                              labelKey="group"
-                              collapsed={financialCollapsed}
-                              onToggle={() => setFinancialCollapsed((value) => !value)}
-                            />
-                            <FinancialTable
-                              title="Assuntos sem regra frequentes"
-                              rows={filteredFinancials.top_unmapped_subjects}
-                              labelKey="os_subject"
-                              collapsed={financialCollapsed}
-                              onToggle={() => setFinancialCollapsed((value) => !value)}
-                            />
-                          </div>
-                        </AccordionContent>
-                      </AccordionItem>
-
-                      <AccordionItem value="closure-analysis" className="rounded-none border-0">
-                        <div className="flex items-start gap-3 px-5 py-4 transition hover:bg-slate-50/80">
-                          <AccordionTrigger asChild>
-                            <button type="button" className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left">
-                              <div className="flex min-w-0 items-start gap-3">
-                                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-violet-50 text-violet-700">
-                                  <BarChart3 className="h-4 w-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-sm font-semibold text-slate-950">Análise operacional e gráficos</div>
-                                </div>
-                              </div>
-                              <Badge className="border-slate-200 bg-slate-50 text-slate-700">{selectedRegionals.length ? `${selectedRegionals.length} ${pluralizeFilial(selectedRegionals.length)}` : "Todas as filiais"}</Badge>
-                            </button>
-                          </AccordionTrigger>
-                          <InfoHint ariaLabel="Ajuda sobre Análise operacional e gráficos" description={SECTION_HELP.chartArea} />
-                        </div>
-                        <AccordionContent className="px-5 pb-5">
-                          <div className="grid gap-4 rounded-[20px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] p-4 lg:grid-cols-[1fr_minmax(260px,360px)] lg:items-start">
-                            <div>
-                              <Badge className="w-fit border-slate-200 bg-white text-slate-700">
-                                <BarChart3 className="h-3.5 w-3.5" />
-                                Análise operacional
-                              </Badge>
-                              <div className="mt-2 flex items-center gap-2">
-                                <h2 className="text-lg font-semibold text-slate-950">Gráficos e indicadores filtrados</h2>
-                                <InfoHint ariaLabel="Ajuda sobre Gráficos e indicadores filtrados" description={SECTION_HELP.filteredCharts} />
-                              </div>
-                            </div>
-                            <div className="grid gap-1">
-                              <select
-                                multiple
-                                className="h-16 rounded-md border border-input bg-white px-3 py-2 text-sm"
-                                value={selectedRegionals}
-                                onChange={(event) => updateSelectedRegionals(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}
-                              >
-                                {regionalOptions.map((regional) => (
-                                  <option key={regional} value={regional}>
-                                    {regionalName(regional)}
-                                  </option>
-                                ))}
-                              </select>
-                              <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                                <span>{selectedRegionals.length ? `${selectedRegionals.length} ${pluralizeFilial(selectedRegionals.length, " selecionada")}` : "Todas as filiais"}</span>
-                                <Button type="button" variant="ghost" size="sm" className="h-6 px-2" onClick={() => setSelectedRegionals([])}>
-                                  Limpar
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                            {[
-                              { label: "Contexto", value: chartContext.label, icon: BarChart3, tone: "text-slate-950" },
-                              { label: "Colaboradores", value: `${formatNumber(chartContext.collaborators)} colaboradores`, icon: UsersRound, tone: "text-slate-950" },
-                              { label: "Reincidências", value: `${formatNumber(chartContext.recurrenceOrders)} O.S`, icon: AlertTriangle, tone: "text-amber-700" },
-                              { label: "% reincidência", value: `${formatNumber(chartContext.recurrenceRate)}%`, icon: RefreshCw, tone: "text-teal-700" }
-                            ].map((item) => {
-                              const Icon = item.icon;
-                              return (
-                                <div key={item.label} className="rounded-md border bg-white px-3 py-2 shadow-sm">
-                                  <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                    <Icon className="h-3.5 w-3.5" />
-                                    <span className="truncate">{item.label}</span>
-                                  </div>
-                                  <div className={`mt-1 truncate text-sm font-semibold ${item.tone}`}>{item.value}</div>
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          <div className="mt-4">
-                            <DashboardCharts ranking={filteredRanking} penalties={chartPenalties} health={chartHealth} />
-                          </div>
-                        </AccordionContent>
-                      </AccordionItem>
-                    </Accordion>
-                  </section>
-                </div>
+                  <ClosureTab
+                    summary={summary}
+                    currentUser={currentUser}
+                    can={can}
+                    busy={busy}
+                    closure={closure}
+                    closureFinancials={closureFinancials}
+                    closureBalanceImpact={closureBalanceImpact}
+                    chartHealth={chartHealth}
+                    chartContext={chartContext}
+                    chartPenalties={chartPenalties}
+                    filteredRanking={filteredRanking}
+                    filteredFinancials={filteredFinancials}
+                    financialCollapsed={financialCollapsed}
+                    onToggleFinancialCollapsed={() => setFinancialCollapsed((value) => !value)}
+                    selectedRegionals={selectedRegionals}
+                    regionalOptions={regionalOptions}
+                    onSelectedRegionalsChange={updateSelectedRegionals}
+                    leadershipCoveredRegionals={leadershipCoveredRegionals}
+                    onExportPaymentCsv={exportPaymentCsv}
+                    onAdvanceRunStatus={advanceRunStatus}
+                    onActiveTabChange={setActiveTab}
+                    onConfigTabChange={setConfigTab}
+                    onRankingTabChange={setRankingTab}
+                  />
                 )
               ) : null}
             </TabsContent>
@@ -2003,264 +1146,27 @@ export default function GamificacaoPage() {
                 ) : !serviceOrdersLoaded && tabLoading.serviceOrders ? (
                   <div className="panel p-8 text-sm text-slate-500">Carregando base detalhada do ranking...</div>
                 ) : (
-                  <div className="flex h-full min-h-0 flex-col gap-3">
-                    <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
-                      <div className="shrink-0 border-b bg-gradient-to-r from-slate-50 via-white to-white px-4 py-4">
-                        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                          <div className="min-w-0">
-                            <Badge className="w-fit border-slate-200 bg-white text-slate-700">
-                              <Trophy className="h-3.5 w-3.5" />
-                              Ranking operacional
-                            </Badge>
-                            <h2 className="mt-2 text-xl font-semibold text-slate-950">Colaboradores por resultado final</h2>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Referência {summary.run?.reference_month}/{summary.run?.reference_year}. Valor global{" "}
-                              {formatMoney(summary.run?.point_value ?? summary.point_value)}.
-                            </p>
-                          </div>
-                          <div className="grid gap-2 xl:min-w-[520px]">
-                            <div className="grid gap-1.5">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-[11px] font-medium text-slate-500">
-                                  {selectedRegionals.length ? `${selectedRegionals.length} ${pluralizeFilial(selectedRegionals.length, " selecionada")}` : "Todas as filiais"}
-                                </span>
-                                <Button type="button" variant="ghost" size="sm" className="h-6 px-2" onClick={() => setSelectedRegionals([])} disabled={selectedRegionals.length === 0}>
-                                  Limpar
-                                </Button>
-                              </div>
-                              <div className="flex max-h-20 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
-                                {regionalOptions.map((regional) => {
-                                  const normalized = normalizeRegional(regional);
-                                  const active = selectedRegionals.includes(normalized);
-                                  return (
-                                    <button
-                                      key={regional}
-                                      type="button"
-                                      onClick={() =>
-                                        updateSelectedRegionals(
-                                          active ? selectedRegionals.filter((value) => value !== normalized) : [...selectedRegionals, normalized]
-                                        )
-                                      }
-                                      className={
-                                        active
-                                          ? "shrink-0 rounded-full border border-teal-600 bg-teal-600 px-3 py-1 text-xs font-medium text-white"
-                                          : "shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 hover:border-teal-300 hover:bg-teal-50/40"
-                                      }
-                                    >
-                                      {regionalName(regional)}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                            <div className="relative">
-                              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-                              <Input
-                                className="h-9 pl-9"
-                                value={rankingSearch}
-                                onChange={(event) => setRankingSearch(event.target.value)}
-                                placeholder={rankingTab === "collaborators" ? "Buscar colaborador" : "Buscar líder ou perfil"}
-                              />
-                            </div>
-                          </div>
-                        </div>
-
-                        <Tabs value={rankingTab} onValueChange={setRankingTab} className="mt-4 grid gap-4">
-                          <div className="rounded-xl border border-slate-200 bg-white p-2">
-                            <TabsList className="flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
-                              <TabsTrigger value="collaborators">Colaboradores</TabsTrigger>
-                              <TabsTrigger value="leaders">Liderança</TabsTrigger>
-                            </TabsList>
-                          </div>
-
-                          <TabsContent value="collaborators" className="mt-0 grid gap-4">
-                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                              <span className="font-medium text-slate-800">
-                                Escopo atual: {formatNumber(rankingScopeTotals.serviceOrders)} O.S entraram no ranking
-                              </span>{" "}
-                              |{" "}
-                              {formatNumber(outsideRankingCount)} O.S ficaram fora do ranking.
-                              {rankingSearch.trim() ? " A busca por nome filtra a lista abaixo, mas não altera este resumo." : ""}
-                            </div>
-
-                            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-                              {[
-                                { label: "O.S no ranking", value: `${formatNumber(rankingScopeTotals.serviceOrders)} O.S`, icon: ClipboardList, tone: "neutral" as const },
-                                { label: "Fora do ranking", value: `${formatNumber(outsideRankingCount)} O.S`, icon: XCircle, tone: outsideRankingCount > 0 ? ("warning" as const) : ("good" as const) },
-                                { label: "O.S pontuadas", value: `${formatNumber(rankingScopeTotals.scored)} O.S`, icon: CheckCircle2, tone: "good" as const },
-                                { label: "O.S sem regra", value: `${formatNumber(rankingScopeTotals.unscored)} O.S`, icon: HelpCircle, tone: rankingScopeTotals.unscored > 0 ? ("warning" as const) : ("good" as const) },
-                                { label: "Valor a ser pago", value: formatMoney(rankingScopeTotals.estimated), icon: CircleDollarSign, tone: "info" as const }
-                              ].map((item) => {
-                                const Icon = item.icon;
-                                const iconToneClass =
-                                  item.tone === "warning"
-                                    ? "bg-amber-100 text-amber-700"
-                                    : item.tone === "good"
-                                      ? "bg-emerald-100 text-emerald-700"
-                                      : item.tone === "info"
-                                        ? "bg-blue-100 text-blue-700"
-                                        : "bg-slate-200 text-slate-600";
-                                return (
-                                  <div key={item.label} className="min-w-0 rounded-md border bg-white px-3 py-2">
-                                    <div className="flex items-center gap-2">
-                                      <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${iconToneClass}`}>
-                                        <Icon className="h-3.5 w-3.5" />
-                                      </div>
-                                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</div>
-                                    </div>
-                                    <div className="mt-1 truncate text-sm font-semibold text-slate-950">{item.value}</div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </TabsContent>
-
-                          <TabsContent value="leaders" className="mt-0 grid gap-4">
-                            <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                              <span className="font-medium text-slate-800">
-                                Escopo atual: {formatNumber(filteredLeadershipResults.length)} líder(es) no recorte
-                              </span>{" "}
-                              |{" "}
-                              {formatNumber(leadershipCoveredRegionals)} {pluralizeFilial(leadershipCoveredRegionals, " coberta")}.
-                              {rankingSearch.trim() ? " A busca filtra a tabela abaixo, sem alterar o resumo financeiro do período." : ""}
-                            </div>
-
-                            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-                              {[
-                                { label: "Líderes no ranking", value: `${formatNumber(leadershipScopeTotals.leaders)} líder(es)`, icon: Trophy, tone: "info" as const },
-                                { label: "Filiais cobertas", value: `${formatNumber(leadershipCoveredRegionals)} ${pluralizeFilial(leadershipCoveredRegionals)}`, icon: MapPin, tone: "neutral" as const },
-                                { label: "Colaboradores na base", value: `${formatNumber(leadershipScopeTotals.scopedCollaborators)} colaborador(es)`, icon: UsersRound, tone: "neutral" as const },
-                                { label: "Multiplicador médio", value: leadershipScopeTotals.leaders ? `${formatNumber(leadershipScopeTotals.averageMultiplier)}x` : "0x", icon: BarChart3, tone: "neutral" as const },
-                                { label: "Valor a pagar", value: formatMoney(leadershipScopeTotals.bonusAmount), icon: CircleDollarSign, tone: "info" as const }
-                              ].map((item) => {
-                                const Icon = item.icon;
-                                const iconToneClass = item.tone === "info" ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-600";
-                                return (
-                                  <div key={item.label} className="min-w-0 rounded-md border bg-white px-3 py-2">
-                                    <div className="flex items-center gap-2">
-                                      <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ${iconToneClass}`}>
-                                        <Icon className="h-3.5 w-3.5" />
-                                      </div>
-                                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</div>
-                                    </div>
-                                    <div className="mt-1 truncate text-sm font-semibold text-slate-950">{item.value}</div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </TabsContent>
-                        </Tabs>
-                      </div>
-                      <div className="min-h-0 flex-1 overflow-auto">
-                        {rankingTab === "collaborators" ? (
-                          <RankingTable
-                            data={filteredRanking}
-                            onViewOrders={(score) => {
-                              setSelectedScore(score);
-                              setOrdersOpen(true);
-                            }}
-                          />
-                        ) : (
-                          <div className="table-frame h-full overflow-auto px-2 py-2">
-                            <div className="rounded-xl border border-slate-200 bg-white">
-                              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-                                <div>
-                                  <div className="text-sm font-semibold text-slate-950">Ranking de liderança</div>
-                                  <div className="text-xs text-slate-500">Ordenado pelo valor a pagar no recorte atual.</div>
-                                </div>
-                                <Badge className="border-slate-200 bg-slate-50 text-slate-700">
-                                  Base financeira {formatMoney(leadershipScopeTotals.baseAmount)}
-                                </Badge>
-                              </div>
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead>Líder</TableHead>
-                                    <TableHead>Perfil</TableHead>
-                                    <TableHead>Filiais cobertas</TableHead>
-                                    <TableHead>Base</TableHead>
-                                    <TableHead>Média final</TableHead>
-                                    <TableHead>Multiplicador</TableHead>
-                                    <TableHead className="text-right">Valor a pagar</TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {filteredLeadershipResults.map((item) => {
-                                    const normalizedRegionals = item.regionals.map((regional) => regionalName(regional));
-                                    const regionalSummary = summarizeLabels(normalizedRegionals);
-                                    const roleLabel = leadershipRoleLabel(item.role_type);
-                                    const profileLabel =
-                                      item.role_profile_name && item.role_profile_name !== roleLabel ? item.role_profile_name : roleLabel;
-                                    return (
-                                      <TableRow key={`${item.leadership_profile_id}-${item.role_type}`}>
-                                        <TableCell className="min-w-[220px]">
-                                          <div className="grid gap-1">
-                                            <div className="font-semibold text-slate-950">{item.name}</div>
-                                            <div className="text-xs text-slate-500">{profileLabel}</div>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>
-                                          <Badge className="border-blue-200 bg-blue-50 text-blue-700">{profileLabel}</Badge>
-                                        </TableCell>
-                                        <TableCell className="min-w-[280px]">
-                                          <div className="flex flex-wrap gap-1.5">
-                                            {regionalSummary.visible.map((regional) => (
-                                              <Badge key={`${item.leadership_profile_id}-${regional}`} className="border-slate-200 bg-slate-50 text-slate-700">
-                                                {regional}
-                                              </Badge>
-                                            ))}
-                                            {regionalSummary.remaining > 0 ? (
-                                              <Badge className="border-slate-200 bg-white text-slate-500">+{regionalSummary.remaining}</Badge>
-                                            ) : null}
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>
-                                          <div className="grid gap-0.5">
-                                            <span className="font-medium text-slate-900">{formatNumber(item.scoped_collaborators)} pessoa(s)</span>
-                                            <span className="text-xs text-slate-500">{leadershipAverageSourceLabel(item.average_source)} - {formatMoney(item.base_amount)}</span>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>
-                                          <div className="grid gap-2">
-                                            <span className="font-medium text-slate-950">{formatPoints(item.average_final_points)}</span>
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              className="h-8 w-fit rounded-full border border-teal-600 bg-teal-600 px-3 text-[11px] font-semibold text-white shadow-sm hover:bg-teal-700"
-                                              onClick={() => setSelectedLeadershipResult(item)}
-                                            >
-                                              <Search className="h-3.5 w-3.5" />
-                                              Auditar média
-                                            </Button>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell>
-                                          <div className="grid gap-0.5">
-                                            <span className="font-medium text-slate-900">{formatNumber(item.multiplier)}x</span>
-                                            <span className="text-xs text-slate-500">{item.point_value > 0 ? `${formatMoney(item.point_value)}/pt` : "Sem valor"}</span>
-                                          </div>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                          <span className="font-semibold text-teal-700">{formatMoney(item.bonus_amount)}</span>
-                                        </TableCell>
-                                      </TableRow>
-                                    );
-                                  })}
-                                  {filteredLeadershipResults.length === 0 ? (
-                                    <TableRow>
-                                      <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
-                                        Nenhum líder encontrado para os filtros atuais.
-                                      </TableCell>
-                                    </TableRow>
-                                  ) : null}
-                                </TableBody>
-                              </Table>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </section>
-                  </div>
+                  <RankingTab
+                    summary={summary}
+                    selectedRegionals={selectedRegionals}
+                    regionalOptions={regionalOptions}
+                    onSelectedRegionalsChange={updateSelectedRegionals}
+                    rankingSearch={rankingSearch}
+                    onRankingSearchChange={setRankingSearch}
+                    rankingTab={rankingTab}
+                    onRankingTabChange={setRankingTab}
+                    filteredRanking={filteredRanking}
+                    rankingScopeTotals={rankingScopeTotals}
+                    outsideRankingCount={outsideRankingCount}
+                    filteredLeadershipResults={filteredLeadershipResults}
+                    leadershipScopeTotals={leadershipScopeTotals}
+                    leadershipCoveredRegionals={leadershipCoveredRegionals}
+                    onViewOrders={(score) => {
+                      setSelectedScore(score);
+                      setOrdersOpen(true);
+                    }}
+                    onAuditLeadership={setSelectedLeadershipResult}
+                  />
                 )
               ) : null}
             </TabsContent>
@@ -2286,7 +1192,7 @@ export default function GamificacaoPage() {
             <TabsContent value="pending" className="mt-0 flex-1 pr-1">
               {activeTab === "pending" ? (
                 !summary ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado antes de abrir as pendencias...</div>
+                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado antes de abrir as pendências...</div>
                 ) : !pendingDataLoaded && tabLoading.pending ? (
                   <div className="panel p-8 text-sm text-slate-500">Carregando assuntos e diagnósticos pendentes...</div>
                 ) : (
@@ -2677,6 +1583,14 @@ export default function GamificacaoPage() {
                           await refreshAfterCollaboratorRegistryChange();
                         }, `${items.length} colaborador(es) removido(s).`)
                       }
+                      onBulkSetActive={(items: CollaboratorRegistryItem[], active: boolean) =>
+                        withFeedback(async () => {
+                          for (const item of items) {
+                            await api.updateCollaborator(item.id, { active });
+                          }
+                          await refreshAfterCollaboratorRegistryChange();
+                        }, `${items.length} colaborador(es) ${active ? "ativado(s)" : "desativado(s)"}.`)
+                      }
                       canManagePortalAccess={can("users:manage")}
                       unlinkedUsers={users.filter((item) => item.collaborator_id == null)}
                       onCreatePortalUser={({ collaboratorId, email, password }) =>
@@ -2798,6 +1712,7 @@ export default function GamificacaoPage() {
                       <UserManagementPanel
                         users={users}
                         collaborators={[...collaboratorRegistry.registered, ...collaboratorRegistry.unregistered]}
+                        regionalOptions={collaboratorRegionalOptions}
                         onCreate={(payload) =>
                           withFeedback(async () => {
                             await api.createUser(payload);
@@ -3015,7 +1930,7 @@ export default function GamificacaoPage() {
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Valor a pagar</div>
-                <div className="mt-2 text-2xl font-semibold text-teal-700">{formatMoney(selectedLeadershipResult.bonus_amount)}</div>
+                <div className="mt-2 text-2xl font-semibold text-blue-700">{formatMoney(selectedLeadershipResult.bonus_amount)}</div>
                 <div className="mt-1 text-sm text-slate-500">Base x multiplicador {formatNumber(selectedLeadershipResult.multiplier)}x.</div>
               </div>
             </div>
@@ -3109,7 +2024,7 @@ export default function GamificacaoPage() {
                           </TableCell>
                           <TableCell>{score.source_type === "leader" ? "—" : `${formatNumber(score.health_multiplier)}x`}</TableCell>
                           <TableCell className="font-medium text-slate-950">{formatPoints(score.final_points)}</TableCell>
-                          <TableCell className="text-right font-semibold text-teal-700">{formatMoney(score.estimated_payment)}</TableCell>
+                          <TableCell className="text-right font-semibold text-blue-700">{formatMoney(score.estimated_payment)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -3124,7 +2039,6 @@ export default function GamificacaoPage() {
     </main>
   );
 }
-
 
 
 

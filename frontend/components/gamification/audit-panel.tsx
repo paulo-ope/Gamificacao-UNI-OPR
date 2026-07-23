@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import * as Popover from "@radix-ui/react-popover";
 import {
   AlertTriangle,
   Clock,
@@ -9,7 +10,6 @@ import {
   FileSearch,
   Filter,
   HelpCircle,
-  type LucideIcon,
   MinusCircle,
   RefreshCw,
   Repeat,
@@ -21,15 +21,18 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Avatar } from "@/components/gamification/config-ui";
+import { SecondaryPill, StatusBadge } from "@/components/ui/status-badge";
+import { SummaryMetric } from "@/components/ui/summary-metric";
+import { AppCombobox, Avatar } from "@/components/gamification/config-ui";
 import { OrderAuditSheet } from "@/components/gamification/order-audit-drawer";
 import { api } from "@/lib/api";
 import { formatAnnulledPoints, formatHours, formatInteger, formatMoney, formatPoints } from "@/lib/format";
+import { recurrenceClassificationLabel, resolveRecurrenceDisplay } from "@/lib/recurrence-display";
 import { normalizeRegional, regionalName } from "@/lib/regional";
+import { scoringStatusEntry } from "@/lib/tones";
 import type { AuditOrders, CollaboratorOrderDetail, ScoringGroup } from "@/lib/types";
 
 type FilterMode = "all" | "scored" | "unscored" | "penalized" | "sla_out" | "recurrence" | "non_recurrent" | "diagnosis_blocked";
@@ -55,65 +58,6 @@ type Props = {
 };
 
 type AuditOrder = CollaboratorOrderDetail & { collaborator_id: number; collaborator_name: string };
-
-function statusBadgeClass(status: string) {
-  const normalized = status.toLowerCase();
-  if (normalized.includes("anulada")) return "border-red-200 bg-red-50 text-red-700";
-  if (normalized.includes("penal")) return "border-red-200 bg-red-50 text-red-700";
-  if (normalized.includes("sem regra")) return "border-amber-200 bg-amber-50 text-amber-800";
-  if (normalized.includes("garantia")) return "border-blue-200 bg-blue-50 text-blue-700";
-  if (normalized.includes("revisão")) return "border-violet-200 bg-violet-50 text-violet-700";
-  if (normalized.includes("pontuada")) return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  return "border-slate-200 bg-slate-50 text-slate-700";
-}
-
-function recurrenceClassificationLabel(value: string | null | undefined) {
-  if (value === "reincidencia_tecnica") return "Reincidência de manutenção";
-  if (value === "garantia") return "Reincidência após ativação";
-  if (value === "possivel_retorno_sem_regra") return "Retorno dentro da janela sem regra ativa";
-  if (value === "os_nao_reincidente") return "O.S não reincidente";
-  if (value === "nao_identificado") return "Não identificado";
-  if (value === "demandas_diferentes") return "Demandas diferentes";
-  if (value === "recorrencia_operacional") return "Recorrência operacional";
-  return "Sem classificação";
-}
-
-type StatTone = "neutral" | "danger" | "warning" | "good" | "info";
-
-function StatCard({ icon: Icon, label, value, tone = "neutral" }: { icon: LucideIcon; label: string; value: string; tone?: StatTone }) {
-  const toneClass: Record<StatTone, string> = {
-    neutral: "border-slate-200 bg-slate-50",
-    danger: "border-red-200 bg-red-50",
-    warning: "border-amber-200 bg-amber-50",
-    good: "border-emerald-200 bg-emerald-50",
-    info: "border-blue-200 bg-blue-50"
-  };
-  const iconToneClass: Record<StatTone, string> = {
-    neutral: "bg-slate-200 text-slate-600",
-    danger: "bg-red-100 text-red-700",
-    warning: "bg-amber-100 text-amber-700",
-    good: "bg-emerald-100 text-emerald-700",
-    info: "bg-blue-100 text-blue-700"
-  };
-  const valueToneClass: Record<StatTone, string> = {
-    neutral: "text-slate-950",
-    danger: "text-red-700",
-    warning: "text-amber-800",
-    good: "text-emerald-700",
-    info: "text-blue-700"
-  };
-  return (
-    <div className={`flex min-w-0 items-center gap-2.5 rounded-xl border px-3 py-2.5 ${toneClass[tone]}`}>
-      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconToneClass[tone]}`}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-        <div className={`truncate text-sm font-semibold ${valueToneClass[tone]}`}>{value}</div>
-      </div>
-    </div>
-  );
-}
 
 function csvEscape(value: unknown) {
   const text = value === null || value === undefined ? "" : String(value);
@@ -172,6 +116,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
   const [collaboratorId, setCollaboratorId] = useState("");
   const [groupId, setGroupId] = useState("");
   const [subject, setSubject] = useState("");
+  const [subjectMenuOpen, setSubjectMenuOpen] = useState(false);
   const [sla, setSla] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedGroupLabel, setSelectedGroupLabel] = useState<string | null>(null);
@@ -187,6 +132,11 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [collaboratorOptions, regional]);
   const hasFilters = mode !== "all" || Boolean(regional || collaboratorId || groupId || subject || sla || selectedGroupLabel);
+  const subjectSuggestions = useMemo(() => {
+    const normalized = subject.trim().toLowerCase();
+    const matches = normalized ? subjectOptions.filter((option) => option.toLowerCase().includes(normalized)) : subjectOptions;
+    return matches.slice(0, 8);
+  }, [subject, subjectOptions]);
 
   const filters = useMemo(
     () => ({
@@ -265,7 +215,8 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     const counts = new Map<string, number>();
     (audit?.orders ?? []).forEach((order) => {
       if (!order.recurrence_classification && !order.is_recurrence && !order.is_warranty) return;
-      const label = recurrenceClassificationLabel(order.recurrence_classification);
+      // Prefere o nome da regra configurada pelo usuário; cai no rótulo genérico da classificação.
+      const label = order.recurrence_rule_name || recurrenceClassificationLabel(order.recurrence_classification);
       counts.set(label, (counts.get(label) ?? 0) + 1);
     });
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
@@ -381,21 +332,21 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
 
   return (
     <section className="panel flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-col gap-3 border-b bg-gradient-to-r from-slate-50 via-white to-white px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex shrink-0 flex-col gap-3 border-b bg-white px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <Badge className="w-fit border-slate-200 bg-white text-slate-700">
+          <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">
             <ShieldCheck className="h-3.5 w-3.5" />
-            Auditoria operacional
-          </Badge>
-          <h2 className="mt-2 text-xl font-semibold text-slate-950">Conferência das O.S e regras aplicadas</h2>
-          <p className="mt-1 text-sm text-slate-500">Base, regra aplicada, pontos anulados e resultado final em uma tela operacional.</p>
+            Gamificação · Auditoria operacional
+          </p>
+          <h2 className="mt-1 text-base font-semibold text-slate-950">Conferência das O.S e regras aplicadas</h2>
+          <p className="mt-1 text-[11px] text-slate-500">Base, regra aplicada, pontos anulados e resultado final em uma tela operacional.</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => setFiltersOpen((value) => !value)}>
             <Filter className="h-4 w-4" />
             {filtersOpen ? "Ocultar filtros" : "Filtros"}
             {activeFilterChips.length > 0 ? (
-              <span className="ml-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-teal-600 px-1 text-[10px] font-semibold text-white">
+              <span className="ml-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">
                 {activeFilterChips.length}
               </span>
             ) : null}
@@ -412,37 +363,37 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
 
       {audit ? (
         <div className="grid shrink-0 gap-2 overflow-x-auto border-b bg-white px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-          <StatCard icon={ClipboardList} label="Total de O.S" value={`${formatInteger(audit.summary.total_service_orders)} O.S`} tone="neutral" />
-          <StatCard
+          <SummaryMetric icon={ClipboardList} label="Total de O.S" value={`${formatInteger(audit.summary.total_service_orders)} O.S`} tone="slate" />
+          <SummaryMetric
             icon={HelpCircle}
             label="O.S sem regra"
             value={`${formatInteger(audit.summary.unscored_service_orders)} O.S`}
-            tone={audit.summary.unscored_service_orders > 0 ? "warning" : "good"}
+            tone={audit.summary.unscored_service_orders > 0 ? "amber" : "emerald"}
           />
-          <StatCard
+          <SummaryMetric
             icon={XCircle}
             label="O.S anuladas"
             value={`${formatInteger(audit.summary.annulled_service_orders)} O.S`}
-            tone={audit.summary.annulled_service_orders > 0 ? "danger" : "good"}
+            tone={audit.summary.annulled_service_orders > 0 ? "red" : "emerald"}
           />
-          <StatCard
+          <SummaryMetric
             icon={Clock}
             label="Fora prazo"
             value={`${formatInteger(audit.summary.sla_out_service_orders)} O.S`}
-            tone={audit.summary.sla_out_service_orders > 0 ? "warning" : "good"}
+            tone={audit.summary.sla_out_service_orders > 0 ? "amber" : "emerald"}
           />
-          <StatCard
+          <SummaryMetric
             icon={MinusCircle}
             label="Pontos anulados"
             value={formatAnnulledPoints(audit.summary.penalty_points)}
-            tone={audit.summary.penalty_points > 0 ? "danger" : "good"}
+            tone={audit.summary.penalty_points > 0 ? "red" : "emerald"}
           />
-          <StatCard icon={Repeat} label="Reincidências" value={`${formatInteger(audit.summary.recurrence_service_orders)} O.S`} tone="info" />
-          <StatCard
+          <SummaryMetric icon={Repeat} label="Reincidências" value={`${formatInteger(audit.summary.recurrence_service_orders)} O.S`} tone="blue" />
+          <SummaryMetric
             icon={ShieldAlert}
             label="Diagnósticos bloqueados"
             value={`${formatInteger(audit.summary.diagnosis_penalized_service_orders)} O.S`}
-            tone={audit.summary.diagnosis_penalized_service_orders > 0 ? "danger" : "good"}
+            tone={audit.summary.diagnosis_penalized_service_orders > 0 ? "red" : "emerald"}
           />
         </div>
       ) : null}
@@ -488,15 +439,49 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
               ))}
             </select>
 
-            <div className="relative min-w-52 flex-1">
-              <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-slate-400" />
-              <Input value={subject} onChange={(event) => setSubject(event.target.value)} className="h-8 pl-7 text-xs" placeholder="Buscar assunto" list="audit-subject-options" />
-              <datalist id="audit-subject-options">
-                {subjectOptions.map((option) => (
-                  <option key={option} value={option} />
-                ))}
-              </datalist>
-            </div>
+            <Popover.Root open={subjectMenuOpen && subjectSuggestions.length > 0} onOpenChange={setSubjectMenuOpen}>
+              <Popover.Anchor asChild>
+                <div className="relative min-w-52 flex-1">
+                  <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-slate-400" />
+                  <Input
+                    value={subject}
+                    onChange={(event) => {
+                      setSubject(event.target.value);
+                      setSubjectMenuOpen(true);
+                    }}
+                    onFocus={() => setSubjectMenuOpen(true)}
+                    className="h-8 pl-7 text-xs"
+                    placeholder="Buscar assunto"
+                  />
+                </div>
+              </Popover.Anchor>
+              <Popover.Portal>
+                <Popover.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={4}
+                  avoidCollisions
+                  collisionPadding={12}
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                  style={{ width: "var(--radix-popover-trigger-width)", pointerEvents: "auto" }}
+                  className="z-[90] max-h-64 overflow-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
+                >
+                  {subjectSuggestions.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => {
+                        setSubject(option);
+                        setSubjectMenuOpen(false);
+                      }}
+                      className="block w-full truncate rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
           </div>
         </div>
 
@@ -506,38 +491,51 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
             <div className="mt-2 grid gap-3 md:grid-cols-3">
               <div className="grid gap-1">
                 <Label className="text-[10px] uppercase text-slate-500">Regional</Label>
-                <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={regional} onChange={(event) => setRegional(event.target.value)}>
-                  <option value="">Todas as regionais</option>
-                  {regionalOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {regionalName(option)}
-                    </option>
-                  ))}
-                </select>
+                <AppCombobox
+                  value={regional}
+                  onChange={setRegional}
+                  placeholder="Todas as regionais"
+                  ariaLabel="Filtrar por regional"
+                  className="h-8 rounded-md text-xs"
+                  options={[
+                    { value: "", label: "Todas as regionais" },
+                    ...regionalOptions.map((option) => ({ value: option, label: regionalName(option) }))
+                  ]}
+                />
               </div>
               <div className="grid gap-1">
                 <Label className="text-[10px] uppercase text-slate-500">Colaborador</Label>
-                <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={collaboratorId} onChange={(event) => setCollaboratorId(event.target.value)}>
-                  <option value="">Todos os colaboradores</option>
-                  {filteredCollaboratorOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.name}
-                    </option>
-                  ))}
-                </select>
+                <AppCombobox
+                  value={collaboratorId}
+                  onChange={setCollaboratorId}
+                  placeholder="Todos os colaboradores"
+                  ariaLabel="Filtrar por colaborador"
+                  className="h-8 rounded-md text-xs"
+                  options={[
+                    { value: "", label: "Todos os colaboradores" },
+                    ...filteredCollaboratorOptions.map((option) => ({ value: String(option.id), label: option.name }))
+                  ]}
+                />
                 <div className="text-[11px] text-slate-500">
                   {regional ? `${filteredCollaboratorOptions.length} colaborador(es) nesta regional.` : "Selecione uma regional para reduzir a lista."}
                 </div>
               </div>
               <div className="grid gap-1">
                 <Label className="text-[10px] uppercase text-slate-500">SLA</Label>
-                <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={sla} onChange={(event) => setSla(event.target.value)}>
-                  <option value="">Todos os SLAs</option>
-                  <option value="Encerrada no Prazo">Encerrada no Prazo</option>
-                  <option value="Encerrada Atrasada">Encerrada Atrasada</option>
-                  <option value="No prazo">No prazo</option>
-                  <option value="Fora do prazo">Fora do prazo</option>
-                </select>
+                <AppCombobox
+                  value={sla}
+                  onChange={setSla}
+                  placeholder="Todos os SLAs"
+                  ariaLabel="Filtrar por SLA"
+                  className="h-8 rounded-md text-xs"
+                  options={[
+                    { value: "", label: "Todos os SLAs" },
+                    { value: "Encerrada no Prazo", label: "Encerrada no Prazo" },
+                    { value: "Encerrada Atrasada", label: "Encerrada Atrasada" },
+                    { value: "No prazo", label: "No prazo" },
+                    { value: "Fora do prazo", label: "Fora do prazo" }
+                  ]}
+                />
               </div>
             </div>
           </div>
@@ -552,7 +550,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
               key={chip.key}
               type="button"
               onClick={chip.onRemove}
-              className="flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-medium text-teal-800 hover:bg-teal-100"
+              className="flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100"
             >
               {chip.label}
               <X className="h-3 w-3" />
@@ -592,13 +590,13 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           </div>
 
           {visibleOrders.length === 0 && !loading ? (
-            <div className="m-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-                <AlertTriangle className="h-4 w-4 text-amber-700" />
+            <div className="m-3 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
+              <div className="flex items-center justify-center gap-2 text-sm font-semibold text-slate-950">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
                 Nenhuma O.S encontrada com os filtros atuais.
               </div>
-              <p className="mt-1 text-xs text-slate-700">A base não está zerada necessariamente; os filtros podem estar restringindo a auditoria.</p>
-              <Button className="mt-3" size="sm" variant="outline" onClick={clearFilters}>
+              <p className="mt-1 text-xs text-slate-500">A base não está zerada necessariamente; os filtros podem estar restringindo a auditoria.</p>
+              <Button className="mt-4" size="sm" variant="outline" onClick={clearFilters}>
                 Limpar filtros
               </Button>
             </div>
@@ -612,8 +610,8 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                     key={group.label}
                     className={
                       group.label === selectedGroupLabel
-                        ? "min-w-48 rounded-md border border-teal-300 bg-teal-50 px-3 py-1.5 text-left text-xs"
-                        : "min-w-48 rounded-md border bg-white px-3 py-1.5 text-left text-xs hover:bg-slate-50"
+                        ? "min-w-48 rounded-xl border border-blue-300 bg-blue-50 px-3 py-1.5 text-left text-xs shadow-sm"
+                        : "min-w-48 rounded-xl border bg-white px-3 py-1.5 text-left text-xs shadow-sm hover:bg-slate-50"
                     }
                     onClick={() => setSelectedGroupLabel((current) => (current === group.label ? null : group.label))}
                   >
@@ -630,7 +628,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                 <div className="text-left">
                   <div className="text-[10px] text-slate-500">Agrupamento</div>
                   <div className="flex items-center gap-2 truncate font-semibold text-slate-950">
-                    <ClipboardCheck className="h-4 w-4 text-teal-700" />
+                    <ClipboardCheck className="h-4 w-4 text-blue-600" />
                     <span className="truncate">{activeGroup.label}</span>
                   </div>
                 </div>
@@ -648,30 +646,39 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                 </div>
                 <div>
                   <div className="text-[10px] text-slate-500">Valor a ser pago</div>
-                  <div className="font-semibold text-teal-700">{formatMoney(activeGroup.estimatedPayment)}</div>
+                  <div className="font-semibold tabular-nums text-blue-700">{formatMoney(activeGroup.estimatedPayment)}</div>
                 </div>
               </div>
 
-              <div className="mt-2 min-h-0 flex-1 overflow-hidden rounded-md border bg-white">
+              <div className="mt-2 min-h-0 flex-1 overflow-hidden rounded-xl border bg-white">
                 <div className="audit-table-frame h-full">
-                  <table className="audit-table">
-                    <thead>
+                  <table className="w-full table-fixed border-collapse text-xs">
+                    <thead className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm">
                       <tr>
-                        <th className="w-[76px]">O.S</th>
-                        <th className="w-[190px]">Colaborador</th>
-                        <th className="w-[130px]">Regional</th>
-                        <th className="w-[180px]">Cliente</th>
-                        <th>Assunto / diagnóstico</th>
-                        <th className="w-[170px]">Operação</th>
-                        <th className="w-[100px]">Pontos</th>
-                        <th className="w-[95px]">Valor</th>
-                        <th className="w-[140px]">Status</th>
-                        <th className="w-[90px]">Auditoria</th>
+                        {[
+                          ["O.S", "w-[76px]"],
+                          ["Colaborador", "w-[180px]"],
+                          ["Regional", "w-[110px]"],
+                          ["Cliente", "w-[160px]"],
+                          ["Assunto / diagnóstico", ""],
+                          ["Operação", "w-[160px]"],
+                          ["Pontos", "w-[95px]"],
+                          ["Valor", "w-[90px]"],
+                          ["Status", "w-[188px]"],
+                          ["Auditoria", "w-[90px]"]
+                        ].map(([label, width]) => (
+                          <th key={label} className={`${width} px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-200`}>
+                            {label}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {visibleOrders.map((order) => (
-                        <tr key={order.id}>
+                      {visibleOrders.map((order) => {
+                        const statusEntry = scoringStatusEntry(order.scoring_status);
+                        const recurrenceDisplay = resolveRecurrenceDisplay(order);
+                        return (
+                        <tr key={order.id} className="odd:bg-white even:bg-slate-50/70 hover:bg-blue-50/40 [&>td]:border-b [&>td]:px-2 [&>td]:py-1.5 [&>td]:align-middle [&>td]:leading-snug">
                           <td className="font-semibold">{order.os_code}</td>
                           <td title={order.collaborator_name}>
                             <div className="flex min-w-0 items-center gap-2">
@@ -694,35 +701,38 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                             <div className="line-clamp-1 text-[11px] text-slate-500">{order.sla_status} - {formatHours(order.closing_time_hours)}</div>
                           </td>
                           <td>
-                            <div className="font-semibold">{formatPoints(order.net_points)}</div>
-                            <div className={order.penalty_points > 0 ? "text-[11px] font-medium text-red-600" : "text-[11px] text-slate-500"}>
+                            <div className="font-semibold tabular-nums">{formatPoints(order.net_points)}</div>
+                            <div className={order.penalty_points > 0 ? "text-[11px] font-medium tabular-nums text-red-600" : "text-[11px] tabular-nums text-slate-500"}>
                               {formatAnnulledPoints(order.penalty_points)}
                             </div>
                           </td>
                           <td>
-                            <div className="font-semibold text-teal-700">{formatMoney(order.net_points * pointValue)}</div>
+                            <div className="font-semibold tabular-nums text-blue-700">{formatMoney(order.net_points * pointValue)}</div>
                           </td>
                           <td>
-                            <Badge className={statusBadgeClass(order.scoring_status)}>{order.scoring_status}</Badge>
-                            {order.recurrence_classification ? (
-                              <div className="mt-1 text-[11px] text-blue-700">{recurrenceClassificationLabel(order.recurrence_classification)}</div>
-                            ) : null}
-                            {order.has_reschedule || order.has_pending ? (
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {order.has_reschedule ? (
-                                  <span className="inline-flex items-center gap-0.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
-                                    <Repeat className="h-3 w-3" />
-                                    Reagendada
-                                  </span>
-                                ) : null}
-                                {order.has_pending ? (
-                                  <span className="inline-flex items-center gap-0.5 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
-                                    <Clock className="h-3 w-3" />
-                                    Pendência
-                                  </span>
-                                ) : null}
-                              </div>
-                            ) : null}
+                            {/* Etiqueta única por O.S: 1 badge de status + no máximo 1 pill secundário
+                                (retorno > reagendada > pendência) - o restante fica na auditoria.
+                                Ponto sólido em vez de ícone (mais limpo em linha densa), texto em
+                                uma linha só com título completo no hover em vez de quebrar em duas
+                                linhas dentro do badge. */}
+                            <div className="flex flex-col items-start gap-1">
+                              <StatusBadge tone={statusEntry.tone} dot className="max-w-full" title={statusEntry.label}>
+                                <span className="truncate">{statusEntry.label}</span>
+                              </StatusBadge>
+                              {recurrenceDisplay ? (
+                                <SecondaryPill tone={recurrenceDisplay.tone} className="max-w-full" title={recurrenceDisplay.label}>
+                                  <span className="truncate">{recurrenceDisplay.label}</span>
+                                </SecondaryPill>
+                              ) : order.has_reschedule ? (
+                                <SecondaryPill tone="amber" icon={Repeat}>
+                                  Reagendada
+                                </SecondaryPill>
+                              ) : order.has_pending ? (
+                                <SecondaryPill tone="slate" icon={Clock}>
+                                  Pendência
+                                </SecondaryPill>
+                              ) : null}
+                            </div>
                           </td>
                           <td>
                             <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => setSelectedAuditOrder(order)}>
@@ -731,7 +741,8 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                             </Button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

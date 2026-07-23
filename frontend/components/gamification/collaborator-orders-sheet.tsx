@@ -19,17 +19,20 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CollaboratorBalanceHistorySheet } from "@/components/gamification/collaborator-balance-history-sheet";
 import { Label } from "@/components/ui/label";
 import { OrderAuditSheet } from "@/components/gamification/order-audit-drawer";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { SecondaryPill, StatusBadge } from "@/components/ui/status-badge";
+import { SummaryMetric } from "@/components/ui/summary-metric";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { formatAnnulledPoints, formatDateTime, formatHours, formatInteger, formatMoney, formatPoints, formatSignedPoints } from "@/lib/format";
+import { recurrenceClassificationLabel, resolveRecurrenceDisplay } from "@/lib/recurrence-display";
 import { regionalName } from "@/lib/regional";
+import { type Tone, scoringStatusEntry } from "@/lib/tones";
 import type { CollaboratorOrderDetail, CollaboratorOrdersDetail, CollaboratorPointBalance, CollaboratorScore, RegionalHealthItem } from "@/lib/types";
 
 type FilterMode = "all" | "scored" | "unscored" | "penalized" | "sla_out" | "recurrence" | "non_recurrent" | "diagnosis_blocked";
@@ -47,28 +50,6 @@ type CollaboratorOrdersSheetProps = {
   runStatus?: string | null;
 };
 
-function statusBadgeClass(status: string) {
-  const normalized = status.toLowerCase();
-  if (normalized.includes("anulada")) return "border-red-200 bg-red-50 text-red-700";
-  if (normalized.includes("penal")) return "border-red-200 bg-red-50 text-red-700";
-  if (normalized.includes("sem regra")) return "border-amber-200 bg-amber-50 text-amber-800";
-  if (normalized.includes("garantia") || normalized.includes("reincid")) return "border-blue-200 bg-blue-50 text-blue-700";
-  if (normalized.includes("revisão")) return "border-violet-200 bg-violet-50 text-violet-700";
-  if (normalized.includes("pontuada")) return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  return "border-slate-200 bg-slate-50 text-slate-700";
-}
-
-function recurrenceClassificationLabel(value: string | null | undefined) {
-  if (value === "reincidencia_tecnica") return "Reincidência de manutenção";
-  if (value === "garantia") return "Reincidência após ativação";
-  if (value === "possivel_retorno_sem_regra") return "Retorno dentro da janela sem regra ativa";
-  if (value === "os_nao_reincidente") return "O.S não reincidente";
-  if (value === "nao_identificado") return "Não identificado";
-  if (value === "demandas_diferentes") return "Demandas diferentes";
-  if (value === "recorrencia_operacional") return "Recorrência operacional";
-  return "Sem classificação";
-}
-
 function formatPeriod(month: number | null | undefined, year: number | null | undefined) {
   if (!month || !year) return "Não informado";
   return `${String(month).padStart(2, "0")}/${year}`;
@@ -82,43 +63,6 @@ function csvEscape(value: unknown) {
 function uniqueSorted(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).sort((a, b) =>
     a.localeCompare(b, "pt-BR")
-  );
-}
-
-type StatTone = "neutral" | "danger" | "warning" | "good" | "info";
-
-function StatCard({ icon: Icon, label, value, tone = "neutral" }: { icon: LucideIcon; label: string; value: string; tone?: StatTone }) {
-  const toneClass: Record<StatTone, string> = {
-    neutral: "border-slate-200 bg-white",
-    danger: "border-red-200 bg-red-50",
-    warning: "border-amber-200 bg-amber-50",
-    good: "border-emerald-200 bg-emerald-50",
-    info: "border-blue-200 bg-blue-50"
-  };
-  const iconToneClass: Record<StatTone, string> = {
-    neutral: "bg-slate-100 text-slate-600",
-    danger: "bg-red-100 text-red-700",
-    warning: "bg-amber-100 text-amber-700",
-    good: "bg-emerald-100 text-emerald-700",
-    info: "bg-blue-100 text-blue-700"
-  };
-  const valueToneClass: Record<StatTone, string> = {
-    neutral: "text-slate-950",
-    danger: "text-red-700",
-    warning: "text-amber-800",
-    good: "text-emerald-700",
-    info: "text-blue-700"
-  };
-  return (
-    <div className={`min-w-0 rounded-md border p-4 ${toneClass[tone]}`}>
-      <div className="flex items-center gap-2">
-        <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${iconToneClass[tone]}`}>
-          <Icon className="h-3.5 w-3.5" />
-        </div>
-        <div className="truncate text-xs font-medium uppercase text-slate-500">{label}</div>
-      </div>
-      <div className={`mt-2 truncate text-xl font-semibold ${valueToneClass[tone]}`}>{value}</div>
-    </div>
   );
 }
 
@@ -237,42 +181,43 @@ export function CollaboratorOrdersSheet({
     const counts = new Map<string, number>();
     (detail?.orders ?? []).forEach((order) => {
       if (!order.recurrence_classification && !order.is_recurrence && !order.is_warranty) return;
-      const label = recurrenceClassificationLabel(order.recurrence_classification);
+      // Prefere o nome da regra configurada pelo usuário; cai no rótulo genérico da classificação.
+      const label = order.recurrence_rule_name || recurrenceClassificationLabel(order.recurrence_classification);
       counts.set(label, (counts.get(label) ?? 0) + 1);
     });
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [detail]);
 
-  const cards: Array<{ label: string; value: string; icon: LucideIcon; tone: StatTone }> = detail
+  const cards: Array<{ label: string; value: string; icon: LucideIcon; tone: Tone }> = detail
     ? [
-        { label: "Total de O.S", value: `${formatInteger(detail.summary.total_service_orders)} O.S`, icon: ClipboardList, tone: "neutral" },
-        { label: "O.S pontuadas", value: `${formatInteger(detail.summary.scored_service_orders)} O.S`, icon: CheckCircle2, tone: "good" },
+        { label: "Total de O.S", value: `${formatInteger(detail.summary.total_service_orders)} O.S`, icon: ClipboardList, tone: "slate" },
+        { label: "O.S pontuadas", value: `${formatInteger(detail.summary.scored_service_orders)} O.S`, icon: CheckCircle2, tone: "emerald" },
         {
           label: "O.S anuladas",
           value: `${formatInteger(detail.summary.annulled_service_orders)} O.S`,
           icon: XCircle,
-          tone: detail.summary.annulled_service_orders > 0 ? "danger" : "good"
+          tone: detail.summary.annulled_service_orders > 0 ? "red" : "emerald"
         },
         {
           label: "Fora prazo",
           value: `${formatInteger(detail.summary.sla_out_service_orders)} O.S`,
           icon: Clock,
-          tone: detail.summary.sla_out_service_orders > 0 ? "warning" : "good"
+          tone: detail.summary.sla_out_service_orders > 0 ? "amber" : "emerald"
         },
         {
           label: "Reincidências",
           value: `${formatInteger(detail.summary.recurrence_service_orders ?? detail.summary.warranty_service_orders)} O.S`,
           icon: Repeat,
-          tone: "info"
+          tone: "blue"
         },
-        { label: "Pontos brutos", value: formatPoints(detail.summary.gross_points), icon: TrendingUp, tone: "neutral" },
+        { label: "Pontos brutos", value: formatPoints(detail.summary.gross_points), icon: TrendingUp, tone: "slate" },
         {
           label: "Pontos anulados",
           value: formatAnnulledPoints(detail.summary.penalty_points),
           icon: MinusCircle,
-          tone: detail.summary.penalty_points > 0 ? "danger" : "good"
+          tone: detail.summary.penalty_points > 0 ? "red" : "emerald"
         },
-        { label: "Pontos do mês", value: formatPoints(detail.summary.final_points), icon: Award, tone: "info" }
+        { label: "Pontos do mês", value: formatPoints(detail.summary.final_points), icon: Award, tone: "blue" }
       ]
     : [];
 
@@ -482,7 +427,7 @@ export function CollaboratorOrdersSheet({
 
               <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
                 {cards.map((card) => (
-                  <StatCard key={card.label} icon={card.icon} label={card.label} value={card.value} tone={card.tone} />
+                  <SummaryMetric key={card.label} icon={card.icon} label={card.label} value={card.value} tone={card.tone} />
                 ))}
               </section>
 
@@ -516,7 +461,7 @@ export function CollaboratorOrdersSheet({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-slate-900">Valor a pagar</span>
-                    <span className="text-lg font-semibold text-teal-700">{formatMoney(valueToPay)}</span>
+                    <span className="text-lg font-semibold text-blue-700">{formatMoney(valueToPay)}</span>
                   </div>
                 </div>
                 {hasGarantiaDiscount ? (
@@ -680,8 +625,8 @@ export function CollaboratorOrdersSheet({
 
               <section className="overflow-hidden rounded-md border bg-white">
                   <Table className="table-fixed text-xs md:text-sm">
-                    <TableHeader>
-                      <TableRow>
+                    <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                      <TableRow className="border-slate-700 hover:bg-slate-900">
                         <TableHead className="w-[88px]">ID da O.S</TableHead>
                         <TableHead className="w-[120px]">Data</TableHead>
                         <TableHead className="w-[16%]">Cliente</TableHead>
@@ -727,38 +672,39 @@ export function CollaboratorOrdersSheet({
                             )}
                           </TableCell>
                           <TableCell className="max-w-0">
-                            <div className="font-medium text-teal-700">
+                            <div className="font-medium tabular-nums text-blue-700">
                               {formatMoney(order.net_points * (effectivePointValue ?? 0))}
                             </div>
                           </TableCell>
                           <TableCell className="max-w-0">
-                            <div className="flex flex-col gap-1">
-                              <Badge className={`${statusBadgeClass(order.scoring_status)} max-w-full justify-center whitespace-normal text-center`}>{order.scoring_status}</Badge>
-                              {order.recurrence_classification ? (
-                                <div className="text-[11px] text-blue-700">{recurrenceClassificationLabel(order.recurrence_classification)}</div>
-                              ) : null}
-                              {order.has_reschedule || order.has_pending || order.requires_manual_review ? (
-                                <div className="flex flex-wrap gap-1">
-                                  {order.has_reschedule ? (
-                                    <span className="inline-flex items-center gap-0.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
-                                      <Repeat className="h-3 w-3" />
-                                      Reagendada
-                                    </span>
-                                  ) : null}
-                                  {order.has_pending ? (
-                                    <span className="inline-flex items-center gap-0.5 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
-                                      <Clock className="h-3 w-3" />
-                                      Pendência
-                                    </span>
-                                  ) : null}
+                            {/* Etiqueta única por O.S: 1 badge de status + no máximo 1 pill secundário
+                                (revisão > retorno > reagendada > pendência) - detalhe completo no Auditar. */}
+                            {(() => {
+                              const statusEntry = scoringStatusEntry(order.scoring_status);
+                              const recurrenceDisplay = resolveRecurrenceDisplay(order);
+                              return (
+                                <div className="flex flex-col items-start gap-1">
+                                  <StatusBadge tone={statusEntry.tone} icon={statusEntry.icon} className="max-w-full whitespace-normal text-center">
+                                    {statusEntry.label}
+                                  </StatusBadge>
                                   {order.requires_manual_review ? (
-                                    <span className="inline-flex items-center gap-0.5 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
-                                      Revisão
-                                    </span>
+                                    <SecondaryPill tone="violet">Revisão</SecondaryPill>
+                                  ) : recurrenceDisplay ? (
+                                    <SecondaryPill tone={recurrenceDisplay.tone} icon={Repeat}>
+                                      {recurrenceDisplay.label}
+                                    </SecondaryPill>
+                                  ) : order.has_reschedule ? (
+                                    <SecondaryPill tone="amber" icon={Repeat}>
+                                      Reagendada
+                                    </SecondaryPill>
+                                  ) : order.has_pending ? (
+                                    <SecondaryPill tone="slate" icon={Clock}>
+                                      Pendência
+                                    </SecondaryPill>
                                   ) : null}
                                 </div>
-                              ) : null}
-                            </div>
+                              );
+                            })()}
                           </TableCell>
                           <TableCell className="whitespace-nowrap">
                             <Button

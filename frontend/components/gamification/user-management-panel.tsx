@@ -1,24 +1,77 @@
 "use client";
 
-import { KeyRound, Save, ShieldCheck, Trash2, UserCog, UserPlus, Users2 } from "lucide-react";
+import { Save, ShieldCheck, UserCog, UserPlus, Users2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import { AppCombobox, AppInput, AppModal, AppSwitch, RowActionMenu, StatusBadge } from "@/components/gamification/config-ui";
+import {
+  AppCombobox,
+  AppDrawer,
+  AppInput,
+  AppModal,
+  AppSwitch,
+  RegionalMultiSelect,
+  RowActionMenu,
+  StatusBadge,
+  uniqueRegionals,
+} from "@/components/gamification/config-ui";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { normalizeRegional, regionalName } from "@/lib/regional";
 import { cn } from "@/lib/utils";
 import type { AuthUser, CollaboratorRegistryItem } from "@/lib/types";
 
-type UserPayload = { name: string; email: string; password?: string; role: string; active: boolean; collaborator_id: number | null };
+type UserPayload = {
+  name: string;
+  email: string;
+  password?: string;
+  role: string;
+  active: boolean;
+  collaborator_id: number | null;
+  managed_regionals: string[];
+};
 
 type Props = {
   users: AuthUser[];
   collaborators?: CollaboratorRegistryItem[];
+  regionalOptions?: string[];
   onCreate: (payload: UserPayload & { password: string }) => Promise<void>;
   onSave: (id: number, payload: UserPayload) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
 };
+
+type EditDraft = {
+  name: string;
+  email: string;
+  password: string;
+  role: string;
+  active: boolean;
+  collaborator_id: number | null;
+  managed_regionals: string[];
+};
+
+const BLANK_DRAFT: EditDraft = {
+  name: "",
+  email: "",
+  password: "",
+  role: "viewer",
+  active: true,
+  collaborator_id: null,
+  managed_regionals: [],
+};
+
+function draftFromUser(user: AuthUser): EditDraft {
+  return {
+    name: user.name,
+    email: user.email,
+    password: "",
+    role: user.role,
+    active: user.active,
+    collaborator_id: user.collaborator_id,
+    managed_regionals: user.managed_regionals,
+  };
+}
 
 const roles = [
   { value: "viewer", label: "Viewer" },
@@ -27,6 +80,10 @@ const roles = [
   { value: "collaborator", label: "Colaborador (portal)" },
   { value: "regional_manager_viewer", label: "Gestor regional (portal)" },
 ];
+
+function roleLabel(role: string) {
+  return roles.find((item) => item.value === role)?.label ?? role;
+}
 
 function SummaryCard({
   icon,
@@ -47,7 +104,7 @@ function SummaryCard({
         {icon}
         {label}
       </div>
-      <div className={cn("mt-3 text-2xl font-semibold", accent === "highlight" ? "text-teal-700" : "text-slate-950")}>{value}</div>
+      <div className={cn("mt-3 text-2xl font-semibold", accent === "highlight" ? "text-blue-700" : "text-slate-950")}>{value}</div>
       <div className="mt-1 text-sm text-slate-500">{hint}</div>
     </div>
   );
@@ -61,32 +118,39 @@ function statusBadge(active: boolean) {
   );
 }
 
-export function UserManagementPanel({ users, collaborators = [], onCreate, onSave, onDelete }: Props) {
+export function UserManagementPanel({ users, collaborators = [], regionalOptions = [], onCreate, onSave, onDelete }: Props) {
   const [rows, setRows] = useState(users);
-  const [passwords, setPasswords] = useState<Record<number, string>>({});
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<number | null>(null);
-  const [draft, setDraft] = useState({ name: "", email: "", password: "", role: "viewer", active: true, collaborator_id: null as number | null });
+  const [savingId, setSavingId] = useState<number | "new" | null>(null);
+
+  // Drawer único de criar/editar - a tabela deixa de ter cada campo editável espremido na linha
+  // (achado do usuário: muito campo exprimido, sem espaço) e vira só leitura + botão "Editar", mesmo
+  // padrão já usado em Colaboradores.
+  const [editingId, setEditingId] = useState<number | "new" | null>(null);
+  const [draft, setDraft] = useState<EditDraft>(BLANK_DRAFT);
+
+  const sortedRegionalOptions = useMemo(
+    () =>
+      Array.from(new Set(regionalOptions.map((regional) => normalizeRegional(regional)).filter(Boolean))).sort((a, b) =>
+        regionalName(a).localeCompare(regionalName(b), "pt-BR")
+      ),
+    [regionalOptions]
+  );
 
   useEffect(() => {
     setRows(users);
-    setPasswords({});
   }, [users]);
 
   const activeUsers = useMemo(() => rows.filter((item) => item.active), [rows]);
   const adminUsers = useMemo(() => rows.filter((item) => item.role === "admin"), [rows]);
-  const pendingPasswordChanges = useMemo(
-    () => Object.values(passwords).filter((value) => value.trim().length > 0).length,
-    [passwords]
-  );
-
-  function patch(id: number, data: Partial<AuthUser>) {
-    setRows((current) => current.map((item) => (item.id === id ? { ...item, ...data } : item)));
-  }
 
   const linkedCollaboratorIds = useMemo(
     () => new Set(rows.map((item) => item.collaborator_id).filter((id): id is number => id != null)),
     [rows]
   );
+
+  const editingUser = typeof editingId === "number" ? rows.find((item) => item.id === editingId) ?? null : null;
+  const drawerOpen = editingId !== null;
 
   // Combobox de "colaborador vinculado": só oferece colaboradores sem usuário ainda, mais o que já
   // está vinculado a esta própria linha (senão ele desapareceria da lista ao editar outro campo).
@@ -98,9 +162,103 @@ export function UserManagementPanel({ users, collaborators = [], onCreate, onSav
     ];
   }
 
+  // Vínculo com o portal só faz sentido pros dois perfis de portal - Admin/Operator/Viewer não têm
+  // conceito de "colaborador vinculado" nem "regional gerenciada", então o controle some pra eles em
+  // vez de mostrar algo sem efeito nenhum.
+  function vinculoField(role: string, collaboratorId: number | null, managedRegionals: string[]) {
+    if (role === "collaborator") {
+      return (
+        <AppCombobox
+          value={collaboratorId != null ? String(collaboratorId) : ""}
+          onChange={(value) => updateDraft({ collaborator_id: value ? Number(value) : null })}
+          placeholder="Nenhum"
+          ariaLabel="Colaborador vinculado"
+          options={collaboratorOptions(collaboratorId)}
+        />
+      );
+    }
+    if (role === "regional_manager_viewer") {
+      // Um gestor regional pode acompanhar várias filiais ao mesmo tempo - mesmo padrão de
+      // seleção múltipla já usado pra "Filiais vinculadas" em Liderança.
+      return (
+        <RegionalMultiSelect
+          options={sortedRegionalOptions}
+          selected={managedRegionals}
+          onChange={(values) => updateDraft({ managed_regionals: uniqueRegionals(values) })}
+        />
+      );
+    }
+    return <div className="flex h-11 items-center text-sm text-slate-400">Não aplicável a este perfil.</div>;
+  }
+
+  function vinculoSummary(user: AuthUser) {
+    if (user.role === "collaborator") {
+      if (user.collaborator_id == null) return "Sem colaborador vinculado";
+      const collaborator = collaborators.find((item) => item.id === user.collaborator_id);
+      return collaborator ? collaborator.name : `Colaborador #${user.collaborator_id}`;
+    }
+    if (user.role === "regional_manager_viewer") {
+      return user.managed_regionals.length > 0
+        ? user.managed_regionals.map((regional) => regionalName(regional)).join(", ")
+        : "Sem regional vinculada";
+    }
+    return "—";
+  }
+
+  function openCreateDrawer() {
+    setDraft(BLANK_DRAFT);
+    setEditingId("new");
+  }
+
+  function openEditDrawer(user: AuthUser) {
+    setDraft(draftFromUser(user));
+    setEditingId(user.id);
+  }
+
+  function closeDrawer() {
+    setEditingId(null);
+    setDraft(BLANK_DRAFT);
+  }
+
+  function updateDraft(patch: Partial<EditDraft>) {
+    setDraft((current) => ({ ...current, ...patch }));
+  }
+
+  async function saveDraft() {
+    if (!draft.name.trim() || !draft.email.trim()) return;
+    setSavingId(editingId);
+    try {
+      if (editingId === "new") {
+        if (!draft.password.trim()) return;
+        await onCreate({
+          name: draft.name.trim(),
+          email: draft.email.trim(),
+          password: draft.password,
+          role: draft.role,
+          active: draft.active,
+          collaborator_id: draft.collaborator_id,
+          managed_regionals: draft.managed_regionals,
+        });
+      } else if (editingUser) {
+        await onSave(editingUser.id, {
+          name: draft.name.trim(),
+          email: draft.email.trim(),
+          password: draft.password.trim() || undefined,
+          role: draft.role,
+          active: draft.active,
+          collaborator_id: draft.collaborator_id,
+          managed_regionals: draft.managed_regionals,
+        });
+      }
+      closeDrawer();
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   return (
     <section className="grid gap-5">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <SummaryCard
           icon={<Users2 className="h-4 w-4" />}
           label="Usuários"
@@ -120,13 +278,6 @@ export function UserManagementPanel({ users, collaborators = [], onCreate, onSav
           value={String(activeUsers.length)}
           hint="Contas habilitadas para acesso imediato."
         />
-        <SummaryCard
-          icon={<KeyRound className="h-4 w-4" />}
-          label="Senhas em edição"
-          value={String(pendingPasswordChanges)}
-          hint="Alterações de senha preenchidas, aguardando salvar."
-          accent={pendingPasswordChanges > 0 ? "highlight" : "default"}
-        />
       </div>
 
       <div className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
@@ -135,136 +286,45 @@ export function UserManagementPanel({ users, collaborators = [], onCreate, onSav
             <div>
               <h3 className="text-lg font-semibold text-slate-950">Usuários e permissões</h3>
               <p className="mt-1 max-w-3xl text-sm text-slate-500">
-                Gerencie acesso simples por perfil, revise rapidamente contas ativas e deixe a manutenção de credenciais mais clara na mesma superfície.
+                Gerencie acesso por perfil e revise rapidamente contas ativas. Use "Editar" para abrir o cadastro completo.
               </p>
             </div>
-          </div>
-        </div>
-
-        <div className="grid gap-4 border-b border-slate-200 bg-slate-50/80 px-5 py-5 lg:grid-cols-[1fr_1fr_0.9fr_1fr_auto]">
-          <div className="grid gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Nome</label>
-            <AppInput className="h-11" placeholder="Nome" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
-          </div>
-          <div className="grid gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">E-mail</label>
-            <AppInput className="h-11" placeholder="E-mail" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} />
-          </div>
-          <div className="grid gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Perfil</label>
-            <AppCombobox
-              value={draft.role}
-              onChange={(value) => setDraft((current) => ({ ...current, role: value }))}
-              placeholder="Selecionar perfil"
-              ariaLabel="Perfil do novo usuário"
-              options={roles.map((role) => ({ value: role.value, label: role.label }))}
-            />
-          </div>
-          <div className="grid gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Colaborador vinculado</label>
-            <AppCombobox
-              value={draft.collaborator_id != null ? String(draft.collaborator_id) : ""}
-              onChange={(value) => setDraft((current) => ({ ...current, collaborator_id: value ? Number(value) : null }))}
-              placeholder="Nenhum"
-              ariaLabel="Colaborador vinculado ao novo usuário"
-              options={collaboratorOptions(draft.collaborator_id)}
-            />
-          </div>
-          <div className="grid gap-2">
-            <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Senha inicial</label>
-            <div className="flex gap-3">
-              <AppInput
-                className="h-11"
-                placeholder="Senha inicial"
-                type="password"
-                value={draft.password}
-                onChange={(event) => setDraft((current) => ({ ...current, password: event.target.value }))}
-              />
-              <Button
-                className="h-11"
-                onClick={async () => {
-                  await onCreate(draft);
-                  setDraft({ name: "", email: "", password: "", role: "viewer", active: true, collaborator_id: null });
-                }}
-                disabled={!draft.name.trim() || !draft.email.trim() || !draft.password.trim()}
-              >
-                <UserPlus className="h-4 w-4" />
-                Criar
-              </Button>
-            </div>
+            <Button type="button" onClick={openCreateDrawer}>
+              <UserPlus className="h-4 w-4" />
+              Cadastrar usuário
+            </Button>
           </div>
         </div>
 
         <div className="p-5">
           <div className="overflow-hidden rounded-2xl border border-slate-200">
             <Table>
-              <TableHeader>
-                <TableRow className="bg-slate-50/80">
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead>Nome</TableHead>
                   <TableHead>E-mail</TableHead>
                   <TableHead>Perfil</TableHead>
-                  <TableHead>Colaborador vinculado</TableHead>
+                  <TableHead>Vínculo (portal)</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Nova senha</TableHead>
-                  <TableHead className="w-56">Ações</TableHead>
+                  <TableHead className="w-32">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((user) => (
                   <TableRow key={user.id}>
-                    <TableCell><AppInput value={user.name} onChange={(event) => patch(user.id, { name: event.target.value })} /></TableCell>
-                    <TableCell><AppInput value={user.email} onChange={(event) => patch(user.id, { email: event.target.value })} /></TableCell>
+                    <TableCell className="font-medium text-slate-950">{user.name}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{user.email}</TableCell>
+                    <TableCell className="text-sm text-slate-700">{roleLabel(user.role)}</TableCell>
+                    <TableCell className="text-sm text-slate-600">{vinculoSummary(user)}</TableCell>
+                    <TableCell>{statusBadge(user.active)}</TableCell>
                     <TableCell>
-                      <AppCombobox
-                        value={user.role}
-                        onChange={(value) => patch(user.id, { role: value as AuthUser["role"] })}
-                        placeholder="Selecionar perfil"
-                        ariaLabel={`Perfil do usuário ${user.name}`}
-                        options={roles.map((role) => ({ value: role.value, label: role.label }))}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <AppCombobox
-                        value={user.collaborator_id != null ? String(user.collaborator_id) : ""}
-                        onChange={(value) => patch(user.id, { collaborator_id: value ? Number(value) : null })}
-                        placeholder="Nenhum"
-                        ariaLabel={`Colaborador vinculado ao usuário ${user.name}`}
-                        options={collaboratorOptions(user.collaborator_id)}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        {statusBadge(user.active)}
-                        <AppSwitch checked={user.active} onCheckedChange={(checked) => patch(user.id, { active: checked })} />
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <AppInput type="password" placeholder="Manter atual" value={passwords[user.id] ?? ""} onChange={(event) => setPasswords((current) => ({ ...current, [user.id]: event.target.value }))} />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            onSave(user.id, {
-                              name: user.name,
-                              email: user.email,
-                              role: user.role,
-                              active: user.active,
-                              collaborator_id: user.collaborator_id,
-                              password: passwords[user.id] || undefined,
-                            })
-                          }
-                        >
-                          <Save className="h-4 w-4" />
-                          Salvar
+                      <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" onClick={() => openEditDrawer(user)}>
+                          Editar
                         </Button>
                         <RowActionMenu
                           ariaLabel={`Ações do usuário ${user.name}`}
-                          items={[
-                            { label: "Excluir", onSelect: () => setPendingDeleteUserId(user.id), tone: "danger" },
-                          ]}
+                          items={[{ label: "Excluir", onSelect: () => setPendingDeleteUserId(user.id), tone: "danger" }]}
                         />
                       </div>
                     </TableCell>
@@ -272,7 +332,7 @@ export function UserManagementPanel({ users, collaborators = [], onCreate, onSav
                 ))}
                 {rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
+                    <TableCell colSpan={6} className="py-10 text-center text-sm text-slate-500">
                       Nenhum usuário cadastrado até o momento.
                     </TableCell>
                   </TableRow>
@@ -282,6 +342,77 @@ export function UserManagementPanel({ users, collaborators = [], onCreate, onSav
           </div>
         </div>
       </div>
+
+      <AppDrawer
+        open={drawerOpen}
+        onOpenChange={(open) => !open && closeDrawer()}
+        title={editingId === "new" ? "Cadastrar usuário" : `Editar ${editingUser?.name ?? "usuário"}`}
+        description="Nome, e-mail e perfil são obrigatórios. O vínculo com o portal depende do perfil escolhido."
+      >
+        <div className="grid gap-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-2 md:col-span-2">
+              <Label>Nome completo</Label>
+              <AppInput value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} placeholder="Nome do usuário" />
+            </div>
+            <div className="grid gap-2">
+              <Label>E-mail</Label>
+              <AppInput type="email" value={draft.email} onChange={(event) => updateDraft({ email: event.target.value })} placeholder="nome@exemplo.com" />
+            </div>
+            <div className="grid gap-2">
+              <Label>Perfil</Label>
+              <AppCombobox
+                value={draft.role}
+                onChange={(value) => updateDraft({ role: value })}
+                placeholder="Selecionar perfil"
+                ariaLabel="Perfil do usuário"
+                options={roles.map((role) => ({ value: role.value, label: role.label }))}
+              />
+            </div>
+            <div className="grid gap-2 md:col-span-2">
+              <Label>Vínculo (portal)</Label>
+              {vinculoField(draft.role, draft.collaborator_id, draft.managed_regionals)}
+            </div>
+            <div className="grid gap-2 md:col-span-2">
+              <Label>{editingId === "new" ? "Senha inicial" : "Nova senha"}</Label>
+              <AppInput
+                type="password"
+                value={draft.password}
+                onChange={(event) => updateDraft({ password: event.target.value })}
+                placeholder={editingId === "new" ? "Senha inicial" : "Deixe em branco para manter a atual"}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <div>
+              <div className="text-sm font-medium text-slate-900">Ativo</div>
+              <div className="text-xs text-slate-500">Desligado bloqueia o acesso imediatamente.</div>
+            </div>
+            <AppSwitch checked={draft.active} onCheckedChange={(checked) => updateDraft({ active: checked })} />
+          </div>
+
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="outline" onClick={closeDrawer}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void saveDraft()}
+              disabled={
+                !draft.name.trim() ||
+                !draft.email.trim() ||
+                savingId !== null ||
+                (editingId === "new" && !draft.password.trim())
+              }
+            >
+              <Save className="h-4 w-4" />
+              {savingId !== null ? "Salvando..." : editingId === "new" ? "Cadastrar" : "Salvar"}
+            </Button>
+          </div>
+        </div>
+      </AppDrawer>
+
       <AppModal
         open={pendingDeleteUserId != null}
         onOpenChange={(open) => setPendingDeleteUserId(open ? pendingDeleteUserId : null)}

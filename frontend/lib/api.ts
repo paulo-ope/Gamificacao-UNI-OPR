@@ -1,5 +1,6 @@
 import type {
   AppSetting,
+  AccessProfile,
   AuthUser,
   AuditLog,
   AuditOrders,
@@ -29,13 +30,17 @@ import type {
   LeadershipProfile,
   LeadershipRoleProfile,
   LoginResult,
+  EcosystemPermission,
+  Permission,
   PenaltyRule,
   PointBalanceEntry,
   PortalOrder,
   PortalOverview,
+  PortalProfile,
   PortalRules,
   PortalSimulation,
   PortalSummary,
+  PortalTeamSummary,
   RecurrenceAudit,
   RecurrenceClassificationRule,
   ScoringGroupDeleteResult,
@@ -51,7 +56,7 @@ import type {
   UnmappedSubject
 } from "@/lib/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 const TOKEN_KEY = "gamification_auth_token";
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
@@ -166,26 +171,63 @@ export const api = {
       body: JSON.stringify({ email, password })
     }),
   me: () => request<AuthUser>("/auth/me"),
-  portalSummary: () => request<PortalSummary>("/portal/summary"),
+  portalSummary: (period?: { reference_month: number; reference_year: number }) => {
+    const query = period ? `?reference_month=${period.reference_month}&reference_year=${period.reference_year}` : "";
+    return request<PortalSummary>(`/portal/summary${query}`);
+  },
+  portalProfile: () => request<PortalProfile>("/portal/profile"),
+  updatePortalProfile: (payload: { phone?: string | null; email?: string | null }) =>
+    request<PortalProfile>("/portal/profile", { method: "PUT", body: JSON.stringify(payload) }),
+  uploadPortalProfilePhoto: (file: File) => uploadRequest<PortalProfile>("/portal/profile/photo", file),
+  portalProfilePhoto: () => requestBlob("/portal/profile/photo"),
+  deletePortalProfilePhoto: () => request<PortalProfile>("/portal/profile/photo", { method: "DELETE", body: JSON.stringify({}) }),
   portalOverview: () => request<PortalOverview>("/portal/overview"),
-  portalOrders: (limit = 80) => request<PortalOrder[]>(`/portal/my-orders?limit=${limit}`),
-  portalAudit: () => request<PortalAudit>("/portal/my-audit"),
+  portalOrders: (limit = 80, period?: { reference_month: number; reference_year: number }) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (period) {
+      params.set("reference_month", String(period.reference_month));
+      params.set("reference_year", String(period.reference_year));
+    }
+    return request<PortalOrder[]>(`/portal/my-orders?${params.toString()}`);
+  },
+  portalAudit: (period?: { reference_month: number; reference_year: number }) => {
+    const query = period ? `?reference_month=${period.reference_month}&reference_year=${period.reference_year}` : "";
+    return request<PortalAudit>(`/portal/my-audit${query}`);
+  },
   portalRules: () => request<PortalRules>("/portal/rules"),
   portalSimulation: (extraPoints: number) =>
     request<PortalSimulation>(`/portal/simulation?extra_points=${encodeURIComponent(String(extraPoints))}`),
+  portalTeamSummary: () => request<PortalTeamSummary>("/portal/team-summary"),
   users: () => request<AuthUser[]>("/users"),
-  createUser: (payload: { name?: string; email?: string; role?: string; active?: boolean; password: string; collaborator_id?: number | null }) =>
+  createUser: (payload: { name?: string; email?: string; role?: string; active?: boolean; password: string; collaborator_id?: number | null; managed_regionals?: string[]; access_profile_ids?: number[] }) =>
     request<AuthUser>("/users", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  updateUser: (id: number, payload: { name?: string; email?: string; role?: string; active?: boolean; password?: string; collaborator_id?: number | null }) =>
+  updateUser: (id: number, payload: { name?: string; email?: string; role?: string; active?: boolean; password?: string; collaborator_id?: number | null; managed_regionals?: string[]; access_profile_ids?: number[] }) =>
     request<AuthUser>(`/users/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
   deleteUser: (id: number) =>
     request<AuthUser>(`/users/${id}`, {
+      method: "DELETE"
+    }),
+  operationRegionals: () => request<string[]>("/admin/operation-regionals"),
+  ecosystemPermissions: () => request<EcosystemPermission[]>("/admin/permissions"),
+  accessProfiles: () => request<AccessProfile[]>("/admin/access-profiles"),
+  createAccessProfile: (payload: { name: string; description?: string | null; active: boolean; permission_keys: Permission[] }) =>
+    request<AccessProfile>("/admin/access-profiles", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateAccessProfile: (id: number, payload: { name?: string; description?: string | null; active?: boolean; permission_keys?: Permission[] }) =>
+    request<AccessProfile>(`/admin/access-profiles/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  deleteAccessProfile: (id: number) =>
+    request<AccessProfile>(`/admin/access-profiles/${id}`, {
       method: "DELETE"
     }),
   leadershipProfiles: () => request<LeadershipProfile[]>("/leadership/profiles"),

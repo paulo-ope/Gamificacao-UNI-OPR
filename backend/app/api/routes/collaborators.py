@@ -113,7 +113,13 @@ def delete_collaborator(
         raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
 
     linked_orders = list(db.scalars(select(ServiceOrder).where(ServiceOrder.collaborator_id == collaborator_id)))
-    if linked_orders:
+    # CollaboratorScore.collaborator_id é NOT NULL - sem checar isso aqui, apagar um colaborador com
+    # pontuação já calculada (mesmo sem nenhuma O.S. vinculada no momento) derruba o delete com um
+    # IntegrityError (achado real: o ORM tenta nulificar a FK ao invés de bloquear/soft-deletar).
+    has_scores = db.scalar(
+        select(CollaboratorScore.id).where(CollaboratorScore.collaborator_id == collaborator_id).limit(1)
+    )
+    if linked_orders or has_scores:
         before = snapshot(collaborator)
         collaborator.active = False
         collaborator.is_registered = False

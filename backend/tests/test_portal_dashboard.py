@@ -5,8 +5,10 @@ collaborator's score to an unrelated user. Now that users can be linked directly
 `users.collaborator_id`, that link must win, and no match at all must return None instead of
 leaking data."""
 
-from app.models import User
-from app.services.portal_dashboard import _resolve_score
+from datetime import datetime, timezone
+
+from app.models import CalculationRun, ScoringGroup, ScoringSubjectRule, User
+from app.services.portal_dashboard import _audit_order, _order_label, _portal_run, _resolve_score, build_portal_rules
 
 ROWS = [
     {"collaborator_id": 1, "collaborator_name": "Ana Souza", "final_points": 100},
@@ -45,3 +47,110 @@ def test_resolve_score_returns_none_without_link_or_match_viewer():
     user = _user(role="viewer", name="Viewer Sem Colaborador", email="viewer@pytest.local", collaborator_id=None)
     result = _resolve_score(user, ROWS)
     assert result is None
+
+
+def test_audit_order_preserves_diagnosis_and_recurrence_evidence():
+    result = _audit_order(
+        {
+            "os_code": "IXC-101",
+            "os_type": "Manutenção",
+            "os_subject": "Retorno",
+            "customer_name": "Cliente Exemplo",
+            "status_label": "Anulada por diagnóstico",
+            "sla_status_normalized": "NO_PRAZO",
+            "diagnosis_action_type": "cancel_points",
+            "diagnosis_penalty_reason": "Diagnóstico X anulou a pontuação base",
+            "recurrence_related_os_code": "IXC-202",
+            "recurrence_days_between": 4,
+        }
+    )
+
+    assert result["diagnosis_action_type"] == "cancel_points"
+    assert result["diagnosis_penalty_reason"] == "Diagnóstico X anulou a pontuação base"
+    assert result["recurrence_related_os_code"] == "IXC-202"
+    assert result["recurrence_days_between"] == 4
+    assert result["customer_name"] == "Cliente Exemplo"
+    assert result["sla_status_normalized"] == "NO_PRAZO"
+
+
+def test_order_label_hides_technical_sla_import_trace():
+    status_label, reason = _order_label(
+        {
+            "is_annulled": True,
+            "scoring_status": "Anulada por diagnóstico",
+            "reasons": [
+                "SLA original importado: Não informado",
+                "SLA normalizado: NO_PRAZO",
+                "Assunto vinculado ao grupo Manutenção",
+                "Diagnóstico Equipamentos: Não Removidos anulou a pontuação base",
+            ],
+        }
+    )
+
+    assert status_label == "Anulada por diagnóstico"
+    assert reason == "Diagnóstico Equipamentos: Não Removidos anulou a pontuação base"
+
+
+def test_portal_rules_exposes_effective_points_and_source(db_session):
+    group = ScoringGroup(name="Manutenção", default_points=12, active=True)
+    db_session.add(group)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ScoringSubjectRule(
+                group_id=group.id,
+                os_type="Manutenção",
+                os_subject="Reparo padrão",
+                use_group_default=True,
+                active=True,
+            ),
+            ScoringSubjectRule(
+                group_id=group.id,
+                os_type="Manutenção",
+                os_subject="Reparo especial",
+                custom_points=25,
+                use_group_default=False,
+                active=True,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    result = build_portal_rules(db_session)
+    subjects = {item["os_subject"]: item for item in result["subjects"]}
+
+    assert subjects["Reparo padrão"]["points"] == 12
+    assert subjects["Reparo padrão"]["point_source"] == "Valor padrão do grupo"
+    assert subjects["Reparo especial"]["points"] == 25
+    assert subjects["Reparo especial"]["point_source"] == "Valor específico deste assunto"
+
+
+def test_portal_run_returns_the_latest_revision_for_the_requested_period(db_session):
+    older_revision = CalculationRun(
+        reference_month=6,
+        reference_year=2026,
+        status="approved",
+        point_value=1,
+        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    latest_revision = CalculationRun(
+        reference_month=6,
+        reference_year=2026,
+        status="approved",
+        point_value=1,
+        created_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    other_period = CalculationRun(
+        reference_month=7,
+        reference_year=2026,
+        status="approved",
+        point_value=1,
+        created_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+    db_session.add_all([older_revision, latest_revision, other_period])
+    db_session.flush()
+
+    result = _portal_run(db_session, reference_month=6, reference_year=2026)
+
+    assert result is not None
+    assert result.id == latest_revision.id

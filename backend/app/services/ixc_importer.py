@@ -4,14 +4,13 @@ import calendar
 import contextlib
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models import Collaborator, ImportRun, ScoringSubjectRule, ServiceOrder
-from app.services.calculation import get_setting, upsert_setting
 from app.services.calculation_closure import find_paid_run_for_service_order_context
 from app.services.ixc_client import (
     IxcClient,
@@ -19,7 +18,6 @@ from app.services.ixc_client import (
     fetch_clientes_by_ids,
     fetch_diagnosticos,
     fetch_funcionarios,
-    fetch_latest_service_order_timestamp,
     fetch_logins_by_ids,
     fetch_service_orders,
     fetch_setores,
@@ -63,9 +61,6 @@ IXC_PROVIDED_FIELDS = [
 ]
 
 ZERO_DATE_SENTINELS = {"0000-00-00 00:00:00", "0000-00-00", ""}
-
-IXC_SYNC_WATERMARK_KEY = "ixc_sync_last_updated_at"
-IXC_SYNC_DEFAULT_LOOKBACK_HOURS = 24
 
 # Chave arbitrária e fixa para o lock consultivo do Postgres que serializa importações do IXC (ver
 # `_ixc_import_lock`). Só precisa ser única dentro do banco - não colide com nada mais no sistema.
@@ -469,13 +464,20 @@ def import_ixc_service_orders(
     closed_after: str | None = None,
     closed_before: str | None = None,
     updated_after: str | None = None,
+    updated_before: str | None = None,
     imported_by: int | None = None,
 ) -> dict[str, Any]:
     """Adaptador Fase B: busca O.S. da API do IXC e alimenta o MESMO pipeline de matching/auditoria/
     bloqueio de período pago que o importador UpValue usa - não duplica essa lógica.
 
     `updated_after` (filtra por `ultima_atualizacao`) é o parâmetro certo para sincronização periódica -
-    pega tanto O.S. novas quanto já existentes que mudaram (ex: uma que fechou). `closed_after`/
+    pega tanto O.S. novas quanto já existentes que mudaram (ex: uma que fechou). `updated_before` deve
+    SEMPRE acompanhar `updated_after` na sincronização periódica: fecha a janela num instante fixo,
+    capturado antes de começar a paginar (ver `sync_ixc_service_orders`) - sem isso, uma O.S. que passa a
+    satisfazer o filtro EM QUANTO a busca ainda está paginando pode cair numa página já lida (a paginação é
+    por offset/página, não por cursor) e ser perdida pra sempre, já que a sincronização seguinte só olha
+    pra frente a partir da marca d'água (achado real: 2 O.S. de Nova Brasilândia D'Oeste fecharam durante a
+    janela de uma sincronização e nunca mais apareceram - ver docs/plano-integracao-ixc.md). `closed_after`/
     `closed_before` filtram por data de FECHAMENTO - use os dois juntos para importar retroativamente um
     período específico (ver `backfill_ixc_service_orders`); é o par certo porque a apuração agrupa O.S.
     pelo mês em que fecharam, não em que abriram (uma O.S. aberta em 31/05 e fechada em 01/06 fica de fora
@@ -492,7 +494,7 @@ def import_ixc_service_orders(
             db, client,
             opened_after=opened_after, opened_before=opened_before,
             closed_after=closed_after, closed_before=closed_before,
-            updated_after=updated_after,
+            updated_after=updated_after, updated_before=updated_before,
             imported_by=imported_by,
         )
 
@@ -506,6 +508,7 @@ def _import_ixc_service_orders_body(
     closed_after: str | None = None,
     closed_before: str | None = None,
     updated_after: str | None = None,
+    updated_before: str | None = None,
     imported_by: int | None = None,
 ) -> dict[str, Any]:
     records = list(
@@ -516,6 +519,7 @@ def _import_ixc_service_orders_body(
             closed_after=closed_after,
             closed_before=closed_before,
             updated_after=updated_after,
+            updated_before=updated_before,
             setor_ids=IXC_TECHNICAL_SETOR_IDS,
             only_finalized=True,
         )
@@ -537,6 +541,7 @@ def _import_ixc_service_orders_body(
             f"{'-closed_after=' + closed_after if closed_after else ''}"
             f"{'-closed_before=' + closed_before if closed_before else ''}"
             f"{'-updated_after=' + updated_after if updated_after else ''}"
+            f"{'-updated_before=' + updated_before if updated_before else ''}"
         ),
         file_hash=None,
         source="ixc",
@@ -688,45 +693,4 @@ def backfill_ixc_service_orders(
 
     result = import_ixc_service_orders(db, client, closed_after=start, closed_before=end, imported_by=imported_by)
     result["backfill_period"] = f"{year:04d}-{month:02d}"
-    return result
-
-
-def sync_ixc_service_orders(
-    db: Session,
-    client: IxcClient,
-    *,
-    imported_by: int | None = None,
-    initial_lookback_hours: int = IXC_SYNC_DEFAULT_LOOKBACK_HOURS,
-) -> dict[str, Any]:
-    """Sincronização incremental: busca só o que mudou desde a última vez (marca d'água guardada em
-    `AppSetting`, chave `ixc_sync_last_updated_at`). Pensada para ser chamada periodicamente (ver plano,
-    polling a cada 15-30 min) - não para uso manual único (isso é `import_ixc_service_orders` direto).
-
-    Na primeira execução (sem marca d'água salva ainda), olha só as últimas `initial_lookback_hours` horas
-    de trás da O.S. mais recente que o próprio IXC reporta - não o histórico inteiro, e não baseado no
-    nosso relógio (o servidor do IXC grava em horário local, ~4h atrás do UTC do nosso container -
-    confirmado com dado real; usar `datetime.now()` daria uma janela vazia).
-    """
-    watermark = get_setting(db, IXC_SYNC_WATERMARK_KEY, "")
-    if not watermark:
-        latest = fetch_latest_service_order_timestamp(client)
-        if latest:
-            latest_dt = datetime.strptime(latest, "%Y-%m-%d %H:%M:%S")
-            watermark = (latest_dt - timedelta(hours=initial_lookback_hours)).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=initial_lookback_hours)
-            watermark = cutoff.strftime("%Y-%m-%d %H:%M:%S")
-
-    result = import_ixc_service_orders(db, client, updated_after=watermark, imported_by=imported_by)
-    result["watermark_used"] = watermark
-
-    new_watermark = result.get("max_updated_at")
-    if new_watermark:
-        upsert_setting(
-            db, IXC_SYNC_WATERMARK_KEY, new_watermark,
-            description="Última vez (ultima_atualizacao do IXC) até onde a sincronização automática já processou.",
-        )
-        db.flush()
-        result["watermark_advanced_to"] = new_watermark
-
     return result

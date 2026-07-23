@@ -28,6 +28,10 @@ class IxcApiError(RuntimeError):
     """Erro de comunicação com o webservice v1 do IXC (rede, autenticação ou formato de resposta)."""
 
 
+class IxcQueryLimitError(IxcApiError):
+    """Consulta filtrada que excede o limite de segurança definido pelo consumidor."""
+
+
 @dataclass
 class IxcPage:
     records: list[dict[str, Any]]
@@ -78,7 +82,15 @@ class IxcClient:
             payload["sortname"] = sortname
             payload["sortorder"] = sortorder
 
-        filters_summary = ", ".join(f"{item.get('TB')} {item.get('OP')} {item.get('P')}" for item in (grid_param or []))
+        def safe_filter_summary(item: dict[str, str]) -> str:
+            operator = str(item.get("OP") or "")
+            raw_value = str(item.get("P") or "")
+            if operator.upper() == "IN":
+                count = len([value for value in raw_value.split(",") if value])
+                return f"{item.get('TB')} IN [{count} valores]"
+            return f"{item.get('TB')} {operator} {raw_value}"
+
+        filters_summary = ", ".join(safe_filter_summary(item) for item in (grid_param or []))
         started_at = time.monotonic()
         try:
             response = httpx.post(
@@ -97,7 +109,19 @@ class IxcClient:
             )
             raise IxcApiError(f"Falha ao consultar '{table}' no IXC: {exc}") from exc
 
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            duration_ms = round((time.monotonic() - started_at) * 1000)
+            content_type = response.headers.get("content-type", "não informado").split(";", 1)[0]
+            logger.warning(
+                "RESPOSTA_INVALIDA tabela=%s pagina=%s rp=%s filtros=[%s] status=%s content_type=%s duracao_ms=%s",
+                table, page, rp, filters_summary, response.status_code, content_type, duration_ms,
+            )
+            raise IxcApiError(
+                f"O IXC respondeu em formato inválido para '{table}' "
+                f"(HTTP {response.status_code}, tipo {content_type}). Tente novamente em alguns instantes."
+            ) from exc
         if not isinstance(body, dict) or ("registros" not in body and "total" not in body):
             keys = list(body.keys()) if isinstance(body, dict) else type(body).__name__
             raise IxcApiError(f"Resposta inesperada do IXC para '{table}' (chaves recebidas: {keys}).")
@@ -122,6 +146,7 @@ class IxcClient:
         sortname: str | None = None,
         sortorder: str = "asc",
         max_pages: int = 1000,
+        max_records: int | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Itera todos os registros de uma tabela, paginando até a lista de registros vir vazia.
 
@@ -133,6 +158,11 @@ class IxcClient:
         seen = 0
         while page <= max_pages:
             result = self.list(table, grid_param=grid_param, page=page, rp=rp, sortname=sortname, sortorder=sortorder)
+            if max_records is not None and result.total > max_records:
+                raise IxcQueryLimitError(
+                    f"A consulta filtrada de '{table}' retornaria {result.total} registros, "
+                    f"acima do limite seguro de {max_records}. Reduza o período selecionado."
+                )
             if not result.records:
                 return
             yield from result.records
@@ -169,14 +199,23 @@ def fetch_service_orders(
     closed_after: str | None = None,
     closed_before: str | None = None,
     updated_after: str | None = None,
+    updated_before: str | None = None,
     setor_ids: list[str] | None = None,
     only_finalized: bool = False,
+    statuses: list[str] | None = None,
     rp: int = 200,
+    max_records: int | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Busca O.S. do IXC.
 
     `updated_after` filtra por `ultima_atualizacao` (pega tanto O.S. novas quanto já existentes que
     mudaram - ex: uma que estava aberta e foi fechada) - é o campo certo para sincronização incremental.
+    `updated_before` fecha essa janela por cima com um instante fixo capturado ANTES de começar a paginar
+    (ver `sync_ixc_service_orders`) - sem isso, uma O.S. cujo `ultima_atualizacao` passa a satisfazer o
+    filtro EM QUANTO a busca ainda está paginando pode cair numa página já lida (paginação por
+    offset/página, não por cursor) e ser perdida pra sempre, já que a próxima sincronização só olha pra
+    frente a partir da marca d'água (achado real: 2 O.S. de Nova Brasilândia D'Oeste fecharam durante a
+    janela de uma sincronização e nunca mais apareceram - ver docs/plano-integracao-ixc.md).
     `opened_after`/`opened_before` filtram por `data_abertura`; `closed_after`/`closed_before` filtram por
     `data_fechamento` - use os de fechamento para importação retroativa de um período específico (ex.: um
     mês fechado no passado), porque a apuração agrupa O.S. pelo mês em que FECHARAM, não em que abriram.
@@ -202,16 +241,32 @@ def fetch_service_orders(
         grid_param.append({"TB": "su_oss_chamado.data_fechamento", "OP": "<=", "P": closed_before})
     if updated_after:
         grid_param.append({"TB": "su_oss_chamado.ultima_atualizacao", "OP": ">=", "P": updated_after})
+    if updated_before:
+        grid_param.append({"TB": "su_oss_chamado.ultima_atualizacao", "OP": "<=", "P": updated_before})
     if setor_ids:
-        grid_param.append({"TB": "su_oss_chamado.setor", "OP": "IN", "P": ",".join(setor_ids)})
+        grid_param.append({
+            "TB": "su_oss_chamado.setor",
+            "OP": "=" if len(setor_ids) == 1 else "IN",
+            "P": setor_ids[0] if len(setor_ids) == 1 else ",".join(setor_ids),
+        })
     if only_finalized:
         grid_param.append({"TB": "su_oss_chamado.status", "OP": "=", "P": "F"})
+    elif statuses:
+        # O IXC desta instalação retorna uma página de erro quando recebe
+        # `status IN` com um único valor. O operador simples preserva o mesmo
+        # recorte e evita essa falha do webservice.
+        grid_param.append({
+            "TB": "su_oss_chamado.status",
+            "OP": "=" if len(statuses) == 1 else "IN",
+            "P": statuses[0] if len(statuses) == 1 else ",".join(statuses),
+        })
     yield from client.list_all(
         "su_oss_chamado",
         grid_param=grid_param or None,
         rp=rp,
         sortname="su_oss_chamado.id",
         sortorder="asc",
+        max_records=max_records,
     )
 
 

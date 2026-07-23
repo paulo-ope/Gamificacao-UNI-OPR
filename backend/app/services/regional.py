@@ -61,3 +61,18 @@ def same_regional(left: str | None, right: str | None) -> bool:
 def is_valid_regional(value: str | None) -> bool:
     normalized = normalize_regional(value)
     return normalized != "NAO IDENTIFICADO" and normalized not in INVALID_REGIONAL_CODES
+
+
+def effective_managed_regionals(managed_regional: str | None, managed_regionals: list[str] | None) -> list[str]:
+    """Une o campo legado (managed_regional, singular) com o novo (managed_regionals, lista),
+    normalizando e removendo duplicatas - permite um gestor regional cobrir várias filiais
+    (migration 20260718_0011) sem quebrar contas antigas que só têm o campo singular preenchido."""
+    values = list(managed_regionals or [])
+    if managed_regional:
+        values.append(managed_regional)
+    seen: dict[str, str] = {}
+    for value in values:
+        normalized = normalize_regional(value)
+        if normalized != "NAO IDENTIFICADO":
+            seen.setdefault(normalized, normalized)
+    return list(seen.values())

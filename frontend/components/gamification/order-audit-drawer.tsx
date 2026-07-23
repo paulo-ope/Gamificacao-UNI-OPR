@@ -1,16 +1,22 @@
 ﻿"use client";
 
-import { FileSearch } from "lucide-react";
+import { ChevronDown, FileSearch, Minus, Repeat, Sigma } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Info } from "@/components/ui/info-field";
 import { Separator } from "@/components/ui/separator";
+import { SecondaryPill, StatusBadge } from "@/components/ui/status-badge";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { SummaryMetric } from "@/components/ui/summary-metric";
 import { api } from "@/lib/api";
 import { formatAnnulledPoints, formatDateTime, formatHours, formatInteger, formatMoney, formatPoints } from "@/lib/format";
+import { cleanOperationalText, recurrenceClassificationLabel, resolveRecurrenceDisplay } from "@/lib/recurrence-display";
 import { regionalName } from "@/lib/regional";
-import type { CollaboratorOrderDetail, RecurrenceAudit, RecurrenceClassification } from "@/lib/types";
+import { type Tone, scoringStatusEntry, toneBadgeClass } from "@/lib/tones";
+import type { CollaboratorOrderDetail, RecurrenceAudit } from "@/lib/types";
 
 type AuditableOrder = CollaboratorOrderDetail & {
   collaborator_name?: string;
@@ -28,16 +34,6 @@ type OrderAuditSheetProps = {
   calculationRunId?: number;
 };
 
-const recurrenceLabels: Record<RecurrenceClassification, string> = {
-  recorrencia_operacional: "Recorrência operacional",
-  reincidencia_tecnica: "Reincidência de manutenção",
-  garantia: "Reincidência após ativação",
-  possivel_retorno_sem_regra: "Retorno dentro da janela sem regra ativa",
-  os_nao_reincidente: "O.S não reincidente",
-  demandas_diferentes: "Demandas diferentes",
-  nao_identificado: "Não identificado"
-};
-
 function safeText(value: string | number | null | undefined, fallback = "Não informado") {
   if (value === null || value === undefined || value === "") return fallback;
   return String(value);
@@ -45,10 +41,6 @@ function safeText(value: string | number | null | undefined, fallback = "Não in
 
 function yesNo(value: boolean) {
   return value ? "Sim" : "Não";
-}
-
-function recurrenceLabel(value: RecurrenceClassification | null | undefined) {
-  return value ? recurrenceLabels[value] : "Sem classificação";
 }
 
 function diagnosisActionLabel(value: string | null | undefined) {
@@ -136,18 +128,6 @@ function appliedRuleText(order: AuditableOrder) {
   return order.rule_applied ?? order.scoring_rule_name ?? "Não identificada";
 }
 
-function cleanOperationalText(value: string | null | undefined) {
-  return safeText(value)
-    .replace(/Garantia\/reincidencia/gi, "Reincidência")
-    .replace(/Garantia\/Reincidencia/gi, "Reincidência")
-    .replace(/\bGarantia\b/g, "Reincidência")
-    .replace(/\bgarantia\b/g, "reincidência")
-    .replace(/reincidencia/gi, "reincidência")
-    .replace(/pontuacao/gi, "pontuação")
-    .replace(/revisao/gi, "revisão")
-    .replace(/Reducao/gi, "Redução");
-}
-
 function DetailItem({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
     <div className="min-w-0 rounded-md border bg-slate-50 px-3 py-2">
@@ -166,24 +146,13 @@ function RuleDecisionCard({
   title: string;
   status: string;
   detail: string;
-  tone?: "slate" | "emerald" | "amber" | "red" | "blue";
+  tone?: Tone;
 }) {
-  const toneClass =
-    tone === "red"
-      ? "border-red-200 bg-red-50 text-red-700"
-      : tone === "amber"
-        ? "border-amber-200 bg-amber-50 text-amber-800"
-        : tone === "emerald"
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : tone === "blue"
-            ? "border-blue-200 bg-blue-50 text-blue-700"
-            : "border-slate-200 bg-slate-50 text-slate-700";
-
   return (
-    <div className="rounded-lg border bg-white p-4">
+    <div className="rounded-xl border bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
-        <Badge className={toneClass}>{status}</Badge>
+        <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">{title}</div>
+        <Badge className={toneBadgeClass(tone)}>{status}</Badge>
       </div>
       <p className="mt-3 text-sm leading-6 text-slate-700">{detail}</p>
     </div>
@@ -259,7 +228,7 @@ function TimelineOrderCard({
 }) {
   const isCurrent = item.id === currentOrderId;
   return (
-    <article className={isCurrent ? "rounded-lg border border-teal-300 bg-teal-50 p-3" : "rounded-lg border bg-white p-3"}>
+    <article className={isCurrent ? "rounded-lg border border-blue-300 bg-blue-50 p-3" : "rounded-lg border bg-white p-3"}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{formatDateTime(item.opened_at)}</div>
@@ -268,7 +237,9 @@ function TimelineOrderCard({
           </div>
         </div>
         <div className="flex flex-wrap justify-end gap-1">
-          <Badge className="border-slate-200 bg-slate-50 text-slate-700">{recurrenceLabel(item.recurrence_classification)}</Badge>
+          <Badge className="border-slate-200 bg-slate-50 text-slate-700">
+            {item.recurrence_rule_name || recurrenceClassificationLabel(item.recurrence_classification)}
+          </Badge>
           {item.recurrence_discount_applied ? <DecisionPill discountApplied /> : null}
         </div>
       </div>
@@ -307,7 +278,7 @@ function RecurrenceAuditPanel({ audit }: { audit: RecurrenceAudit }) {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Resultado da auditoria</div>
-              <div className="mt-1 text-lg font-semibold text-slate-950">{recurrenceLabel(audit.classification)}</div>
+              <div className="mt-1 text-lg font-semibold text-slate-950">{recurrenceClassificationLabel(audit.classification)}</div>
               <p className="mt-1 text-sm text-slate-700">
                 {hasIdentity
                   ? audit.discount_applied
@@ -331,8 +302,6 @@ function RecurrenceAuditPanel({ audit }: { audit: RecurrenceAudit }) {
           <RecurrenceOrderCard title="O.S origem" order={audit.origin_order} />
           <RecurrenceOrderCard title="O.S posterior" order={audit.posterior_order} />
         </div>
-
-        <EvidenceList title="Evidência usada na classificação" items={audit.evidence} />
 
         <div className="grid gap-2 rounded-lg border bg-slate-50 p-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Histórico da O.S</div>
@@ -390,11 +359,10 @@ export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calcu
   const hasSlaPenalty = order.sla_penalty_points > 0;
   const hasSlaRule = Boolean(order.sla_rule_id);
   const slaSuppressed = hasSlaRule && wasSuppressed(order.sla_penalty_reason);
-  const recurrenceClassification = order.recurrence_classification
-    ? recurrenceLabels[order.recurrence_classification]
-    : order.is_warranty || order.is_recurrence
-      ? "Reincidência importada"
-      : "Sem reincidência técnica aplicada";
+  // Etiqueta única de retorno: nome da regra configurada > rótulo genérico > flags legadas.
+  const recurrenceDisplay = resolveRecurrenceDisplay(order);
+  const recurrenceClassification = recurrenceDisplay?.label ?? "Sem reincidência técnica aplicada";
+  const statusEntry = scoringStatusEntry(order.scoring_status);
   const diagnosisAuditText = hasDiagnosisRule
     ? diagnosisSuppressed
       ? order.diagnosis_penalty_reason ||
@@ -409,12 +377,16 @@ export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calcu
     : hasSlaPenalty
       ? `O SLA anulou ${formatAnnulledPoints(order.sla_penalty_points)}.`
       : "SLA no prazo ou sem regra de anulação aplicada.";
-  const reasons = order.reasons?.length ? order.reasons : ["Sem motivo registrado."];
-  const penaltyReasons = order.penalty_reasons?.length ? order.penalty_reasons : [];
-  const recurrenceEvidence = order.recurrence_evidence?.length ? order.recurrence_evidence : [];
   const outcome = auditOutcomeLabel(order);
   const mainReason = operationalReason(order);
   const appliedRule = appliedRuleText(order);
+  // Uma única lista de evidências (critérios + anulações + reincidência), sem repetição - antes o
+  // mesmo motivo aparecia em até 4 seções diferentes do drawer.
+  const allEvidence = Array.from(
+    new Set(
+      [...(order.reasons ?? []), ...(order.penalty_reasons ?? []), ...(order.recurrence_evidence ?? [])].map(cleanOperationalText)
+    )
+  );
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -431,67 +403,51 @@ export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calcu
               <section className={`rounded-xl border p-4 ${auditTone(order)}`}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs font-semibold uppercase tracking-wide opacity-80">Resumo da decisão</div>
+                    <div className="text-[10px] font-bold uppercase tracking-[0.14em] opacity-80">Resumo da decisão</div>
                     <div className="mt-1 text-xl font-semibold text-slate-950">{outcome}</div>
                     <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700">{mainReason}</p>
+                    <p className="mt-1 text-sm text-slate-700">
+                      <span className="font-semibold text-slate-950">Regra aplicada:</span> {appliedRule}.{" "}
+                      <span className="font-semibold text-slate-950">Resultado final:</span> {formatPoints(order.net_points)}.
+                    </p>
                   </div>
-                  <Badge className={auditTone(order)}>{order.scoring_status}</Badge>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <StatusBadge tone={statusEntry.tone} icon={statusEntry.icon}>
+                      {statusEntry.label}
+                    </StatusBadge>
+                    {recurrenceDisplay ? (
+                      <SecondaryPill tone={recurrenceDisplay.tone} icon={Repeat}>
+                        {recurrenceDisplay.label}
+                      </SecondaryPill>
+                    ) : null}
+                  </div>
                 </div>
               </section>
 
-              <section className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <DetailItem label="ID da O.S" value={order.os_code} />
-                <DetailItem label="ID interno" value={order.id} />
-                <DetailItem label="Cliente" value={order.customer_name} />
-                <DetailItem label="Contrato/login" value={[order.contract_id, order.customer_login].filter(Boolean).join(" / ") || null} />
-                <DetailItem label="Colaborador" value={order.collaborator_name} />
-                <DetailItem label="Regional" value={regionalName(order.regional)} />
-                <DetailItem label="Tipo geral" value={order.os_type} />
-                <DetailItem label="Assunto" value={order.os_subject} />
-                <DetailItem label="Diagnóstico" value={order.diagnosis} />
-                <DetailItem label="SLA original" value={order.sla_status} />
-                <DetailItem label="SLA normalizado" value={order.sla_status_normalized} />
-                <DetailItem label="Grupo de pontuação" value={order.group_name ?? "Sem regra"} />
-              </section>
-
-              <section className="rounded-lg border bg-white p-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Auditoria explicada</div>
-                <div className="mt-3 grid gap-3 text-sm leading-6 text-slate-700">
-                  <p>
-                    <span className="font-semibold text-slate-950">Regra aplicada:</span> {appliedRule}.
-                  </p>
-                  <p>
-                    <span className="font-semibold text-slate-950">Motivo operacional:</span> {mainReason}
-                  </p>
-                  <p>
-                    {hasGroup
-                      ? `Esta O.S pontuou porque o assunto "${order.os_subject}" está vinculado ao grupo "${order.group_name}".`
-                      : `Esta O.S não pontuou porque o assunto "${order.os_subject}" ainda não possui grupo configurado.`}
-                  </p>
-                  <p>
-                    {hasGroup
-                      ? `A pontuação base aplicada foi ${formatPoints(order.base_points)}. O investimento usado foi ${formatMoney(order.point_value)} por ponto${
-                          order.point_value_source ? ` (${order.point_value_source})` : ""
-                        }.`
-                      : "Depois de vincular o assunto a um grupo, recalcule a apuração para liberar a pontuação."}
-                  </p>
-                  <p>
-                    {hasDiagnosisRule
-                      ? `Diagnóstico: ${cleanOperationalText(diagnosisAuditText)}`
-                      : "O diagnóstico não possui regra de anulação configurada para esta O.S."}
-                  </p>
-                  <p>SLA: {cleanOperationalText(slaAuditText)}</p>
-                  <p>
-                    Reincidência: {recurrencePlainReason(order)}
-                    {" "}Classificação: {recurrenceClassification}
-                    {order.recurrence_related_os_code ? `, relacionada a O.S ${order.recurrence_related_os_code}` : ""}
-                    {order.recurrence_days_between !== null && order.recurrence_days_between !== undefined
-                      ? ` com intervalo de ${order.recurrence_days_between} dia(s)`
-                      : ""}
-                    . Anulação aplicada: {yesNo(order.recurrence_discount_applied)}.
-                    {order.recurrence_rule_name ? ` Regra aplicada: ${order.recurrence_rule_name}.` : ""}
-                  </p>
-                  <p className="font-semibold text-slate-950">Resultado final: {formatPoints(order.net_points)}.</p>
+              <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Identificação</div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <Info label="ID da O.S" value={order.os_code} />
+                  <Info label="Cliente" value={order.customer_name} />
+                  <Info label="Contrato / login" value={[order.contract_id, order.customer_login].filter(Boolean).join(" / ") || null} />
+                  <Info label="Colaborador" value={order.collaborator_name} />
+                  <Info label="Regional" value={regionalName(order.regional)} />
+                  <Info label="Tipo geral" value={order.os_type} />
+                  <Info label="Assunto" value={order.os_subject} />
+                  <Info label="Diagnóstico" value={order.diagnosis} />
+                  <Info label="Grupo de pontuação" value={order.group_name ?? "Sem regra"} />
+                  <Info label="SLA original" value={order.sla_status} />
+                  <Info label="SLA normalizado" value={order.sla_status_normalized} />
+                  <Info label="TMF/TMA" value={formatHours(order.closing_time_hours)} />
+                  <Info label="Abertura" value={formatDateTime(order.opened_at)} />
+                  <Info label="Fechamento" value={formatDateTime(order.closed_at)} />
+                  <Info label="Origem do valor do ponto" value={order.point_value_source} />
+                  <Info label="Regra de reincidência" value={order.recurrence_rule_name} />
+                  <Info label="Revisão manual" value={yesNo(order.requires_manual_review)} />
+                  <Info
+                    label="Pontuação base"
+                    value={hasGroup ? `${formatPoints(order.base_points)} · ${formatMoney(order.point_value)}/ponto` : null}
+                  />
                 </div>
               </section>
 
@@ -532,74 +488,36 @@ export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calcu
                 </div>
               </section>
 
+              <section className="grid gap-2 sm:grid-cols-3">
+                <SummaryMetric icon={Sigma} label="Pontos base" value={formatPoints(order.base_points)} tone="slate" />
+                <SummaryMetric
+                  icon={Minus}
+                  label="Pontos anulados"
+                  value={formatAnnulledPoints(order.penalty_points)}
+                  tone={order.penalty_points > 0 ? "red" : "emerald"}
+                />
+                <SummaryMetric icon={Sigma} label="Pontos finais" value={formatPoints(order.net_points)} tone="blue" />
+              </section>
+
+              <EvidenceList title="Evidências e critérios registrados" items={allEvidence} />
+
               {auditLoading ? (
                 <div className="rounded-lg border bg-slate-50 p-4 text-sm text-slate-600">Carregando auditoria de reincidência...</div>
               ) : null}
               {auditError ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{auditError}</div> : null}
-              {recurrenceAudit ? <RecurrenceAuditPanel audit={recurrenceAudit} /> : null}
-
-              <section className="grid gap-3 lg:grid-cols-3">
-                <div className="rounded-lg border bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pontuação</div>
-                  <div className="mt-3 grid gap-2 text-sm">
-                    <div className="flex justify-between gap-4">
-                      <span className="text-slate-500">Pontos base</span>
-                      <span className="font-semibold">{formatPoints(order.base_points)}</span>
-                    </div>
-                    <div className="flex justify-between gap-4">
-                      <span className="text-slate-500">Pontos anulados</span>
-                      <span className={order.penalty_points > 0 ? "font-semibold text-red-600" : "font-semibold"}>{formatAnnulledPoints(order.penalty_points)}</span>
-                    </div>
-                    <Separator />
-                    <div className="flex justify-between gap-4">
-                      <span className="text-slate-500">Pontos finais</span>
-                      <span className="font-semibold text-slate-950">{formatPoints(order.net_points)}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div>
-                  <div className="mt-3 grid gap-2 text-sm">
-                    <Badge className="w-fit border-slate-200 bg-slate-50 text-slate-700">{order.scoring_status}</Badge>
-                    <div>SLA original: {safeText(order.sla_status)}</div>
-                    <div>SLA normalizado: {safeText(order.sla_status_normalized)}</div>
-                    <div>Regra aplicada: {safeText(appliedRule)}</div>
-                    <div>TMF/TMA: {formatHours(order.closing_time_hours)}</div>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Datas</div>
-                  <div className="mt-3 grid gap-2 text-sm">
-                    <div>Abertura: {formatDateTime(order.opened_at)}</div>
-                    <div>Fechamento: {formatDateTime(order.closed_at)}</div>
-                    <div>Login: {safeText(order.customer_login)}</div>
-                    <div>ID contrato/plano: {safeText(order.contract_id)}</div>
-                  </div>
-                </div>
-              </section>
-
-              <EvidenceList title="Critérios da pontuação" items={reasons.map(cleanOperationalText)} />
-              <EvidenceList title="Evidências de reincidências" items={recurrenceEvidence.map(cleanOperationalText)} />
-              <EvidenceList title="Pontos anulados registrados" items={penaltyReasons.map(cleanOperationalText)} />
-
-              <section className="rounded-lg border bg-white">
-                <div className="border-b px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Dados usados na auditoria</div>
-                <div className="grid gap-2 p-4 sm:grid-cols-2">
-                  <DetailItem label="Tipo geral" value={order.os_type} />
-                  <DetailItem label="Assunto" value={order.os_subject} />
-                  <DetailItem label="Diagnóstico" value={order.diagnosis} />
-                  <DetailItem label="Regra aplicada" value={order.rule_applied ?? order.scoring_rule_name} />
-                  <DetailItem label="Origem do valor" value={order.point_value_source} />
-                  <DetailItem label="Login" value={order.customer_login} />
-                  <DetailItem label="ID contrato/plano" value={order.contract_id} />
-                  <DetailItem label="Regra de reincidência" value={order.recurrence_rule_name} />
-                  <DetailItem label="SLA original" value={order.sla_status} />
-                  <DetailItem label="SLA normalizado" value={order.sla_status_normalized} />
-                  <DetailItem label="Revisão manual" value={yesNo(order.requires_manual_review)} />
-                </div>
-              </section>
+              {recurrenceAudit ? (
+                <Collapsible className="rounded-xl border bg-white">
+                  <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-3 text-left">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                      Análise detalhada de reincidência
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-slate-400" />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="border-t p-2">
+                    <RecurrenceAuditPanel audit={recurrenceAudit} />
+                  </CollapsibleContent>
+                </Collapsible>
+              ) : null}
             </div>
           </div>
         </SheetContent>
@@ -620,7 +538,6 @@ export function OrderAuditDrawer({ order, label = "Auditar" }: OrderAuditDrawerP
     </>
   );
 }
-
 
 
 

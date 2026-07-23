@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { Check, ChevronDown, FileDown, FileUp, RefreshCw, RotateCcw, Save, Search, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, FileDown, FileUp, RotateCcw, Save, Search, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -11,10 +11,8 @@ import {
   AppSwitch,
   DataTableFrame,
   EmptyState,
-  ErrorState,
   FilterToolbar,
   GuidanceCard,
-  LoadingState,
   PageHeader,
   RowActionMenu,
   StatusBadge,
@@ -30,6 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { formatInteger, formatMoney, formatPoints } from "@/lib/format";
@@ -163,13 +162,41 @@ function actionLabel(action: DiagnosisActionType | null) {
   return "Sem regra";
 }
 
+// O backend (scoring_detail.py) só lê o valor numérico pra "subtract_points" (desconta o valor
+// exato) e "force_points" (usa como pontuação fixa). Pra "cancel_points" ele sempre zera 100% dos
+// pontos da ocorrência, ignorando qualquer número digitado aqui; pra "requires_review" e
+// "no_penalty" o valor nunca é lido. Sem isso, o campo parecia funcionar pra todo mundo e um admin
+// podia achar que "Anular pontos" com valor "50" descontava 50 pontos, quando na verdade zera tudo.
+function diagnosisPointsFieldState(action: DiagnosisActionType): { editable: boolean; helper: string } {
+  if (action === "subtract_points") return { editable: true, helper: "Pontos descontados desta ocorrência." };
+  if (action === "force_points") return { editable: true, helper: "Pontuação fixa aplicada, substitui a regra do assunto." };
+  if (action === "cancel_points") return { editable: false, helper: "Anula 100% da pontuação - este valor não é usado." };
+  return { editable: false, helper: "Esta ação não usa valor numérico." };
+}
+
+// Mesma lógica do diagnóstico, mas pra regra de SLA: "cancel_points" sempre zera 100% dos pontos da
+// O.S fora do prazo (ignora o valor); "none" e "requires_review" nunca leem o valor.
+function slaValueFieldState(penaltyType: SlaPenaltyType): { editable: boolean; helper: string } {
+  if (penaltyType === "subtract_points") return { editable: true, helper: "Pontos descontados da O.S fora do prazo." };
+  if (penaltyType === "percentage_reduction") return { editable: true, helper: "Percentual (0-100) reduzido da pontuação." };
+  if (penaltyType === "cancel_points") return { editable: false, helper: "Anula 100% da pontuação - este valor não é usado." };
+  return { editable: false, helper: "Este tipo não usa valor numérico." };
+}
+
 function recurrenceClassificationLabel(value: string) {
   if (value === "recorrencia_operacional") return "Reincidência operacional";
   if (value === "reincidencia_tecnica") return "Reincidência de manutenção";
   if (value === "garantia") return "Reincidência após ativação";
-  if (value === "os_nao_reincidente") return "O.S não reincidente";
+  if (value === "os_nao_reincidente") return "O.S. não reincidente";
   if (value === "demandas_diferentes") return "Demandas diferentes";
   return "Não identificado";
+}
+
+// O backend (scoring_detail.py, RECURRENCE_DISCOUNT_CLASSIFICATIONS) só aplica o desconto na O.S
+// original pra esses dois subtipos - marcar "Anula pontuação" em qualquer outro subtipo não tem
+// efeito nenhum no cálculo, então o checkbox fica desabilitado pra evitar essa falsa impressão.
+function classificationSupportsDiscount(classification: string) {
+  return classification === "reincidencia_tecnica" || classification === "garantia";
 }
 
 function recurrenceActionLabel(value: string) {
@@ -329,7 +356,7 @@ function SearchableMultiSelect({
                   <span
                     className={cn(
                       "flex h-4 w-4 items-center justify-center rounded border",
-                      checked ? "border-teal-600 bg-teal-600 text-white" : "border-slate-300 bg-white text-transparent"
+                      checked ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white text-transparent"
                     )}
                   >
                     {checked ? <Check className="h-3 w-3" /> : null}
@@ -410,6 +437,14 @@ export function LogicConfigurationPanel({
   const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
   const [pendingDeleteGroupId, setPendingDeleteGroupId] = useState<number | null>(null);
   const [pendingDeleteSubjectRuleId, setPendingDeleteSubjectRuleId] = useState<number | null>(null);
+  const [editingSubjectId, setEditingSubjectId] = useState<number | null>(null);
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState<Set<number>>(new Set());
+  const [deleteSubjectSelectionOpen, setDeleteSubjectSelectionOpen] = useState(false);
+  const [deletingSubjectSelection, setDeletingSubjectSelection] = useState(false);
+  const [savingSubjectId, setSavingSubjectId] = useState<number | null>(null);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Set<number>>(new Set());
+  const [deleteGroupSelectionOpen, setDeleteGroupSelectionOpen] = useState(false);
+  const [deletingGroupSelection, setDeletingGroupSelection] = useState(false);
   const [savingGroupId, setSavingGroupId] = useState<number | null>(null);
   const [deletingGroupId, setDeletingGroupId] = useState<number | null>(null);
   const [newGroupDraft, setNewGroupDraft] = useState({ name: "", default_points: 0 });
@@ -528,9 +563,12 @@ export function LogicConfigurationPanel({
       };
     });
   }, [closurePaymentByGroup, closurePaymentBySubject, groups, normalizedQuery, periodSubjectCounts, subjectRules]);
+  const selectedVisibleGroups = subjectsByGroup.filter(({ group }) => selectedGroupIds.has(group.id));
+  const allVisibleGroupsSelected = subjectsByGroup.length > 0 && subjectsByGroup.every(({ group }) => selectedGroupIds.has(group.id));
   const currentEditingGroup = editingGroupId != null ? groups.find((group) => group.id === editingGroupId) ?? null : null;
   const pendingDeleteGroup = pendingDeleteGroupId != null ? groups.find((group) => group.id === pendingDeleteGroupId) ?? null : null;
   const pendingDeleteSubjectRule = pendingDeleteSubjectRuleId != null ? subjectRules.find((rule) => rule.id === pendingDeleteSubjectRuleId) ?? null : null;
+  const currentEditingSubject = editingSubjectId != null ? subjectRules.find((rule) => rule.id === editingSubjectId) ?? null : null;
 
   const filteredSubjectRules = useMemo(() => {
     return subjectRules.filter((rule) => {
@@ -546,6 +584,10 @@ export function LogicConfigurationPanel({
       return matchesQuery && matchesFilter && matchesGroupFilter;
     });
   }, [groups, normalizedQuery, subjectFilter, subjectGroupFilter, subjectRules]);
+
+  const visibleSubjectRules = filteredSubjectRules.slice(0, visibleSubjectRulesCount);
+  const selectedVisibleSubjectRules = visibleSubjectRules.filter((rule) => selectedSubjectIds.has(rule.id));
+  const allVisibleSubjectsSelected = visibleSubjectRules.length > 0 && visibleSubjectRules.every((rule) => selectedSubjectIds.has(rule.id));
 
   const filteredSlaRules = useMemo(() => {
     if (!normalizedQuery) return slaRules;
@@ -835,9 +877,95 @@ export function LogicConfigurationPanel({
     setDeletingGroupId((current) => (current === group.id ? null : current));
   }
 
+  function toggleGroupSelected(id: number, checked: boolean) {
+    setSelectedGroupIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllVisibleGroups(checked: boolean) {
+    setSelectedGroupIds((current) => {
+      const next = new Set(current);
+      subjectsByGroup.forEach(({ group }) => {
+        if (checked) {
+          next.add(group.id);
+        } else {
+          next.delete(group.id);
+        }
+      });
+      return next;
+    });
+  }
+
+  async function deleteSelectedGroups() {
+    if (selectedVisibleGroups.length === 0) return;
+    setDeletingGroupSelection(true);
+    try {
+      // Exclusão em lote não pergunta um destino de transferência por grupo - assuntos vinculados
+      // ficam sem grupo (mesmo comportamento do destino padrão "Remover vínculos" do modal
+      // individual). Quem precisa reatribuir os assuntos antes de apagar, exclui um de cada vez.
+      for (const { group } of selectedVisibleGroups) {
+        await onDeleteGroup(group, null);
+      }
+      setSelectedGroupIds(new Set());
+      setDeleteGroupSelectionOpen(false);
+      setMessage(`${selectedVisibleGroups.length} grupo(s) excluído(s).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro inesperado ao excluir os grupos selecionados.");
+    } finally {
+      setDeletingGroupSelection(false);
+    }
+  }
+
   async function deleteSubjectRule(rule: ScoringSubjectRule) {
     await onDeleteSubjectRule(rule);
     setPendingDeleteSubjectRuleId(null);
+  }
+
+  function toggleSubjectSelected(id: number, checked: boolean) {
+    setSelectedSubjectIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllVisibleSubjects(checked: boolean) {
+    setSelectedSubjectIds((current) => {
+      const next = new Set(current);
+      visibleSubjectRules.forEach((rule) => {
+        if (checked) {
+          next.add(rule.id);
+        } else {
+          next.delete(rule.id);
+        }
+      });
+      return next;
+    });
+  }
+
+  async function deleteSelectedSubjectRules() {
+    if (selectedVisibleSubjectRules.length === 0) return;
+    setDeletingSubjectSelection(true);
+    try {
+      for (const rule of selectedVisibleSubjectRules) {
+        await onDeleteSubjectRule(rule);
+      }
+      setSelectedSubjectIds(new Set());
+      setDeleteSubjectSelectionOpen(false);
+    } finally {
+      setDeletingSubjectSelection(false);
+    }
   }
 
   async function saveSubjectRule(rule: ScoringSubjectRule) {
@@ -846,7 +974,13 @@ export function LogicConfigurationPanel({
       setError("Informe o Tipo Geral do assunto antes de salvar.");
       return;
     }
-    await onSaveSubjectRule(latestRule);
+    setSavingSubjectId(rule.id);
+    try {
+      await onSaveSubjectRule(latestRule);
+      setEditingSubjectId((current) => (current === rule.id ? null : current));
+    } finally {
+      setSavingSubjectId(null);
+    }
   }
 
   async function saveTypeGeneral(currentType: string) {
@@ -981,22 +1115,14 @@ export function LogicConfigurationPanel({
           <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => importConfig(event.target.files?.[0] ?? null)} />
         </FilterToolbar>
 
-        {error ? (
-          <div className="mx-5 mb-5">
-            <ErrorState title="Não foi possível concluir a atualização" description={error} />
-          </div>
-        ) : null}
-        {message ? <div className="mx-5 mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</div> : null}
-        {busy ? (
-          <div className="mx-5 mb-5">
-            <LoadingState>
-              <span className="flex items-center gap-2">
-                <RefreshCw className="h-4 w-4 animate-spin" />
-                Atualizando configuração permanente...
-              </span>
-            </LoadingState>
-          </div>
-        ) : null}
+        <StatusToast
+          error={error}
+          message={message}
+          busy={busy}
+          busyLabel="Atualizando configuração permanente..."
+          onDismissError={() => setError(null)}
+          onDismissMessage={() => setMessage(null)}
+        />
 
         <div className="grid gap-3 border-t p-5 sm:grid-cols-2 xl:grid-cols-3">
           <StepHeroCard step={mode === "simple" ? "S" : "A"} title={mode === "simple" ? "Modo simples" : "Modo avançado"} description={mode === "simple" ? "Governança operacional para a apuração diária e o fechamento." : "Regras técnicas, SLA, reincidência e restauração."} />
@@ -1069,14 +1195,14 @@ export function LogicConfigurationPanel({
                   <div className="text-sm font-semibold text-slate-950">{row.os_type}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge className="border-slate-200 bg-slate-50 text-slate-700">{formatInteger(row.subjects)} assunto(s)</Badge>
-                    <Badge className="border-teal-200 bg-teal-50 text-teal-700">{formatInteger(row.orders)} O.S</Badge>
+                    <Badge className="border-blue-200 bg-blue-50 text-blue-700">{formatInteger(row.orders)} O.S</Badge>
                   </div>
                 </div>
               ))}
             </div>
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead>Tipo Geral</TableHead>
                   <TableHead>Assuntos</TableHead>
                   <TableHead>O.S impactadas</TableHead>
@@ -1110,7 +1236,7 @@ export function LogicConfigurationPanel({
                     </TableCell>
                     <TableCell>{formatInteger(row.subjects)}</TableCell>
                     <TableCell>{formatInteger(row.orders)}</TableCell>
-                    <TableCell className="font-medium text-teal-700">{formatMoney(row.impact)}</TableCell>
+                    <TableCell className="font-medium text-blue-700">{formatMoney(row.impact)}</TableCell>
                     <TableCell className="min-w-96">
                       <div className="grid gap-2">
                         <div className="flex flex-wrap gap-2">
@@ -1125,7 +1251,7 @@ export function LogicConfigurationPanel({
                         </div>
                         <button
                           type="button"
-                          className="w-fit text-xs font-semibold text-teal-700 hover:text-teal-900"
+                          className="w-fit text-xs font-semibold text-blue-700 hover:text-blue-900"
                           onClick={() =>
                             setExpandedTypes((current) => ({
                               ...current,
@@ -1201,7 +1327,7 @@ export function LogicConfigurationPanel({
                                     </div>
                                   </div>
                                   <Badge className={subjectStatusClass(status)}>{subjectStatusLabel(status)}</Badge>
-                                  <div className="text-sm font-semibold text-teal-700">{formatMoney(stats.impact)}</div>
+                                  <div className="text-sm font-semibold text-blue-700">{formatMoney(stats.impact)}</div>
                                 </div>
                               );
                             })}
@@ -1225,6 +1351,16 @@ export function LogicConfigurationPanel({
                 <p className="panel-subtitle">O grupo define pontos e R$/ponto padrão; o assunto pode sobrescrever quando necessário.</p>
               </div>
             </div>
+            {/*
+              O R$/ponto tem 3 níveis de sobrescrita (assunto > grupo > global, ver
+              effective_rule_point_value em scoring_detail.py) mas em nenhum lugar da tela isso era
+              dito explicitamente perto do campo - só dava pra descobrir lendo o placeholder
+              ("Global R$X"/"Grupo R$X") linha por linha. Achado de revisão: clareza, não bug.
+            */}
+            <div className="mx-5 mt-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-slate-700">
+              <span className="font-semibold text-slate-950">Prioridade do R$/ponto:</span> assunto &gt; grupo &gt; global. Deixe o campo em
+              branco para herdar o valor do nível acima.
+            </div>
             <FilterToolbar className="items-end">
               <div className="grid min-w-[260px] flex-1 gap-1">
                 <Label>Novo grupo de pontuação</Label>
@@ -1246,22 +1382,35 @@ export function LogicConfigurationPanel({
                 Criar grupo
               </Button>
               <ToolbarCount>{formatInteger(subjectsByGroup.length)} grupo(s) no recorte atual</ToolbarCount>
+              {selectedVisibleGroups.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-red-200 text-red-700 hover:bg-red-50"
+                  onClick={() => setDeleteGroupSelectionOpen(true)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Excluir selecionados ({selectedVisibleGroups.length})
+                </Button>
+              ) : null}
             </FilterToolbar>
             <div className="grid gap-3 border-b bg-slate-50/60 px-5 py-4 md:grid-cols-3">
-              <GuidanceCard title="Gestão por linha" description="Edite inline o essencial e deixe detalhes avançados no drawer lateral." />
-              <GuidanceCard title="Ações discretas" description="Salvar só aparece quando a linha muda; exclusão fica no menu e confirma em modal." />
+              <GuidanceCard title="Leitura rápida" description='A tabela mostra o essencial; use "Editar" para abrir o cadastro completo do grupo.' />
+              <GuidanceCard title="Ações discretas" description="Duplicar e excluir ficam no menu; exclusão sempre confirma em modal." />
               <GuidanceCard title="Impacto visível" description="Assuntos, O.S e custo estimado ficam agrupados em badges suaves para leitura rápida." />
             </div>
             <DataTableFrame className="overflow-x-auto rounded-b-[24px] border-t-0">
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHead className="w-10">
+                    <AppSwitch checked={allVisibleGroupsSelected} onCheckedChange={toggleAllVisibleGroups} label={allVisibleGroupsSelected ? "Todos" : "Selecionar"} />
+                  </TableHead>
                   <TableHead>Grupo</TableHead>
                   <TableHead>Pontos do grupo</TableHead>
                   <TableHead>R$/Ponto</TableHead>
                   <TableHead>Assuntos vinculados</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Regra ao arquivar</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1269,65 +1418,28 @@ export function LogicConfigurationPanel({
                 {subjectsByGroup.map(({ group, rules, orders, impact }) => {
                   const baseline = groupBaselines[group.id];
                   const dirty = !sameGroupSnapshot(baseline, groupSnapshot(group));
-                  const archiveOptions = [
-                    {
-                      value: "",
-                      label: "Remover vínculos e deixar assuntos sem regra",
-                      description: "Os assuntos ficam sem grupo após o arquivamento.",
-                    },
-                    ...groups
-                      .filter((item) => item.id !== group.id)
-                      .map((item) => ({
-                        value: String(item.id),
-                        label: `Transferir assuntos para ${item.name}`,
-                        description: `Move os ${formatInteger(rules.length)} assunto(s) vinculados para este grupo.`,
-                      })),
-                  ];
 
                   return (
-                    <TableRow
-                      key={group.id}
-                      className={cn(
-                        "align-top transition-colors hover:bg-slate-50/70",
-                        dirty ? "bg-teal-50/40" : "bg-white"
-                      )}
-                    >
+                    <TableRow key={group.id} className={cn("align-top transition-colors hover:bg-slate-50/70", dirty ? "bg-blue-50/40" : "bg-white")}>
+                      <TableCell className="py-4">
+                        <AppSwitch checked={selectedGroupIds.has(group.id)} onCheckedChange={(checked) => toggleGroupSelected(group.id, checked)} label="" />
+                      </TableCell>
                       <TableCell className="min-w-72 py-4">
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="text-sm font-semibold text-slate-950">{group.name}</div>
-                          {dirty ? <StatusBadge tone="info">Alterado</StatusBadge> : null}
-                          {!group.active ? <StatusBadge>Inativo</StatusBadge> : null}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {formatPoints(group.default_points)} por assunto base no grupo.
+                          {dirty ? <StatusBadge tone="info">Alterações não salvas</StatusBadge> : null}
                         </div>
                       </TableCell>
-                      <TableCell className="w-40 py-4">
-                        <AppInput
-                          type="number"
-                          value={group.default_points}
-                          onChange={(event) => updateGroupField(group.id, { default_points: Number(event.target.value) })}
-                        />
-                      </TableCell>
-                      <TableCell className="w-44 py-4">
-                        <AppInput
-                          type="number"
-                          step="0.01"
-                          value={group.point_value_override ?? ""}
-                          placeholder={`Global ${globalPointValueLabel}`}
-                          onChange={(event) =>
-                            updateGroupField(group.id, {
-                              point_value_override: event.target.value === "" ? null : Number(event.target.value)
-                            })
-                          }
-                        />
+                      <TableCell className="py-4 text-sm text-slate-700">{formatPoints(group.default_points)}</TableCell>
+                      <TableCell className="py-4 text-sm text-slate-700">
+                        {group.point_value_override != null ? formatMoney(group.point_value_override) : `Global ${globalPointValueLabel}`}
                       </TableCell>
                       <TableCell className="min-w-72 py-4">
                         <div className="flex flex-wrap gap-2">
                           <StatusBadge tone="success" className="border-emerald-200 bg-emerald-50 text-emerald-800">
                             {formatInteger(rules.length)} assuntos
                           </StatusBadge>
-                          <StatusBadge tone="success" className="border-teal-200 bg-teal-50 text-teal-700">
+                          <StatusBadge tone="success" className="border-blue-200 bg-blue-50 text-blue-700">
                             {formatInteger(orders)} O.S
                           </StatusBadge>
                           <StatusBadge tone="success" className="border-emerald-200 bg-emerald-50 text-emerald-700">
@@ -1335,53 +1447,15 @@ export function LogicConfigurationPanel({
                           </StatusBadge>
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-40 py-4">
-                        <AppSwitch checked={group.active} onCheckedChange={(checked) => updateGroupField(group.id, { active: checked })} />
-                      </TableCell>
-                      <TableCell className="min-w-80 py-4">
-                        <AppCombobox
-                          value={deleteTargets[group.id] ?? ""}
-                          onChange={(value) =>
-                            setDeleteTargets((current) => ({
-                              ...current,
-                              [group.id]: value,
-                            }))
-                          }
-                          options={archiveOptions}
-                          placeholder="Selecionar regra de arquivamento"
-                          ariaLabel={`Regra ao arquivar o grupo ${group.name}`}
-                        />
-                      </TableCell>
+                      <TableCell className="py-4">{group.active ? <StatusBadge tone="success">Ativo</StatusBadge> : <StatusBadge>Inativo</StatusBadge>}</TableCell>
                       <TableCell className="py-4">
                         <div className="flex items-center justify-end gap-2">
-                          {dirty ? (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => restoreGroup(group.id)}
-                                disabled={savingGroupId === group.id}
-                              >
-                                Cancelar
-                              </Button>
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={() => void saveGroup(group.id)}
-                                disabled={savingGroupId === group.id}
-                              >
-                                <Save className="h-4 w-4" />
-                                {savingGroupId === group.id ? "Salvando..." : "Salvar"}
-                              </Button>
-                            </>
-                          ) : null}
+                          <Button variant="outline" size="sm" onClick={() => setEditingGroupId(group.id)}>
+                            Editar
+                          </Button>
                           <RowActionMenu
                             ariaLabel={`Ações do grupo ${group.name}`}
                             items={[
-                              {
-                                label: "Editar",
-                                onSelect: () => setEditingGroupId(group.id),
-                              },
                               {
                                 label: "Duplicar",
                                 onSelect: () => void duplicateGroup(group),
@@ -1389,7 +1463,7 @@ export function LogicConfigurationPanel({
                               ...(dirty
                                 ? [
                                     {
-                                      label: "Descartar alterações",
+                                      label: "Descartar alterações não salvas",
                                       onSelect: () => restoreGroup(group.id),
                                     },
                                   ]
@@ -1419,6 +1493,14 @@ export function LogicConfigurationPanel({
                 <h3 className="panel-title">2. Assuntos</h3>
                 <p className="panel-subtitle">Vínculo permanente de assunto para grupo, com pontos e valor por ponto específicos quando precisar.</p>
               </div>
+            </div>
+            <div className="mx-5 mt-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-slate-700">
+              <span className="font-semibold text-slate-950">Prioridade do R$/ponto:</span> assunto &gt; grupo &gt; global. Deixe o campo em
+              branco para herdar o valor do nível acima.
+            </div>
+            <div className="grid gap-3 border-b bg-slate-50/60 px-5 py-4 md:grid-cols-2">
+              <GuidanceCard title="Leitura rápida" description='A tabela mostra o essencial; use "Editar" para abrir o cadastro completo do assunto.' />
+              <GuidanceCard title="Ação em lote" description="Marque as linhas na coluna à esquerda para remover vários assuntos de uma vez." />
             </div>
             <FilterToolbar>
               {[
@@ -1462,94 +1544,63 @@ export function LogicConfigurationPanel({
                 ) : null}
               </div>
               <ToolbarCount>{formatInteger(filteredSubjectRules.length)} assunto(s) no filtro</ToolbarCount>
+              {selectedVisibleSubjectRules.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-red-200 text-red-700 hover:bg-red-50"
+                  onClick={() => setDeleteSubjectSelectionOpen(true)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remover selecionados ({selectedVisibleSubjectRules.length})
+                </Button>
+              ) : null}
             </FilterToolbar>
             <DataTableFrame>
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHead className="w-10">
+                    <AppSwitch checked={allVisibleSubjectsSelected} onCheckedChange={toggleAllVisibleSubjects} label={allVisibleSubjectsSelected ? "Todos" : "Selecionar"} />
+                  </TableHead>
                   <TableHead>Assunto</TableHead>
-                  <TableHead>Tipo Geral</TableHead>
                   <TableHead>Grupo vinculado</TableHead>
                   <TableHead>Pontos</TableHead>
-                  <TableHead>Status</TableHead>
                   <TableHead>R$/ponto</TableHead>
                   <TableHead>O.S impactadas</TableHead>
-                  <TableHead>Ação</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredSubjectRules.slice(0, visibleSubjectRulesCount).map((rule) => {
+                {visibleSubjectRules.map((rule) => {
                   const selectedGroup = groups.find((group) => group.id === rule.group_id) ?? null;
                   const stats = periodRuleStats(rule);
-                  const pointValuePlaceholder =
-                    selectedGroup?.point_value_override != null
-                      ? `Grupo ${formatMoney(selectedGroup.point_value_override)}`
-                      : `Global ${globalPointValueLabel}`;
                   const status = subjectStatus(rule, selectedGroup);
 
                   return (
                   <TableRow key={rule.id}>
-                    <TableCell className="min-w-80">
-                      <div className="font-medium">{rule.os_subject}</div>
-                      <div className="text-xs text-slate-500">Tipo Geral: {rule.os_type}</div>
-                    </TableCell>
-                    <TableCell className="min-w-56">
-                      <AppCombobox
-                        value={rule.os_type}
-                        onChange={(value) =>
-                          setSubjectRules(
-                            replaceById(subjectRules, rule.id, {
-                              os_type: value
-                            })
-                          )
-                        }
-                        placeholder="Selecionar Tipo Geral"
-                        ariaLabel={`Tipo Geral do assunto ${rule.os_subject}`}
-                        options={osTypeOptions.map((type) => ({ value: type, label: type }))}
-                      />
-                      {!rule.os_type.trim() ? <p className="mt-1 text-xs text-red-600">Tipo Geral é obrigatório.</p> : null}
+                    <TableCell>
+                      <AppSwitch checked={selectedSubjectIds.has(rule.id)} onCheckedChange={(checked) => toggleSubjectSelected(rule.id, checked)} label="" />
                     </TableCell>
                     <TableCell className="min-w-72">
-                      <AppCombobox
-                        value={String(rule.group_id)}
-                        onChange={(value) => setSubjectRules(replaceById(subjectRules, rule.id, { group_id: Number(value) }))}
-                        placeholder="Selecionar grupo"
-                        ariaLabel={`Grupo vinculado ao assunto ${rule.os_subject}`}
-                        options={activeGroups.map((group) => ({
-                          value: String(group.id),
-                          label: `${group.name} (${formatPoints(group.default_points)})`,
-                          description: group.point_value_override != null ? `R$/ponto ${formatMoney(group.point_value_override)}` : `Usa valor global ${globalPointValueLabel}`,
-                        }))}
-                      />
-                      {!selectedGroup ? <Badge className="mt-2 border-amber-200 bg-amber-50 text-amber-800">Sem grupo</Badge> : null}
+                      <div className="font-medium text-slate-950">{rule.os_subject}</div>
+                      <div className="text-xs text-slate-500">Tipo Geral: {rule.os_type}</div>
                     </TableCell>
-                    <TableCell className="min-w-44">
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="number"
-                          value={rule.custom_points ?? ""}
-                          disabled={rule.use_group_default}
-                          placeholder={formatPoints(rule.effective_points)}
-                          onChange={(event) =>
-                            setSubjectRules(
-                              replaceById(subjectRules, rule.id, {
-                                custom_points: event.target.value === "" ? null : Number(event.target.value)
-                              })
-                            )
-                          }
-                        />
-                        <label className="flex items-center gap-1 text-xs text-slate-600" title="Usar pontuação padrão do grupo">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 accent-teal-700"
-                            checked={rule.use_group_default}
-                            onChange={(event) =>
-                              setSubjectRules(replaceById(subjectRules, rule.id, { use_group_default: event.target.checked }))
-                            }
-                          />
-                          Grupo
-                        </label>
-                      </div>
+                    <TableCell className="min-w-48 text-sm text-slate-700">
+                      {selectedGroup ? selectedGroup.name : <Badge className="border-amber-200 bg-amber-50 text-amber-800">Sem grupo</Badge>}
+                    </TableCell>
+                    <TableCell className="text-sm text-slate-700">{formatPoints(rule.effective_points)}</TableCell>
+                    <TableCell className="text-sm text-slate-700">
+                      {rule.point_value_override != null
+                        ? formatMoney(rule.point_value_override)
+                        : selectedGroup?.point_value_override != null
+                          ? `Grupo ${formatMoney(selectedGroup.point_value_override)}`
+                          : `Global ${globalPointValueLabel}`}
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium">{formatInteger(stats.orders)}</div>
+                      <div className="text-xs font-medium text-blue-700">{formatMoney(stats.impact)}</div>
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-2">
@@ -1558,54 +1609,28 @@ export function LogicConfigurationPanel({
                           {rule.active ? "Ativo" : "Inativo"}
                         </Badge>
                       </div>
-                      <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 accent-teal-700"
-                          checked={rule.active}
-                          onChange={(event) => setSubjectRules(replaceById(subjectRules, rule.id, { active: event.target.checked }))}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setEditingSubjectId(rule.id)}>
+                          Editar
+                        </Button>
+                        <RowActionMenu
+                          ariaLabel={`Ações do assunto ${rule.os_subject}`}
+                          items={[{ label: "Remover", onSelect: () => setPendingDeleteSubjectRuleId(rule.id), tone: "danger" }]}
                         />
-                        Pontuar assunto
-                      </label>
-                    </TableCell>
-                    <TableCell className="w-44">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={rule.point_value_override ?? ""}
-                        placeholder={pointValuePlaceholder}
-                        onChange={(event) =>
-                          setSubjectRules(
-                            replaceById(subjectRules, rule.id, {
-                              point_value_override: event.target.value === "" ? null : Number(event.target.value)
-                            })
-                          )
-                        }
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <div className="font-medium">{formatInteger(stats.orders)}</div>
-                      <div className="text-xs font-medium text-teal-700">{formatMoney(stats.impact)}</div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="default"
-                          size="sm"
-                          onClick={() => void saveSubjectRule(rule)}
-                        >
-                          <Save className="h-4 w-4" />
-                          Salvar
-                        </Button>
-                        <Button variant="destructive" size="sm" onClick={() => setPendingDeleteSubjectRuleId(rule.id)}>
-                          <Trash2 className="h-4 w-4" />
-                          Remover
-                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
                   );
                 })}
+                {visibleSubjectRules.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-6 text-center text-sm text-slate-500">
+                      Nenhum assunto encontrado para os filtros atuais.
+                    </TableCell>
+                  </TableRow>
+                ) : null}
               </TableBody>
             </Table>
             </DataTableFrame>
@@ -1647,8 +1672,8 @@ export function LogicConfigurationPanel({
             </FilterToolbar>
             <DataTableFrame>
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead>Diagnóstico</TableHead>
                   <TableHead>Qtd O.S</TableHead>
                   <TableHead>Ação</TableHead>
@@ -1662,6 +1687,7 @@ export function LogicConfigurationPanel({
                 {diagnosisRows.slice(0, visibleDiagnosisRowsCount).map((item) => {
                   const draft = diagnosisDraft(item);
                   const value = draft.action_type === "force_points" ? draft.force_points_value ?? "" : draft.penalty_points;
+                  const pointsField = diagnosisPointsFieldState(draft.action_type);
                   return (
                     <TableRow key={item.diagnosis_name}>
                       <TableCell className="min-w-64 font-medium">{item.diagnosis_name}</TableCell>
@@ -1685,7 +1711,9 @@ export function LogicConfigurationPanel({
                       <TableCell className="w-36">
                         <Input
                           type="number"
-                          value={value}
+                          value={pointsField.editable ? value : ""}
+                          disabled={!pointsField.editable}
+                          placeholder={pointsField.editable ? undefined : "N/A"}
                           onChange={(event) =>
                             updateDiagnosisDraft(
                               item,
@@ -1695,8 +1723,9 @@ export function LogicConfigurationPanel({
                             )
                           }
                         />
+                        <div className="mt-1 text-xs text-slate-500">{pointsField.helper}</div>
                       </TableCell>
-                      <TableCell className="font-medium text-teal-700">{formatMoney(item.estimated_impact)}</TableCell>
+                      <TableCell className="font-medium text-blue-700">{formatMoney(item.estimated_impact)}</TableCell>
                       <TableCell>
                         <Badge className={item.has_rule ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-800"}>
                           {item.has_rule ? "Configurado" : "Sem regra"}
@@ -1743,8 +1772,8 @@ export function LogicConfigurationPanel({
             </div>
             <div className="overflow-hidden rounded-b-[24px] border-t border-slate-200">
             <Table>
-              <TableHeader>
-                <TableRow>
+              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead>Regra</TableHead>
                   <TableHead>Regra ativa</TableHead>
                   <TableHead>Tipo</TableHead>
@@ -1753,7 +1782,9 @@ export function LogicConfigurationPanel({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredSlaRules.map((rule) => (
+                {filteredSlaRules.map((rule) => {
+                  const valueField = slaValueFieldState(rule.penalty_type);
+                  return (
                   <TableRow key={rule.id}>
                     <TableCell className="min-w-56 font-medium">{rule.name}</TableCell>
                     <TableCell>
@@ -1777,9 +1808,12 @@ export function LogicConfigurationPanel({
                     <TableCell className="w-40">
                       <Input
                         type="number"
-                        value={rule.penalty_value}
+                        value={valueField.editable ? rule.penalty_value : ""}
+                        disabled={!valueField.editable}
+                        placeholder={valueField.editable ? undefined : "N/A"}
                         onChange={(event) => setSlaRules(replaceById(slaRules, rule.id, { penalty_value: Number(event.target.value) }))}
                       />
+                      <div className="mt-1 text-xs text-slate-500">{valueField.helper}</div>
                     </TableCell>
                     <TableCell>
                       <Button variant="default" size="sm" onClick={() => onSaveSlaRule(rule)}>
@@ -1788,7 +1822,8 @@ export function LogicConfigurationPanel({
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
             </div>
@@ -1801,8 +1836,8 @@ export function LogicConfigurationPanel({
               </div>
               <div className="overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
-                  <TableHeader>
-                    <TableRow>
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
                       <TableHead>Faixa</TableHead>
                       <TableHead>SLA min.</TableHead>
                       <TableHead>Reinc. max.</TableHead>
@@ -1846,7 +1881,7 @@ export function LogicConfigurationPanel({
                           <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
                             <input
                               type="checkbox"
-                              className="h-4 w-4 accent-teal-700"
+                              className="h-4 w-4 accent-blue-700"
                               checked={rule.active}
                               onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { active: event.target.checked }))}
                             />
@@ -1932,57 +1967,44 @@ export function LogicConfigurationPanel({
                 ["7", "Auditoria mostra evidências"]
               ].map(([step, label]) => (
                 <div key={step} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                  <div className="mb-2 flex h-6 w-6 items-center justify-center rounded-full bg-teal-700 text-xs font-semibold text-white">{step}</div>
+                  <div className="mb-2 flex h-6 w-6 items-center justify-center rounded-full bg-blue-700 text-xs font-semibold text-white">{step}</div>
                   <div className="text-xs font-semibold text-slate-700">{label}</div>
                 </div>
               ))}
             </div>
 
             <div className="grid gap-4 border-b p-5 xl:grid-cols-[1fr_1.4fr]">
+              <div className="grid gap-4">
               <section className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                 <div className="border-b bg-slate-50 px-4 py-3">
                   <h4 className="text-sm font-semibold text-slate-950">Configuração geral</h4>
-                  <p className="text-xs text-slate-500">Define a janela, o vínculo do cliente e o comportamento padrão.</p>
+                  <p className="text-xs text-slate-500">Vínculo do cliente usado para detectar reincidência nesta tela; janela e ação padrão ficam em Governança geral.</p>
                 </div>
-                <div className="grid gap-4 p-4 md:grid-cols-2">
-                  <div className="grid gap-2">
-                    <Label>Janela de reincidência (dias)</Label>
-                    <Input
-                      inputMode="numeric"
-                      value={localSettings.recurrence_window_days ?? ""}
-                      onChange={(event) => setLocalSettings({ ...localSettings, recurrence_window_days: event.target.value })}
-                      onBlur={(event) => saveSettings({ recurrence_window_days: event.target.value })}
-                      placeholder="Ex.: 30"
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Ação padrão</Label>
-                    <AppCombobox
-                      value={localSettings.recurrence_action ?? ""}
-                      onChange={(value) => {
-                        setLocalSettings({ ...localSettings, recurrence_action: value });
-                        void saveSettings({ recurrence_action: value });
-                      }}
-                      placeholder="Usar backend"
-                      ariaLabel="Ação padrão de reincidência"
-                      options={[
-                        { value: "", label: "Usar backend", description: "Mantém a regra operacional padrão do backend." },
-                        { value: "no_penalty", label: "Apenas sinalizar", description: "Marca a reincidência sem descontar pontos." },
-                        { value: "annul_original", label: "Anular pontuação da O.S original", description: "Remove a pontuação da O.S base." },
-                        { value: "requires_review", label: "Enviar para revisão manual", description: "Encaminha o caso para análise." },
-                        { value: "subtract_original", label: "Anular pontos fixos da O.S original", description: "Aplica desconto fixo sobre a O.S base." },
-                      ]}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Pontos fixos, se usar essa ação</Label>
-                    <Input
-                      inputMode="decimal"
-                      value={localSettings.recurrence_penalty_points ?? ""}
-                      onChange={(event) => setLocalSettings({ ...localSettings, recurrence_penalty_points: event.target.value })}
-                      onBlur={(event) => saveSettings({ recurrence_penalty_points: event.target.value })}
-                      placeholder="Ex.: 10"
-                    />
+                <div className="grid gap-4 p-4">
+                  {/*
+                    Janela/ação padrão/pontos fixos eram editados aqui E em GovernanceRulesPanel (aba
+                    "Governança geral") - mesmo campo, duas telas, com rótulos levemente diferentes
+                    ("Ação padrão" aqui vs "Ação quando confirmar reincidência" lá). Achado de revisão:
+                    clássico "qual dos dois é o de verdade?". Mantém só um lugar editável e recapitula
+                    o valor atual aqui, com atalho direto pra editar.
+                  */}
+                  <div className="grid gap-2 rounded-2xl border border-blue-100 bg-blue-50 p-4 text-xs text-slate-700">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-slate-950">Janela e ação padrão configuradas em Governança geral</span>
+                      <Button type="button" variant="outline" size="sm" onClick={() => setConfigSection("governance")}>
+                        Editar em Governança geral
+                      </Button>
+                    </div>
+                    <div>
+                      Janela atual: <span className="font-medium">{localSettings.recurrence_window_days || "30"} dias</span> · Ação padrão:{" "}
+                      <span className="font-medium">{recurrenceActionLabel(localSettings.recurrence_action || "")}</span>
+                      {localSettings.recurrence_action === "subtract_original" ? (
+                        <>
+                          {" "}
+                          · Pontos fixos: <span className="font-medium">{localSettings.recurrence_penalty_points || "0"}</span>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="grid gap-2">
                     <Label>Campos de vínculo</Label>
@@ -1996,7 +2018,7 @@ export function LogicConfigurationPanel({
                         <label key={field} className="flex items-center gap-2">
                           <input
                             type="checkbox"
-                            className="h-4 w-4 accent-teal-700"
+                            className="h-4 w-4 accent-blue-700"
                             checked={recurrenceIdentityFields(localSettings).includes(field)}
                             disabled={field === "cpf_cnpj"}
                             onChange={(event) => {
@@ -2013,6 +2035,58 @@ export function LogicConfigurationPanel({
                   </div>
                 </div>
               </section>
+
+              {/*
+                warranty_mode/warranty_reduction_percentage: setting real, lido em explain_order
+                (scoring_detail.py) pra decidir como a PRÓPRIA O.S de garantia/reincidência pontua
+                (pontua normal, pontua com redução, não pontua, ou vai pra revisão manual). Achado de
+                revisão: esse setting nunca teve controle nenhuma tela - só dava pra mudar editando o
+                banco ou o JSON exportado - e o nome fica fácil de confundir com "Ação padrão" acima,
+                que é sobre a O.S ORIGINAL quando um retorno confirma reincidência, não sobre a O.S
+                de garantia em si. Título e texto abaixo tentam deixar essa diferença clara.
+              */}
+              <section className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                <div className="border-b bg-slate-50 px-4 py-3">
+                  <h4 className="text-sm font-semibold text-slate-950">Pontuação da própria O.S de garantia/reincidência</h4>
+                  <p className="text-xs text-slate-500">
+                    Diferente da "Ação padrão" acima (que decide o que acontece com a O.S <strong>original</strong> quando um retorno confirma
+                    reincidência): isto decide como pontua a O.S de garantia/retorno <strong>em si</strong>.
+                  </p>
+                </div>
+                <div className="grid gap-4 p-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label>Como pontuar</Label>
+                    <AppCombobox
+                      value={localSettings.warranty_mode ?? "score_full"}
+                      onChange={(value) => {
+                        setLocalSettings({ ...localSettings, warranty_mode: value });
+                        void saveSettings({ warranty_mode: value });
+                      }}
+                      placeholder="Pontua normalmente"
+                      ariaLabel="Como pontuar a O.S de garantia/reincidência"
+                      options={[
+                        { value: "score_full", label: "Pontua normalmente", description: "A O.S de garantia/reincidência pontua igual a qualquer outra." },
+                        { value: "score_reduced", label: "Pontua com redução", description: "Aplica um percentual de desconto sobre a pontuação base." },
+                        { value: "no_points", label: "Não pontua", description: "A O.S de garantia/reincidência não gera pontos." },
+                        { value: "requires_review", label: "Exige revisão manual", description: "Pontua, mas fica marcada para conferência." },
+                      ]}
+                    />
+                  </div>
+                  {(localSettings.warranty_mode ?? "score_full") === "score_reduced" ? (
+                    <div className="grid gap-2">
+                      <Label>Redução (%)</Label>
+                      <Input
+                        inputMode="decimal"
+                        value={localSettings.warranty_reduction_percentage ?? ""}
+                        onChange={(event) => setLocalSettings({ ...localSettings, warranty_reduction_percentage: event.target.value })}
+                        onBlur={(event) => saveSettings({ warranty_reduction_percentage: event.target.value })}
+                        placeholder="Ex.: 50"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+              </div>
 
               <section className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                 <div className="border-b bg-slate-50 px-4 py-3">
@@ -2103,17 +2177,60 @@ export function LogicConfigurationPanel({
                       />
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-teal-700"
-                        checked={Boolean(newRecurrenceRule.discount_points)}
-                        onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, discount_points: event.target.checked })}
-                      />
-                      Pode anular a O.S original
-                    </label>
-                    <Button onClick={() => void createRecurrenceRule()}>Criar regra</Button>
+                  <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                    <div className="flex flex-wrap items-center gap-4">
+                      <label
+                        className={cn(
+                          "flex items-center gap-2 text-sm",
+                          !classificationSupportsDiscount(newRecurrenceRule.classification ?? "reincidencia_tecnica") && "text-slate-400"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-blue-700"
+                          checked={Boolean(newRecurrenceRule.discount_points)}
+                          disabled={!classificationSupportsDiscount(newRecurrenceRule.classification ?? "reincidencia_tecnica")}
+                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, discount_points: event.target.checked })}
+                        />
+                        Pode anular a O.S original
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-blue-700"
+                          checked={Boolean(newRecurrenceRule.require_same_subject)}
+                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_subject: event.target.checked })}
+                        />
+                        Exigir mesmo assunto
+                      </label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-blue-700"
+                          checked={Boolean(newRecurrenceRule.require_same_diagnosis)}
+                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_diagnosis: event.target.checked })}
+                        />
+                        Exigir mesmo diagnóstico
+                      </label>
+                    </div>
+                    {!classificationSupportsDiscount(newRecurrenceRule.classification ?? "reincidencia_tecnica") ? (
+                      <p className="text-xs text-slate-500">
+                        Este subtipo não anula pontos - a marcação acima não teria efeito no cálculo.
+                      </p>
+                    ) : null}
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <div className="grid gap-2">
+                        <Label>Prioridade</Label>
+                        <Input
+                          type="number"
+                          className="w-28"
+                          value={newRecurrenceRule.priority ?? 100}
+                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, priority: Number(event.target.value || 0) })}
+                        />
+                        <p className="text-[11px] text-slate-500">Regras com prioridade menor são conferidas primeiro quando mais de uma bate com a mesma O.S.</p>
+                      </div>
+                      <Button onClick={() => void createRecurrenceRule()}>Criar regra</Button>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -2232,39 +2349,84 @@ export function LogicConfigurationPanel({
                           ]}
                         />
                       </div>
-                      <div className="grid gap-2">
-                        <Label>Janela da regra</Label>
-                        <div className="flex items-center gap-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="grid gap-2">
+                          <Label>Janela da regra</Label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              inputMode="numeric"
+                              value={rule.max_days ?? ""}
+                              placeholder="Global"
+                              onChange={(event) =>
+                                setRecurrenceRules(
+                                  replaceById(recurrenceRules, rule.id, {
+                                    max_days: event.target.value === "" ? null : Number(event.target.value)
+                                  })
+                                )
+                              }
+                            />
+                            <span className="text-xs text-slate-500">dias</span>
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label>Prioridade</Label>
                           <Input
-                            inputMode="numeric"
-                            value={rule.max_days ?? ""}
-                            placeholder="Global"
+                            type="number"
+                            value={rule.priority ?? 100}
                             onChange={(event) =>
-                              setRecurrenceRules(
-                                replaceById(recurrenceRules, rule.id, {
-                                  max_days: event.target.value === "" ? null : Number(event.target.value)
-                                })
-                              )
+                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { priority: Number(event.target.value || 0) }))
                             }
                           />
-                          <span className="text-xs text-slate-500">dias</span>
                         </div>
                       </div>
-                      <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs leading-snug text-slate-700">
+                      <label
+                        className={cn(
+                          "flex items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs leading-snug",
+                          classificationSupportsDiscount(rule.classification) ? "text-slate-700" : "text-slate-400"
+                        )}
+                      >
                         <input
                           type="checkbox"
-                          className="mt-0.5 h-4 w-4 shrink-0 accent-teal-700"
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-blue-700"
                           checked={rule.discount_points}
+                          disabled={!classificationSupportsDiscount(rule.classification)}
                           onChange={(event) =>
                             setRecurrenceRules(replaceById(recurrenceRules, rule.id, { discount_points: event.target.checked }))
                           }
                         />
-                        <span>{rule.discount_points ? "Anula pontuação da O.S original" : "Apenas sinaliza reincidência"}</span>
+                        <span>
+                          {rule.discount_points ? "Anula pontuação da O.S original" : "Apenas sinaliza reincidência"}
+                          {!classificationSupportsDiscount(rule.classification) ? " - este subtipo não anula pontos, marcação sem efeito." : ""}
+                        </span>
                       </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 shrink-0 accent-blue-700"
+                            checked={rule.require_same_subject}
+                            onChange={(event) =>
+                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_subject: event.target.checked }))
+                            }
+                          />
+                          Exigir mesmo assunto
+                        </label>
+                        <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 shrink-0 accent-blue-700"
+                            checked={rule.require_same_diagnosis}
+                            onChange={(event) =>
+                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_diagnosis: event.target.checked }))
+                            }
+                          />
+                          Exigir mesmo diagnóstico
+                        </label>
+                      </div>
                       <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
                         <input
                           type="checkbox"
-                          className="h-4 w-4 shrink-0 accent-teal-700"
+                          className="h-4 w-4 shrink-0 accent-blue-700"
                           checked={rule.active}
                           onChange={(event) => setRecurrenceRules(replaceById(recurrenceRules, rule.id, { active: event.target.checked }))}
                         />
@@ -2381,6 +2543,25 @@ export function LogicConfigurationPanel({
           ) : null}
 
           <AppModal
+            open={deleteGroupSelectionOpen}
+            onOpenChange={setDeleteGroupSelectionOpen}
+            title="Excluir grupos selecionados?"
+            description="Assuntos vinculados a cada grupo excluído ficam sem grupo, sem apagar o assunto da base."
+            footer={
+              <>
+                <Button type="button" variant="outline" onClick={() => setDeleteGroupSelectionOpen(false)} disabled={deletingGroupSelection}>
+                  Cancelar
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => void deleteSelectedGroups()} disabled={deletingGroupSelection}>
+                  {deletingGroupSelection ? "Excluindo..." : "Excluir grupos"}
+                </Button>
+              </>
+            }
+          >
+            <div className="text-sm text-slate-600">{selectedVisibleGroups.length} grupo(s) serão excluídos.</div>
+          </AppModal>
+
+          <AppModal
             open={pendingDeleteGroup != null}
             onOpenChange={(open) => setPendingDeleteGroupId(open ? pendingDeleteGroupId : null)}
             title="Excluir grupo?"
@@ -2484,6 +2665,143 @@ export function LogicConfigurationPanel({
             </div>
           </AppModal>
 
+          <AppModal
+            open={deleteSubjectSelectionOpen}
+            onOpenChange={setDeleteSubjectSelectionOpen}
+            title="Remover assuntos selecionados?"
+            description="Cada assunto marcado perde o vínculo com o grupo de pontuação, sem apagar o assunto da base."
+            footer={
+              <>
+                <Button type="button" variant="outline" onClick={() => setDeleteSubjectSelectionOpen(false)} disabled={deletingSubjectSelection}>
+                  Cancelar
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => void deleteSelectedSubjectRules()} disabled={deletingSubjectSelection}>
+                  {deletingSubjectSelection ? "Removendo..." : "Remover vínculos"}
+                </Button>
+              </>
+            }
+          >
+            <div className="text-sm text-slate-600">{selectedVisibleSubjectRules.length} assunto(s) perderão o vínculo com o grupo atual.</div>
+          </AppModal>
+
+          <AppDrawer
+            open={currentEditingSubject != null}
+            onOpenChange={(open) => setEditingSubjectId(open ? editingSubjectId : null)}
+            title={currentEditingSubject ? `Editar ${currentEditingSubject.os_subject}` : "Editar assunto"}
+            description="Ajuste o vínculo de grupo, pontos e valor por ponto deste assunto."
+          >
+            {currentEditingSubject ? (
+              (() => {
+                const selectedGroup = groups.find((group) => group.id === currentEditingSubject.group_id) ?? null;
+                const stats = periodRuleStats(currentEditingSubject);
+                const pointValuePlaceholder =
+                  selectedGroup?.point_value_override != null
+                    ? `Grupo ${formatMoney(selectedGroup.point_value_override)}`
+                    : `Global ${globalPointValueLabel}`;
+                return (
+                  <>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="grid gap-2 md:col-span-2">
+                        <Label>Tipo Geral</Label>
+                        <AppCombobox
+                          value={currentEditingSubject.os_type}
+                          onChange={(value) => setSubjectRules(replaceById(subjectRules, currentEditingSubject.id, { os_type: value }))}
+                          placeholder="Selecionar Tipo Geral"
+                          ariaLabel={`Tipo Geral do assunto ${currentEditingSubject.os_subject}`}
+                          options={osTypeOptions.map((type) => ({ value: type, label: type }))}
+                        />
+                        {!currentEditingSubject.os_type.trim() ? <p className="text-xs text-red-600">Tipo Geral é obrigatório.</p> : null}
+                      </div>
+                      <div className="grid gap-2 md:col-span-2">
+                        <Label>Grupo vinculado</Label>
+                        <AppCombobox
+                          value={String(currentEditingSubject.group_id)}
+                          onChange={(value) => setSubjectRules(replaceById(subjectRules, currentEditingSubject.id, { group_id: Number(value) }))}
+                          placeholder="Selecionar grupo"
+                          ariaLabel={`Grupo vinculado ao assunto ${currentEditingSubject.os_subject}`}
+                          options={activeGroups.map((group) => ({
+                            value: String(group.id),
+                            label: `${group.name} (${formatPoints(group.default_points)})`,
+                            description: group.point_value_override != null ? `R$/ponto ${formatMoney(group.point_value_override)}` : `Usa valor global ${globalPointValueLabel}`,
+                          }))}
+                        />
+                        {!selectedGroup ? <Badge className="border-amber-200 bg-amber-50 text-amber-800">Sem grupo</Badge> : null}
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>Pontos</Label>
+                        <AppInput
+                          type="number"
+                          value={currentEditingSubject.custom_points ?? ""}
+                          disabled={currentEditingSubject.use_group_default}
+                          placeholder={formatPoints(currentEditingSubject.effective_points)}
+                          onChange={(event) =>
+                            setSubjectRules(
+                              replaceById(subjectRules, currentEditingSubject.id, {
+                                custom_points: event.target.value === "" ? null : Number(event.target.value),
+                              })
+                            )
+                          }
+                        />
+                        <label className="flex items-center gap-2 text-xs text-slate-600">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-blue-700"
+                            checked={currentEditingSubject.use_group_default}
+                            onChange={(event) =>
+                              setSubjectRules(replaceById(subjectRules, currentEditingSubject.id, { use_group_default: event.target.checked }))
+                            }
+                          />
+                          Usar pontuação padrão do grupo
+                        </label>
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>R$/ponto</Label>
+                        <AppInput
+                          type="number"
+                          step="0.01"
+                          value={currentEditingSubject.point_value_override ?? ""}
+                          placeholder={pointValuePlaceholder}
+                          onChange={(event) =>
+                            setSubjectRules(
+                              replaceById(subjectRules, currentEditingSubject.id, {
+                                point_value_override: event.target.value === "" ? null : Number(event.target.value),
+                              })
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 md:col-span-2">
+                        <div>
+                          <div className="text-sm font-medium text-slate-900">Pontuar assunto</div>
+                          <div className="text-xs text-slate-500">Desligado remove o assunto da pontuação sem apagar o vínculo.</div>
+                        </div>
+                        <AppSwitch
+                          checked={currentEditingSubject.active}
+                          onCheckedChange={(checked) => setSubjectRules(replaceById(subjectRules, currentEditingSubject.id, { active: checked }))}
+                        />
+                      </div>
+                    </div>
+                    <div className={configCardClass}>
+                      <div className="flex flex-wrap gap-2">
+                        <StatusBadge tone="success">{formatInteger(stats.orders)} O.S impactadas</StatusBadge>
+                        <StatusBadge tone="success">{formatMoney(stats.impact)}</StatusBadge>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button type="button" variant="outline" onClick={() => setEditingSubjectId(null)}>
+                        Cancelar
+                      </Button>
+                      <Button type="button" onClick={() => void saveSubjectRule(currentEditingSubject)} disabled={savingSubjectId === currentEditingSubject.id}>
+                        <Save className="h-4 w-4" />
+                        {savingSubjectId === currentEditingSubject.id ? "Salvando..." : "Salvar assunto"}
+                      </Button>
+                    </div>
+                  </>
+                );
+              })()
+            ) : null}
+          </AppDrawer>
+
           <AppDrawer
             open={currentEditingGroup != null}
             onOpenChange={(open) => setEditingGroupId(open ? editingGroupId : null)}
@@ -2530,6 +2848,12 @@ export function LogicConfigurationPanel({
                     />
                   </div>
                 </div>
+                {/*
+                  "Regra ao arquivar" (deleteTargets) saiu daqui e da linha da tabela - só faz
+                  sentido no momento da exclusão, e já existe no modal de confirmação de exclusão.
+                  Mostrar em 3 lugares ao mesmo tempo (linha, drawer, modal) era duplicação sem
+                  necessidade - achado da mesma revisão que já corrigimos em Reincidência.
+                */}
                 <div className={configCardClass}>
                   <div className="flex flex-wrap gap-2">
                     <StatusBadge tone="success">
@@ -2541,34 +2865,6 @@ export function LogicConfigurationPanel({
                     <StatusBadge tone="success">
                       {formatMoney(subjectsByGroup.find((item) => item.group.id === currentEditingGroup.id)?.impact ?? 0)}
                     </StatusBadge>
-                  </div>
-                  <div className="mt-3 grid gap-2">
-                    <Label>Regra ao arquivar</Label>
-                    <AppCombobox
-                      value={deleteTargets[currentEditingGroup.id] ?? ""}
-                      onChange={(value) =>
-                        setDeleteTargets((current) => ({
-                          ...current,
-                          [currentEditingGroup.id]: value,
-                        }))
-                      }
-                      placeholder="Selecionar regra de arquivamento"
-                      ariaLabel={`Regra ao arquivar o grupo ${currentEditingGroup.name}`}
-                      options={[
-                        {
-                          value: "",
-                          label: "Remover vínculos e deixar assuntos sem regra",
-                          description: "Os assuntos permanecem cadastrados, mas sem grupo vinculado.",
-                        },
-                        ...groups
-                          .filter((item) => item.id !== currentEditingGroup.id)
-                          .map((item) => ({
-                            value: String(item.id),
-                            label: `Transferir assuntos para ${item.name}`,
-                            description: `${formatPoints(item.default_points)} por grupo`,
-                          })),
-                      ]}
-                    />
                   </div>
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
@@ -2587,7 +2883,6 @@ export function LogicConfigurationPanel({
     </section>
   );
 }
-
 
 
 

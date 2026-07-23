@@ -4,38 +4,34 @@
 
 @layer base {
   :root {
-    /* Padrão visual oficial UNI Workspace (PADRAO_VISUAL_OFICIAL_UNI_OPR.md) */
+    /* Sistema visual UNI Internet 2026. */
+    --uni-royal: #2d5fff;
+    --uni-turquoise: #27d9bf;
+    --uni-impact: #0028f3;
+    --uni-electric: #000ecc;
+    --uni-midnight: #010c8b;
+    --uni-cyan: #02fffa;
+    --uni-rich-black: #151f27;
 
-    /* Neutras: base clara, branco predominante, cinza frio para texto/borda/fundo */
-    --background: 210 20% 98%;
-    --foreground: 224 30% 12%;
+    --background: 216 100% 98%;
+    --foreground: 204 30% 12%;
     --card: 0 0% 100%;
-    --card-foreground: 224 30% 12%;
+    --card-foreground: 204 30% 12%;
     --popover: 0 0% 100%;
-    --popover-foreground: 224 30% 12%;
-
-    /* Primária: azul/ciano da UNI - CTA principal, foco, seleção ativa */
-    --primary: 198 93% 40%;
+    --popover-foreground: 204 30% 12%;
+    --primary: 223 100% 59%;
     --primary-foreground: 0 0% 100%;
-
-    /* Secundária: tons de azul claro/ciano suave - superfícies e painéis de apoio */
-    --secondary: 202 60% 94%;
-    --secondary-foreground: 202 45% 22%;
-
-    --muted: 215 22% 94%;
-    --muted-foreground: 215 16% 40%;
-
-    /* Semânticas: atenção (âmbar) */
+    --secondary: 171 70% 94%;
+    --secondary-foreground: 235 99% 27%;
+    --muted: 216 45% 95%;
+    --muted-foreground: 207 14% 38%;
     --accent: 38 91% 56%;
-    --accent-foreground: 224 30% 13%;
-
-    /* Semânticas: erro/destrutivo */
+    --accent-foreground: 204 30% 12%;
     --destructive: 0 74% 48%;
     --destructive-foreground: 0 0% 100%;
-
-    --border: 214 22% 84%;
-    --input: 214 22% 84%;
-    --ring: 198 93% 40%;
+    --border: 222 56% 87%;
+    --input: 222 56% 87%;
+    --ring: 179 100% 50%;
   }
 
   * {
@@ -44,6 +40,7 @@
 
   body {
     @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans), Arial, sans-serif;
     letter-spacing: 0;
   }
 
@@ -55,8 +52,26 @@
 }
 
 @layer components {
+  .uni-gradient {
+    background: linear-gradient(135deg, var(--uni-midnight) 0%, var(--uni-impact) 52%, var(--uni-turquoise) 100%);
+  }
+
+  .uni-gradient-soft {
+    background: linear-gradient(135deg, rgba(45, 95, 255, 0.12) 0%, rgba(39, 217, 191, 0.16) 100%);
+  }
+
+  .uni-surface {
+    @apply border bg-white shadow-sm;
+    border-color: rgba(45, 95, 255, 0.16);
+  }
+
+  .uni-focus {
+    @apply outline-none ring-2 ring-offset-2;
+    --tw-ring-color: var(--uni-cyan);
+  }
+
   .panel {
-    @apply overflow-hidden rounded-lg border bg-white shadow-sm;
+    @apply overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm;
   }
 
   .panel-header {
@@ -64,11 +79,11 @@
   }
 
   .panel-title {
-    @apply text-base font-semibold text-slate-950;
+    @apply text-base font-semibold text-foreground;
   }
 
   .panel-subtitle {
-    @apply text-sm text-slate-500;
+    @apply text-sm text-muted-foreground;
   }
 
   .table-frame {
@@ -81,21 +96,5 @@
 
   .audit-table-frame {
     @apply max-h-full min-h-0 overflow-auto bg-white;
-  }
-
-  .audit-table {
-    @apply w-full table-fixed border-collapse text-xs;
-  }
-
-  .audit-table thead th {
-    @apply pointer-events-none sticky top-0 z-10 border-b bg-slate-50 px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500;
-  }
-
-  .audit-table tbody td {
-    @apply border-b px-2 py-1.5 align-middle leading-snug;
-  }
-
-  .audit-table tbody tr {
-    @apply hover:bg-teal-50/40;
   }
 }

@@ -18,4 +18,8 @@ COPY alembic.ini ./alembic.ini
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Sem --reload: em produção (VM), o reload observa o filesystem e QUALQUER toque nos arquivos
+# (ex.: sync do OneDrive na máquina de dev, quando os volumes dev estão montados) reinicia a API
+# no meio de requisições/tarefas - incidente real. Para desenvolvimento com hot-reload, use
+# docker-compose.dev.yml (re-adiciona os volumes e o --reload).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token, get_current_user, permissions_for_role, verify_password
+from app.core.security import create_access_token, get_current_user, permissions_for_user, verify_password
 from app.db.session import get_db
 from app.models import User
 from app.schemas import LoginRequest, TokenOut, UserOut
+from app.services.regional import effective_managed_regionals
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -25,9 +26,13 @@ def serialize_user(user: User) -> dict:
         "active": user.active,
         "created_at": user.created_at,
         "updated_at": user.updated_at,
-        "permissions": sorted(permissions_for_role(user.role)),
+        "permissions": sorted(permissions_for_user(user)),
+        "access_profile_ids": [profile.id for profile in user.access_profiles if profile.active],
+        "access_profile_names": [profile.name for profile in user.access_profiles if profile.active],
         "collaborator_id": user.collaborator_id,
         "collaborator_name": user.collaborator.name if user.collaborator else None,
+        "managed_regional": user.managed_regional,
+        "managed_regionals": effective_managed_regionals(user.managed_regional, user.managed_regionals),
     }
 
 

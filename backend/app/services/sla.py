@@ -36,6 +36,10 @@ def normalize_sla_status(value: Any) -> str | None:
         "estourado",
         "vencido",
         "expirado",
+        # vocabulario de sla_status persistido em OperationOrder (modulo de operacoes
+        # analiticas) - copiado 1:1 para ServiceOrder.sla_status pela sync, ver
+        # backend/app/services/operations_sync.py.
+        "outoftime",
     }
     in_time_terms = {
         "encerradanoprazo",
@@ -44,8 +48,12 @@ def normalize_sla_status(value: Any) -> str | None:
         "dentrodoprazo",
         "dentrodeprazo",
         "emprazo",
+        "ontime",
     }
+    unidentified_terms = {"unidentified"}
 
+    if compact in unidentified_terms:
+        return None
     if compact in out_of_time_terms or "atrasad" in text or "fora do prazo" in text or "fora prazo" in text:
         return SLA_FORA_DO_PRAZO
     if compact in in_time_terms or "encerrada no prazo" in text or "encerrado no prazo" in text or "dentro do prazo" in text:

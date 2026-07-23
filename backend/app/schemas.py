@@ -29,6 +29,9 @@ class UserBase(BaseModel):
     role: str = "viewer"
     active: bool = True
     collaborator_id: int | None = None
+    managed_regional: str | None = None
+    managed_regionals: list[str] = []
+    access_profile_ids: list[int] = []
 
 
 class UserCreate(UserBase):
@@ -42,6 +45,9 @@ class UserUpdate(BaseModel):
     active: bool | None = None
     password: str | None = None
     collaborator_id: int | None = None
+    managed_regional: str | None = None
+    managed_regionals: list[str] | None = None
+    access_profile_ids: list[int] | None = None
 
 
 class UserOut(UserBase):
@@ -50,6 +56,7 @@ class UserOut(UserBase):
     updated_at: datetime
     permissions: list[str] = []
     collaborator_name: str | None = None
+    access_profile_names: list[str] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1220,6 +1227,7 @@ class PortalScoreOut(BaseModel):
     health_status: str
     final_points: float
     estimated_payment: float
+    balance_adjustment_points: float = 0
     scored_service_orders: int
     unscored_service_orders: int
     penalized_service_orders: int
@@ -1245,6 +1253,14 @@ class PortalRankingItemOut(BaseModel):
     service_orders_count: int
     scored_service_orders: int
     penalty_points: float
+    health_multiplier: float = 1
+    health_status: str | None = None
+    sla_out_service_orders: int = 0
+    recurrence_service_orders: int = 0
+    unscored_service_orders: int = 0
+    manual_review_service_orders: int = 0
+    points_to_average: float | None = None
+    performance_band: str | None = None
     is_current_user: bool = False
 
 
@@ -1255,11 +1271,43 @@ class PortalSummaryOut(BaseModel):
     score: PortalScoreOut | None = None
     regional_position: int | None = None
     regional_total: int = 0
+    regional_service_orders: int = 0
+    regional_sla_out_service_orders: int = 0
+    regional_sla_rate: float | None = None
     general_position: int | None = None
     general_total: int = 0
     next_position_gap: float | None = None
     ranking: list[PortalRankingItemOut] = []
     message: str | None = None
+
+
+class PortalProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phone: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=160)
+
+    @field_validator("phone", "email")
+    @classmethod
+    def normalize_contact(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str | None) -> str | None:
+        if value is not None and "@" not in value:
+            raise ValueError("Informe um e-mail de contato válido.")
+        return value
+
+
+class PortalProfileOut(BaseModel):
+    collaborator_id: int
+    name: str
+    role: str
+    regional: str
+    phone: str | None = None
+    email: str | None = None
+    has_photo: bool = False
 
 
 class PortalOrderOut(BaseModel):
@@ -1269,14 +1317,20 @@ class PortalOrderOut(BaseModel):
     closed_at: datetime | None = None
     os_type: str
     os_subject: str
+    customer_name: str | None = None
     diagnosis: str | None = None
     status: str
     sla_status: str
+    sla_status_normalized: str = "NAO_IDENTIFICADO"
     base_points: float = 0
     penalty_points: float = 0
     net_points: float = 0
     status_label: str
     reason: str | None = None
+    diagnosis_action_type: str | None = None
+    diagnosis_penalty_reason: str | None = None
+    recurrence_related_os_code: str | None = None
+    recurrence_days_between: int | None = None
 
 
 class PortalRulesOut(BaseModel):
@@ -1304,6 +1358,51 @@ class PortalRegionalOverviewOut(BaseModel):
     estimated_payment: float
     penalty_points: float
     health_average: float
+    sla_out_service_orders: int = 0
+    recurrence_service_orders: int = 0
+    unscored_service_orders: int = 0
+    manual_review_service_orders: int = 0
+    sla_rate: float = 0
+    recurrence_rate: float = 0
+
+
+class PortalTeamHistoryOut(BaseModel):
+    reference_month: int
+    reference_year: int
+    collaborators: int
+    service_orders: int
+    sla_out_service_orders: int
+    recurrence_service_orders: int
+    final_points: float
+    estimated_payment: float
+    health_average: float
+    sla_rate: float
+    recurrence_rate: float
+
+
+class PortalTeamAttentionOut(PortalRankingItemOut):
+    attention_reason: str
+    target_gap: float = 0
+
+
+class PortalTeamBandOut(BaseModel):
+    label: str
+    collaborators: int
+    min_points: float
+    max_points: float
+    description: str
+
+
+class PortalTeamSummaryOut(BaseModel):
+    period: PortalPeriodOut
+    regional: str | None = None
+    totals: PortalRegionalOverviewOut | None = None
+    ranking: list[PortalRankingItemOut] = []
+    attention: list[PortalTeamAttentionOut] = []
+    history: list[PortalTeamHistoryOut] = []
+    bands: list[PortalTeamBandOut] = []
+    alerts: list[str] = []
+    message: str | None = None
 
 
 class PortalOverviewOut(BaseModel):
@@ -1327,12 +1426,18 @@ class PortalAuditOrderOut(BaseModel):
     os_code: str
     os_type: str
     os_subject: str
+    customer_name: str | None = None
     group_name: str | None = None
     base_points: float
     net_points: float
     penalty_points: float
     status_label: str
+    sla_status_normalized: str = "NAO_IDENTIFICADO"
     reason: str | None = None
+    diagnosis_action_type: str | None = None
+    diagnosis_penalty_reason: str | None = None
+    recurrence_related_os_code: str | None = None
+    recurrence_days_between: int | None = None
 
 
 class PortalAuditHistoryOut(BaseModel):
@@ -1358,6 +1463,7 @@ class PortalAuditOut(BaseModel):
     health_multiplier: float = 1
     final_points: float = 0
     estimated_payment: float = 0
+    balance_adjustment_points: float = 0
     health_status: str = "Nao informado"
     service_orders_count: int = 0
     scored_service_orders: int = 0
@@ -1367,6 +1473,9 @@ class PortalAuditOut(BaseModel):
     recurrence_service_orders: int = 0
     pending_service_orders: int = 0
     sla_out_service_orders: int = 0
+    sla_on_time_service_orders: int = 0
+    sla_unidentified_service_orders: int = 0
+    sla_rate: float | None = None
     manual_review_service_orders: int = 0
     points_to_next_position: float | None = None
     top_positive_orders: list[PortalAuditOrderOut] = []

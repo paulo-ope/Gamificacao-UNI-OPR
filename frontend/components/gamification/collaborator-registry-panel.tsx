@@ -4,7 +4,8 @@ import { Building2, CircleAlert, KeyRound, Link2, Mail, Phone, Save, Trash2, Upl
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AppCombobox, AppDrawer, AppInput, AppModal, AppSwitch, Avatar, RowActionMenu, StatusBadge } from "@/components/gamification/config-ui";
+import { AppCheckbox, AppCombobox, AppDrawer, AppInput, AppModal, AppSwitch, Avatar, RowActionMenu, StatusBadge } from "@/components/gamification/config-ui";
+import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -31,6 +32,7 @@ type Props = {
   onSave: (item: CollaboratorRegistryItem) => Promise<void>;
   onDelete: (item: CollaboratorRegistryItem) => Promise<void>;
   onDeleteMany: (items: CollaboratorRegistryItem[]) => Promise<void>;
+  onBulkSetActive?: (items: CollaboratorRegistryItem[], active: boolean) => Promise<void>;
   // Vínculo de acesso ao portal - só o admin (permissão users:manage) enxerga essa seção. Opcional
   // pra não quebrar quem ainda monta este painel sem essas props (ex: testes de componente).
   canManagePortalAccess?: boolean;
@@ -100,7 +102,7 @@ function SummaryCard({
 }) {
   const accentClass =
     accent === "highlight"
-      ? "text-teal-700"
+      ? "text-blue-700"
       : accent === "warning"
         ? "text-amber-700"
         : "text-slate-950";
@@ -150,6 +152,7 @@ export function CollaboratorRegistryPanel({
   onSave,
   onDelete,
   onDeleteMany,
+  onBulkSetActive,
   canManagePortalAccess = false,
   unlinkedUsers = [],
   onCreatePortalUser,
@@ -309,6 +312,12 @@ export function CollaboratorRegistryPanel({
     await onDeleteMany(visibleSelectedItems);
     setSelectedIds(new Set());
     setDeleteSelectionOpen(false);
+  }
+
+  async function bulkSetActive(active: boolean) {
+    if (visibleSelectedItems.length === 0 || !onBulkSetActive) return;
+    await onBulkSetActive(visibleSelectedItems, active);
+    setSelectedIds(new Set());
   }
 
   function resetPortalForm() {
@@ -534,6 +543,28 @@ export function CollaboratorRegistryPanel({
                 <UserPlus className="h-4 w-4" />
                 Cadastrar colaborador
               </Button>
+              {onBulkSetActive && activeList === "registered" ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                    onClick={() => bulkSetActive(true)}
+                    disabled={visibleSelectedItems.length === 0}
+                  >
+                    Ativar selecionados
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="border-slate-200 text-slate-700 hover:bg-slate-50"
+                    onClick={() => bulkSetActive(false)}
+                    disabled={visibleSelectedItems.length === 0}
+                  >
+                    Desativar selecionados
+                  </Button>
+                </>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
@@ -605,16 +636,24 @@ export function CollaboratorRegistryPanel({
           {activeList === "registered" ? (
             <div className="overflow-hidden rounded-2xl border border-slate-200">
               <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50/80">
+                <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                  <TableRow className="border-slate-700 hover:bg-slate-900">
                     <TableHead className="w-10">
-                      <AppSwitch checked={allVisibleSelected} onCheckedChange={toggleAllVisible} label={allVisibleSelected ? "Todos" : "Selecionar"} />
+                      <AppCheckbox checked={allVisibleSelected} onCheckedChange={toggleAllVisible} ariaLabel="Selecionar todos os colaboradores listados" />
                     </TableHead>
                     <TableHead>Colaborador</TableHead>
                     <TableHead>Filial oficial</TableHead>
                     <TableHead>Contato</TableHead>
                     <TableHead>O.S vinculadas</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>
+                      <span className="inline-flex items-center gap-1">
+                        Status
+                        <InfoHint
+                          ariaLabel="O que significa cada status"
+                          description={'"Cadastrado" = ativo e formalizado, entra na apuração normalmente. "Inativo" = formalizado mas desligado, não entra na apuração. "Pendente" = apareceu com produção mas ainda não foi formalizado (aba Não cadastrados).'}
+                        />
+                      </span>
+                    </TableHead>
                     <TableHead className="w-32">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -622,7 +661,11 @@ export function CollaboratorRegistryPanel({
                   {filteredRegistered.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>
-                        <AppSwitch checked={selectedIds.has(item.id)} onCheckedChange={(checked) => toggleSelected(item.id, checked)} label="" />
+                        <AppCheckbox
+                          checked={selectedIds.has(item.id)}
+                          onCheckedChange={(checked) => toggleSelected(item.id, checked)}
+                          ariaLabel={`Selecionar ${item.name}`}
+                        />
                       </TableCell>
                       <TableCell className="min-w-56">
                         <div className="flex items-center gap-2.5">
@@ -663,10 +706,10 @@ export function CollaboratorRegistryPanel({
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200">
               <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50/80">
+                <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                  <TableRow className="border-slate-700 hover:bg-slate-900">
                     <TableHead className="w-10">
-                      <AppSwitch checked={allVisibleSelected} onCheckedChange={toggleAllVisible} label={allVisibleSelected ? "Todos" : "Selecionar"} />
+                      <AppCheckbox checked={allVisibleSelected} onCheckedChange={toggleAllVisible} ariaLabel="Selecionar todos os colaboradores listados" />
                     </TableHead>
                     <TableHead>Colaborador</TableHead>
                     <TableHead>Filial sugerida</TableHead>
@@ -678,7 +721,11 @@ export function CollaboratorRegistryPanel({
                   {filteredUnregistered.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>
-                        <AppSwitch checked={selectedIds.has(item.id)} onCheckedChange={(checked) => toggleSelected(item.id, checked)} label="" />
+                        <AppCheckbox
+                          checked={selectedIds.has(item.id)}
+                          onCheckedChange={(checked) => toggleSelected(item.id, checked)}
+                          ariaLabel={`Selecionar ${item.name}`}
+                        />
                       </TableCell>
                       <TableCell className="min-w-56">
                         <div className="flex items-center gap-2.5">

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.models import AppSetting, CalculationRun, HealthRule, ScoringGroup, ScoringSubjectRule, ServiceOrder
+from app.models import AppSetting, CalculationRun, CollaboratorScore, HealthRule, ScoringGroup, ScoringSubjectRule, ServiceOrder
 from app.services.calculation_closure import ensure_status_transition_allowed, update_run_status
 
 
@@ -87,3 +87,85 @@ def test_same_collaborator_cannot_be_paid_twice_via_aggregate_and_regional_runs(
 
     run_regional_final = client.get(f"/api/calculation-runs/{run_regional['id']}").json()
     assert run_regional_final["status"] != "paid"
+
+
+def test_calculate_scores_zeroes_estimated_payment_for_unregistered_collaborator(client, db_session, make_collaborator):
+    """Regression: a collaborator auto-created from an import (is_registered=False) must never
+    accrue a payable estimated_payment, even though their points/O.S stay visible for tracking.
+    Guaranteeing they won't be paid has to start at calculation time, not at a CSV export filter."""
+    unregistered = make_collaborator(name="Nao Cadastrado", regional="UNI SUL", registered=False)
+    # Colaborador cadastrado extra, apenas para estabelecer a saude/SLA da regional: uma O.S de
+    # colaborador nao cadastrado nunca conta para o calculo de saude da regional (regra ja existente,
+    # ver calculate_regional_health) - sem isto, health_by_regional ficaria vazio e o multiplicador
+    # do nao cadastrado cairia para "abaixo da faixa minima" (0x) por falta de referencia, mascarando
+    # o que este teste realmente quer verificar (o zeramento do estimated_payment).
+    baseline = make_collaborator(name="Colaborador Base", regional="UNI SUL", registered=True)
+    group = ScoringGroup(name="Instalacao", default_points=10.0, active=True)
+    db_session.add(group)
+    db_session.flush()
+    db_session.add(ScoringSubjectRule(group_id=group.id, os_type="Instalacao", os_subject="Padrao", use_group_default=True, active=True))
+    db_session.add(AppSetting(key="point_value", value="2.00"))
+    db_session.add(HealthRule(name="Boa", min_sla=0, max_recurrence_rate=100, multiplier=1.0, active=True))
+    db_session.add(
+        ServiceOrder(
+            os_code="OS-BASE-1", contract_id="C-0", customer_login="cli.base", customer_name="Z",
+            collaborator_id=baseline.id, regional="UNI SUL", os_type="Instalacao", os_subject="Padrao",
+            diagnosis="Falha", status="Concluida", sla_status="Dentro do prazo",
+            opened_at=datetime(2026, 6, 5, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+        )
+    )
+    db_session.add(
+        ServiceOrder(
+            os_code="OS-UNREG-1", contract_id="C-1", customer_login="cli.unreg", customer_name="Y",
+            collaborator_id=unregistered.id, regional="UNI SUL", os_type="Instalacao", os_subject="Padrao",
+            diagnosis="Falha", status="Concluida", sla_status="Dentro do prazo",
+            opened_at=datetime(2026, 6, 5, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    resp = client.post(
+        "/api/calculation-runs/calculate",
+        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True},
+    )
+    assert resp.status_code == 200, resp.text
+    run = resp.json()
+
+    score = next(s for s in run["scores"] if s["collaborator_id"] == unregistered.id)
+    baseline_score = next(s for s in run["scores"] if s["collaborator_id"] == baseline.id)
+    assert score["final_points"] > 0, "points must stay visible for an unregistered collaborator"
+    assert score["estimated_payment"] == 0, "an unregistered collaborator must never accrue a payable amount"
+    assert baseline_score["estimated_payment"] > 0, "a registered collaborator's payment must remain untouched"
+    assert run["result_summary"]["cards"]["estimated_payment"] == baseline_score["estimated_payment"], (
+        "the aggregate payable total must exclude the unregistered collaborator entirely"
+    )
+
+
+def test_marking_run_as_paid_is_blocked_while_unregistered_collaborator_has_payable_amount(db_session, admin_user, make_collaborator):
+    """Regression: this is the last-resort safety net, independent of the calculation-time zeroing
+    above - even if stale/edited data slips an unregistered collaborator through with a nonzero
+    estimated_payment, marking the run as paid must be refused rather than silently paying them."""
+    unregistered = make_collaborator(name="Sem Cadastro", regional="UNI SUL", registered=False)
+    run = CalculationRun(reference_month=9, reference_year=2026, regional="UNI SUL", point_value=2.0, status="approved")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(
+        CollaboratorScore(
+            calculation_run_id=run.id,
+            collaborator_id=unregistered.id,
+            service_orders_count=1,
+            gross_points=10,
+            penalty_points=0,
+            net_points=10,
+            final_points=10,
+            estimated_payment=20.0,
+        )
+    )
+    db_session.commit()
+    db_session.refresh(run)
+
+    with pytest.raises(Exception) as excinfo:
+        update_run_status(db_session, run, "paid", admin_user)
+    assert getattr(excinfo.value, "status_code", None) == 409
+    assert "não cadastrado" in str(getattr(excinfo.value, "detail", "")).lower()
+    assert run.status == "approved", "the run must remain unpaid after the block"

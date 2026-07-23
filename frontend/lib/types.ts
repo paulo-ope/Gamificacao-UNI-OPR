@@ -15,7 +15,29 @@ export type Permission =
   | "portal:simulate_self"
   | "portal:read_rules"
   | "portal:read_regional_summary"
-  | "portal:read_overview";
+  | "portal:read_overview"
+  | "operations:read"
+  | "operations:manage"
+  | "operations:views:read_global"
+  | "operations:views:create_global"
+  | "operations:views:update_global"
+  | "operations:views:delete_global"
+  | "operations:sync_ixc"
+  | "operations:manage_filters"
+  | "operations:manage_team_models"
+  | "operations:manage_subjects"
+  | "operations:view_order_details"
+  | "operations:view_sla"
+  | "operations:view_calendar"
+  | "operations:view_backlog"
+  | "operations:export"
+  | "admin:users:read"
+  | "admin:users:write"
+  | "admin:users:delete"
+  | "admin:roles:read"
+  | "admin:roles:write"
+  | "admin:permissions:read"
+  | "admin:audit:read";
 
 export type AuthUser = {
   id: number;
@@ -26,8 +48,31 @@ export type AuthUser = {
   created_at: string;
   updated_at: string;
   permissions: Permission[];
+  access_profile_ids: number[];
+  access_profile_names: string[];
   collaborator_id: number | null;
   collaborator_name: string | null;
+  managed_regional: string | null;
+  managed_regionals: string[];
+};
+
+export type EcosystemPermission = {
+  key: Permission;
+  label: string;
+  module: string;
+};
+
+export type AccessProfile = {
+  id: number;
+  name: string;
+  description: string | null;
+  legacy_role: string | null;
+  active: boolean;
+  is_system: boolean;
+  permission_keys: Permission[];
+  user_count: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type LoginResult = {
@@ -64,6 +109,7 @@ export type PortalScore = {
   health_status: string;
   final_points: number;
   estimated_payment: number;
+  balance_adjustment_points: number;
   scored_service_orders: number;
   unscored_service_orders: number;
   penalized_service_orders: number;
@@ -89,6 +135,14 @@ export type PortalRankingItem = {
   service_orders_count: number;
   scored_service_orders: number;
   penalty_points: number;
+  health_multiplier: number;
+  health_status: string | null;
+  sla_out_service_orders: number;
+  recurrence_service_orders: number;
+  unscored_service_orders: number;
+  manual_review_service_orders: number;
+  points_to_average: number | null;
+  performance_band: string | null;
   is_current_user: boolean;
 };
 
@@ -99,11 +153,24 @@ export type PortalSummary = {
   score: PortalScore | null;
   regional_position: number | null;
   regional_total: number;
+  regional_service_orders: number;
+  regional_sla_out_service_orders: number;
+  regional_sla_rate: number | null;
   general_position: number | null;
   general_total: number;
   next_position_gap: number | null;
   ranking: PortalRankingItem[];
   message: string | null;
+};
+
+export type PortalProfile = {
+  collaborator_id: number;
+  name: string;
+  role: string;
+  regional: string;
+  phone: string | null;
+  email: string | null;
+  has_photo: boolean;
 };
 
 export type PortalOrder = {
@@ -113,27 +180,39 @@ export type PortalOrder = {
   closed_at: string | null;
   os_type: string;
   os_subject: string;
+  customer_name: string | null;
   group_name: string | null;
   diagnosis: string | null;
   status: string;
   sla_status: string;
+  sla_status_normalized: string;
   base_points: number;
   penalty_points: number;
   net_points: number;
   status_label: string;
   reason: string | null;
+  diagnosis_action_type: DiagnosisActionType | null;
+  diagnosis_penalty_reason: string | null;
+  recurrence_related_os_code: string | null;
+  recurrence_days_between: number | null;
 };
 
 export type PortalAuditOrder = {
   os_code: string;
   os_type: string;
   os_subject: string;
+  customer_name: string | null;
   group_name: string | null;
   base_points: number;
   net_points: number;
   penalty_points: number;
   status_label: string;
+  sla_status_normalized: string;
   reason: string | null;
+  diagnosis_action_type: DiagnosisActionType | null;
+  diagnosis_penalty_reason: string | null;
+  recurrence_related_os_code: string | null;
+  recurrence_days_between: number | null;
 };
 
 export type PortalAuditBreakdown = {
@@ -159,6 +238,7 @@ export type PortalAudit = {
   health_multiplier: number;
   final_points: number;
   estimated_payment: number;
+  balance_adjustment_points: number;
   health_status: string;
   service_orders_count: number;
   scored_service_orders: number;
@@ -168,6 +248,9 @@ export type PortalAudit = {
   recurrence_service_orders: number;
   pending_service_orders: number;
   sla_out_service_orders: number;
+  sla_on_time_service_orders: number;
+  sla_unidentified_service_orders: number;
+  sla_rate: number | null;
   manual_review_service_orders: number;
   points_to_next_position: number | null;
   top_positive_orders: PortalAuditOrder[];
@@ -204,6 +287,52 @@ export type PortalRegionalOverview = {
   estimated_payment: number;
   penalty_points: number;
   health_average: number;
+  sla_out_service_orders: number;
+  recurrence_service_orders: number;
+  unscored_service_orders: number;
+  manual_review_service_orders: number;
+  sla_rate: number;
+  recurrence_rate: number;
+};
+
+export type PortalTeamHistoryItem = {
+  reference_month: number;
+  reference_year: number;
+  collaborators: number;
+  service_orders: number;
+  sla_out_service_orders: number;
+  recurrence_service_orders: number;
+  final_points: number;
+  estimated_payment: number;
+  health_average: number;
+  sla_rate: number;
+  recurrence_rate: number;
+};
+
+export type PortalTeamAttentionItem = PortalRankingItem & {
+  attention_reason: string;
+  target_gap: number;
+};
+
+export type PortalTeamBand = {
+  label: string;
+  collaborators: number;
+  min_points: number;
+  max_points: number;
+  description: string;
+};
+
+export type PortalTeamSummary = {
+  period: PortalPeriod;
+  regional: string | null;
+  regionals: string[];
+  totals: PortalRegionalOverview | null;
+  ranking: PortalRankingItem[];
+  attention: PortalTeamAttentionItem[];
+  history: PortalTeamHistoryItem[];
+  bands: PortalTeamBand[];
+  alerts: string[];
+  message: string | null;
 };
 
 export type PortalOverview = {

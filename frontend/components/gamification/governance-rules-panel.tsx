@@ -149,8 +149,8 @@ export function GovernanceRulesPanel({
         ) : null}
         <div className="overflow-hidden rounded-2xl border border-slate-200">
           <Table>
-            <TableHeader>
-              <TableRow>
+            <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+              <TableRow className="border-slate-700 hover:bg-slate-900">
                 <TableHead>Saúde</TableHead>
                 <TableHead>SLA min.</TableHead>
                 <TableHead>Reinc. max.</TableHead>

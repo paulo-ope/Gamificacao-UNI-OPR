@@ -100,7 +100,7 @@ export function AuditTrailPanel() {
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-teal-700" />
+          <ShieldCheck className="h-4 w-4 text-blue-700" />
           <h3 className="text-sm font-semibold text-slate-950">Trilha de ações (quem fez o quê, quando)</h3>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
@@ -137,8 +137,8 @@ export function AuditTrailPanel() {
 
       <div className="table-frame overflow-hidden rounded-[20px] border border-slate-200 bg-white">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+            <TableRow className="border-slate-700 hover:bg-slate-900">
               <TableHead>Quando</TableHead>
               <TableHead>Quem</TableHead>
               <TableHead>Ação</TableHead>

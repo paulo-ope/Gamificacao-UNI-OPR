@@ -4,28 +4,25 @@ import {
   BadgeCheck,
   BriefcaseBusiness,
   Building2,
-  Check,
   CircleAlert,
   Layers3,
   PenLine,
   Plus,
-  Search,
   ShieldCheck,
   Trash2,
   Users2,
-  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RegionalMultiSelect, uniqueRegionals } from "@/components/gamification/config-ui";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import { cn } from "@/lib/utils";
 import type { LeadershipAverageSource, LeadershipProfile, LeadershipRoleProfile, LeadershipRoleType } from "@/lib/types";
@@ -117,10 +114,6 @@ function buildLeaderDraft(): DraftLeader {
   };
 }
 
-function uniqueRegionals(values: string[]) {
-  return Array.from(new Set(values.map((item) => normalizeRegional(item)).filter(Boolean)));
-}
-
 function formatNumber(value: number) {
   return new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value);
 }
@@ -140,135 +133,6 @@ function resolveRoleProfile(leader: LeadershipProfile, roleProfiles: LeadershipR
   return roleProfiles.find((item) => item.scope_type === leader.role_type) ?? null;
 }
 
-function RegionalMultiSelect({
-  options,
-  selected,
-  onChange,
-  disabled = false,
-}: {
-  options: string[];
-  selected: string[];
-  onChange: (values: string[]) => void;
-  disabled?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-
-  const filteredOptions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return options.filter((item) => regionalName(item).toLowerCase().includes(normalizedQuery));
-  }, [options, query]);
-
-  const toggle = (regional: string) => {
-    if (selected.includes(regional)) {
-      onChange(selected.filter((item) => item !== regional));
-      return;
-    }
-    onChange([...selected, regional]);
-  };
-
-  return (
-    <div className="grid gap-2">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        className={cn(
-          "flex min-h-11 items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm transition",
-          disabled ? "cursor-not-allowed bg-slate-100 text-slate-400" : "hover:border-slate-300 hover:bg-slate-50",
-        )}
-      >
-        <div className="min-w-0">
-          <div className="text-sm font-medium text-slate-900">
-            {selected.length > 0
-              ? `${selected.length} ${selected.length === 1 ? "filial selecionada" : "filiais selecionadas"}`
-              : "Selecionar filiais"}
-          </div>
-          <div className="truncate text-xs text-slate-500">
-            {selected.length > 0
-              ? selected.slice(0, 3).map((item) => regionalName(item)).join(", ")
-              : "Busque e marque as filiais que entram no escopo."}
-          </div>
-        </div>
-        <Badge className="border-slate-200 bg-slate-50 text-slate-600">{selected.length}</Badge>
-      </button>
-
-      {selected.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {selected.map((regional) => (
-            <span
-              key={regional}
-              className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700"
-            >
-              {regionalName(regional)}
-              {!disabled ? (
-                <button type="button" onClick={() => toggle(regional)} className="text-sky-500 transition hover:text-sky-700">
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              ) : null}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {open ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.12)]">
-          <Command className="border-0 shadow-none">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-              <CommandInput
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Buscar filial..."
-                className="pl-9"
-              />
-            </div>
-            <CommandList className="mt-3 max-h-64 space-y-1">
-              {filteredOptions.map((regional) => {
-                const checked = selected.includes(regional);
-                return (
-                  <CommandItem
-                    key={regional}
-                    onClick={() => toggle(regional)}
-                    className="flex items-center justify-between rounded-xl border border-transparent px-3 py-2.5 hover:border-slate-200 hover:bg-slate-50"
-                  >
-                    <div className="flex items-center gap-3">
-                      <span
-                        className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded border",
-                          checked ? "border-teal-600 bg-teal-600 text-white" : "border-slate-300 bg-white text-transparent",
-                        )}
-                      >
-                        <Check className="h-3 w-3" />
-                      </span>
-                      <span className="text-sm text-slate-700">{regionalName(regional)}</span>
-                    </div>
-                  </CommandItem>
-                );
-              })}
-              {filteredOptions.length === 0 ? (
-                <div className="px-3 py-6 text-center text-sm text-slate-500">Nenhuma filial encontrada para a busca.</div>
-              ) : null}
-            </CommandList>
-          </Command>
-          <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-3">
-            <button
-              type="button"
-              className="text-sm font-medium text-slate-500 transition hover:text-slate-800"
-              onClick={() => onChange([])}
-            >
-              Limpar seleção
-            </button>
-            <Button type="button" size="sm" variant="secondary" onClick={() => setOpen(false)}>
-              Fechar
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function SummaryCard({
   icon,
   label,
@@ -284,7 +148,7 @@ function SummaryCard({
 }) {
   const accentClass =
     accent === "highlight"
-      ? "text-teal-700"
+      ? "text-blue-700"
       : accent === "warning"
         ? "text-amber-700"
         : "text-slate-950";
@@ -327,8 +191,16 @@ export function LeadershipBonusPanel({
   );
 
   const activeLeaders = useMemo(() => profiles.filter((item) => item.active), [profiles]);
+  // Gerente de pasta ignora as filiais vinculadas no cálculo (leadership_bonus.py:
+  // validate_scope_regionals_required - "usa todos os colaboradores registrados"), então as
+  // filiais que ele tem marcadas não representam cobertura real de liderança - contá-las aqui
+  // fazia uma filial aparecer como "coberta" só porque um gerente de pasta (que já inclui todo
+  // mundo de qualquer forma) tinha ela marcada, e mascarava filiais de fato sem responsável.
   const coveredRegionals = useMemo(
-    () => uniqueRegionals(activeLeaders.flatMap((item) => item.regional_names)),
+    () =>
+      uniqueRegionals(
+        activeLeaders.filter((item) => item.role_type !== "portfolio_manager").flatMap((item) => item.regional_names)
+      ),
     [activeLeaders],
   );
   const uncoveredRegionals = useMemo(
@@ -496,8 +368,8 @@ export function LeadershipBonusPanel({
             <TabsContent value="role-profiles" className="mt-0">
               <div className="overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/80">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
                       <TableHead>Perfil / cargo</TableHead>
                       <TableHead>Escopo do cálculo</TableHead>
                       <TableHead>Multiplicador padrão</TableHead>
@@ -514,7 +386,7 @@ export function LeadershipBonusPanel({
                           <div className="mt-1 text-sm text-slate-500">{ROLE_SCOPE_HINTS[profile.scope_type]}</div>
                         </TableCell>
                         <TableCell>{ROLE_SCOPE_LABELS[profile.scope_type]}</TableCell>
-                        <TableCell className="font-semibold text-teal-700">{formatNumber(profile.default_multiplier)}x</TableCell>
+                        <TableCell className="font-semibold text-blue-700">{formatNumber(profile.default_multiplier)}x</TableCell>
                         <TableCell>{roleStatusBadge(profile.active)}</TableCell>
                         <TableCell>{profile.linked_leaders_count}</TableCell>
                         <TableCell className="text-right">
@@ -546,8 +418,8 @@ export function LeadershipBonusPanel({
             <TabsContent value="leaders" className="mt-0">
               <div className="overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/80">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
                       <TableHead>Líder</TableHead>
                       <TableHead>Perfil / cargo</TableHead>
                       <TableHead>Filiais</TableHead>
@@ -587,7 +459,7 @@ export function LeadershipBonusPanel({
                             <div className="mt-1 text-sm text-slate-500">{AVERAGE_SOURCE_HINTS[leader.average_source ?? "collaborators"]}</div>
                           </TableCell>
                           <TableCell>
-                            <div className="font-semibold text-teal-700">{formatNumber(leader.multiplier)}x</div>
+                            <div className="font-semibold text-blue-700">{formatNumber(leader.multiplier)}x</div>
                             <div className="mt-1 text-sm text-slate-500">
                               {leader.use_custom_multiplier ? "Personalizado" : "Herdado do perfil"}
                             </div>
@@ -623,8 +495,8 @@ export function LeadershipBonusPanel({
             <TabsContent value="branches" className="mt-0">
               <div className="overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/80">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
                       <TableHead>Filial</TableHead>
                       <TableHead>Líder responsável</TableHead>
                       <TableHead>Perfil</TableHead>
@@ -730,7 +602,7 @@ export function LeadershipBonusPanel({
               <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
                 <input
                   type="checkbox"
-                  className="h-4 w-4 accent-teal-700"
+                  className="h-4 w-4 accent-blue-700"
                   checked={roleDraft.active}
                   onChange={(event) => setRoleDraft((current) => ({ ...current, active: event.target.checked }))}
                   disabled={readOnly}
@@ -866,7 +738,7 @@ export function LeadershipBonusPanel({
                 <label className="flex items-center gap-3 text-sm text-slate-700">
                   <input
                     type="checkbox"
-                    className="h-4 w-4 accent-teal-700"
+                    className="h-4 w-4 accent-blue-700"
                     checked={leaderDraft.use_custom_multiplier}
                     disabled={readOnly}
                     onChange={(event) => {
@@ -913,20 +785,30 @@ export function LeadershipBonusPanel({
               </div>
             </div>
 
-            <div className="grid gap-2">
-              <Label>Filiais vinculadas</Label>
-              <RegionalMultiSelect
-                options={sortedRegionals}
-                selected={leaderDraft.regional_names}
-                onChange={(values) => setLeaderDraft((current) => ({ ...current, regional_names: uniqueRegionals(values) }))}
-                disabled={readOnly}
-              />
-            </div>
+            {leaderDraft.role_type === "portfolio_manager" ? (
+              // Gerente de pasta ignora filiais no cálculo (usa a média de todos os colaboradores
+              // registrados, ver leadership_bonus.py) - mostrar o seletor aqui daria a falsa
+              // impressão de que dá pra restringir o escopo dele, quando na prática não muda nada.
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+                Gerente de pasta não usa filiais vinculadas - a bonificação considera a média de todos os colaboradores cadastrados,
+                independente de filial.
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                <Label>Filiais vinculadas</Label>
+                <RegionalMultiSelect
+                  options={sortedRegionals}
+                  selected={leaderDraft.regional_names}
+                  onChange={(values) => setLeaderDraft((current) => ({ ...current, regional_names: uniqueRegionals(values) }))}
+                  disabled={readOnly}
+                />
+              </div>
+            )}
 
             <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
               <input
                 type="checkbox"
-                className="h-4 w-4 accent-teal-700"
+                className="h-4 w-4 accent-blue-700"
                 checked={leaderDraft.active}
                 onChange={(event) => setLeaderDraft((current) => ({ ...current, active: event.target.checked }))}
                 disabled={readOnly}
@@ -947,7 +829,12 @@ export function LeadershipBonusPanel({
               </Button>
               <Button
                 type="button"
-                disabled={readOnly || !leaderDraft.name.trim() || leaderDraft.regional_names.length === 0 || !leaderDraft.role_profile_id}
+                disabled={
+                  readOnly ||
+                  !leaderDraft.name.trim() ||
+                  (leaderDraft.role_type !== "portfolio_manager" && leaderDraft.regional_names.length === 0) ||
+                  !leaderDraft.role_profile_id
+                }
                 onClick={() => {
                   const payload: DraftLeader = {
                     ...leaderDraft,

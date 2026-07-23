@@ -1,0 +1,225 @@
+from __future__ import annotations
+
+from datetime import date, datetime, time, timezone
+
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, Time, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class OperationImportRun(Base):
+    __tablename__ = "operations_import_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date_from: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    date_to: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="running", index=True)
+    fetched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    imported_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OperationBackfillJob(Base):
+    __tablename__ = "operations_backfill_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date_from: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    date_to: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    next_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    sector_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending", index=True)
+    total_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fetched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OperationSavedFilter(Base):
+    __tablename__ = "operations_saved_filters"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_operations_saved_filters_user_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    filters: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="personal", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class OperationOrder(Base):
+    __tablename__ = "operations_orders"
+    __table_args__ = (
+        UniqueConstraint("source", "source_order_id", name="uq_operations_orders_source_id"),
+        Index("ix_operations_orders_opened_closed", "opened_at", "closed_at"),
+        Index("ix_operations_orders_dimensions", "regional", "os_type", "os_subject"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="ixc", index=True)
+    source_order_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    order_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    protocol: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    contract_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    customer_login: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(220), nullable=True)
+    company_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    regional: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    state: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    city: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    contract_type: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    person_type: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    os_type: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    os_subject: Mapped[str | None] = mapped_column(String(220), nullable=True, index=True)
+    diagnosis: Mapped[str | None] = mapped_column(String(220), nullable=True, index=True)
+    department: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    sector: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    priority: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    creator: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    responsible: Mapped[str | None] = mapped_column(String(180), nullable=True, index=True)
+    # id_tecnico bruto do IXC (su_rh_funcionarios), guardado alem do nome pra permitir casar o
+    # colaborador com precisao (ver Collaborator.ixc_employee_id) sem depender so de nome.
+    responsible_ixc_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    project: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    pop: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    status_code: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    status: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    is_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    is_internal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    sla_status: Mapped[str] = mapped_column(String(40), nullable=False, default="unidentified", index=True)
+    sla_target_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    elapsed_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    assumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    displacement_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    execution_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    raw_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    normalization_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    first_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    last_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class OperationTeamModel(Base):
+    __tablename__ = "operations_team_models"
+    __table_args__ = (UniqueConstraint("name", name="uq_operations_team_models_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    daily_target: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    median_from_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    good_from_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    below_target_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#fee2e2")
+    median_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#fef3c7")
+    good_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#dcfce7")
+    excellent_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#dbeafe")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    target_rules: Mapped[list["OperationTeamTargetRule"]] = relationship(
+        back_populates="team_model",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="OperationTeamTargetRule.period_type",
+    )
+
+
+class OperationTeamTargetRule(Base):
+    __tablename__ = "operations_team_target_rules"
+    __table_args__ = (
+        UniqueConstraint("team_model_id", "period_type", name="uq_operations_team_target_rule_period"),
+        Index("ix_operations_team_target_rule_model_period", "team_model_id", "period_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    team_model_id: Mapped[int] = mapped_column(
+        ForeignKey("operations_team_models.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    period_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    median_from_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    good_from_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    target_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    team_model: Mapped[OperationTeamModel] = relationship(back_populates="target_rules")
+
+
+class OperationSubjectTypeMapping(Base):
+    __tablename__ = "operations_subject_type_mappings"
+    __table_args__ = (UniqueConstraint("subject", name="uq_operations_subject_type_mapping_subject"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subject: Mapped[str] = mapped_column(String(220), nullable=False, unique=True, index=True)
+    os_type: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class OperationResponsibleAssignment(Base):
+    __tablename__ = "operations_responsible_assignments"
+    __table_args__ = (
+        UniqueConstraint("responsible_name", "regional", name="uq_operations_responsible_assignment_identity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    responsible_name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    regional: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    team_model_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operations_team_models.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class OperationIxcCollaborator(Base):
+    __tablename__ = "operations_ixc_collaborators"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_employee_id: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class OperationResponsibleDirectorySetting(Base):
+    __tablename__ = "operations_responsible_directory_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="orders")
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)

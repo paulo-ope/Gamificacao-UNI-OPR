@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { WorkspaceHome } from "@/components/workspace/workspace-home";
 
 export default function Home() {
-  redirect("/gamificacao");
+  return <WorkspaceHome />;
 }

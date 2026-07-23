@@ -332,6 +332,14 @@ def calculate_scores(
         summary["regional"] = official_regional or effective_regional
         summary["health_status"] = str(health.get("health_status", scoring_detail.HEALTH_BELOW_MINIMUM_STATUS))
 
+        # Colaborador nao cadastrado formalmente (is_registered=False) nunca gera valor a pagar:
+        # pontos/O.S continuam visiveis para acompanhamento, mas o R$ fica zerado em toda a cadeia
+        # (card agregado, CollaboratorScore individual, bonus de lideranca) ate que o cadastro seja
+        # concluido - a garantia de que ele nao sera pago precisa nascer aqui, no calculo, e nao
+        # depender de um filtro de tela (ex: exportacao de CSV).
+        if not collaborator.is_registered:
+            summary["estimated_payment"] = 0.0
+
         # Previa nao-destrutiva do saldo de garantias pendentes: nao consome nada aqui - o consumo
         # so acontece quando este fechamento efetivamente vira "paid" (calculation_runs.py).
         pre_balance_final_points = float(summary["final_points"])
@@ -352,6 +360,8 @@ def calculate_scores(
             )
             summary["final_points"] = round(max(balance_preview["projected_balance"], 0.0), 2)
             summary["estimated_payment"] = round(summary["final_points"] * effective_rate, 2)
+            if not collaborator.is_registered:
+                summary["estimated_payment"] = 0.0
 
         cached_score_summaries[str(collaborator.id)] = dict(summary)
         result_summary["gross_points"] = round(float(result_summary["gross_points"]) + float(summary["gross_points"]), 2)

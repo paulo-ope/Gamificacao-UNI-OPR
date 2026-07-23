@@ -9,7 +9,9 @@ from sqlalchemy import inspect
 from app.api.routes import audit, auth, calculation_runs, collaborators, dashboard, gamification, health, imports, leadership, point_balance, portal, rules, scoring, service_orders, settings, users
 from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
-from app.core.security import ensure_initial_admin
+from app.core.security import ensure_access_profiles, ensure_initial_admin
+from app.modules.admin.router import router as admin_router
+from app.modules.operations.router import router as operations_router
 from app.services.ixc_scheduler import run_ixc_sync_loop
 
 
@@ -17,9 +19,10 @@ from app.services.ixc_scheduler import run_ixc_sync_loop
 async def lifespan(app: FastAPI):
     settings_ = get_settings()
     inspector = inspect(engine)
-    if inspector.has_table("users"):
+    if inspector.has_table("users") and inspector.has_table("access_profiles"):
         with SessionLocal() as db:
             ensure_initial_admin(db)
+            ensure_access_profiles(db)
 
     # O loop fica sempre rodando quando o IXC está configurado - se ligar/desligar e o intervalo passam a
     # ser controlados pelo banco (AppSetting), lidos a cada ciclo, para dar pra mudar pela própria tela de
@@ -66,3 +69,5 @@ app.include_router(dashboard.router, prefix=settings_obj.api_prefix)
 app.include_router(settings.router, prefix=settings_obj.api_prefix)
 app.include_router(point_balance.router, prefix=settings_obj.api_prefix)
 app.include_router(portal.router, prefix=settings_obj.api_prefix)
+app.include_router(admin_router, prefix=settings_obj.api_prefix)
+app.include_router(operations_router, prefix=settings_obj.api_prefix)

@@ -83,7 +83,7 @@ function WarrantyTraceTimeline({
       <button
         type="button"
         onClick={() => onOpenOrder(entry.original_service_order_id)}
-        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-teal-300 hover:bg-teal-50/50"
+        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-blue-300 hover:bg-blue-50/50"
         title="Ver auditoria da O.S original"
       >
         <span className="truncate font-semibold text-slate-800">{entry.original_os_code}</span>
@@ -93,7 +93,7 @@ function WarrantyTraceTimeline({
       <button
         type="button"
         onClick={() => onOpenOrder(entry.related_service_order_id)}
-        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-teal-300 hover:bg-teal-50/50"
+        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-blue-300 hover:bg-blue-50/50"
         title="Ver auditoria da O.S de garantia"
       >
         <span className="truncate font-semibold text-slate-800">{entry.related_os_code ?? "-"}</span>
@@ -304,8 +304,8 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Histórico mês a mês</div>
               <div className="table-frame overflow-hidden rounded-lg border border-slate-200">
                 <Table>
-                  <TableHeader>
-                    <TableRow>
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
                       <TableHead>Mês</TableHead>
                       <TableHead>Situação</TableHead>
                       <TableHead>O.S</TableHead>
@@ -330,7 +330,7 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
                         <TableCell className={row.balance_adjustment_points ? "font-medium text-red-600" : "text-slate-400"}>
                           {row.balance_adjustment_points ? formatSignedPoints(row.balance_adjustment_points) : "-"}
                         </TableCell>
-                        <TableCell className="font-medium text-teal-700">{formatMoney(row.estimated_payment)}</TableCell>
+                        <TableCell className="font-medium text-blue-700">{formatMoney(row.estimated_payment)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -341,8 +341,8 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
 
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Lançamentos de saldo de garantia</div>
           <Table>
-            <TableHeader>
-              <TableRow>
+            <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+              <TableRow className="border-slate-700 hover:bg-slate-900">
                 <TableHead>Status</TableHead>
                 <TableHead>Tipo</TableHead>
                 <TableHead>Impacto no pagamento</TableHead>

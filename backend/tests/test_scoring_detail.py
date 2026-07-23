@@ -208,6 +208,45 @@ def test_real_recurrence_discount_still_annuls_the_original_order(db_session, ma
     assert detail["is_annulled"] is True
 
 
+def test_warranty_and_recurrence_flags_are_mutually_exclusive_in_audit_payload(
+    db_session, make_collaborator, scoring_setup, recurrence_setup
+):
+    """Regression: classification='garantia' used to set BOTH is_warranty AND is_recurrence in the
+    audit payload (explain_order), making the frontend show two labels on one O.S. Product decision:
+    at most ONE label per order - garantia keeps counting as discountable (health/points math via
+    RECURRENCE_DISCOUNT_CLASSIFICATIONS is untouched), but the display flags are exclusive."""
+    collaborator = make_collaborator()
+    original = ServiceOrder(
+        os_code="OS-EXCL-ORIG", contract_id="C9", customer_login="cliente9", customer_name="Cliente Nove",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    warranty_return = ServiceOrder(
+        os_code="OS-EXCL-RET", contract_id="C9", customer_login="cliente9", customer_name="Cliente Nove",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 5, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+        is_warranty=True,
+    )
+    db_session.add_all([original, warranty_return])
+    db_session.flush()
+
+    rules = sd.active_scoring_rules(db_session)
+    diagnosis_rules = sd.active_diagnosis_rules(db_session)
+    sla_rules = sd.active_sla_penalty_rules(db_session)
+    recurrence = sd.recurrence_penalties(db_session, [original, warranty_return], rules)
+
+    detail = sd.explain_order(
+        original, rules, diagnosis_rules, sla_rules, recurrence,
+        warranty_mode="score_normally", warranty_reduction_percentage=0, default_point_value=1.0,
+    )
+
+    assert detail["recurrence_classification"] == "garantia"
+    assert detail["is_warranty"] is True
+    assert detail["is_recurrence"] is False, "garantia nao pode ligar a flag de reincidencia junto (etiqueta unica)"
+
+
 def test_cascade_os_type_for_subject_updates_only_matching_subject(db_session, make_collaborator):
     """Regression: ServiceOrder.os_type is stamped once at import time and never rewritten
     afterward - correcting a subject's Tipo Geral via the rule (ScoringSubjectRule) used to
@@ -252,3 +291,38 @@ def test_cascade_os_type_for_subject_updates_only_matching_subject(db_session, m
 
     # Idempotente: rodar de novo depois que ja esta tudo corrigido nao acha mais nada pra mudar.
     assert sd.cascade_os_type_for_subject(db_session, "Reativação de Suspensão Temporária - Externo", "Outros") == 0
+
+
+def test_penalty_distribution_excludes_unregistered_collaborator_orders(db_session, make_collaborator, scoring_setup):
+    """Regression: the "Distribuição de pontos anulados" chart (Fechamento > Análise) must only
+    count O.S from formally registered collaborators - same rule already applied to
+    calculate_regional_health. An O.S penalized by SLA from an unregistered collaborator used to
+    still show up in this breakdown even though it never contributes to anything payable."""
+    db_session.add(
+        SlaPenaltyRule(name="SLA fora do prazo", condition_type="status_sla_out_of_time", penalty_type="cancel_points", penalty_value=0, active=True)
+    )
+    db_session.flush()
+
+    registered = make_collaborator(name="Registrado", regional="UNI SUL", registered=True)
+    unregistered = make_collaborator(name="Nao Registrado", regional="UNI SUL", registered=False)
+
+    order_registered = ServiceOrder(
+        os_code="OS-REG-SLA", contract_id="C1", customer_login="cli.reg", customer_name="Cliente Reg",
+        collaborator_id=registered.id, regional="UNI SUL", os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida", sla_status="Fora do prazo",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    order_unregistered = ServiceOrder(
+        os_code="OS-UNREG-SLA", contract_id="C1", customer_login="cli.unreg", customer_name="Cliente Unreg",
+        collaborator_id=unregistered.id, regional="UNI SUL", os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida", sla_status="Fora do prazo",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    db_session.add_all([order_registered, order_unregistered])
+    db_session.flush()
+
+    details = sd.explain_orders(db_session, [order_registered, order_unregistered])
+    distribution = sd.calculate_penalty_distribution(db_session, [order_registered, order_unregistered], details=details)
+
+    sla_entry = next(item for item in distribution if item["name"] == "SLA fora do prazo")
+    assert sla_entry["service_orders_count"] == 1, "only the registered collaborator's O.S should be counted"
