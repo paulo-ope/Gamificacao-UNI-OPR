@@ -21,8 +21,10 @@ import { useMemo, useState } from "react";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppCheckbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { AppRadio } from "@/components/ui/radio";
 import type {
   OperationFilterState,
   OperationFilters,
@@ -795,20 +797,20 @@ function SavedViewsPopover({
                   </p>
                   <div className="grid gap-1.5 sm:grid-cols-2">
                     <label className="flex items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs text-slate-700">
-                      <input
-                        type="radio"
+                      <AppRadio
                         checked={visibility === "personal"}
-                        onChange={() => onVisibilityChange("personal")}
+                        onSelect={() => onVisibilityChange("personal")}
+                        ariaLabel="Pessoal"
                       />
                       Pessoal
                     </label>
                     {canCreateGlobalViews || active?.visibility === "global" ? (
                       <label className="flex items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs text-slate-700">
-                        <input
-                          type="radio"
+                        <AppRadio
                           checked={visibility === "global"}
                           disabled={!canCreateGlobalViews && active?.visibility !== "global"}
-                          onChange={() => onVisibilityChange("global")}
+                          onSelect={() => onVisibilityChange("global")}
+                          ariaLabel="Global"
                         />
                         Global
                       </label>
@@ -925,6 +927,7 @@ export function OperationsFilterPanel({
   canManageViews,
   canCreateGlobalViews,
   datesIgnored,
+  filterCount,
   onChange,
   onApply,
   onClearAll,
@@ -967,6 +970,7 @@ export function OperationsFilterPanel({
   onDeleteSaved: () => void;
 }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const activeChips = useMemo<ActiveChip[]>(() => {
     if (!filters) return [];
     const chips: ActiveChip[] = [];
@@ -1106,34 +1110,34 @@ export function OperationsFilterPanel({
                 <div className="space-y-2">
                   <div className="flex flex-wrap gap-3 text-[11px] text-slate-600">
                     <label className="flex items-center gap-1.5">
-                      <input
-                        type="checkbox"
+                      <AppCheckbox
                         checked={(filters?.custom_window_basis || []).includes(
                           "opened",
                         )}
-                        onChange={(event) => {
+                        onCheckedChange={(checked) => {
                           const current = filters?.custom_window_basis || [];
-                          const next = event.target.checked
+                          const next = checked
                             ? [...current, "opened"]
                             : current.filter((item) => item !== "opened");
                           onChange("custom_window_basis", next);
                         }}
+                        ariaLabel="Abertura"
                       />
                       Abertura
                     </label>
                     <label className="flex items-center gap-1.5">
-                      <input
-                        type="checkbox"
+                      <AppCheckbox
                         checked={(filters?.custom_window_basis || []).includes(
                           "closed",
                         )}
-                        onChange={(event) => {
+                        onCheckedChange={(checked) => {
                           const current = filters?.custom_window_basis || [];
-                          const next = event.target.checked
+                          const next = checked
                             ? [...current, "closed"]
                             : current.filter((item) => item !== "closed");
                           onChange("custom_window_basis", next);
                         }}
+                        ariaLabel="Fechamento"
                       />
                       Fechamento
                     </label>
@@ -1225,6 +1229,24 @@ export function OperationsFilterPanel({
           <p className="text-xs text-slate-500">
             Aplique o recorte e mantenha os dados operacionais em foco.
           </p>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setMobileFiltersOpen((current) => !current)}
+            aria-expanded={mobileFiltersOpen}
+            className="mt-2 h-9 w-full justify-center md:hidden"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            {mobileFiltersOpen ? "Ocultar filtros" : "Filtros"}
+            {filterCount ? (
+              <Badge className="border-blue-100 bg-blue-50 px-1.5 text-blue-700">
+                {filterCount}
+              </Badge>
+            ) : null}
+            <ChevronDown
+              className={`h-4 w-4 transition ${mobileFiltersOpen ? "rotate-180" : ""}`}
+            />
+          </Button>
         </div>
         <div className="flex flex-col items-end gap-1">
           <>
@@ -1256,7 +1278,9 @@ export function OperationsFilterPanel({
           </span>
         </div>
       </div>
-      <div className="sticky top-[65px] z-40 grid items-end gap-2 border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:grid-cols-2 lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,1.45fr)_repeat(5,minmax(0,1fr))_auto]">
+      <div
+        className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-65px)] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[65px] md:z-40 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,1.45fr)_repeat(5,minmax(0,1fr))_auto]`}
+      >
         <DateRangePicker
           dateFrom={filters?.date_from || ""}
           dateTo={filters?.date_to || ""}
