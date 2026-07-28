@@ -3,6 +3,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
+  ArrowLeft,
   CalendarDays,
   ChevronsLeft,
   ChevronsRight,
@@ -17,6 +18,7 @@ import {
   Wallet,
   X
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -117,7 +119,7 @@ export function ModuleSidebar({
             <img src="/brand/uni-logo.png" alt="UNI Internet" className="max-h-7 w-auto object-contain" />
           </div>
           <div className={cn("min-w-0", collapsed && "lg:hidden")}>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">UNI Workspace</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-uni-royal">UNI Workspace</div>
             <div className="truncate text-sm font-semibold text-slate-950">Gamificação Operacional</div>
           </div>
           <button
@@ -129,6 +131,20 @@ export function ModuleSidebar({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {/* Volta ao hub de módulos (Gamificação/Operação/Admin) - antes não existia nenhum jeito
+            de sair do módulo sem apagar a URL manualmente. */}
+        <Link
+          href="/"
+          title={collapsed ? "Voltar ao ecossistema" : undefined}
+          className={cn(
+            "flex items-center gap-2 border-b border-slate-200 px-5 py-3 text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-uni-royal",
+            collapsed && "lg:justify-center lg:px-0"
+          )}
+        >
+          <ArrowLeft className="h-3.5 w-3.5 shrink-0" />
+          <span className={cn(collapsed && "lg:hidden")}>Voltar ao ecossistema</span>
+        </Link>
 
         {canRecalculate ? (
           <div className={cn("border-b border-slate-200 px-3 py-3", collapsed && "lg:px-2")}>

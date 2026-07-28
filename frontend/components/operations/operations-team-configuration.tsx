@@ -167,6 +167,7 @@ export function OperationsTeamConfiguration({
   const [syncEnabled, setSyncEnabled] = useState(false);
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState("20");
   const [syncBacklogIntervalMinutes, setSyncBacklogIntervalMinutes] = useState("60");
+  const [syncLookbackDays, setSyncLookbackDays] = useState("1");
   const [syncSectorIds, setSyncSectorIds] = useState<string[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +206,7 @@ export function OperationsTeamConfiguration({
     setSyncEnabled(ixcSyncSettings.enabled);
     setSyncIntervalMinutes(String(ixcSyncSettings.interval_minutes));
     setSyncBacklogIntervalMinutes(String(ixcSyncSettings.backlog_sweep_interval_minutes));
+    setSyncLookbackDays(String(ixcSyncSettings.lookback_days));
     setSyncSectorIds(ixcSyncSettings.sector_ids);
   }, [ixcSyncSettings]);
 
@@ -502,12 +504,14 @@ export function OperationsTeamConfiguration({
     try {
       const interval = Number(syncIntervalMinutes);
       const backlogInterval = Number(syncBacklogIntervalMinutes);
+      const lookbackDays = Number(syncLookbackDays);
       const saved = await operationsApi.updateIxcSyncSettings({
         enabled: syncEnabled,
         interval_minutes: Number.isFinite(interval) ? interval : 20,
         backlog_sweep_interval_minutes: Number.isFinite(backlogInterval)
           ? backlogInterval
           : 60,
+        lookback_days: Number.isFinite(lookbackDays) ? lookbackDays : 1,
         sector_ids: syncSectorIds,
       });
       onIxcSyncSettingsChange(saved);
@@ -654,7 +658,7 @@ export function OperationsTeamConfiguration({
             </p>
           </CardHeader>
           <CardContent className="space-y-4 p-4">
-            <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr_0.8fr]">
+            <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr]">
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <p className="text-xs font-semibold text-slate-900">
                   Sincronização automática
@@ -704,6 +708,20 @@ export function OperationsTeamConfiguration({
                 />
                 <span className="text-[10px] font-normal text-slate-500">
                   Mínimo 15 min. Essa consulta é mais pesada.
+                </span>
+              </label>
+              <label className="grid gap-1.5 text-xs font-medium text-slate-700">
+                Janela de dias reimportados
+                <Input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={syncLookbackDays}
+                  onChange={(event) => setSyncLookbackDays(event.target.value)}
+                />
+                <span className="text-[10px] font-normal text-slate-500">
+                  Quantos dias antes de hoje o ciclo reimporta a cada rodada
+                  (pega O.S. que só fecham/atualizam depois de abertas).
                 </span>
               </label>
             </div>

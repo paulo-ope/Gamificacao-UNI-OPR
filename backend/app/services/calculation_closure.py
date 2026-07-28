@@ -12,7 +12,7 @@ from app.core.security import is_admin_user
 from app.models import CALCULATION_RUN_STATUSES, CalculationRun, CollaboratorScore, LeadershipProfile, LeadershipRoleProfile, User
 from app.services.audit_log import snapshot
 from app.services.leadership_bonus import serialize_profile, serialize_role_profile
-from app.services.regional import normalize_regional
+from app.services.regional import normalize_regional_grouped as normalize_regional
 
 # Fuso da operação (Rondônia - sem horário de verão) - usado para decidir "qual é o mês corrente"
 # de forma consistente com o horário local que o próprio IXC grava nas datas de O.S (ver

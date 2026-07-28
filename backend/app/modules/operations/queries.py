@@ -3,7 +3,7 @@ from __future__ import annotations
 import calendar
 import math
 from collections import defaultdict
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timezone, timedelta
 
 from sqlalchemy import Date, Integer, String, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Session
@@ -14,6 +14,31 @@ from app.services.regional import effective_managed_regionals
 from .models import OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel
 from .period import OPERATIONS_TIMEZONE, OPERATIONS_TIMEZONE_NAME, local_period_utc_bounds, operations_period_bounds
 from .scope import ALL_SECTOR_NAMES
+
+
+# Colunas ordenáveis do detalhamento de O.S. (ver `order_page`/`opening_order_page`/
+# `in_progress_order_page`) - a chave bate com `DetailSortKey` no frontend. Sem isso, ordenar por
+# uma coluna só reordenava os itens já carregados na página atual (o restante do banco, nas outras
+# páginas, continuava fora de ordem) - achado real, ver conversa que motivou este ajuste.
+ORDER_SORT_COLUMNS = {
+    "order_code": OperationOrder.order_code,
+    "customer": OperationOrder.customer_name,
+    "regional": OperationOrder.regional,
+    "type_subject": OperationOrder.os_subject,
+    "responsible": OperationOrder.responsible,
+    "opened_at": OperationOrder.opened_at,
+    "closed_at": OperationOrder.closed_at,
+    "status": OperationOrder.status,
+    "sla_status": OperationOrder.sla_status,
+}
+
+
+def _order_sort_clauses(sort_by: str | None, sort_dir: str):
+    column = ORDER_SORT_COLUMNS.get(sort_by or "", OperationOrder.opened_at)
+    descending = sort_dir != "asc"
+    primary = column.desc() if descending else column.asc()
+    tiebreaker = OperationOrder.id.desc() if descending else OperationOrder.id.asc()
+    return primary, tiebreaker
 
 
 FILTER_COLUMNS = {
@@ -84,6 +109,7 @@ SEARCH_COLUMNS = (
 
 
 def _query_conditions(
+    db: Session,
     date_from: date,
     date_to: date,
     user: User,
@@ -98,7 +124,7 @@ def _query_conditions(
             OperationOrder.closed_at.between(start, end),
         )
     ]
-    conditions.extend(_dimension_conditions(user, filters, exclude_filter=exclude_filter))
+    conditions.extend(_dimension_conditions(db, user, filters, exclude_filter=exclude_filter))
     return conditions, start, end
 
 
@@ -107,7 +133,16 @@ def _opening_filters(filters: dict) -> dict:
     return {**filters, "responsibles": [], "team_models": []}
 
 
+def _backlog_filters(filters: dict) -> dict:
+    """Backlog é o estoque de O.S. ainda abertas (closed_at nulo). Filtros de fechamento (dia da
+    semana ou horário de fechamento) comparam contra `closed_at`, que é nulo em toda O.S. em aberto -
+    a condição vira NULL/falsa pro SQL e zera o backlog inteiro à toa. Sem sentido aplicar esses dois
+    filtros aqui, então eles são ignorados só para as contagens de backlog."""
+    return {**_opening_filters(filters), "closed_weekdays": [], "closed_time_from": None, "closed_time_to": None}
+
+
 def _dimension_conditions(
+    db: Session,
     user: User,
     filters: dict,
     *,
@@ -145,6 +180,49 @@ def _dimension_conditions(
         selected = filters.get(api_field)
         if selected:
             conditions.append(column.in_(selected))
+    if exclude_filter != "opened_weekdays":
+        selected_opened_weekdays = filters.get("opened_weekdays")
+        if selected_opened_weekdays:
+            iso_days = [WEEKDAY_ISO_BY_KEY[key] for key in selected_opened_weekdays if key in WEEKDAY_ISO_BY_KEY]
+            if iso_days:
+                conditions.append(_local_weekday(db, OperationOrder.opened_at).in_(iso_days))
+    if exclude_filter != "closed_weekdays":
+        selected_closed_weekdays = filters.get("closed_weekdays")
+        if selected_closed_weekdays:
+            iso_days = [WEEKDAY_ISO_BY_KEY[key] for key in selected_closed_weekdays if key in WEEKDAY_ISO_BY_KEY]
+            if iso_days:
+                conditions.append(_local_weekday(db, OperationOrder.closed_at).in_(iso_days))
+    if exclude_filter != "custom_window":
+        window_basis = filters.get("custom_window_basis") or []
+        window_start_weekday = filters.get("custom_window_start_weekday")
+        window_start_time = filters.get("custom_window_start_time")
+        window_end_weekday = filters.get("custom_window_end_weekday")
+        window_end_time = filters.get("custom_window_end_time")
+        # Só ativa quando os 5 pedaços estão definidos - uma janela "sábado 12h até domingo Xh"
+        # pela metade não tem uma leitura óbvia, então preferimos não filtrar a adivinhar errado.
+        if (
+            window_basis
+            and window_start_weekday in WEEKDAY_ISO_BY_KEY
+            and window_end_weekday in WEEKDAY_ISO_BY_KEY
+            and window_start_time
+            and window_end_time
+        ):
+            start_point = _week_point_minutes(window_start_weekday, window_start_time)
+            end_point = _week_point_minutes(window_end_weekday, window_end_time)
+            window_clauses = []
+            for basis in window_basis:
+                column = OperationOrder.opened_at if basis == "opened" else OperationOrder.closed_at if basis == "closed" else None
+                if column is None:
+                    continue
+                week_minutes = _local_week_minutes(db, column)
+                if start_point <= end_point:
+                    window_clauses.append(week_minutes.between(start_point, end_point))
+                else:
+                    # A janela atravessa a virada da semana (ex.: sábado à tarde até domingo à noite
+                    # sendo domingo o "fim" da semana ISO) - vira duas pontas em vez de um intervalo só.
+                    window_clauses.append(or_(week_minutes >= start_point, week_minutes <= end_point))
+            if window_clauses:
+                conditions.append(or_(*window_clauses))
     search = str(filters.get("search") or "").strip()
     if search:
         pattern = f"%{search}%"
@@ -187,7 +265,7 @@ def _inside(value: datetime | None, start: datetime, end: datetime) -> bool:
 
 
 def _period_orders(db: Session, date_from: date, date_to: date, user: User) -> list[OperationOrder]:
-    conditions, _, _ = _query_conditions(date_from, date_to, user, {})
+    conditions, _, _ = _query_conditions(db, date_from, date_to, user, {})
     stmt = select(OperationOrder).where(*conditions)
     return list(db.scalars(stmt.order_by(OperationOrder.opened_at.desc(), OperationOrder.id.desc())))
 
@@ -287,7 +365,7 @@ def _matches(
 
 
 def filtered_orders(db: Session, date_from: date, date_to: date, user: User, **filters) -> list[OperationOrder]:
-    conditions, _, _ = _query_conditions(date_from, date_to, user, filters)
+    conditions, _, _ = _query_conditions(db, date_from, date_to, user, filters)
     return list(
         db.scalars(
             select(OperationOrder)
@@ -320,10 +398,11 @@ def filter_options(
             result[api_field] = list(ALL_SECTOR_NAMES)
             continue
         if scope == "in_progress":
-            conditions = _dimension_conditions(user, filters, exclude_filter=api_field)
+            conditions = _dimension_conditions(db, user, filters, exclude_filter=api_field)
             conditions.append(OperationOrder.is_closed.is_(False))
         else:
             conditions, start, end = _query_conditions(
+                db,
                 date_from,
                 date_to,
                 user,
@@ -340,6 +419,10 @@ def filter_options(
             result[api_field] = sorted({int(value) for value in values})
         else:
             result[api_field] = sorted({str(value) for value in values}, key=str.casefold)
+    # Fixos (não derivados dos dados) - toda semana tem os mesmos 7 dias, então não faz sentido
+    # consultar o banco só para descobrir "quais dias existem".
+    result["opened_weekdays"] = list(WEEKDAY_KEYS)
+    result["closed_weekdays"] = list(WEEKDAY_KEYS)
     directory = db.get(OperationResponsibleDirectorySetting, 1)
     source = directory.source if directory else "orders"
     if source in {"ixc", "both"}:
@@ -371,8 +454,9 @@ def filter_options(
 
 
 def overview(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
-    conditions, start, end = _query_conditions(date_from, date_to, user, filters)
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
     opening_conditions, _, _ = _query_conditions(
+        db,
         date_from,
         date_to,
         user,
@@ -391,7 +475,7 @@ def overview(db: Session, date_from: date, date_to: date, user: User, **filters)
     ).one()
     # Backlog is a current stock: it deliberately ignores the selected dates.
     backlog_conditions = [
-        *_dimension_conditions(user, filters),
+        *_dimension_conditions(db, user, filters),
         OperationOrder.is_closed.is_(False),
     ]
     backlog_row = db.execute(
@@ -454,7 +538,7 @@ def overview(db: Session, date_from: date, date_to: date, user: User, **filters)
 
 
 def work_schedule_orders(db: Session, date_from: date, date_to: date, user: User, **filters):
-    conditions, start, end = _query_conditions(date_from, date_to, user, filters)
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
     return list(
         db.scalars(
             select(OperationOrder).where(
@@ -475,7 +559,7 @@ def sla_breakdown(db: Session, date_from: date, date_to: date, user: User, group
         "sector": OperationOrder.sector,
     }
     field = allowed_groups.get(group_by, OperationOrder.os_type)
-    conditions, start, end = _query_conditions(date_from, date_to, user, filters)
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
     label = func.coalesce(field, "Não identificado")
     elapsed = OperationOrder.elapsed_hours
     rows = db.execute(
@@ -543,7 +627,7 @@ def sla_hierarchy(
         "diagnosis": OperationOrder.diagnosis,
     }
     field = fields[level]
-    conditions, start, end = _query_conditions(date_from, date_to, user, filters)
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
     if parent_os_type is not None:
         conditions.append(_normalized_dimension(OperationOrder.os_type) == parent_os_type)
     if parent_subject is not None:
@@ -658,8 +742,54 @@ def _local_date(db: Session, column):
     return func.date(column, "-4 hours")
 
 
+# Chaves estáveis do filtro "dia da semana" (ver `opened_weekdays`/`closed_weekdays`) - em inglês
+# igual ao padrão já usado para sla_statuses (on_time/out_of_time), traduzidas só na tela.
+WEEKDAY_KEYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+WEEKDAY_ISO_BY_KEY = {key: index + 1 for index, key in enumerate(WEEKDAY_KEYS)}  # ISO: 1=segunda..7=domingo
+
+
+def _local_weekday(db: Session, column):
+    """Dia da semana ISO (1=segunda..7=domingo) da coluna de data, já no fuso operacional -
+    sem isso, uma O.S. aberta às 23h de terça (horário local) contaria como quarta, porque a coluna
+    é gravada em UTC."""
+    if db.get_bind().dialect.name == "postgresql":
+        return cast(func.extract("isodow", func.timezone(OPERATIONS_TIMEZONE_NAME, column)), Integer)
+    # SQLite: %w retorna 0=domingo..6=sábado; convertido para ISO (1=segunda..7=domingo).
+    sunday_zero = cast(func.strftime("%w", column, "-4 hours"), Integer)
+    return case((sunday_zero == 0, 7), else_=sunday_zero)
+
+
+def _local_hour(db: Session, column):
+    if db.get_bind().dialect.name == "postgresql":
+        return cast(func.extract("hour", func.timezone(OPERATIONS_TIMEZONE_NAME, column)), Integer)
+    return cast(func.strftime("%H", column, "-4 hours"), Integer)
+
+
 def _local_closed_date(db: Session):
     return _local_date(db, OperationOrder.closed_at)
+
+
+def _local_week_minutes(db: Session, column):
+    """Minutos desde segunda-feira 00:00 no fuso operacional (0..10079) - combina dia da semana e
+    hora do dia num único eixo contínuo, pra dar pra comparar uma janela tipo "sábado 12h até
+    domingo 18h" com um único BETWEEN (ou OR quando a janela atravessa a virada da semana)."""
+    weekday = _local_weekday(db, column)
+    if db.get_bind().dialect.name == "postgresql":
+        local_column = func.timezone(OPERATIONS_TIMEZONE_NAME, column)
+        minute_of_day = cast(func.extract("hour", local_column), Integer) * 60 + cast(
+            func.extract("minute", local_column), Integer
+        )
+    else:
+        # America/Porto_Velho é UTC-4 e não adota horário de verão - mesma aritmética já usada em
+        # closed_time_from/closed_time_to, portável entre PostgreSQL e SQLite (usado nos testes).
+        utc_minutes = cast(func.extract("hour", column), Integer) * 60 + cast(func.extract("minute", column), Integer)
+        minute_of_day = (utc_minutes - 240 + 1440) % 1440
+    return (weekday - 1) * 1440 + minute_of_day
+
+
+def _week_point_minutes(weekday_key: str, time_value: str) -> int:
+    hour, minute = (int(part) for part in time_value.split(":", 1))
+    return (WEEKDAY_ISO_BY_KEY[weekday_key] - 1) * 1440 + hour * 60 + minute
 
 
 def _date_value(value) -> date:
@@ -677,8 +807,8 @@ def overview_trend_daily(
 ) -> dict[date, dict[str, int]]:
     """Agrega os eventos por dia sem enviar linhas de O.S. ao frontend."""
     start, end = local_period_utc_bounds(date_from, date_to)
-    full_conditions = _dimension_conditions(user, filters)
-    opening_conditions = _dimension_conditions(user, _opening_filters(filters))
+    full_conditions = _dimension_conditions(db, user, filters)
+    opening_conditions = _dimension_conditions(db, user, _opening_filters(filters))
     opened_day = _local_date(db, OperationOrder.opened_at)
     closed_day = _local_date(db, OperationOrder.closed_at)
 
@@ -733,7 +863,7 @@ def subject_backlog_history(
 ) -> dict:
     """Retorna eventos agregados para reconstruir o backlog diário por assunto."""
     start, end = local_period_utc_bounds(history_from, history_to)
-    conditions = _dimension_conditions(user, filters, exclude_filter="responsibles")
+    conditions = _dimension_conditions(db, user, filters, exclude_filter="responsibles")
     label = _normalized_dimension(OperationOrder.os_subject)
     opened_day = _local_date(db, OperationOrder.opened_at)
     closed_day = _local_date(db, OperationOrder.closed_at)
@@ -798,7 +928,7 @@ def control_tower_aggregates(
     label = func.coalesce(func.nullif(field, ""), UNIDENTIFIED_LABEL)
     start, end = local_period_utc_bounds(history_from, reference_date)
     conditions = [
-        *_dimension_conditions(user, filters, exclude_filter="responsibles"),
+        *_dimension_conditions(db, user, filters, exclude_filter="responsibles"),
         *_control_tower_path_conditions(path),
     ]
     opened_day = _local_date(db, OperationOrder.opened_at)
@@ -856,6 +986,339 @@ def control_tower_aggregates(
     }
 
 
+OPENINGS_RANKING_COLUMNS = {
+    "regionals": OperationOrder.regional,
+    "cities": OperationOrder.city,
+    "subjects": OperationOrder.os_subject,
+    "os_types": OperationOrder.os_type,
+    "sectors": OperationOrder.sector,
+    "priorities": OperationOrder.priority,
+    "creators": OperationOrder.creator,
+    "pops": OperationOrder.pop,
+    "contract_types": OperationOrder.contract_type,
+    "person_types": OperationOrder.person_type,
+}
+
+
+def _weekday_expectation(day: date, daily: dict[date, int], baseline_weeks: int) -> tuple[float, float]:
+    samples = [int(daily.get(day - timedelta(days=7 * offset), 0)) for offset in range(1, baseline_weeks + 1)]
+    if not samples:
+        return 0.0, 2.0
+    expected = sum(samples) / len(samples)
+    deviation = math.sqrt(sum((item - expected) ** 2 for item in samples) / len(samples)) if len(samples) > 1 else 0.0
+    upper_limit = max(expected + (2 * deviation), expected * 1.35, expected + 2)
+    return expected, upper_limit
+
+
+def _period_group_start(day: date, granularity: str) -> date:
+    if granularity == "week":
+        return day - timedelta(days=day.weekday())
+    if granularity == "month":
+        return day.replace(day=1)
+    return day
+
+
+def _insight(severity: str, title: str, description: str) -> dict:
+    return {"severity": severity, "title": title, "description": description}
+
+
+def _aware_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def openings_analytics(
+    db: Session,
+    date_from: date,
+    date_to: date,
+    user: User,
+    *,
+    baseline_weeks: int = 8,
+    granularity: str = "day",
+    **filters,
+) -> dict:
+    start, end = local_period_utc_bounds(date_from, date_to)
+    history_from = date_from - timedelta(days=baseline_weeks * 7)
+    history_start, _ = local_period_utc_bounds(history_from, date_to)
+    conditions = _dimension_conditions(db, user, _opening_filters(filters))
+    # Finalizadas já têm um responsável/modelo de equipe conhecido (diferente da abertura, quando a
+    # O.S. ainda não foi assumida) - por isso usa os filtros completos, sem o `_opening_filters` que
+    # ignora responsável/modelo de equipe, senão o filtro de Responsável não tinha efeito nenhum
+    # sobre a linha "Finalizadas".
+    completed_conditions = _dimension_conditions(db, user, filters)
+    backlog_conditions = _dimension_conditions(db, user, _backlog_filters(filters))
+    opened_day = _local_date(db, OperationOrder.opened_at)
+    closed_day = _local_date(db, OperationOrder.closed_at)
+
+    opened_history_rows = db.execute(
+        select(opened_day, func.count(OperationOrder.id))
+        .where(*conditions, OperationOrder.opened_at.between(history_start, end))
+        .group_by(opened_day)
+    ).all()
+    completed_rows = db.execute(
+        select(closed_day, func.count(OperationOrder.id))
+        .where(*completed_conditions, OperationOrder.closed_at.between(start, end))
+        .group_by(closed_day)
+    ).all()
+    # Backlog é um estoque (abertas - fechadas) e só fecha a conta se os dois lados usarem o mesmo
+    # recorte: por isso essa segunda contagem de fechadas usa `backlog_conditions` (ignora
+    # responsável/modelo de equipe, igual `opened_by_day`), em vez de `completed_conditions` (que
+    # respeita esses dois filtros só para a linha "Finalizadas"). Misturar as duas fazia o backlog
+    # disparar sempre que um filtro de responsável/modelo de equipe era aplicado - a mesma O.S. que
+    # "abriu" (contada) parava de ser "fechada" (filtrada fora), inflando o saldo à toa.
+    backlog_completed_rows = db.execute(
+        select(closed_day, func.count(OperationOrder.id))
+        .where(*backlog_conditions, OperationOrder.closed_at.between(start, end))
+        .group_by(closed_day)
+    ).all()
+    opened_by_day = {_date_value(day): int(quantity or 0) for day, quantity in opened_history_rows}
+    completed_by_day = {_date_value(day): int(quantity or 0) for day, quantity in completed_rows}
+    backlog_completed_by_day = {_date_value(day): int(quantity or 0) for day, quantity in backlog_completed_rows}
+
+    open_at_start = and_(
+        OperationOrder.opened_at < start,
+        or_(OperationOrder.closed_at.is_(None), OperationOrder.closed_at >= start),
+    )
+    open_at_end = and_(
+        OperationOrder.opened_at <= end,
+        or_(OperationOrder.closed_at.is_(None), OperationOrder.closed_at > end),
+    )
+    initial_backlog = int(db.scalar(select(func.count(OperationOrder.id)).where(*backlog_conditions, open_at_start)) or 0)
+    backlog_at_end = int(db.scalar(select(func.count(OperationOrder.id)).where(*backlog_conditions, open_at_end)) or 0)
+    overdue_backlog = int(
+        db.scalar(
+            select(func.count(OperationOrder.id)).where(
+                *backlog_conditions,
+                open_at_end,
+                or_(
+                    OperationOrder.sla_status == "out_of_time",
+                    and_(OperationOrder.deadline_at.is_not(None), OperationOrder.deadline_at < end),
+                ),
+            )
+        )
+        or 0
+    )
+    without_responsible = int(
+        db.scalar(
+            select(func.count(OperationOrder.id)).where(
+                *conditions,
+                OperationOrder.opened_at.between(start, end),
+                or_(OperationOrder.responsible.is_(None), OperationOrder.responsible == ""),
+            )
+        )
+        or 0
+    )
+
+    period_days = [date_from + timedelta(days=offset) for offset in range((date_to - date_from).days + 1)]
+    timeline = []
+    running_backlog = initial_backlog
+    expected_total = 0.0
+    for day in period_days:
+        opened = int(opened_by_day.get(day, 0))
+        completed = int(completed_by_day.get(day, 0))
+        backlog_completed = int(backlog_completed_by_day.get(day, 0))
+        expected, upper_limit = _weekday_expectation(day, opened_by_day, baseline_weeks)
+        expected_total += expected
+        running_backlog = max(0, running_backlog + opened - backlog_completed)
+        timeline.append(
+            {
+                "date": day,
+                "opened": opened,
+                "completed": completed,
+                "expected_opened": round(expected, 1),
+                "upper_limit": round(upper_limit, 1),
+                "outside_expected": opened > upper_limit,
+                "backlog": running_backlog,
+            }
+        )
+
+    if granularity != "day":
+        # Agrupa a série diária já calculada (mantém a ordem cronológica de `period_days`) - opened/
+        # completed/expected_opened somam entre os dias do grupo, backlog é uma foto do estoque então
+        # fica com o valor do último dia do grupo em vez de somar.
+        grouped_timeline: dict[date, dict] = {}
+        for point in timeline:
+            group_key = _period_group_start(point["date"], granularity)
+            bucket = grouped_timeline.setdefault(
+                group_key,
+                {"date": group_key, "opened": 0, "completed": 0, "expected_opened": 0.0, "upper_limit": 0.0, "backlog": 0},
+            )
+            bucket["opened"] += point["opened"]
+            bucket["completed"] += point["completed"]
+            bucket["expected_opened"] += point["expected_opened"]
+            bucket["upper_limit"] += point["upper_limit"]
+            bucket["backlog"] = point["backlog"]
+        timeline = [
+            {
+                **bucket,
+                "expected_opened": round(bucket["expected_opened"], 1),
+                "upper_limit": round(bucket["upper_limit"], 1),
+                "outside_expected": bucket["opened"] > bucket["upper_limit"],
+            }
+            for bucket in grouped_timeline.values()
+        ]
+
+    total_opened = sum(int(opened_by_day.get(day, 0)) for day in period_days)
+    total_completed = sum(int(completed_by_day.get(day, 0)) for day in period_days)
+    net_flow = total_opened - total_completed
+    pressure_ratio = total_opened / total_completed if total_completed else None
+    deviation_percentage = ((total_opened - expected_total) / expected_total * 100) if expected_total else None
+
+    weekday_expr = _local_weekday(db, OperationOrder.opened_at)
+    hour_expr = _local_hour(db, OperationOrder.opened_at)
+    heatmap_rows = db.execute(
+        select(weekday_expr, hour_expr, func.count(OperationOrder.id))
+        .where(*conditions, OperationOrder.opened_at.between(start, end))
+        .group_by(weekday_expr, hour_expr)
+    ).all()
+    heatmap = [
+        {"weekday": int(weekday or 0), "hour": int(hour or 0), "opened": int(quantity or 0)}
+        for weekday, hour, quantity in heatmap_rows
+    ]
+
+    first_action_rows = db.execute(
+        select(
+            OperationOrder.opened_at,
+            OperationOrder.assumed_at,
+            OperationOrder.displacement_started_at,
+            OperationOrder.execution_started_at,
+        ).where(*conditions, OperationOrder.opened_at.between(start, end))
+    ).all()
+    first_action_minutes = []
+    for opened_at, assumed_at, displacement_started_at, execution_started_at in first_action_rows:
+        opened_at = _aware_utc(opened_at)
+        candidates = [
+            _aware_utc(item)
+            for item in (assumed_at, displacement_started_at, execution_started_at)
+            if item is not None and _aware_utc(item) >= opened_at
+        ]
+        if candidates:
+            first_action_minutes.append((min(candidates) - opened_at).total_seconds() / 60)
+    average_first_action = sum(first_action_minutes) / len(first_action_minutes) if first_action_minutes else None
+
+    aging_rows = db.execute(
+        select(OperationOrder.opened_at)
+        .where(
+            *conditions,
+            OperationOrder.opened_at.between(start, end),
+            or_(OperationOrder.closed_at.is_(None), OperationOrder.closed_at > end),
+        )
+    ).all()
+    aging_counts = {"0_1": 0, "2_3": 0, "4_7": 0, "8_plus": 0}
+    for (opened_at,) in aging_rows:
+        age_days = max(0, int((end - _aware_utc(opened_at)).total_seconds() // 86400))
+        if age_days <= 1:
+            aging_counts["0_1"] += 1
+        elif age_days <= 3:
+            aging_counts["2_3"] += 1
+        elif age_days <= 7:
+            aging_counts["4_7"] += 1
+        else:
+            aging_counts["8_plus"] += 1
+
+    rankings: dict[str, list[dict]] = {}
+    for key, column in OPENINGS_RANKING_COLUMNS.items():
+        label = func.coalesce(func.nullif(column, ""), UNIDENTIFIED_LABEL)
+        opened_rows = db.execute(
+            select(label, func.count(OperationOrder.id))
+            .where(*conditions, OperationOrder.opened_at.between(start, end))
+            .group_by(label)
+        ).all()
+        completed_group_rows = db.execute(
+            select(label, func.count(OperationOrder.id))
+            .where(*conditions, OperationOrder.closed_at.between(start, end))
+            .group_by(label)
+        ).all()
+        backlog_rows = db.execute(
+            select(
+                label,
+                func.count(OperationOrder.id),
+                func.sum(
+                    case(
+                        (
+                            or_(
+                                OperationOrder.sla_status == "out_of_time",
+                                and_(OperationOrder.deadline_at.is_not(None), OperationOrder.deadline_at < end),
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+            )
+            .where(*backlog_conditions, open_at_end)
+            .group_by(label)
+        ).all()
+        completed_by_label = {str(item_label): int(quantity or 0) for item_label, quantity in completed_group_rows}
+        backlog_by_label = {
+            str(item_label): {"backlog": int(quantity or 0), "overdue": int(overdue or 0)}
+            for item_label, quantity, overdue in backlog_rows
+        }
+        items = []
+        for item_label, quantity in opened_rows:
+            label_text = str(item_label)
+            opened_quantity = int(quantity or 0)
+            stock = backlog_by_label.get(label_text, {})
+            items.append(
+                {
+                    "label": label_text,
+                    "opened": opened_quantity,
+                    "completed": completed_by_label.get(label_text, 0),
+                    "backlog": int(stock.get("backlog", 0)),
+                    "overdue_backlog": int(stock.get("overdue", 0)),
+                    "share_percentage": round((opened_quantity / total_opened * 100), 1) if total_opened else 0.0,
+                }
+            )
+        rankings[key] = sorted(items, key=lambda item: (-item["opened"], -item["backlog"], item["label"].casefold()))[:10]
+
+    insights = []
+    if total_opened == 0:
+        insights.append(_insight("insufficient", "Sem aberturas no período", "Não há volume de entrada para analisar com os filtros atuais."))
+    elif deviation_percentage is not None and deviation_percentage >= 50:
+        insights.append(_insight("critical", "Aberturas muito acima do esperado", f"O volume ficou {deviation_percentage:.1f}% acima do histórico comparável."))
+    elif deviation_percentage is not None and deviation_percentage >= 25:
+        insights.append(_insight("attention", "Aberturas acima do esperado", f"O volume ficou {deviation_percentage:.1f}% acima do histórico comparável."))
+    if pressure_ratio is not None and pressure_ratio >= 1.3 and net_flow > 0:
+        insights.append(_insight("critical", "Entrada maior que vazão", f"Entraram {net_flow} O.S. a mais do que foram finalizadas no período."))
+    elif net_flow > 0:
+        insights.append(_insight("attention", "Backlog tende a crescer", f"O saldo do período adicionou {net_flow} O.S. ao estoque operacional."))
+    if without_responsible:
+        insights.append(_insight("attention", "O.S. sem responsável", f"{without_responsible} abertura(s) ainda não têm responsável vinculado."))
+    top_subject = rankings.get("subjects", [])[:1]
+    if top_subject and total_opened:
+        insights.append(_insight("normal", "Maior origem de demanda", f"{top_subject[0]['label']} concentra {top_subject[0]['share_percentage']}% das aberturas."))
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "baseline_weeks": baseline_weeks,
+        "granularity": granularity,
+        "calculation_note": "Aberturas usam data de abertura e ignoram filtro de responsável, porque medem entrada de demanda antes da execução.",
+        "summary": {
+            "opened": total_opened,
+            "completed": total_completed,
+            "net_flow": net_flow,
+            "pressure_ratio": round(pressure_ratio, 2) if pressure_ratio is not None else None,
+            "average_daily_opened": round(total_opened / max(len(period_days), 1), 1),
+            "expected_opened": round(expected_total, 1),
+            "deviation_percentage": round(deviation_percentage, 1) if deviation_percentage is not None else None,
+            "backlog": backlog_at_end,
+            "overdue_backlog": overdue_backlog,
+            "without_responsible": without_responsible,
+            "average_first_action_minutes": round(average_first_action, 1) if average_first_action is not None else None,
+        },
+        "timeline": timeline,
+        "heatmap": heatmap,
+        "aging": [
+            {"bucket": "0_1", "label": "0-1 dia", "quantity": aging_counts["0_1"]},
+            {"bucket": "2_3", "label": "2-3 dias", "quantity": aging_counts["2_3"]},
+            {"bucket": "4_7", "label": "4-7 dias", "quantity": aging_counts["4_7"]},
+            {"bucket": "8_plus", "label": "8+ dias", "quantity": aging_counts["8_plus"]},
+        ],
+        "rankings": rankings,
+        "insights": insights[:6],
+    }
+
+
 def data_freshness(db: Session) -> dict:
     run = db.scalar(
         select(OperationImportRun)
@@ -895,11 +1358,28 @@ def _execution_hours(db: Session):
 
 
 def collaborator_sla(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
-    conditions, start, end = _query_conditions(date_from, date_to, user, filters)
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
     responsible = func.coalesce(OperationOrder.responsible, "Não identificado")
     regional = func.coalesce(OperationOrder.regional, "Não identificada")
     closed_day = _local_closed_date(db)
     execution_hours = _execution_hours(db)
+    # Aderência ao agendamento: compara `scheduled_at` (promessa ao cliente) com o horário real de
+    # início (deslocamento ou, na falta dele, execução) - só entra no denominador quem tinha
+    # agendamento marcado; tolerância de 60 min pra não penalizar atraso de trânsito normal.
+    actual_start = func.coalesce(OperationOrder.displacement_started_at, OperationOrder.execution_started_at)
+    schedule_deviation_minutes = func.abs(func.extract("epoch", actual_start - OperationOrder.scheduled_at)) / 60.0
+    scheduled_case = case((OperationOrder.scheduled_at.is_not(None), 1), else_=0)
+    on_schedule_case = case(
+        (
+            and_(
+                OperationOrder.scheduled_at.is_not(None),
+                actual_start.is_not(None),
+                schedule_deviation_minutes <= 60,
+            ),
+            1,
+        ),
+        else_=0,
+    )
     rows = db.execute(
         select(
             responsible,
@@ -912,6 +1392,8 @@ def collaborator_sla(db: Session, date_from: date, date_to: date, user: User, **
             func.avg(execution_hours),
             func.min(execution_hours),
             func.max(execution_hours),
+            func.sum(scheduled_case),
+            func.sum(on_schedule_case),
         )
         .where(*conditions, OperationOrder.closed_at.between(start, end))
         .group_by(responsible, regional)
@@ -946,6 +1428,8 @@ def collaborator_sla(db: Session, date_from: date, date_to: date, user: User, **
         other_count = sum(value for label, value in person_counts.items() if label not in type_columns)
         if other_count:
             visible_counts[other_column] = other_count
+        scheduled_orders = int(row[10] or 0)
+        on_schedule_orders = int(row[11] or 0)
         items.append(
             {
                 "responsible": person_key[0],
@@ -961,6 +1445,8 @@ def collaborator_sla(db: Session, date_from: date, date_to: date, user: User, **
                 "minimum_execution_minutes": round(float(row[8]) * 60, 1) if row[8] is not None else None,
                 "maximum_execution_minutes": round(float(row[9]) * 60, 1) if row[9] is not None else None,
                 "type_counts": visible_counts,
+                "scheduled_orders": scheduled_orders,
+                "schedule_adherence_rate": round((on_schedule_orders / scheduled_orders) * 100, 1) if scheduled_orders else None,
             }
         )
     return {
@@ -982,7 +1468,7 @@ def monthly_calendar(
     month_end = date(competence.year, competence.month, calendar.monthrange(competence.year, competence.month)[1])
     query_start = max(month_start, allowed_from)
     query_end = min(month_end, allowed_to)
-    conditions, start, end = _query_conditions(query_start, query_end, user, filters)
+    conditions, start, end = _query_conditions(db, query_start, query_end, user, filters)
     responsible = func.coalesce(OperationOrder.responsible, "Não identificado")
     regional = func.coalesce(OperationOrder.regional, "Não identificada")
     closed_day = _local_closed_date(db)
@@ -1129,7 +1615,7 @@ def _calendar_order_conditions(
     group_by: str = "regional",
     **filters,
 ) -> list:
-    conditions, start, end = _query_conditions(day, day, user, filters)
+    conditions, start, end = _query_conditions(db, day, day, user, filters)
     conditions.extend([
         OperationOrder.closed_at.between(start, end),
     ])
@@ -1151,7 +1637,7 @@ def _calendar_period_order_conditions(
     group_by: str = "regional",
     **filters,
 ) -> list:
-    conditions, start, end = _query_conditions(date_from, date_to, user, filters)
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
     conditions.extend([
         OperationOrder.closed_at.between(start, end),
     ])
@@ -1301,7 +1787,7 @@ def _calendar_month_order_conditions(
     month_end = date(competence.year, competence.month, calendar.monthrange(competence.year, competence.month)[1])
     query_start = max(month_start, allowed_from)
     query_end = min(month_end, allowed_to)
-    conditions, start, end = _query_conditions(query_start, query_end, user, filters)
+    conditions, start, end = _query_conditions(db, query_start, query_end, user, filters)
     conditions.extend([
         OperationOrder.closed_at.between(start, end),
         func.coalesce(OperationOrder.responsible, "Não identificado") == responsible,
@@ -1364,7 +1850,7 @@ def calendar_month_metric_orders(
 
 
 def team_configuration(db: Session, user: User) -> dict:
-    visible_conditions = _dimension_conditions(user, {})
+    visible_conditions = _dimension_conditions(db, user, {})
     pairs = list(db.execute(
         select(OperationOrder.responsible, OperationOrder.regional)
         .where(
@@ -1416,7 +1902,7 @@ def team_configuration(db: Session, user: User) -> dict:
 
 
 def subject_type_mappings(db: Session, user: User) -> list[dict]:
-    visible_conditions = _dimension_conditions(user, {})
+    visible_conditions = _dimension_conditions(db, user, {})
     rows = db.execute(
         select(
             OperationOrder.os_subject,
@@ -1447,15 +1933,60 @@ def subject_type_mappings(db: Session, user: User) -> list[dict]:
     ]
 
 
+SLA_RISK_LABELS = {
+    "breached": "Vencido (100%+)",
+    "critical": "Crítico (80-99%)",
+    "attention": "Atenção (50-79%)",
+    "on_track": "Tranquilo (<50%)",
+    "no_target": "Sem meta definida",
+}
+SLA_RISK_ORDER = ["breached", "critical", "attention", "on_track", "no_target"]
+
+
+def _sla_risk_bucket_case():
+    # Só olha O.S. ainda abertas (quem chama já filtra is_closed=False) - `elapsed_hours` é
+    # recalculado contra "agora" a cada sincronização do IXC, então o percentual consumido aqui é
+    # uma leitura preditiva (antes de vencer), diferente do `sla_status` que só vira "out_of_time"
+    # depois que já venceu.
+    ratio = OperationOrder.elapsed_hours / OperationOrder.sla_target_hours * 100.0
+    return case(
+        (or_(OperationOrder.sla_target_hours.is_(None), OperationOrder.sla_target_hours <= 0), "no_target"),
+        (ratio >= 100, "breached"),
+        (ratio >= 80, "critical"),
+        (ratio >= 50, "attention"),
+        else_="on_track",
+    )
+
+
+def in_progress_sla_risk(db: Session, user: User, **filters) -> list[dict]:
+    conditions = [*_dimension_conditions(db, user, filters), OperationOrder.is_closed.is_(False)]
+    bucket = _sla_risk_bucket_case()
+    rows = db.execute(select(bucket, func.count(OperationOrder.id)).where(*conditions).group_by(bucket)).all()
+    counts = {key: 0 for key in SLA_RISK_LABELS}
+    for key, quantity in rows:
+        counts[str(key)] = int(quantity or 0)
+    total = sum(counts.values())
+    return [
+        {
+            "bucket": key,
+            "label": SLA_RISK_LABELS[key],
+            "quantity": counts[key],
+            "percentage": round((counts[key] / total) * 100, 1) if total else 0,
+        }
+        for key in SLA_RISK_ORDER
+    ]
+
+
 def in_progress_breakdown(db: Session, user: User, group_by: str, **filters) -> list[dict]:
     allowed_groups = {
         "regional": OperationOrder.regional,
+        "city": OperationOrder.city,
         "os_type": OperationOrder.os_type,
         "subject": OperationOrder.os_subject,
         "status": OperationOrder.status,
     }
     field = allowed_groups.get(group_by, OperationOrder.regional)
-    conditions = _dimension_conditions(user, filters)
+    conditions = _dimension_conditions(db, user, filters)
     label = func.coalesce(field, "Não identificado")
     rows = db.execute(
         select(label, func.count(OperationOrder.id))
@@ -1475,15 +2006,21 @@ def in_progress_order_page(
     *,
     page: int,
     page_size: int,
+    sort_by: str | None = None,
+    sort_dir: str = "asc",
+    sla_risk: str | None = None,
     **filters,
 ) -> dict:
-    conditions = [*_dimension_conditions(user, filters), OperationOrder.is_closed.is_(False)]
+    conditions = [*_dimension_conditions(db, user, filters), OperationOrder.is_closed.is_(False)]
+    if sla_risk and sla_risk in SLA_RISK_LABELS:
+        conditions.append(_sla_risk_bucket_case() == sla_risk)
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
+    primary, tiebreaker = _order_sort_clauses(sort_by, sort_dir)
     orders = list(
         db.scalars(
             select(OperationOrder)
             .where(*conditions)
-            .order_by(OperationOrder.opened_at.asc(), OperationOrder.id.asc())
+            .order_by(primary, tiebreaker)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -1505,16 +2042,19 @@ def order_page(
     *,
     page: int,
     page_size: int,
+    sort_by: str | None = None,
+    sort_dir: str = "desc",
     **filters,
 ) -> dict:
-    conditions, _, _ = _query_conditions(date_from, date_to, user, filters)
+    conditions, _, _ = _query_conditions(db, date_from, date_to, user, filters)
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
     start = (page - 1) * page_size
+    primary, tiebreaker = _order_sort_clauses(sort_by, sort_dir)
     orders = list(
         db.scalars(
             select(OperationOrder)
             .where(*conditions)
-            .order_by(OperationOrder.opened_at.desc(), OperationOrder.id.desc())
+            .order_by(primary, tiebreaker)
             .offset(start)
             .limit(page_size)
         )
@@ -1528,6 +2068,14 @@ def order_page(
     }
 
 
+AGING_BUCKET_BOUNDS = {
+    "0_1": (0, 1),
+    "2_3": (2, 3),
+    "4_7": (4, 7),
+    "8_plus": (8, None),
+}
+
+
 def opening_order_page(
     db: Session,
     date_from: date,
@@ -1536,19 +2084,38 @@ def opening_order_page(
     *,
     page: int,
     page_size: int,
+    sort_by: str | None = None,
+    sort_dir: str = "desc",
+    aging_bucket: str | None = None,
+    weekday: int | None = None,
+    hour: int | None = None,
     **filters,
 ) -> dict:
     start, end = local_period_utc_bounds(date_from, date_to)
     conditions = [
-        *_dimension_conditions(user, _opening_filters(filters)),
+        *_dimension_conditions(db, user, _opening_filters(filters)),
         OperationOrder.opened_at.between(start, end),
     ]
+    if aging_bucket and aging_bucket in AGING_BUCKET_BOUNDS:
+        # Mesma janela de "ainda em aberto" usada no gráfico de envelhecimento - só faz sentido
+        # combinar idade com O.S. que seguem sem fechamento até o fim do período.
+        conditions.append(or_(OperationOrder.closed_at.is_(None), OperationOrder.closed_at > end))
+        min_days, max_days = AGING_BUCKET_BOUNDS[aging_bucket]
+        age_seconds = func.extract("epoch", end - OperationOrder.opened_at)
+        conditions.append(age_seconds >= min_days * 86400)
+        if max_days is not None:
+            conditions.append(age_seconds < (max_days + 1) * 86400)
+    if weekday is not None:
+        conditions.append(_local_weekday(db, OperationOrder.opened_at) == weekday)
+    if hour is not None:
+        conditions.append(_local_hour(db, OperationOrder.opened_at) == hour)
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
+    primary, tiebreaker = _order_sort_clauses(sort_by, sort_dir)
     orders = list(
         db.scalars(
             select(OperationOrder)
             .where(*conditions)
-            .order_by(OperationOrder.opened_at.desc(), OperationOrder.id.desc())
+            .order_by(primary, tiebreaker)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )

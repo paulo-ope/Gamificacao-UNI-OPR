@@ -32,6 +32,8 @@ services:
       IXC_API_VERIFY_SSL: ${IXC_API_VERIFY_SSL:-true}
       IXC_SYNC_ENABLED: ${IXC_SYNC_ENABLED:-false}
       IXC_SYNC_INTERVAL_MINUTES: ${IXC_SYNC_INTERVAL_MINUTES:-20}
+      CPK_API_BASE_URL: ${CPK_API_BASE_URL:-}
+      CPK_API_KEY: ${CPK_API_KEY:-}
     ports:
       - "8000:8000"
     depends_on:

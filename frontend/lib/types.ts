@@ -713,16 +713,6 @@ export type ScoringGroupDeleteResult = {
   deleted_subject_rules: number;
 };
 
-export type ScoringRule = {
-  id: number;
-  group_id: number;
-  os_type: string;
-  os_subject: string | null;
-  points: number;
-  active: boolean;
-  group?: ScoringGroup | null;
-};
-
 export type ScoringSubjectRule = {
   id: number;
   group_id: number;
@@ -817,8 +807,16 @@ export type HealthRule = {
   min_sla: number;
   max_recurrence_rate: number;
   multiplier: number;
-  condition_operator: string;
   active: boolean;
+};
+
+export type CpkRegionalSnapshot = {
+  regional: string;
+  status: "na_meta" | "fora_meta" | "sem_base";
+  cpk_realizado: number | null;
+  cpk_meta: number | null;
+  mes_fechado: boolean;
+  synced_at: string;
 };
 
 export type SlaPenaltyType = "none" | "subtract_points" | "percentage_reduction" | "cancel_points" | "requires_review";
@@ -858,6 +856,7 @@ export type RecurrenceClassificationRule = {
   classification: RecurrenceClassification;
   discount_points: boolean;
   max_days: number | null;
+  min_hours_between: number | null;
   require_same_subject: boolean;
   require_same_diagnosis: boolean;
   priority: number;
@@ -878,6 +877,7 @@ export type GamificationConfig = {
   sla_penalty_rules: SlaPenaltyRule[];
   recurrence_classification_rules: RecurrenceClassificationRule[];
   health_rules: HealthRule[];
+  warnings?: string[];
 };
 
 export type AppSetting = {

@@ -24,7 +24,8 @@ const ACTION_LABEL: Record<string, string> = {
   point_balance_debit_applied: "Aplicou débito de garantia no pagamento",
   point_balance_carry_over: "Carregou saldo de garantia para o próximo mês",
   point_balance_debit_reverted: "Estornou débito de garantia",
-  point_balance_manual_adjustment: "Lançou ajuste manual de saldo"
+  point_balance_manual_adjustment: "Lançou ajuste manual de saldo",
+  point_balance_bulk_cleanup: "Limpeza retroativa de backlog de garantia (lote)"
 };
 
 const ENTITY_LABEL: Record<string, string> = {
@@ -61,6 +62,11 @@ function statusNote(log: AuditLog) {
       draft: "rascunho"
     };
     return `→ ${labels[status] ?? status}`;
+  }
+  if (log.action === "point_balance_bulk_cleanup" && log.after_data) {
+    const count = Number(log.after_data.reverted_count ?? 0);
+    const points = Number(log.after_data.total_points_reverted ?? 0);
+    return `${count.toLocaleString("pt-BR")} lançamento(s) revertido(s), ${points.toLocaleString("pt-BR")} pts`;
   }
   return null;
 }
@@ -100,7 +106,7 @@ export function AuditTrailPanel() {
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-blue-700" />
+          <ShieldCheck className="h-4 w-4 text-uni-royal" />
           <h3 className="text-sm font-semibold text-slate-950">Trilha de ações (quem fez o quê, quando)</h3>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading}>

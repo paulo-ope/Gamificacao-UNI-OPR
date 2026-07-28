@@ -104,7 +104,7 @@ function SummaryCard({
         {icon}
         {label}
       </div>
-      <div className={cn("mt-3 text-2xl font-semibold", accent === "highlight" ? "text-blue-700" : "text-slate-950")}>{value}</div>
+      <div className={cn("mt-3 text-2xl font-semibold", accent === "highlight" ? "text-uni-royal" : "text-slate-950")}>{value}</div>
       <div className="mt-1 text-sm text-slate-500">{hint}</div>
     </div>
   );

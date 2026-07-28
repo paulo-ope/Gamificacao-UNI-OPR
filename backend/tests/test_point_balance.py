@@ -1,6 +1,6 @@
 """Regression tests for backend/app/services/point_balance.py - the ledger that tracks
 warranty debits detected after their original month has already been paid."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -253,6 +253,114 @@ def test_requires_review_entry_can_be_resolved_with_a_negative_value(db_session,
         with pytest.raises(Exception) as excinfo:
             point_balance.resolve_review_entry(db_session, other_created[0].id, points=5.0, user=admin_user)
         assert getattr(excinfo.value, "status_code", None) == 422, "resolving with a positive (credit) value must be rejected"
+
+
+def test_only_one_debit_per_original_even_with_many_near_simultaneous_later_returns(
+    db_session, make_collaborator, paid_june_run, recurrence_setup
+):
+    """Regression found in production: one original ticket (IXC-1081509) had 12 SEPARATE debit
+    entries created against it, one per near-duplicate "return" ticket opened seconds apart on
+    the same day. Because all those gaps round down to days_between=0, they tie on the "nearest
+    candidate" sort, and each later ticket independently re-discovers the SAME original as its
+    best match. A single original must only ever be debited once by this mechanism, no matter
+    how many later tickets tie back to it."""
+    collaborator = make_collaborator()
+    original = _os(collaborator, "OS-JUN-ORIG", datetime(2026, 6, 25, 10, 0, tzinfo=timezone.utc))
+    laters = [
+        _os(collaborator, f"OS-JUN-DUP-{i}", datetime(2026, 6, 25, 10, i, tzinfo=timezone.utc))
+        for i in range(1, 6)
+    ]
+    db_session.add(original)
+    db_session.add_all(laters)
+    db_session.flush()
+
+    created_total = []
+    for later in laters:
+        created_total.extend(point_balance.detect_post_payment_warranty_debits(db_session, [later]))
+        db_session.commit()
+
+    assert len(created_total) == 1, "so o primeiro retorno deveria gerar debito - os demais batem na mesma original ja debitada"
+    assert created_total[0].original_os_code == "OS-JUN-ORIG"
+
+
+def _months_before(reference: datetime, months: int) -> tuple[int, int]:
+    month = reference.month - months
+    year = reference.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    return month, year
+
+
+def test_post_payment_debit_skips_originals_two_or_more_months_old(db_session, make_collaborator, recurrence_setup):
+    """Regression: only the calendar month immediately before the current one is eligible for this
+    mechanism. A rolling day-count window (the previous approach) could reach 2 calendar months
+    back depending on which day of the month the detection ran on - a real incident where a
+    collaborator was debited for an O.S closed in May while July was being calculated, which
+    surprised the product owner. Anything 2+ months old must never generate a NEW debit."""
+    collaborator = make_collaborator()
+    now = datetime.now(timezone.utc)
+    old_month, old_year = _months_before(now, 2)
+    old_closed = datetime(old_year, old_month, 15, tzinfo=timezone.utc)
+    run = CalculationRun(reference_month=old_month, reference_year=old_year, regional=None, point_value=2.5, status="paid")
+    db_session.add(run)
+    original = _os(collaborator, "OS-2MONTHS-ORIG", old_closed)
+    later = _os(collaborator, "OS-2MONTHS-RET", old_closed + timedelta(days=5))
+    db_session.add_all([original, later])
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
+    db_session.commit()
+
+    assert created == [], "original de 2+ meses atras nao deveria gerar debito - so o mes imediatamente anterior e elegivel"
+
+
+def test_post_payment_debit_allowed_for_immediately_previous_month(db_session, make_collaborator, recurrence_setup):
+    """Sanity check for the fix above: an original closed in the month right before the current
+    one must keep generating the debit normally - the calendar-month rule must not weaken the
+    real, intended case."""
+    collaborator = make_collaborator()
+    now = datetime.now(timezone.utc)
+    last_month, last_year = _months_before(now, 1)
+    recent_closed = datetime(last_year, last_month, 15, tzinfo=timezone.utc)
+    run = CalculationRun(reference_month=last_month, reference_year=last_year, regional=None, point_value=2.5, status="paid")
+    db_session.add(run)
+    original = _os(collaborator, "OS-LASTMONTH-ORIG", recent_closed)
+    later = _os(collaborator, "OS-LASTMONTH-RET", recent_closed + timedelta(days=5))
+    db_session.add_all([original, later])
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
+    db_session.commit()
+
+    assert len(created) == 1, "original do mes imediatamente anterior deveria gerar debito normalmente"
+
+
+def test_post_payment_debit_skips_unregistered_or_inactive_original_collaborator(
+    db_session, make_collaborator, paid_june_run, recurrence_setup
+):
+    """A collaborator who is not registered (or not active) never enters a future payroll run,
+    so a pending debit against them can NEVER be applied - it just accumulates forever with no
+    effect, and becomes an unfair surprise backlog if they're registered later. This mechanism
+    must skip creating a debit for those collaborators entirely."""
+    unregistered = make_collaborator(name="Fantasma Nao Cadastrado", registered=False)
+    inactive = make_collaborator(name="Ex Colaborador Inativo")
+    inactive.active = False
+    db_session.flush()
+
+    original_unregistered = _os(unregistered, "OS-JUN-UNREG", datetime(2026, 6, 25, tzinfo=timezone.utc))
+    later_unregistered = _os(unregistered, "OS-JUL-UNREG", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    original_inactive = _os(inactive, "OS-JUN-INACTIVE", datetime(2026, 6, 25, tzinfo=timezone.utc), customer_login="cliente.inactive")
+    later_inactive = _os(inactive, "OS-JUL-INACTIVE", datetime(2026, 7, 10, tzinfo=timezone.utc), customer_login="cliente.inactive")
+    db_session.add_all([original_unregistered, later_unregistered, original_inactive, later_inactive])
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(
+        db_session, [later_unregistered, later_inactive]
+    )
+    db_session.commit()
+
+    assert created == [], "colaborador nao cadastrado/inativo nao deveria acumular debito de garantia"
 
 
 def test_debit_survives_deleting_and_reimporting_the_related_service_order(db_session, make_collaborator, paid_june_run, recurrence_setup):

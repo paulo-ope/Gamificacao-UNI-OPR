@@ -59,6 +59,21 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
     .slice(0, 15)
     .sort((a, b) => a.final_points - b.final_points);
 
+  // Estilo "lista de barras" moderno: nome completo ACIMA da barra (dentro da área do gráfico,
+  // sem truncar nem colidir com o valor), barra fina com gradiente do manual da marca UNI
+  // (royal → turquoise). Substitui o layout antigo de rótulos truncados num eixo lateral.
+  const UNI_BAR_GRADIENT = {
+    type: "linear",
+    x: 0,
+    y: 0,
+    x2: 1,
+    y2: 0,
+    colorStops: [
+      { offset: 0, color: "#2d5fff" },
+      { offset: 1, color: "#27d9bf" }
+    ]
+  };
+
   const rankingOption = {
     tooltip: {
       trigger: "axis",
@@ -67,19 +82,40 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         return [`<strong>${item?.collaborator_name ?? ""}</strong>`, `Pontos finais: ${formatPoints(item?.final_points ?? 0)}`].join("<br />");
       }
     },
-    grid: { left: 210, right: 52, top: 20, bottom: 24 },
-    xAxis: { type: "value", axisLabel: { color: "#475569" } },
+    grid: { left: 8, right: 96, top: 8, bottom: 8 },
+    xAxis: { type: "value", show: false },
     yAxis: {
       type: "category",
       data: rankingData.map((item) => item.collaborator_name),
-      axisLabel: { color: "#334155", width: 190, overflow: "truncate" }
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        show: true,
+        inside: true,
+        verticalAlign: "bottom",
+        align: "left",
+        padding: [0, 0, 6, -2],
+        color: "#334155",
+        fontSize: 11,
+        fontWeight: 600
+      }
     },
     series: [
       {
         type: "bar",
+        barWidth: 10,
         data: rankingData.map((item) => item.final_points),
-        itemStyle: { color: "#2563eb", borderRadius: [0, 4, 4, 0] },
-        label: { show: true, position: "right", color: "#0f172a", formatter: ({ value }: { value: number }) => formatPoints(value) }
+        itemStyle: { color: UNI_BAR_GRADIENT, borderRadius: [5, 5, 5, 5] },
+        showBackground: true,
+        backgroundStyle: { color: "#f1f5f9", borderRadius: [5, 5, 5, 5] },
+        label: {
+          show: true,
+          position: "right",
+          distance: 6,
+          color: "#010c8b",
+          fontWeight: 600,
+          formatter: ({ value }: { value: number }) => formatPoints(value)
+        }
       }
     ]
   };
@@ -104,27 +140,54 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         ].join("<br />");
       }
     },
-    // grid.left mais folgado que a largura do rótulo (label width 170 vs grid.left 230, ~60px de
-    // respiro) - com os dois quase iguais (168 vs 150) o rótulo de valor de barras bem curtas
-    // (poucos O.S) ficava colado/sobrepondo o texto truncado do eixo (achado real, ver print do
-    // usuário). Rótulo de valor também encurtado (sem repetir "anulados", já é o título do painel).
-    grid: { left: 230, right: 110, top: 12, bottom: 24 },
-    xAxis: { type: "value", axisLabel: { color: "#475569" } },
+    // Mesmo estilo "lista de barras" do ranking: nome completo do motivo ACIMA da barra (sem
+    // truncar), valor à direita da barra - elimina de vez a colisão entre rótulo truncado e valor
+    // que existia no layout antigo de eixo lateral (achado real, ver print do usuário).
+    grid: { left: 8, right: 150, top: 8, bottom: 8 },
+    xAxis: { type: "value", show: false },
     yAxis: {
       type: "category",
       data: penaltyData.map((item) => item.name),
-      axisLabel: { color: "#334155", width: 170, overflow: "truncate" }
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        show: true,
+        inside: true,
+        verticalAlign: "bottom",
+        align: "left",
+        padding: [0, 0, 6, -2],
+        color: "#334155",
+        fontSize: 11,
+        fontWeight: 600
+      }
     },
     series: [
       {
         type: "bar",
+        barWidth: 10,
         data: penaltyData.map((item) => item.value),
-        itemStyle: { color: "#dc2626", borderRadius: [0, 4, 4, 0] },
+        itemStyle: {
+          color: {
+            type: "linear",
+            x: 0,
+            y: 0,
+            x2: 1,
+            y2: 0,
+            colorStops: [
+              { offset: 0, color: "#dc2626" },
+              { offset: 1, color: "#f87171" }
+            ]
+          },
+          borderRadius: [5, 5, 5, 5]
+        },
+        showBackground: true,
+        backgroundStyle: { color: "#f1f5f9", borderRadius: [5, 5, 5, 5] },
         label: {
           show: true,
           position: "right",
-          distance: 8,
-          color: "#0f172a",
+          distance: 6,
+          color: "#7f1d1d",
+          fontWeight: 600,
           formatter: ({ dataIndex }: { dataIndex: number }) => {
             const item = penaltyData[dataIndex];
             return `${item.service_orders_count} O.S · ${formatAnnulledPoints(item.value)}`;
@@ -144,7 +207,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
       axisLabel: { color: "#334155", interval: 0, rotate: 18 }
     },
     yAxis: { type: "value", min: 0, max: 100, axisLabel: { formatter: "{value}%", color: "#475569" } },
-    color: ["#2563eb", "#e11d48"],
+    color: ["#2d5fff", "#e11d48"],
     series: [
       {
         name: "SLA",
@@ -292,7 +355,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         })),
         symbolSize: (_value: [number, number], params: { data: { total_orders: number } }) =>
           Math.max(12, Math.min(42, 10 + Math.sqrt(params.data.total_orders || 0) / 2)),
-        itemStyle: { color: "#2563eb", opacity: 0.8, borderColor: "#ffffff", borderWidth: 1 },
+        itemStyle: { color: "#2d5fff", opacity: 0.8, borderColor: "#ffffff", borderWidth: 1 },
         label: { show: false },
         emphasis: {
           label: {
@@ -341,7 +404,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
           </div>
         </div>
         <div className="px-2 py-4">
-          <ReactECharts option={rankingOption} style={{ height: 300 }} />
+          <ReactECharts option={rankingOption} style={{ height: Math.max(220, rankingData.length * 38) }} />
         </div>
       </div>
 
@@ -353,7 +416,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
           </div>
         </div>
         <div className="px-2 py-4">
-          <ReactECharts option={penaltyOption} style={{ height: 300 }} />
+          <ReactECharts option={penaltyOption} style={{ height: Math.max(220, penaltyData.length * 42) }} />
         </div>
       </div>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, ScrollText, Search, ShieldAlert, Wallet } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/gamification/config-ui";
@@ -86,8 +86,14 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("severity");
   const [historyCollaboratorId, setHistoryCollaboratorId] = useState<number | null>(null);
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    // Guarda por id de requisicao (nao so um cancelled flag de useEffect): "Atualizar" manual,
+    // o onChanged do CollaboratorBalanceHistorySheet e a troca automatica de periodo podem
+    // disparar chamadas sobrepostas - sem isso, uma resposta antiga (periodo anterior) que
+    // chega DEPOIS de uma mais recente sobrescreve a tela com o saldo do periodo errado.
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -98,11 +104,13 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
             ? { reference_month: referenceMonth, reference_year: referenceYear }
             : undefined
       );
+      if (requestIdRef.current !== requestId) return;
       setEntries(data);
     } catch (err) {
+      if (requestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : "Erro ao carregar o saldo de pontos.");
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId) setLoading(false);
     }
   }, [calculationRunId, referenceMonth, referenceYear]);
 
@@ -270,7 +278,7 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
                       <Avatar name={group.collaboratorName} size="md" />
                       <button
                         type="button"
-                        className="text-left underline decoration-dotted underline-offset-2 hover:text-blue-700"
+                        className="text-left underline decoration-dotted underline-offset-2 hover:text-uni-royal"
                         onClick={() => setHistoryCollaboratorId(group.collaboratorId)}
                         title="Detalhar todas as garantias deste colaborador"
                       >

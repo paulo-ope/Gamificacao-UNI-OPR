@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { Database, Home, Loader2, LogOut, Search } from "lucide-react";
+import { Database, Home, Loader2, LogOut, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { OperationsFilterPanel } from "@/components/operations/operations-filter-panel";
@@ -12,6 +12,7 @@ import {
   OperationsModuleSidebar,
   type OperationTab,
 } from "@/components/operations/operations-module-sidebar";
+import { OperationsOpeningsAnalytics } from "@/components/operations/operations-openings-analytics";
 import { OperationsOrderDetailDialog } from "@/components/operations/operations-order-detail-dialog";
 import { OperationsOverviewCharts } from "@/components/operations/operations-overview-charts";
 import { OperationsSlaHierarchyTable } from "@/components/operations/operations-sla-hierarchy-table";
@@ -43,6 +44,9 @@ import {
   type OperationFilterState,
   type OperationFilters,
   type OperationIxcSyncSettings,
+  type OperationOpeningsAnalytics,
+  type OpeningsDrillField,
+  type OpeningsDrillTarget,
   type OperationOrder,
   type OperationOrderPage,
   type OperationOverview,
@@ -50,10 +54,18 @@ import {
   type OperationSavedFilter,
   type OperationSavedFilterValues,
   type OperationSlaHierarchy,
+  type OperationSlaRiskItem,
   type OperationTrendGranularity,
   type OperationTrendSeries,
   type OperationWorkScheduleOverview,
 } from "@/lib/operations-api";
+
+// Espelha PRIMARY_SECTOR_NAMES em backend/app/modules/operations/scope.py.
+const DEFAULT_PRIORITY_SECTORS = [
+  "Suporte Externo",
+  "Suporte Externo Rádio",
+  "Suporte Externo Fibra",
+];
 
 const EMPTY_FILTERS: OperationFilters = {
   team_models: [],
@@ -75,6 +87,8 @@ const EMPTY_FILTERS: OperationFilters = {
   sla_statuses: [],
   projects: [],
   pops: [],
+  opened_weekdays: [],
+  closed_weekdays: [],
 };
 
 const EMPTY_OVERVIEW: OperationOverview = {
@@ -136,9 +150,36 @@ const EMPTY_CONTROL_TOWER: OperationControlTower = {
     persistent_days: 0,
     critical_nodes: 0,
     attention_nodes: 0,
+    reasons: [],
   },
   timeline: [],
   items: [],
+};
+
+const EMPTY_OPENINGS_ANALYTICS: OperationOpeningsAnalytics = {
+  date_from: "",
+  date_to: "",
+  baseline_weeks: 8,
+  granularity: "day",
+  calculation_note: "",
+  summary: {
+    opened: 0,
+    completed: 0,
+    net_flow: 0,
+    pressure_ratio: null,
+    average_daily_opened: 0,
+    expected_opened: 0,
+    deviation_percentage: null,
+    backlog: 0,
+    overdue_backlog: 0,
+    without_responsible: 0,
+    average_first_action_minutes: null,
+  },
+  timeline: [],
+  heatmap: [],
+  aging: [],
+  rankings: {},
+  insights: [],
 };
 
 const EMPTY_PAGE: OperationOrderPage = {
@@ -260,6 +301,10 @@ type DetailSortKey =
   | "status"
   | "sla_status";
 
+type ProgressDrillTarget =
+  | { kind: "dimension"; field: "regionals" | "cities" | "os_types" | "subjects" | "statuses"; value: string; key: string }
+  | { kind: "sla_risk"; bucket: string; label: string; key: string };
+
 function orderField(order: OperationOrder, key: DetailSortKey) {
   if (key === "customer")
     return `${order.contract_id || ""} ${order.customer_name || ""}`;
@@ -321,118 +366,170 @@ function efficiencyInsight(overview: OperationOverview) {
   return `Principal gargalo: ${formatNumber(percentage, "%")} do tempo médio da O.S. ocorre antes do deslocamento da equipe.`;
 }
 
+const BREAKDOWN_VISIBLE_DEFAULT = 6;
+
 function BreakdownTable({
   title,
   items,
+  activeLabel,
   onDrill,
 }: {
   title: string;
   items: OperationBreakdownItem[];
+  activeLabel?: string | null;
   onDrill: (label: string) => void;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [sort, setSort] = useState<{
-    key: "label" | "quantity" | "percentage";
-    direction: "asc" | "desc";
-  }>({ key: "quantity", direction: "desc" });
-  const visibleItems = useMemo(() => {
-    return [...items].sort((left, right) => {
-      const a = left[sort.key];
-      const b = right[sort.key];
-      const comparison =
-        typeof a === "string"
-          ? a.localeCompare(String(b), "pt-BR")
-          : Number(a) - Number(b);
-      return sort.direction === "asc" ? comparison : -comparison;
-    });
-  }, [items, sort]);
-  useEffect(() => {
-    function clear(event: PointerEvent) {
-      if (cardRef.current && !cardRef.current.contains(event.target as Node))
-        setSelected(null);
-    }
-    document.addEventListener("pointerdown", clear);
-    return () => document.removeEventListener("pointerdown", clear);
-  }, []);
-  function changeSort(key: "label" | "quantity" | "percentage") {
-    setSort((current) => ({
-      key,
-      direction:
-        current.key === key && current.direction === "desc" ? "asc" : "desc",
-    }));
-  }
+  const [expanded, setExpanded] = useState(false);
+  const sortedItems = useMemo(
+    () => [...items].sort((left, right) => right.quantity - left.quantity),
+    [items],
+  );
+  const visibleItems = expanded
+    ? sortedItems
+    : sortedItems.slice(0, BREAKDOWN_VISIBLE_DEFAULT);
+  const hiddenCount = sortedItems.length - visibleItems.length;
   return (
-    <Card ref={cardRef} className="rounded-2xl border-slate-200">
-      <CardHeader>
-        <CardTitle className="text-base font-semibold text-slate-900">
+    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold text-slate-900">
           {title}
         </CardTitle>
-        <p className="text-[10px] text-slate-500">
-          Ordene pelo cabeçalho. Ctrl/Cmd + clique mantém um recorte temporário.
-        </p>
+      </CardHeader>
+      <CardContent className="px-4 pb-3 pt-0">
+        {visibleItems.length ? (
+          <div className="divide-y divide-slate-100">
+            {visibleItems.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => onDrill(item.label)}
+                className={`flex w-full items-center justify-between gap-3 py-2 text-left ${
+                  activeLabel === item.label ? "rounded-lg bg-blue-50 px-2 ring-1 ring-inset ring-blue-300" : ""
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
+                  {item.label}
+                </span>
+                <span className="flex shrink-0 items-baseline gap-1.5">
+                  <span className="text-sm font-semibold tabular-nums text-slate-900">
+                    {item.quantity}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    {formatNumber(item.percentage, "%")}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="py-6 text-center text-sm text-slate-500">
+            Nenhuma O.S. em andamento.
+          </p>
+        )}
+        {sortedItems.length > BREAKDOWN_VISIBLE_DEFAULT ? (
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            className="mt-1 text-xs font-medium text-blue-700 hover:text-blue-900"
+          >
+            {expanded ? "Mostrar menos" : `Mostrar mais ${hiddenCount}`}
+          </button>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+const PROGRESS_FIELD_LABELS: Record<string, string> = {
+  regionals: "Filial",
+  cities: "Cidade",
+  os_types: "Tipo geral",
+  subjects: "Assunto",
+  statuses: "SLA / Status",
+};
+
+function progressDrillHeading(target: ProgressDrillTarget) {
+  if (target.kind === "sla_risk") return { eyebrow: "SLA em risco", title: target.label };
+  return { eyebrow: PROGRESS_FIELD_LABELS[target.field] || target.field, title: target.value };
+}
+
+function ProgressDrillPanel({
+  target,
+  orders,
+  isLoading,
+  onClose,
+}: {
+  target: ProgressDrillTarget;
+  orders: OperationOrderPage;
+  isLoading: boolean;
+  onClose: () => void;
+}) {
+  const heading = progressDrillHeading(target);
+  const items = orders.items;
+  return (
+    <Card className="mb-4 rounded-2xl border-blue-200 bg-blue-50/40 shadow-sm">
+      <CardHeader className="flex-row items-center justify-between gap-4 pb-2">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">
+            {heading.eyebrow}
+          </p>
+          <CardTitle className="text-base font-semibold text-slate-950">
+            {heading.title}
+          </CardTitle>
+          <p className="text-xs text-slate-500">
+            {orders.total} O.S. no total
+            {orders.total > items.length ? ` · mostrando as ${items.length} mais recentes` : ""}
+          </p>
+        </div>
+        <Button type="button" size="sm" variant="ghost" onClick={onClose} aria-label="Fechar detalhamento">
+          <X className="h-4 w-4" /> Fechar
+        </Button>
       </CardHeader>
       <CardContent className="px-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>
-                <button type="button" onClick={() => changeSort("label")}>
-                  Grupo
-                </button>
-              </TableHead>
-              <TableHead className="text-right">
-                <button type="button" onClick={() => changeSort("quantity")}>
-                  Quant.
-                </button>
-              </TableHead>
-              <TableHead className="text-right">
-                <button type="button" onClick={() => changeSort("percentage")}>
-                  % total
-                </button>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {visibleItems.length ? (
-              visibleItems.map((item) => (
-                <TableRow
-                  key={item.label}
-                  className={
-                    selected === item.label
-                      ? "cursor-pointer bg-blue-100 ring-1 ring-inset ring-blue-400"
-                      : "cursor-pointer"
-                  }
-                  onClick={(event) => {
-                    if (event.ctrlKey || event.metaKey) {
-                      event.preventDefault();
-                      setSelected((current) =>
-                        current === item.label ? null : item.label,
-                      );
-                    } else onDrill(item.label);
-                  }}
-                >
-                  <TableCell className="font-medium text-slate-800">
-                    {item.label}
-                  </TableCell>
-                  <TableCell className="text-right">{item.quantity}</TableCell>
-                  <TableCell className="text-right">
-                    {formatNumber(item.percentage, "%")}
+        {isLoading ? (
+          <div className="mx-4 h-40 animate-pulse rounded-xl bg-white" />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>O.S.</TableHead>
+                <TableHead>Cliente</TableHead>
+                <TableHead>Filial / Cidade</TableHead>
+                <TableHead>Assunto</TableHead>
+                <TableHead>Responsável</TableHead>
+                <TableHead>Abertura</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.length ? (
+                items.map((order) => (
+                  <TableRow key={order.id}>
+                    <TableCell className="font-medium text-slate-800">{order.order_code}</TableCell>
+                    <TableCell className="max-w-56 truncate">{order.customer_name || "Cliente não identificado"}</TableCell>
+                    <TableCell>
+                      <p>{order.regional || "—"}</p>
+                      <p className="text-xs text-slate-500">{order.city || "Cidade não identificada"}</p>
+                    </TableCell>
+                    <TableCell className="max-w-56 truncate">
+                      <p>{order.os_type || "—"}</p>
+                      <p className="text-xs text-slate-500">{order.os_subject || "—"}</p>
+                    </TableCell>
+                    <TableCell>{order.responsible || "Sem responsável"}</TableCell>
+                    <TableCell>{new Date(order.opened_at).toLocaleString("pt-BR")}</TableCell>
+                    <TableCell>{order.status || "—"}</TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-8 text-center text-sm text-slate-500">
+                    Nenhuma O.S. encontrada para este recorte.
                   </TableCell>
                 </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell
-                  colSpan={3}
-                  className="py-10 text-center text-slate-500"
-                >
-                  Nenhuma O.S. em andamento.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+              )}
+            </TableBody>
+          </Table>
+        )}
       </CardContent>
     </Card>
   );
@@ -468,6 +565,22 @@ export default function OperacaoPage() {
     useState<OperationTrendSeries>(EMPTY_TRENDS);
   const [controlTower, setControlTower] =
     useState<OperationControlTower>(EMPTY_CONTROL_TOWER);
+  const [openingsAnalytics, setOpeningsAnalytics] =
+    useState<OperationOpeningsAnalytics>(EMPTY_OPENINGS_ANALYTICS);
+  const [openingsDrill, setOpeningsDrill] = useState<OpeningsDrillTarget | null>(null);
+  const [openingsDrillOrders, setOpeningsDrillOrders] =
+    useState<OperationOrderPage>(EMPTY_PAGE);
+  const [openingsDrillLoading, setOpeningsDrillLoading] = useState(false);
+  const [openingsGranularity, setOpeningsGranularity] =
+    useState<OperationTrendGranularity>("day");
+  const [openingsTemporaryPeriod, setOpeningsTemporaryPeriod] = useState<{
+    label: string;
+    date_from: string;
+    date_to: string;
+  } | null>(null);
+  const [openingsTemporaryData, setOpeningsTemporaryData] =
+    useState<OperationOpeningsAnalytics | null>(null);
+  const [openingsTemporaryLoading, setOpeningsTemporaryLoading] = useState(false);
   const [trendGranularity, setTrendGranularity] =
     useState<OperationTrendGranularity>("day");
   const [dataFreshness, setDataFreshness] =
@@ -487,6 +600,9 @@ export default function OperacaoPage() {
   const [regionalBreakdown, setRegionalBreakdown] = useState<
     OperationBreakdownItem[]
   >([]);
+  const [cityBreakdown, setCityBreakdown] = useState<OperationBreakdownItem[]>(
+    [],
+  );
   const [typeBreakdown, setTypeBreakdown] = useState<OperationBreakdownItem[]>(
     [],
   );
@@ -496,6 +612,13 @@ export default function OperacaoPage() {
   const [statusBreakdown, setStatusBreakdown] = useState<
     OperationBreakdownItem[]
   >([]);
+  const [slaRiskBreakdown, setSlaRiskBreakdown] = useState<
+    OperationSlaRiskItem[]
+  >([]);
+  const [progressDrill, setProgressDrill] = useState<ProgressDrillTarget | null>(null);
+  const [progressDrillOrders, setProgressDrillOrders] =
+    useState<OperationOrderPage>(EMPTY_PAGE);
+  const [progressDrillLoading, setProgressDrillLoading] = useState(false);
   const [orders, setOrders] = useState<OperationOrderPage>(EMPTY_PAGE);
   const [selectedOrder, setSelectedOrder] = useState<OperationOrder | null>(
     null,
@@ -510,9 +633,9 @@ export default function OperacaoPage() {
     value: string;
   } | null>(null);
   const [activeTab, setActiveTab] = useState<OperationTab>("overview");
-  const [detailsScope, setDetailsScope] = useState<
-    "period" | "in_progress" | "openings"
-  >("period");
+  const [detailsScope, setDetailsScope] = useState<"period" | "openings">(
+    "period",
+  );
   const [loading, setLoading] = useState(false);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewSecondaryLoading, setOverviewSecondaryLoading] = useState(false);
@@ -545,6 +668,7 @@ export default function OperacaoPage() {
   const visibleTabs = useMemo<OperationTab[]>(
     () => [
       "overview",
+      "openings",
       ...(canViewSla ? ["sla" as const] : []),
       ...(canViewCalendar ? ["calendar" as const] : []),
       ...(canViewBacklog ? ["progress" as const] : []),
@@ -566,9 +690,7 @@ export default function OperacaoPage() {
       setLoading(true);
       setError(null);
       try {
-        const openScope =
-          requestedTab === "progress" ||
-          (requestedTab === "details" && detailsScope === "in_progress");
+        const openScope = requestedTab === "progress";
         const effectiveFilters = openScope
           ? filtersForOpenScope(nextFilters)
           : nextFilters;
@@ -627,6 +749,16 @@ export default function OperacaoPage() {
           return;
         }
 
+        if (requestedTab === "openings") {
+          const nextOpenings = await operationsApi.openingsAnalytics(
+            effectiveFilters,
+            openingsGranularity,
+          );
+          if (dashboardRequest.current !== requestId) return;
+          setOpeningsAnalytics(nextOpenings);
+          return;
+        }
+
         if (requestedTab === "sla") {
           const [nextSlaHierarchy, nextCollaboratorSla] =
             await Promise.all([
@@ -650,26 +782,29 @@ export default function OperacaoPage() {
         }
 
         if (requestedTab === "progress") {
-          const [nextRegional, nextType, nextSubject, nextStatus] =
+          const [nextRegional, nextCity, nextType, nextSubject, nextStatus, nextSlaRisk] =
             await Promise.all([
               operationsApi.inProgress(effectiveFilters, "regional"),
+              operationsApi.inProgress(effectiveFilters, "city"),
               operationsApi.inProgress(effectiveFilters, "os_type"),
               operationsApi.inProgress(effectiveFilters, "subject"),
               operationsApi.inProgress(effectiveFilters, "status"),
+              operationsApi.inProgressSlaRisk(effectiveFilters),
             ]);
           if (dashboardRequest.current !== requestId) return;
           setRegionalBreakdown(nextRegional);
+          setCityBreakdown(nextCity);
           setTypeBreakdown(nextType);
           setSubjectBreakdown(nextSubject);
           setStatusBreakdown(nextStatus);
+          setSlaRiskBreakdown(nextSlaRisk);
+          closeProgressDrill();
           return;
         }
 
-        const nextOrders = await (openScope
-          ? operationsApi.inProgressOrders(effectiveFilters, page)
-          : detailsScope === "openings"
-            ? operationsApi.openingOrders(effectiveFilters, page)
-            : operationsApi.orders(effectiveFilters, page));
+        const nextOrders = await (detailsScope === "openings"
+          ? operationsApi.openingOrders(effectiveFilters, page, 50, detailSort)
+          : operationsApi.orders(effectiveFilters, page, 50, detailSort));
         if (dashboardRequest.current !== requestId) return;
         setOrders(nextOrders);
       } catch (reason) {
@@ -690,6 +825,8 @@ export default function OperacaoPage() {
       activeTab,
       calendarGroupBy,
       detailsScope,
+      detailSort,
+      openingsGranularity,
       trendGranularity,
       workScheduleModelIds,
     ],
@@ -710,6 +847,7 @@ export default function OperacaoPage() {
           date_from: nextPeriod.date_from,
           date_to: nextPeriod.date_to,
           responsible_mode: "all",
+          sectors: [...DEFAULT_PRIORITY_SECTORS],
         };
         setPeriod(nextPeriod);
         setSavedFilters(nextSavedFilters);
@@ -748,14 +886,10 @@ export default function OperacaoPage() {
     [filters],
   );
   const visibleOrderItems = useMemo(() => {
-    return [...orders.items].sort((left, right) => {
-      const comparison = orderField(left, detailSort.key).localeCompare(
-        orderField(right, detailSort.key),
-        "pt-BR",
-        { numeric: true },
-      );
-      return detailSort.direction === "asc" ? comparison : -comparison;
-    });
+    // A ordenação em si já vem pronta do backend (ver changeDetailSort/loadDetailsPage) - ela
+    // cobre o dataset inteiro, não só a página carregada. Este useMemo só existe pra manter a
+    // mesma referência de variável usada na tabela abaixo.
+    return orders.items;
   }, [orders.items, detailSort]);
   const detailCellClass = (key: DetailSortKey, value: string | null) =>
     detailQuickFilter?.key === key && detailQuickFilter.value === (value || "")
@@ -776,11 +910,13 @@ export default function OperacaoPage() {
   }, []);
 
   function changeDetailSort(key: DetailSortKey) {
-    setDetailSort((current) => ({
-      key,
-      direction:
-        current.key === key && current.direction === "desc" ? "asc" : "desc",
-    }));
+    const direction: "asc" | "desc" =
+      detailSort.key === key && detailSort.direction === "desc"
+        ? "asc"
+        : "desc";
+    const nextSort = { key, direction };
+    setDetailSort(nextSort);
+    void loadDetailsPage(1, nextSort);
   }
 
   function detailSortMark(key: DetailSortKey) {
@@ -793,10 +929,7 @@ export default function OperacaoPage() {
     filterOptionsRequest.current = requestId;
     try {
       const openScope =
-        activeTab === "progress" ||
-        (activeTab === "details" && detailsScope === "in_progress") ||
-        !next.date_from ||
-        !next.date_to;
+        activeTab === "progress" || !next.date_from || !next.date_to;
       const nextOptions = await operationsApi.filters(
         next,
         openScope ? "in_progress" : "period",
@@ -848,6 +981,7 @@ export default function OperacaoPage() {
       date_from: period.date_from,
       date_to: period.date_to,
       responsible_mode: "all",
+      sectors: [...DEFAULT_PRIORITY_SECTORS],
     };
     setSelectedSavedFilterId(null);
     setFilterName("");
@@ -1055,33 +1189,18 @@ export default function OperacaoPage() {
     }
   }
 
-  async function drill(
-    group: "regional" | "os_type" | "subject" | "status" | "search",
-    value: string,
-    scope: "period" | "in_progress" = "period",
-  ) {
+  async function loadProgressDrill(target: ProgressDrillTarget) {
+    // Mesmo padrão da aba Aberturas: expande inline dentro da própria aba Andamento, sem tocar em
+    // `filters`/`activeTab` - sair do drill não deixa nada "grudado" no painel principal.
     if (!filters || !canViewOrderDetails) return;
-    const field =
-      group === "regional"
-        ? "regionals"
-        : group === "os_type"
-          ? "os_types"
-          : group === "subject"
-            ? "subjects"
-            : group === "status"
-              ? "statuses"
-              : "search";
-    const next = { ...filters, [field]: field === "search" ? value : [value] };
-    setFilters(next);
-    setDetailsScope(scope);
-    setActiveTab("details");
-    setLoading(true);
-    setError(null);
+    setProgressDrill(target);
+    setProgressDrillLoading(true);
     try {
-      setOrders(
-        scope === "in_progress"
-          ? await operationsApi.inProgressOrders(next)
-          : await operationsApi.orders(next),
+      const base = filtersForOpenScope(filters);
+      const next = target.kind === "dimension" ? { ...base, [target.field]: [target.value] } : base;
+      const slaRisk = target.kind === "sla_risk" ? target.bucket : undefined;
+      setProgressDrillOrders(
+        await operationsApi.inProgressOrders(next, 1, 25, { key: "opened_at", direction: "desc" }, slaRisk),
       );
     } catch (reason) {
       setError(
@@ -1090,21 +1209,126 @@ export default function OperacaoPage() {
           : "Falha ao abrir o detalhamento.",
       );
     } finally {
-      setLoading(false);
+      setProgressDrillLoading(false);
     }
   }
 
-  async function loadDetailsPage(page: number) {
+  function toggleProgressDrill(target: ProgressDrillTarget) {
+    if (progressDrill?.key === target.key) {
+      closeProgressDrill();
+      return;
+    }
+    void loadProgressDrill(target);
+  }
+
+  function closeProgressDrill() {
+    setProgressDrill(null);
+    setProgressDrillOrders(EMPTY_PAGE);
+  }
+
+  async function loadOpeningsDrill(
+    target: OpeningsDrillTarget,
+    extra?: { aging_bucket?: string; weekday?: number; hour?: number },
+  ) {
+    // Expande inline dentro da própria aba Aberturas - usa appliedFilters como base sem tocar em
+    // `filters`/`activeTab`, pra sair do drill não deixar o recorte "grudado" no painel principal.
+    // Clicar de novo no mesmo alvo (mesma barra/célula) fecha em vez de recarregar - ver `toggle`
+    // abaixo, chamado pelos três pontos de entrada (dimensão, envelhecimento, mapa de calor).
+    if (!appliedFilters || !canViewOrderDetails) return;
+    setOpeningsDrill(target);
+    setOpeningsDrillLoading(true);
+    try {
+      const filters =
+        target.kind === "dimension" ? { ...appliedFilters, [target.field]: [target.value] } : appliedFilters;
+      setOpeningsDrillOrders(
+        await operationsApi.openingOrders(
+          filters,
+          1,
+          25,
+          { key: "opened_at", direction: "desc" },
+          extra,
+        ),
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Falha ao abrir as O.S. de abertura.",
+      );
+    } finally {
+      setOpeningsDrillLoading(false);
+    }
+  }
+
+  function toggleOpeningsDrill(
+    target: OpeningsDrillTarget,
+    extra?: { aging_bucket?: string; weekday?: number; hour?: number },
+  ) {
+    if (openingsDrill?.key === target.key) {
+      closeOpeningsDrill();
+      return;
+    }
+    void loadOpeningsDrill(target, extra);
+  }
+
+  function drillOpenings(field: OpeningsDrillField, value: string) {
+    toggleOpeningsDrill({ kind: "dimension", field, value, key: `dimension:${field}:${value}` });
+  }
+
+  function drillAgingBucket(bucket: string, label: string) {
+    toggleOpeningsDrill({ kind: "aging", bucket, label, key: `aging:${bucket}` }, { aging_bucket: bucket });
+  }
+
+  function drillHeatmapSlot(weekday: number, hour: number, label: string) {
+    toggleOpeningsDrill(
+      { kind: "heatmap", weekday, hour, label, key: `heatmap:${weekday}:${hour}` },
+      { weekday, hour },
+    );
+  }
+
+  function closeOpeningsDrill() {
+    setOpeningsDrill(null);
+    setOpeningsDrillOrders(EMPTY_PAGE);
+  }
+
+  async function selectOpeningsPeriod(dateFrom: string, dateTo: string, label: string) {
+    // Recorte temporário só desse gráfico - usa appliedFilters como base sem tocar em `filters`, e
+    // sempre busca por dia (independente da granularidade escolhida) pra dar pra ver o detalhe diário
+    // do período clicado.
+    if (!appliedFilters) return;
+    setOpeningsTemporaryPeriod({ label, date_from: dateFrom, date_to: dateTo });
+    setOpeningsTemporaryLoading(true);
+    try {
+      const next = { ...appliedFilters, date_from: dateFrom, date_to: dateTo };
+      setOpeningsTemporaryData(await operationsApi.openingsAnalytics(next, "day"));
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Falha ao abrir o recorte temporário do gráfico.",
+      );
+    } finally {
+      setOpeningsTemporaryLoading(false);
+    }
+  }
+
+  function clearOpeningsPeriod() {
+    setOpeningsTemporaryPeriod(null);
+    setOpeningsTemporaryData(null);
+  }
+
+  async function loadDetailsPage(
+    page: number,
+    sort: { key: DetailSortKey; direction: "asc" | "desc" } = detailSort,
+  ) {
     if (!filters || !canViewOrderDetails) return;
     setLoading(true);
     setError(null);
     try {
       setOrders(
-        detailsScope === "in_progress"
-          ? await operationsApi.inProgressOrders(filters, page)
-          : detailsScope === "openings"
-            ? await operationsApi.openingOrders(filters, page)
-            : await operationsApi.orders(filters, page),
+        detailsScope === "openings"
+          ? await operationsApi.openingOrders(filters, page, 50, sort)
+          : await operationsApi.orders(filters, page, 50, sort),
       );
     } catch (reason) {
       setError(
@@ -1138,7 +1362,7 @@ export default function OperacaoPage() {
     setLoading(true);
     setError(null);
     try {
-      setOrders(await operationsApi.openingOrders(next));
+      setOrders(await operationsApi.openingOrders(next, 1, 50, detailSort));
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -1166,6 +1390,28 @@ export default function OperacaoPage() {
         reason instanceof Error
           ? reason.message
           : "Falha ao alterar o agrupamento dos gráficos.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function changeOpeningsGranularity(
+    nextGranularity: OperationTrendGranularity,
+  ) {
+    if (!appliedFilters || nextGranularity === openingsGranularity) return;
+    setOpeningsGranularity(nextGranularity);
+    setLoading(true);
+    setError(null);
+    try {
+      setOpeningsAnalytics(
+        await operationsApi.openingsAnalytics(appliedFilters, nextGranularity),
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Falha ao alterar o agrupamento do gráfico de aberturas.",
       );
     } finally {
       setLoading(false);
@@ -1289,10 +1535,7 @@ export default function OperacaoPage() {
         syncScopeLabel={`Escopo IXC: ${ixcSyncSettings?.sector_scope_label || "3 setores principais"}.`}
         canManageViews={canManageViews}
         canCreateGlobalViews={canCreateGlobalViews}
-        datesIgnored={
-          activeTab === "progress" ||
-          (activeTab === "details" && detailsScope === "in_progress")
-        }
+        datesIgnored={activeTab === "progress"}
         filterCount={filterCount}
         onChange={updateFilter}
         onApply={() => filters && applyFilters(filters)}
@@ -1424,6 +1667,31 @@ export default function OperacaoPage() {
             )}
           </TabsContent>
 
+          <TabsContent value="openings">
+            <OperationsOpeningsAnalytics
+              data={openingsTemporaryData || openingsAnalytics}
+              isLoading={loading || openingsTemporaryLoading}
+              onOpenOrders={(field, value) => drillOpenings(field, value)}
+              onOpenAgingBucket={(bucket, label) => drillAgingBucket(bucket, label)}
+              onOpenHeatmapSlot={(weekday, hour, label) => drillHeatmapSlot(weekday, hour, label)}
+              drill={openingsDrill}
+              drillOrders={openingsDrillOrders}
+              drillLoading={openingsDrillLoading}
+              onCloseDrill={closeOpeningsDrill}
+              granularity={openingsTemporaryData ? "day" : openingsGranularity}
+              onGranularityChange={
+                openingsTemporaryData
+                  ? undefined
+                  : (granularity) => void changeOpeningsGranularity(granularity)
+              }
+              temporaryPeriod={openingsTemporaryPeriod}
+              onSelectPeriod={(dateFrom, dateTo, label) =>
+                void selectOpeningsPeriod(dateFrom, dateTo, label)
+              }
+              onClearPeriod={clearOpeningsPeriod}
+            />
+          </TabsContent>
+
           <TabsContent value="sla">
             {appliedFilters ? (
               <OperationsSlaHierarchyTable
@@ -1488,28 +1756,67 @@ export default function OperacaoPage() {
                 </Button>
               ) : null}
             </div>
-            <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-4">
+            {progressDrill ? (
+              <ProgressDrillPanel
+                target={progressDrill}
+                orders={progressDrillOrders}
+                isLoading={progressDrillLoading}
+                onClose={closeProgressDrill}
+              />
+            ) : null}
+            <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
               <BreakdownTable
                 title="Filial"
                 items={regionalBreakdown}
+                activeLabel={progressDrill?.kind === "dimension" && progressDrill.field === "regionals" ? progressDrill.value : null}
                 onDrill={(value) =>
-                  void drill("regional", value, "in_progress")
+                  toggleProgressDrill({ kind: "dimension", field: "regionals", value, key: `regionals:${value}` })
+                }
+              />
+              <BreakdownTable
+                title="Cidade"
+                items={cityBreakdown}
+                activeLabel={progressDrill?.kind === "dimension" && progressDrill.field === "cities" ? progressDrill.value : null}
+                onDrill={(value) =>
+                  toggleProgressDrill({ kind: "dimension", field: "cities", value, key: `cities:${value}` })
                 }
               />
               <BreakdownTable
                 title="Tipo geral"
                 items={typeBreakdown}
-                onDrill={(value) => void drill("os_type", value, "in_progress")}
+                activeLabel={progressDrill?.kind === "dimension" && progressDrill.field === "os_types" ? progressDrill.value : null}
+                onDrill={(value) =>
+                  toggleProgressDrill({ kind: "dimension", field: "os_types", value, key: `os_types:${value}` })
+                }
               />
               <BreakdownTable
                 title="Assunto"
                 items={subjectBreakdown}
-                onDrill={(value) => void drill("subject", value, "in_progress")}
+                activeLabel={progressDrill?.kind === "dimension" && progressDrill.field === "subjects" ? progressDrill.value : null}
+                onDrill={(value) =>
+                  toggleProgressDrill({ kind: "dimension", field: "subjects", value, key: `subjects:${value}` })
+                }
               />
               <BreakdownTable
                 title="SLA / Status"
                 items={statusBreakdown}
-                onDrill={(value) => void drill("status", value, "in_progress")}
+                activeLabel={progressDrill?.kind === "dimension" && progressDrill.field === "statuses" ? progressDrill.value : null}
+                onDrill={(value) =>
+                  toggleProgressDrill({ kind: "dimension", field: "statuses", value, key: `statuses:${value}` })
+                }
+              />
+              <BreakdownTable
+                title="SLA em risco (backlog)"
+                items={slaRiskBreakdown}
+                activeLabel={
+                  progressDrill?.kind === "sla_risk"
+                    ? slaRiskBreakdown.find((entry) => entry.bucket === progressDrill.bucket)?.label
+                    : null
+                }
+                onDrill={(label) => {
+                  const item = slaRiskBreakdown.find((entry) => entry.label === label);
+                  if (item) toggleProgressDrill({ kind: "sla_risk", bucket: item.bucket, label: item.label, key: `sla_risk:${item.bucket}` });
+                }}
               />
             </div>
           </TabsContent>
@@ -1518,21 +1825,22 @@ export default function OperacaoPage() {
             <Card ref={detailTableRef} className="rounded-2xl border-slate-200">
               <CardHeader className="flex-row items-center justify-between gap-4">
                 <div>
-                  <CardTitle className="text-base font-semibold text-slate-900">
-                    {detailsScope === "in_progress"
-                      ? "O.S. em andamento"
-                      : detailsScope === "openings"
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CardTitle className="text-base font-semibold text-slate-900">
+                      {detailsScope === "openings"
                         ? "Aberturas do alerta operacional"
                         : "Detalhamento de O.S."}
-                  </CardTitle>
+                    </CardTitle>
+                    <Badge className="border-blue-200 bg-blue-50 text-blue-800">
+                      {orders.total} O.S. no total
+                    </Badge>
+                  </div>
                   <p className="mt-1 text-xs text-slate-500">
-                    Linhas: {orders.total}. Ordene pelo cabeçalho; Ctrl/Cmd +
-                    clique em um dado cria um recorte temporário.{" "}
-                    {detailsScope === "in_progress"
-                      ? "Sem limitação por data de abertura."
-                      : detailsScope === "openings"
-                        ? "Somente O.S. abertas nos 7 dias analisados, preservando o caminho selecionado."
-                        : "Os filtros do painel são preservados."}
+                    Ordene pelo cabeçalho (considera todas as páginas); Ctrl/Cmd
+                    + clique em um dado cria um recorte temporário.{" "}
+                    {detailsScope === "openings"
+                      ? "Somente O.S. abertas nos 7 dias analisados, preservando o caminho selecionado."
+                      : "Os filtros do painel são preservados."}
                   </p>
                   {detailQuickFilter ? (
                     <Badge className="mt-2 border-blue-200 bg-blue-50 text-blue-800">

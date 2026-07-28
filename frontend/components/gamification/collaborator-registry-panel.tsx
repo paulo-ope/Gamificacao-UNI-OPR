@@ -102,7 +102,7 @@ function SummaryCard({
 }) {
   const accentClass =
     accent === "highlight"
-      ? "text-blue-700"
+      ? "text-uni-royal"
       : accent === "warning"
         ? "text-amber-700"
         : "text-slate-950";

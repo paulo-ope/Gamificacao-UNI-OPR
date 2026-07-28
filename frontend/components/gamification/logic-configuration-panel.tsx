@@ -34,6 +34,7 @@ import { api } from "@/lib/api";
 import { formatInteger, formatMoney, formatPoints } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type {
+  CpkRegionalSnapshot,
   DiagnosisActionType,
   FinancialBreakdownItem,
   GamificationConfig,
@@ -117,6 +118,15 @@ const ADVANCED_SECTIONS: Array<{ value: ConfigSection; label: string; help: stri
 const IXC_SYNC_ENABLED_KEY = "ixc_sync_enabled";
 const IXC_SYNC_INTERVAL_MINUTES_KEY = "ixc_sync_interval_minutes";
 const IXC_SYNC_AUTO_RECALCULATE_KEY = "ixc_sync_auto_recalculate";
+
+const CPK_SYNC_ENABLED_KEY = "cpk_sync_enabled";
+const CPK_BONUS_POINTS_KEY = "cpk_bonus_points";
+
+const CPK_STATUS_LABEL: Record<string, string> = {
+  na_meta: "Na meta",
+  fora_meta: "Fora da meta",
+  sem_base: "Sem base"
+};
 
 
 function replaceById<T extends { id: number }>(items: T[], id: number, patch: Partial<T>) {
@@ -356,7 +366,7 @@ function SearchableMultiSelect({
                   <span
                     className={cn(
                       "flex h-4 w-4 items-center justify-center rounded border",
-                      checked ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white text-transparent"
+                      checked ? "border-uni-royal bg-uni-royal text-white" : "border-slate-300 bg-white text-transparent"
                     )}
                   >
                     {checked ? <Check className="h-3 w-3" /> : null}
@@ -429,6 +439,10 @@ export function LogicConfigurationPanel({
   const [query, setQuery] = useState("");
   const [config, setConfig] = useState<GamificationConfig | null>(null);
   const [localSettings, setLocalSettings] = useState<Record<string, string>>({});
+  const [cpkSnapshotRows, setCpkSnapshotRows] = useState<CpkRegionalSnapshot[]>([]);
+  const [cpkSyncing, setCpkSyncing] = useState(false);
+  const now = new Date();
+  const [cpkPeriod, setCpkPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -487,6 +501,11 @@ export function LogicConfigurationPanel({
       })
       .catch((err: Error) => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    if (configSection !== "integration") return;
+    void loadCpkSnapshot(cpkPeriod.year, cpkPeriod.month);
+  }, [configSection, cpkPeriod.year, cpkPeriod.month]);
 
   useEffect(() => {
     if (mode === "simple" && !SIMPLE_SECTIONS.some((section) => section.value === configSection)) {
@@ -790,6 +809,9 @@ export function LogicConfigurationPanel({
       setConfig(saved);
       setLocalSettings(saved.settings ?? {});
       await onReload();
+      if (saved.warnings?.length) {
+        setError(`Salvo com avisos: ${saved.warnings.join(" | ")}`);
+      }
     }, "Configuração permanente salva e versionada.");
   }
 
@@ -809,6 +831,9 @@ export function LogicConfigurationPanel({
       setConfig(imported);
       setLocalSettings(imported.settings ?? {});
       await onReload();
+      if (imported.warnings?.length) {
+        setError(`Importado com avisos: ${imported.warnings.join(" | ")}`);
+      }
     }, "Configuração JSON importada sem apagar histórico.");
     if (fileRef.current) fileRef.current.value = "";
   }
@@ -819,6 +844,9 @@ export function LogicConfigurationPanel({
       setConfig(defaults);
       setLocalSettings(defaults.settings ?? {});
       await onReload();
+      if (defaults.warnings?.length) {
+        setError(`Restaurado com avisos: ${defaults.warnings.join(" | ")}`);
+      }
     }, "Configuração padrão restaurada.");
   }
 
@@ -836,6 +864,30 @@ export function LogicConfigurationPanel({
       setLocalSettings(saved.settings ?? {});
       await onReload();
     }, "Parâmetro operacional salvo.");
+  }
+
+  async function loadCpkSnapshot(year: number, month: number) {
+    try {
+      const rows = await api.cpkSnapshot(year, month);
+      setCpkSnapshotRows(rows);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao carregar snapshot de CPK.");
+    }
+  }
+
+  async function syncCpk() {
+    setCpkSyncing(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const rows = await api.syncCpkSnapshot(cpkPeriod.year, cpkPeriod.month);
+      setCpkSnapshotRows(rows);
+      setMessage("Sincronização de CPK concluída.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao sincronizar CPK.");
+    } finally {
+      setCpkSyncing(false);
+    }
   }
 
   async function saveHealthRule(rule: HealthRule) {
@@ -1071,6 +1123,7 @@ export function LogicConfigurationPanel({
       classification: (newRecurrenceRule.classification ?? "nao_identificado") as RecurrenceClassificationValue,
       discount_points: Boolean(newRecurrenceRule.discount_points),
       max_days: newRecurrenceRule.max_days ?? null,
+      min_hours_between: newRecurrenceRule.min_hours_between ?? null,
       require_same_subject: Boolean(newRecurrenceRule.require_same_subject),
       require_same_diagnosis: Boolean(newRecurrenceRule.require_same_diagnosis),
       priority: Number(newRecurrenceRule.priority ?? 100),
@@ -1195,7 +1248,7 @@ export function LogicConfigurationPanel({
                   <div className="text-sm font-semibold text-slate-950">{row.os_type}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge className="border-slate-200 bg-slate-50 text-slate-700">{formatInteger(row.subjects)} assunto(s)</Badge>
-                    <Badge className="border-blue-200 bg-blue-50 text-blue-700">{formatInteger(row.orders)} O.S</Badge>
+                    <Badge className="border-blue-200 bg-blue-50 text-uni-royal">{formatInteger(row.orders)} O.S</Badge>
                   </div>
                 </div>
               ))}
@@ -1236,7 +1289,7 @@ export function LogicConfigurationPanel({
                     </TableCell>
                     <TableCell>{formatInteger(row.subjects)}</TableCell>
                     <TableCell>{formatInteger(row.orders)}</TableCell>
-                    <TableCell className="font-medium text-blue-700">{formatMoney(row.impact)}</TableCell>
+                    <TableCell className="font-medium text-uni-royal">{formatMoney(row.impact)}</TableCell>
                     <TableCell className="min-w-96">
                       <div className="grid gap-2">
                         <div className="flex flex-wrap gap-2">
@@ -1251,7 +1304,7 @@ export function LogicConfigurationPanel({
                         </div>
                         <button
                           type="button"
-                          className="w-fit text-xs font-semibold text-blue-700 hover:text-blue-900"
+                          className="w-fit text-xs font-semibold text-uni-royal hover:text-uni-midnight"
                           onClick={() =>
                             setExpandedTypes((current) => ({
                               ...current,
@@ -1327,7 +1380,7 @@ export function LogicConfigurationPanel({
                                     </div>
                                   </div>
                                   <Badge className={subjectStatusClass(status)}>{subjectStatusLabel(status)}</Badge>
-                                  <div className="text-sm font-semibold text-blue-700">{formatMoney(stats.impact)}</div>
+                                  <div className="text-sm font-semibold text-uni-royal">{formatMoney(stats.impact)}</div>
                                 </div>
                               );
                             })}
@@ -1439,7 +1492,7 @@ export function LogicConfigurationPanel({
                           <StatusBadge tone="success" className="border-emerald-200 bg-emerald-50 text-emerald-800">
                             {formatInteger(rules.length)} assuntos
                           </StatusBadge>
-                          <StatusBadge tone="success" className="border-blue-200 bg-blue-50 text-blue-700">
+                          <StatusBadge tone="success" className="border-blue-200 bg-blue-50 text-uni-royal">
                             {formatInteger(orders)} O.S
                           </StatusBadge>
                           <StatusBadge tone="success" className="border-emerald-200 bg-emerald-50 text-emerald-700">
@@ -1600,7 +1653,7 @@ export function LogicConfigurationPanel({
                     </TableCell>
                     <TableCell>
                       <div className="font-medium">{formatInteger(stats.orders)}</div>
-                      <div className="text-xs font-medium text-blue-700">{formatMoney(stats.impact)}</div>
+                      <div className="text-xs font-medium text-uni-royal">{formatMoney(stats.impact)}</div>
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-2">
@@ -1725,7 +1778,7 @@ export function LogicConfigurationPanel({
                         />
                         <div className="mt-1 text-xs text-slate-500">{pointsField.helper}</div>
                       </TableCell>
-                      <TableCell className="font-medium text-blue-700">{formatMoney(item.estimated_impact)}</TableCell>
+                      <TableCell className="font-medium text-uni-royal">{formatMoney(item.estimated_impact)}</TableCell>
                       <TableCell>
                         <Badge className={item.has_rule ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-800"}>
                           {item.has_rule ? "Configurado" : "Sem regra"}
@@ -1881,7 +1934,7 @@ export function LogicConfigurationPanel({
                           <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
                             <input
                               type="checkbox"
-                              className="h-4 w-4 accent-blue-700"
+                              className="h-4 w-4 accent-uni-royal"
                               checked={rule.active}
                               onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { active: event.target.checked }))}
                             />
@@ -1967,7 +2020,7 @@ export function LogicConfigurationPanel({
                 ["7", "Auditoria mostra evidências"]
               ].map(([step, label]) => (
                 <div key={step} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-                  <div className="mb-2 flex h-6 w-6 items-center justify-center rounded-full bg-blue-700 text-xs font-semibold text-white">{step}</div>
+                  <div className="mb-2 flex h-6 w-6 items-center justify-center rounded-full bg-uni-royal text-xs font-semibold text-white">{step}</div>
                   <div className="text-xs font-semibold text-slate-700">{label}</div>
                 </div>
               ))}
@@ -2018,7 +2071,7 @@ export function LogicConfigurationPanel({
                         <label key={field} className="flex items-center gap-2">
                           <input
                             type="checkbox"
-                            className="h-4 w-4 accent-blue-700"
+                            className="h-4 w-4 accent-uni-royal"
                             checked={recurrenceIdentityFields(localSettings).includes(field)}
                             disabled={field === "cpf_cnpj"}
                             onChange={(event) => {
@@ -2187,7 +2240,7 @@ export function LogicConfigurationPanel({
                       >
                         <input
                           type="checkbox"
-                          className="h-4 w-4 accent-blue-700"
+                          className="h-4 w-4 accent-uni-royal"
                           checked={Boolean(newRecurrenceRule.discount_points)}
                           disabled={!classificationSupportsDiscount(newRecurrenceRule.classification ?? "reincidencia_tecnica")}
                           onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, discount_points: event.target.checked })}
@@ -2197,7 +2250,7 @@ export function LogicConfigurationPanel({
                       <label className="flex items-center gap-2 text-sm">
                         <input
                           type="checkbox"
-                          className="h-4 w-4 accent-blue-700"
+                          className="h-4 w-4 accent-uni-royal"
                           checked={Boolean(newRecurrenceRule.require_same_subject)}
                           onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_subject: event.target.checked })}
                         />
@@ -2206,7 +2259,7 @@ export function LogicConfigurationPanel({
                       <label className="flex items-center gap-2 text-sm">
                         <input
                           type="checkbox"
-                          className="h-4 w-4 accent-blue-700"
+                          className="h-4 w-4 accent-uni-royal"
                           checked={Boolean(newRecurrenceRule.require_same_diagnosis)}
                           onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_diagnosis: event.target.checked })}
                         />
@@ -2228,6 +2281,25 @@ export function LogicConfigurationPanel({
                           onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, priority: Number(event.target.value || 0) })}
                         />
                         <p className="text-[11px] text-slate-500">Regras com prioridade menor são conferidas primeiro quando mais de uma bate com a mesma O.S.</p>
+                      </div>
+                      <div className="grid gap-2">
+                        <Label>Intervalo mínimo</Label>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            inputMode="numeric"
+                            className="w-28"
+                            value={newRecurrenceRule.min_hours_between ?? ""}
+                            placeholder="Sem mínimo"
+                            onChange={(event) =>
+                              setNewRecurrenceRule({
+                                ...newRecurrenceRule,
+                                min_hours_between: event.target.value === "" ? null : Number(event.target.value)
+                              })
+                            }
+                          />
+                          <span className="text-xs text-slate-500">horas</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">Só conta como reincidência se a O.S posterior abrir pelo menos essas horas depois da original.</p>
                       </div>
                       <Button onClick={() => void createRecurrenceRule()}>Criar regra</Button>
                     </div>
@@ -2258,11 +2330,14 @@ export function LogicConfigurationPanel({
                         <Badge className={rule.active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-700"}>
                           {rule.active ? "Ativa" : "Inativa"}
                         </Badge>
-                        <Badge className="border-blue-200 bg-blue-50 text-blue-700">{recurrenceClassificationLabel(rule.classification)}</Badge>
+                        <Badge className="border-blue-200 bg-blue-50 text-uni-royal">{recurrenceClassificationLabel(rule.classification)}</Badge>
                         <Badge className={rule.discount_points ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}>
                           {rule.discount_points ? "Anula O.S original" : "Apenas sinaliza"}
                         </Badge>
                         <Badge className="border-slate-200 bg-white text-slate-700">Janela: {rule.max_days ?? localSettings.recurrence_window_days ?? "30"} dias</Badge>
+                        {rule.min_hours_between != null ? (
+                          <Badge className="border-slate-200 bg-white text-slate-700">Mínimo: {rule.min_hours_between}h</Badge>
+                        ) : null}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -2349,7 +2424,7 @@ export function LogicConfigurationPanel({
                           ]}
                         />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         <div className="grid gap-2">
                           <Label>Janela da regra</Label>
                           <div className="flex items-center gap-2">
@@ -2369,6 +2444,24 @@ export function LogicConfigurationPanel({
                           </div>
                         </div>
                         <div className="grid gap-2">
+                          <Label>Intervalo mínimo</Label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              inputMode="numeric"
+                              value={rule.min_hours_between ?? ""}
+                              placeholder="Sem mínimo"
+                              onChange={(event) =>
+                                setRecurrenceRules(
+                                  replaceById(recurrenceRules, rule.id, {
+                                    min_hours_between: event.target.value === "" ? null : Number(event.target.value)
+                                  })
+                                )
+                              }
+                            />
+                            <span className="text-xs text-slate-500">horas</span>
+                          </div>
+                        </div>
+                        <div className="grid gap-2">
                           <Label>Prioridade</Label>
                           <Input
                             type="number"
@@ -2379,6 +2472,9 @@ export function LogicConfigurationPanel({
                           />
                         </div>
                       </div>
+                      <p className="text-[11px] text-slate-500">
+                        Intervalo mínimo: só conta como reincidência se a O.S posterior abrir pelo menos essas horas depois da original (evita marcar visitas quase simultâneas).
+                      </p>
                       <label
                         className={cn(
                           "flex items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs leading-snug",
@@ -2387,7 +2483,7 @@ export function LogicConfigurationPanel({
                       >
                         <input
                           type="checkbox"
-                          className="mt-0.5 h-4 w-4 shrink-0 accent-blue-700"
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-uni-royal"
                           checked={rule.discount_points}
                           disabled={!classificationSupportsDiscount(rule.classification)}
                           onChange={(event) =>
@@ -2403,7 +2499,7 @@ export function LogicConfigurationPanel({
                         <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
                           <input
                             type="checkbox"
-                            className="h-4 w-4 shrink-0 accent-blue-700"
+                            className="h-4 w-4 shrink-0 accent-uni-royal"
                             checked={rule.require_same_subject}
                             onChange={(event) =>
                               setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_subject: event.target.checked }))
@@ -2414,7 +2510,7 @@ export function LogicConfigurationPanel({
                         <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
                           <input
                             type="checkbox"
-                            className="h-4 w-4 shrink-0 accent-blue-700"
+                            className="h-4 w-4 shrink-0 accent-uni-royal"
                             checked={rule.require_same_diagnosis}
                             onChange={(event) =>
                               setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_diagnosis: event.target.checked }))
@@ -2426,7 +2522,7 @@ export function LogicConfigurationPanel({
                       <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
                         <input
                           type="checkbox"
-                          className="h-4 w-4 shrink-0 accent-blue-700"
+                          className="h-4 w-4 shrink-0 accent-uni-royal"
                           checked={rule.active}
                           onChange={(event) => setRecurrenceRules(replaceById(recurrenceRules, rule.id, { active: event.target.checked }))}
                         />
@@ -2447,6 +2543,7 @@ export function LogicConfigurationPanel({
           ) : null}
 
           {configSection === "integration" ? (
+          <>
           <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
             <div className="panel-header">
               <div>
@@ -2507,6 +2604,109 @@ export function LogicConfigurationPanel({
               </div>
             </div>
           </section>
+
+          <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+            <div className="panel-header">
+              <div>
+                <h3 className="panel-title">Integração CPK</h3>
+                <p className="panel-subtitle">
+                  Ajusta o multiplicador de saúde da regional com base no indicador de Custo Por Km (CPK) da frota:
+                  bônus quando a regional está na meta, penalidade quando está fora.
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-4 p-5 md:grid-cols-2">
+              <div className="grid gap-2">
+                <Label>Sincronização automática</Label>
+                <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                  <AppSwitch
+                    checked={(localSettings[CPK_SYNC_ENABLED_KEY] ?? "false") === "true"}
+                    onCheckedChange={(checked) => {
+                      const value = checked ? "true" : "false";
+                      setLocalSettings({ ...localSettings, [CPK_SYNC_ENABLED_KEY]: value });
+                      void saveSettings({ [CPK_SYNC_ENABLED_KEY]: value });
+                    }}
+                  />
+                  <span className="text-sm text-slate-700">
+                    {(localSettings[CPK_SYNC_ENABLED_KEY] ?? "false") === "true" ? "Ligada" : "Desligada"}
+                  </span>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <Label>Bônus/penalidade no multiplicador (pontos)</Label>
+                <Input
+                  inputMode="decimal"
+                  value={localSettings[CPK_BONUS_POINTS_KEY] ?? ""}
+                  onChange={(event) => setLocalSettings({ ...localSettings, [CPK_BONUS_POINTS_KEY]: event.target.value })}
+                  onBlur={(event) => saveSettings({ [CPK_BONUS_POINTS_KEY]: event.target.value })}
+                  placeholder="Ex.: 0.2"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Ano de referência</Label>
+                <Input
+                  inputMode="numeric"
+                  value={cpkPeriod.year}
+                  onChange={(event) => setCpkPeriod({ ...cpkPeriod, year: Number(event.target.value) || cpkPeriod.year })}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Mês de referência</Label>
+                <Input
+                  inputMode="numeric"
+                  value={cpkPeriod.month}
+                  onChange={(event) => setCpkPeriod({ ...cpkPeriod, month: Number(event.target.value) || cpkPeriod.month })}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <Button variant="outline" onClick={() => void syncCpk()} disabled={cpkSyncing}>
+                  {cpkSyncing ? "Sincronizando..." : "Sincronizar agora"}
+                </Button>
+              </div>
+              <div className="md:col-span-2">
+                <p className="text-xs text-slate-500 mb-2">
+                  Último snapshot sincronizado por regional para o período selecionado - confira os números antes de
+                  confiar neles. Um mês ainda em andamento (não fechado pela frota) sempre aparece como "Sem base".
+                </p>
+                {cpkSnapshotRows.length === 0 ? (
+                  <EmptyState
+                    title="Nenhum snapshot sincronizado"
+                    description='Clique em "Sincronizar agora" para buscar os dados de CPK desse período.'
+                  />
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Regional</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>CPK realizado</TableHead>
+                        <TableHead>CPK meta</TableHead>
+                        <TableHead>Mês fechado</TableHead>
+                        <TableHead>Sincronizado em</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {cpkSnapshotRows.map((row) => (
+                        <TableRow key={row.regional}>
+                          <TableCell>{row.regional}</TableCell>
+                          <TableCell>
+                            <StatusBadge tone={row.status === "na_meta" ? "success" : row.status === "fora_meta" ? "danger" : "neutral"}>
+                              {CPK_STATUS_LABEL[row.status] ?? row.status}
+                            </StatusBadge>
+                          </TableCell>
+                          <TableCell>{row.cpk_realizado ?? "-"}</TableCell>
+                          <TableCell>{row.cpk_meta ?? "-"}</TableCell>
+                          <TableCell>{row.mes_fechado ? "Sim" : "Não"}</TableCell>
+                          <TableCell>{new Date(row.synced_at).toLocaleString("pt-BR")}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </div>
+          </section>
+          </>
           ) : null}
 
           {configSection === "advanced" && mode === "advanced" ? (
@@ -2745,7 +2945,7 @@ export function LogicConfigurationPanel({
                         <label className="flex items-center gap-2 text-xs text-slate-600">
                           <input
                             type="checkbox"
-                            className="h-4 w-4 accent-blue-700"
+                            className="h-4 w-4 accent-uni-royal"
                             checked={currentEditingSubject.use_group_default}
                             onChange={(event) =>
                               setSubjectRules(replaceById(subjectRules, currentEditingSubject.id, { use_group_default: event.target.checked }))

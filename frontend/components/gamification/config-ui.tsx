@@ -83,7 +83,7 @@ export function AppCheckbox({
       onClick={() => onCheckedChange(!checked)}
       className={cn(
         "flex h-5 w-5 items-center justify-center rounded border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        checked ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white hover:border-slate-400"
+        checked ? "border-uni-royal bg-uni-royal text-white" : "border-slate-300 bg-white hover:border-slate-400"
       )}
     >
       {checked ? <Check className="h-3.5 w-3.5" /> : null}
@@ -198,7 +198,7 @@ export function AppCombobox({
                     <span
                       className={cn(
                         "ml-3 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                        checked ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white text-transparent"
+                        checked ? "border-uni-royal bg-uni-royal text-white" : "border-slate-300 bg-white text-transparent"
                       )}
                     >
                       <Check className="h-3 w-3" />
@@ -415,10 +415,10 @@ export function StepHeroCard({
 }) {
   const accentClass =
     accent === "blue"
-      ? "border-blue-200 bg-blue-50 text-blue-700"
+      ? "border-blue-200 bg-blue-50 text-uni-royal"
       : accent === "amber"
         ? "border-amber-200 bg-amber-50 text-amber-700"
-        : "border-blue-200 bg-blue-50 text-blue-700";
+        : "border-blue-200 bg-blue-50 text-uni-royal";
 
   return (
     <div className={cn(configCardClass, "flex items-start gap-4")}>
@@ -496,7 +496,7 @@ export function StatusBadge({
         : tone === "danger"
           ? "border-red-200 bg-red-50 text-red-700"
           : tone === "info"
-            ? "border-blue-200 bg-blue-50 text-blue-700"
+            ? "border-blue-200 bg-blue-50 text-uni-royal"
             : "border-slate-200 bg-slate-50 text-slate-700";
   return <Badge className={cn(toneClass, className)}>{children}</Badge>;
 }
@@ -507,7 +507,7 @@ export function StatusBadge({
 // um blob buscado com autenticação, não uma URL pública) e cai pras iniciais coloridas (hash simples
 // do nome, pra variar a cor em vez do tom fixo único que os dois lugares antigos usavam).
 const AVATAR_COLOR_CLASSES = [
-  "bg-blue-600",
+  "bg-uni-royal",
   "bg-sky-600",
   "bg-violet-600",
   "bg-rose-600",
@@ -666,7 +666,7 @@ export function RegionalMultiSelect({
                       <span
                         className={cn(
                           "flex h-4 w-4 items-center justify-center rounded border",
-                          checked ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white text-transparent",
+                          checked ? "border-uni-royal bg-uni-royal text-white" : "border-slate-300 bg-white text-transparent",
                         )}
                       >
                         <Check className="h-3 w-3" />

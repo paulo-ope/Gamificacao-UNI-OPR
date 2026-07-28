@@ -28,7 +28,7 @@ export function ClosureHistoryPanel({ runs }: Props) {
           </div>
         </div>
         {latest ? (
-          <Badge className="border-blue-200 bg-blue-50 text-blue-700">
+          <Badge className="border-blue-200 bg-blue-50 text-uni-royal">
             Última apuração #{latest.id} - {latest.reference_month}/{latest.reference_year}
           </Badge>
         ) : null}
@@ -108,7 +108,7 @@ export function ClosureHistoryPanel({ runs }: Props) {
                 <TableCell>{formatPoints(run.gross_points)}</TableCell>
                 <TableCell className="text-red-600">{formatAnnulledPoints(run.penalty_points)}</TableCell>
                 <TableCell className="font-semibold">{formatPoints(run.final_points)}</TableCell>
-                <TableCell className="font-semibold text-blue-700">{formatMoney(run.estimated_payment)}</TableCell>
+                <TableCell className="font-semibold text-uni-royal">{formatMoney(run.estimated_payment)}</TableCell>
                 <TableCell className="min-w-56">
                   <div className="truncate font-medium text-slate-950" title={run.top_collaborator_name ?? ""}>
                     {run.top_collaborator_name ?? "-"}

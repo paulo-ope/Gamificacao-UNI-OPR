@@ -19,7 +19,7 @@ from app.services.ixc_importer import (
     load_subject_rule_os_type_mapping,
 )
 from app.services.point_balance import detect_post_payment_warranty_debits
-from app.services.regional import is_valid_regional
+from app.services.regional import is_valid_regional, normalize_regional_grouped
 from app.services.upvalue_importer import (
     UNKNOWN_VALUE,
     add_import_audit,
@@ -66,8 +66,10 @@ def _resolve_collaborator(
                     if not is_valid_regional(collaborator.regional):
                         collaborator.regional = regional
                 if not collaborator.active:
+                    # Achado real: ver o mesmo comentario em upvalue_importer.get_or_create_collaborator -
+                    # forcar is_registered=False aqui derrubava o cadastro de quem so tinha sido
+                    # desativado temporariamente (nao excluido) pela tela.
                     collaborator.active = True
-                    collaborator.is_registered = False
                 return collaborator, False
 
     collaborator, created = get_or_create_collaborator(
@@ -102,7 +104,10 @@ def build_service_order_payload_from_operation_order(
         "customer_name": order.customer_name or "Não informado",
         "collaborator_name": order.responsible or UNKNOWN_VALUE,
         "responsible_ixc_id": order.responsible_ixc_id,
-        "regional": order.regional or UNKNOWN_VALUE,
+        # Agrupado porque `operations_orders.regional` vem granular por filial (é a identidade da
+        # Operação Analítica) e a gamificação apura/paga São Miguel do Guaporé, Seringueiras e São
+        # Francisco do Guaporé como uma regional só.
+        "regional": normalize_regional_grouped(order.regional) if order.regional else UNKNOWN_VALUE,
         "os_type": os_type,
         "os_subject": os_subject,
         "diagnosis": order.diagnosis or "Não informado",

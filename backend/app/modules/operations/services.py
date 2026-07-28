@@ -673,6 +673,32 @@ def _control_metrics(
     else:
         status = "normal"
 
+    # Explica o status em linguagem direta - a classificação acima combina 8 condições em OR e sem
+    # isso o usuário via só o resultado ("crítico") sem entender qual sinal específico disparou.
+    reasons: list[str] = []
+    if status in ("critical", "attention"):
+        if persistent_days >= 1:
+            reasons.append(f"{persistent_days} dia(s) consecutivo(s) com aberturas acima do limite esperado.")
+        if positive_deviation > 0:
+            reasons.append(f"Aberturas {round(positive_deviation)}% acima do esperado para o período.")
+        if (pressure_ratio or 0) >= 1.1 and net_flow > 0:
+            reasons.append(f"Entrando {round(pressure_ratio, 1)}x mais O.S. do que a equipe está finalizando.")
+        if backlog >= 5 and overdue_rate >= 0.3 and net_flow > 0:
+            reasons.append(f"{round(overdue_rate * 100)}% do backlog já está vencido, com o estoque crescendo.")
+        if not reasons:
+            reasons.append("Padrão de entrada fora do esperado para o período.")
+        if opened_recent < 10:
+            # Com poucas O.S. no total, um desvio grande em % (ex.: 5 O.S. quando 2 eram esperadas)
+            # já dispara o alerta neste nível agregado, mas some quando espalhado por regional/cidade/
+            # setor/responsável - cada recorte menor fica sem volume suficiente para acionar o mesmo
+            # limite (o alerta exige pelo menos 3 O.S. recentes para considerar o desvio significativo).
+            # Sem essa nota, parece contraditório "crítico aqui, normal em todo filho".
+            reasons.append(
+                f"Volume baixo em números absolutos ({opened_recent} O.S. no total) - por isso o alerta "
+                "aparece neste recorte agregado, mas pode não repetir em cada regional/cidade/setor "
+                "aberto individualmente, já que cada um recebe uma fração ainda menor dessas O.S."
+            )
+
     return {
         "status": status,
         "opened_recent": opened_recent,
@@ -685,6 +711,7 @@ def _control_metrics(
         "overdue_backlog": overdue_backlog,
         "average_backlog_age_hours": round(average_backlog_age_hours, 1) if average_backlog_age_hours is not None else None,
         "persistent_days": persistent_days,
+        "reasons": reasons,
     }
 
 
@@ -787,6 +814,10 @@ def control_tower(
     summary["attention_nodes"] = sum(1 for item in items if item["status"] == "attention")
     if summary["status"] == "normal" and (summary["critical_nodes"] or summary["attention_nodes"]):
         summary["status"] = "attention"
+        summary["reasons"] = [
+            f"{summary['critical_nodes']} assunto(s) crítico(s) e {summary['attention_nodes']} em atenção, "
+            "mesmo com o total geral dentro do esperado."
+        ]
 
     timeline_dates = [reference_date - timedelta(days=offset) for offset in reversed(range(timeline_days))]
     running_backlog = total_backlog

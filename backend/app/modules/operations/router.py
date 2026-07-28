@@ -15,9 +15,12 @@ from app.services.audit_log import record_audit_log, snapshot
 from app.services.calculation import get_setting, upsert_setting
 from app.services.ixc_scheduler import (
     IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES_KEY,
+    IXC_SYNC_DEFAULT_LOOKBACK_DAYS,
     IXC_SYNC_ENABLED_KEY,
     IXC_SYNC_INTERVAL_MINUTES_KEY,
+    IXC_SYNC_LOOKBACK_DAYS_KEY,
     IXC_SYNC_SECTOR_IDS_KEY,
+    recompute_next_allowed_at,
 )
 from app.services.ixc_client import IxcApiError, IxcQueryLimitError, get_ixc_client
 
@@ -28,6 +31,7 @@ from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
 from .schemas import (
     OperationBreakdownItem,
+    OperationSlaRiskItem,
     OperationBackfillJobOut,
     OperationCalendar,
     OperationCalendarDayDetail,
@@ -43,6 +47,7 @@ from .schemas import (
     OperationIxcSyncSettings,
     OperationIxcSyncSettingsUpdate,
     OperationIxcCollaboratorSyncResult,
+    OperationOpeningsAnalytics,
     OperationOrderPage,
     OperationOverview,
     OperationWorkScheduleOverview,
@@ -116,6 +121,12 @@ def _sync_settings_response(db: Session) -> dict:
             60,
             minimum=15,
             maximum=1440,
+        ),
+        "lookback_days": _int_setting(
+            get_setting(db, IXC_SYNC_LOOKBACK_DAYS_KEY, ""),
+            IXC_SYNC_DEFAULT_LOOKBACK_DAYS,
+            minimum=1,
+            maximum=30,
         ),
         "sector_ids": sector_ids,
         "sector_scope_label": ixc_sector_scope_label(sector_ids),
@@ -239,6 +250,13 @@ def _filter_params(
     sla_statuses: list[str] = Query(default_factory=list),
     projects: list[str] = Query(default_factory=list),
     pops: list[str] = Query(default_factory=list),
+    opened_weekdays: list[str] = Query(default_factory=list),
+    closed_weekdays: list[str] = Query(default_factory=list),
+    custom_window_basis: list[str] = Query(default_factory=list),
+    custom_window_start_weekday: str | None = Query(default=None, max_length=20),
+    custom_window_start_time: str | None = Query(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$"),
+    custom_window_end_weekday: str | None = Query(default=None, max_length=20),
+    custom_window_end_time: str | None = Query(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$"),
     closed_time_from: str | None = Query(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$"),
     closed_time_to: str | None = Query(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$"),
     search: str | None = Query(default=None, max_length=160),
@@ -263,12 +281,27 @@ def _filter_params(
         "sla_statuses": sla_statuses,
         "projects": projects,
         "pops": pops,
+        "opened_weekdays": opened_weekdays,
+        "closed_weekdays": closed_weekdays,
+        "custom_window_basis": custom_window_basis,
+        "custom_window_start_weekday": custom_window_start_weekday,
+        "custom_window_start_time": custom_window_start_time,
+        "custom_window_end_weekday": custom_window_end_weekday,
+        "custom_window_end_time": custom_window_end_time,
         "closed_time_from": closed_time_from,
         "closed_time_to": closed_time_to,
         "search": search,
     }
     for field, selected in values.items():
-        if field in {"search", "closed_time_from", "closed_time_to"}:
+        if field in {
+            "search",
+            "closed_time_from",
+            "closed_time_to",
+            "custom_window_start_weekday",
+            "custom_window_start_time",
+            "custom_window_end_weekday",
+            "custom_window_end_time",
+        }:
             continue
         if field != "responsibles" and len(selected) > MAX_FILTER_VALUES_PER_FIELD:
             raise HTTPException(status_code=422, detail=f"O filtro '{field}' excede o limite de valores permitidos.")
@@ -320,12 +353,22 @@ def update_ixc_sync_settings(
             str(payload.interval_minutes),
             description="Intervalo em minutos da sincronizacao automatica do IXC.",
         )
+        # Sem isso, o novo intervalo só valeria na tentativa seguinte ao horário já calculado com o
+        # intervalo anterior (até 1h de atraso num caso real) - ver ixc_scheduler.recompute_next_allowed_at.
+        recompute_next_allowed_at(db, payload.interval_minutes)
     if payload.backlog_sweep_interval_minutes is not None:
         upsert_setting(
             db,
             IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES_KEY,
             str(payload.backlog_sweep_interval_minutes),
             description="Intervalo em minutos da varredura de backlog aberto do IXC.",
+        )
+    if payload.lookback_days is not None:
+        upsert_setting(
+            db,
+            IXC_SYNC_LOOKBACK_DAYS_KEY,
+            str(payload.lookback_days),
+            description="Quantos dias antes de hoje o ciclo automatico do IXC reimporta a cada rodada.",
         )
     if payload.sector_ids is not None:
         sector_ids = _validated_ixc_sector_ids(payload.sector_ids)
@@ -594,6 +637,19 @@ def overview_control_tower(
     )
 
 
+@router.get("/openings/analytics", response_model=OperationOpeningsAnalytics)
+def openings_analytics(
+    date_from: date,
+    date_to: date,
+    granularity: Literal["day", "week", "month"] = "day",
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validated_period(date_from, date_to)
+    return queries.openings_analytics(db, date_from, date_to, user, granularity=granularity, **selected_filters)
+
+
 @router.get("/data-freshness", response_model=OperationDataFreshness)
 def operations_data_freshness(
     db: Session = Depends(get_db),
@@ -789,7 +845,7 @@ def calendar_month_detail(
 
 @router.get("/in-progress", response_model=list[OperationBreakdownItem], dependencies=[Depends(require_permission("operations:view_backlog"))])
 def in_progress(
-    group_by: Literal["regional", "os_type", "subject", "status"] = "regional",
+    group_by: Literal["regional", "city", "os_type", "subject", "status"] = "regional",
     selected_filters: dict = Depends(_filter_params),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -802,11 +858,23 @@ def in_progress(
     )
 
 
+@router.get("/in-progress/sla-risk", response_model=list[OperationSlaRiskItem], dependencies=[Depends(require_permission("operations:view_backlog"))])
+def in_progress_sla_risk(
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return queries.in_progress_sla_risk(db, user, **selected_filters)
+
+
 @router.get("/in-progress/orders", response_model=OperationOrderPage, dependencies=[Depends(require_permission("operations:view_backlog")), Depends(require_permission("operations:view_order_details"))])
 def in_progress_orders(
     selected_filters: dict = Depends(_filter_params),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=200),
+    sort_by: str | None = Query(default=None, max_length=40),
+    sort_dir: Literal["asc", "desc"] = Query(default="asc"),
+    sla_risk: Literal["breached", "critical", "attention", "on_track", "no_target"] | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -815,6 +883,9 @@ def in_progress_orders(
         user,
         page=page,
         page_size=page_size,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        sla_risk=sla_risk,
         **selected_filters,
     )
 
@@ -826,6 +897,8 @@ def orders(
     selected_filters: dict = Depends(_filter_params),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=200),
+    sort_by: str | None = Query(default=None, max_length=40),
+    sort_dir: Literal["asc", "desc"] = Query(default="desc"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -837,6 +910,8 @@ def orders(
         user,
         page=page,
         page_size=page_size,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
         **selected_filters,
     )
 
@@ -848,6 +923,11 @@ def opening_orders(
     selected_filters: dict = Depends(_filter_params),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=10, le=200),
+    sort_by: str | None = Query(default=None, max_length=40),
+    sort_dir: Literal["asc", "desc"] = Query(default="desc"),
+    aging_bucket: Literal["0_1", "2_3", "4_7", "8_plus"] | None = Query(default=None),
+    weekday: int | None = Query(default=None, ge=1, le=7),
+    hour: int | None = Query(default=None, ge=0, le=23),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -859,6 +939,11 @@ def opening_orders(
         user,
         page=page,
         page_size=page_size,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        aging_bucket=aging_bucket,
+        weekday=weekday,
+        hour=hour,
         **selected_filters,
     )
 

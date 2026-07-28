@@ -48,8 +48,6 @@ def _validate_health_rule_payload(updates: dict) -> None:
         raise HTTPException(status_code=422, detail="Multiplicador é obrigatório.")
     if "multiplier" in updates and (not isfinite(float(updates["multiplier"])) or float(updates["multiplier"]) < 0):
         raise HTTPException(status_code=422, detail="Multiplicador deve ser um número maior ou igual a zero.")
-    if "condition_operator" in updates and updates["condition_operator"] not in {"and", "or", "fallback"}:
-        raise HTTPException(status_code=422, detail="Operador da faixa de saúde inválido.")
 
 
 @router.get("/diagnosis-penalty-rules", response_model=list[DiagnosisPenaltyRuleOut])

@@ -21,25 +21,12 @@ from app.schemas import (
 )
 from app.services.calculation import latest_run
 from app.services.point_balance import current_balance, serialize_entry as serialize_point_balance_entry
-from app.services.regional import is_valid_regional, normalize_regional
+from app.services.regional import is_valid_regional, normalize_regional_grouped as normalize_regional
 from app.services.scoring_detail import get_collaborator_service_orders_detail, get_point_value
 from app.services.statement_pdf import build_collaborator_statement_pdf
 from app.services.audit_log import record_audit_log, snapshot
 
 router = APIRouter(prefix="/collaborators", tags=["collaborators"])
-
-
-@router.get("", response_model=list[CollaboratorOut])
-def list_collaborators(db: Session = Depends(get_db), user: User = Depends(require_permission("audit:read"))):
-    return (
-        db.scalars(
-            select(Collaborator)
-            .join(ServiceOrder, ServiceOrder.collaborator_id == Collaborator.id)
-            .distinct()
-            .order_by(Collaborator.name.asc())
-        )
-        .all()
-    )
 
 
 @router.get("/registry", response_model=CollaboratorRegistryOut)

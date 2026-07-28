@@ -26,6 +26,8 @@ export type OperationFilters = {
   sla_statuses: string[];
   projects: string[];
   pops: string[];
+  opened_weekdays: string[];
+  closed_weekdays: string[];
 };
 
 export type OperationOverview = {
@@ -136,6 +138,7 @@ export type OperationControlTowerSummary = {
   persistent_days: number;
   critical_nodes: number;
   attention_nodes: number;
+  reasons: string[];
 };
 
 export type OperationControlTowerItem = Omit<
@@ -171,6 +174,88 @@ export type OperationControlTower = {
   summary: OperationControlTowerSummary;
   timeline: OperationControlTowerTimelinePoint[];
   items: OperationControlTowerItem[];
+};
+
+export type OperationOpeningsSummary = {
+  opened: number;
+  completed: number;
+  net_flow: number;
+  pressure_ratio: number | null;
+  average_daily_opened: number;
+  expected_opened: number;
+  deviation_percentage: number | null;
+  backlog: number;
+  overdue_backlog: number;
+  without_responsible: number;
+  average_first_action_minutes: number | null;
+};
+
+export type OperationOpeningsTimelinePoint = {
+  date: string;
+  opened: number;
+  completed: number;
+  expected_opened: number;
+  upper_limit: number;
+  outside_expected: boolean;
+  backlog: number;
+};
+
+export type OperationOpeningsHeatmapItem = {
+  weekday: number;
+  hour: number;
+  opened: number;
+};
+
+export type OperationOpeningsRankingItem = {
+  label: string;
+  opened: number;
+  completed: number;
+  backlog: number;
+  overdue_backlog: number;
+  share_percentage: number;
+};
+
+export type OperationOpeningsAgingItem = {
+  bucket: string;
+  label: string;
+  quantity: number;
+};
+
+export type OperationOpeningsInsight = {
+  severity: OperationControlTowerStatus;
+  title: string;
+  description: string;
+};
+
+export type OpeningsDrillField =
+  | "regionals"
+  | "cities"
+  | "subjects"
+  | "os_types"
+  | "sectors"
+  | "priorities"
+  | "creators"
+  | "pops"
+  | "contract_types"
+  | "person_types";
+
+export type OpeningsDrillTarget =
+  | { kind: "dimension"; field: OpeningsDrillField; value: string; key: string }
+  | { kind: "aging"; bucket: string; label: string; key: string }
+  | { kind: "heatmap"; weekday: number; hour: number; label: string; key: string };
+
+export type OperationOpeningsAnalytics = {
+  date_from: string;
+  date_to: string;
+  baseline_weeks: number;
+  granularity: OperationTrendGranularity;
+  calculation_note: string;
+  summary: OperationOpeningsSummary;
+  timeline: OperationOpeningsTimelinePoint[];
+  heatmap: OperationOpeningsHeatmapItem[];
+  aging: OperationOpeningsAgingItem[];
+  rankings: Record<string, OperationOpeningsRankingItem[]>;
+  insights: OperationOpeningsInsight[];
 };
 
 export type OperationDataFreshness = {
@@ -233,6 +318,8 @@ export type OperationCollaboratorSlaItem = {
   minimum_execution_minutes: number | null;
   maximum_execution_minutes: number | null;
   type_counts: Record<string, number>;
+  scheduled_orders: number;
+  schedule_adherence_rate: number | null;
 };
 
 export type OperationCollaboratorSla = {
@@ -307,6 +394,13 @@ export type OperationCalendar = {
 };
 
 export type OperationBreakdownItem = {
+  label: string;
+  quantity: number;
+  percentage: number;
+};
+
+export type OperationSlaRiskItem = {
+  bucket: "breached" | "critical" | "attention" | "on_track" | "no_target";
   label: string;
   quantity: number;
   percentage: number;
@@ -450,6 +544,7 @@ export type OperationIxcSyncSettings = {
   enabled: boolean;
   interval_minutes: number;
   backlog_sweep_interval_minutes: number;
+  lookback_days: number;
   sector_ids: string[];
   sector_scope_label: string;
   available_sectors: OperationIxcSector[];
@@ -477,6 +572,13 @@ export type OperationFilterState = {
   sla_statuses?: string[];
   projects?: string[];
   pops?: string[];
+  opened_weekdays?: string[];
+  closed_weekdays?: string[];
+  custom_window_basis?: string[];
+  custom_window_start_weekday?: string;
+  custom_window_start_time?: string;
+  custom_window_end_weekday?: string;
+  custom_window_end_time?: string;
   closed_time_from?: string;
   closed_time_to?: string;
   responsible_mode?: "all" | "completed";
@@ -685,6 +787,13 @@ export const operationsApi = {
         parent_sector: path.sector,
       })}`,
     ),
+  openingsAnalytics: (
+    filters: OperationFilterState,
+    granularity: OperationTrendGranularity = "day",
+  ) =>
+    request<OperationOpeningsAnalytics>(
+      `/operations/openings/analytics?${query(filters, { granularity })}`,
+    ),
   dataFreshness: () =>
     request<OperationDataFreshness>("/operations/data-freshness"),
   sla: (filters: OperationFilterState, groupBy: string) =>
@@ -801,17 +910,38 @@ export const operationsApi = {
     request<OperationBreakdownItem[]>(
       `/operations/in-progress?${query(filters, { group_by: groupBy }, true)}`,
     ),
-  inProgressOrders: (filters: OperationFilterState, page = 1, pageSize = 50) =>
-    request<OperationOrderPage>(
-      `/operations/in-progress/orders?${query(filters, { page, page_size: pageSize }, true)}`,
+  inProgressSlaRisk: (filters: OperationFilterState) =>
+    request<OperationSlaRiskItem[]>(
+      `/operations/in-progress/sla-risk?${query(filters, {}, true)}`,
     ),
-  orders: (filters: OperationFilterState, page = 1, pageSize = 50) =>
+  inProgressOrders: (
+    filters: OperationFilterState,
+    page = 1,
+    pageSize = 50,
+    sort?: { key: string; direction: "asc" | "desc" },
+    slaRisk?: string,
+  ) =>
     request<OperationOrderPage>(
-      `/operations/orders?${query(filters, { page, page_size: pageSize })}`,
+      `/operations/in-progress/orders?${query(filters, { page, page_size: pageSize, sort_by: sort?.key, sort_dir: sort?.direction, sla_risk: slaRisk }, true)}`,
     ),
-  openingOrders: (filters: OperationFilterState, page = 1, pageSize = 50) =>
+  orders: (
+    filters: OperationFilterState,
+    page = 1,
+    pageSize = 50,
+    sort?: { key: string; direction: "asc" | "desc" },
+  ) =>
     request<OperationOrderPage>(
-      `/operations/openings/orders?${query(filters, { page, page_size: pageSize })}`,
+      `/operations/orders?${query(filters, { page, page_size: pageSize, sort_by: sort?.key, sort_dir: sort?.direction })}`,
+    ),
+  openingOrders: (
+    filters: OperationFilterState,
+    page = 1,
+    pageSize = 50,
+    sort?: { key: string; direction: "asc" | "desc" },
+    extra?: { aging_bucket?: string; weekday?: number; hour?: number },
+  ) =>
+    request<OperationOrderPage>(
+      `/operations/openings/orders?${query(filters, { page, page_size: pageSize, sort_by: sort?.key, sort_dir: sort?.direction, ...extra })}`,
     ),
   savedFilters: () =>
     request<OperationSavedFilter[]>("/operations/saved-filters"),

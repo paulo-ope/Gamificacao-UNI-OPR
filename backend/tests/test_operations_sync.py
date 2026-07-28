@@ -7,10 +7,35 @@ from sqlalchemy import select
 from app.models import Collaborator, ServiceOrder
 from app.modules.operations.models import OperationOrder
 from app.services.operations_sync import (
+    _resolve_collaborator,
     backfill_collaborator_ixc_ids,
     sync_service_orders_from_operations,
 )
 from app.services.scoring_detail import sla_inside
+
+
+def test_reactivating_a_collaborator_does_not_reset_is_registered(db_session, make_collaborator):
+    """Regression (audit finding B3): a collaborator manually deactivated via the registry
+    screen's "Desativar" toggle (active=False) while still is_registered=True (e.g. temporary
+    leave) got their registration silently wiped to False the next time a new O.S synced under
+    their ixc_employee_id/name - zeroing their pay until someone noticed and re-registered them
+    by hand. Reactivating must only flip `active` back on; it must not touch `is_registered`."""
+    collaborator = make_collaborator(name="Tecnico De Ferias", registered=True)
+    collaborator.active = False
+    collaborator.ixc_employee_id = 4242
+    db_session.flush()
+
+    resolved, created = _resolve_collaborator(
+        db_session,
+        name="Tecnico De Ferias",
+        regional=collaborator.regional,
+        ixc_employee_id=4242,
+        collaborators_cache=[collaborator],
+    )
+
+    assert created is False
+    assert resolved.active is True
+    assert resolved.is_registered is True, "reativar nao deveria derrubar um cadastro que ja existia"
 
 
 def _make_operation_order(**overrides):

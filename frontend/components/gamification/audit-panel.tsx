@@ -19,7 +19,9 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -118,7 +120,6 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
   const [subject, setSubject] = useState("");
   const [subjectMenuOpen, setSubjectMenuOpen] = useState(false);
   const [sla, setSla] = useState("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedGroupLabel, setSelectedGroupLabel] = useState<string | null>(null);
   const [selectedAuditOrder, setSelectedAuditOrder] = useState<AuditOrder | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +138,9 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     const matches = normalized ? subjectOptions.filter((option) => option.toLowerCase().includes(normalized)) : subjectOptions;
     return matches.slice(0, 8);
   }, [subject, subjectOptions]);
+  // Debounce: a busca por assunto refazia a chamada da auditoria a cada tecla digitada,
+  // deixando a tela em "carregando" contínuo enquanto o usuário escrevia.
+  const debouncedSubject = useDebouncedValue(subject, 450);
 
   const filters = useMemo(
     () => ({
@@ -144,7 +148,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       regional: regional || undefined,
       collaborator_id: collaboratorId ? Number(collaboratorId) : undefined,
       group_id: groupId ? Number(groupId) : undefined,
-      os_subject: subject || undefined,
+      os_subject: debouncedSubject || undefined,
       status_sla: sla || undefined,
       only_scored: mode === "scored" || undefined,
       only_unscored: mode === "unscored" || undefined,
@@ -158,12 +162,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       page,
       page_size: pageSize
     }),
-    [calculationRunId, collaboratorId, groupId, groupMode, mode, page, pageSize, regional, selectedGroupLabel, sla, subject]
+    [calculationRunId, collaboratorId, debouncedSubject, groupId, groupMode, mode, page, pageSize, regional, selectedGroupLabel, sla]
   );
 
   useEffect(() => {
     setPage(1);
-  }, [calculationRunId, collaboratorId, groupId, mode, regional, selectedGroupLabel, sla, subject]);
+  }, [calculationRunId, collaboratorId, debouncedSubject, groupId, mode, regional, selectedGroupLabel, sla]);
 
   useEffect(() => {
     setSelectedGroupLabel(null);
@@ -177,14 +181,24 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     }
   }, [collaboratorId, filteredCollaboratorOptions]);
 
+  // Guarda contra resposta fora de ordem: com filtros mudando rápido, uma busca antiga que
+  // termina depois da mais recente não pode sobrescrever o resultado atual.
+  const requestIdRef = useRef(0);
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     api
       .auditOrders(filters)
-      .then(setAudit)
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
+      .then((payload) => {
+        if (requestIdRef.current === requestId) setAudit(payload);
+      })
+      .catch((err: Error) => {
+        if (requestIdRef.current === requestId) setError(err.message);
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId) setLoading(false);
+      });
   }, [filters]);
 
   const pointValue = audit?.summary.final_points
@@ -334,7 +348,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     <section className="panel flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-col gap-3 border-b bg-white px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">
+          <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">
             <ShieldCheck className="h-3.5 w-3.5" />
             Gamificação · Auditoria operacional
           </p>
@@ -342,15 +356,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           <p className="mt-1 text-[11px] text-slate-500">Base, regra aplicada, pontos anulados e resultado final em uma tela operacional.</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => setFiltersOpen((value) => !value)}>
-            <Filter className="h-4 w-4" />
-            {filtersOpen ? "Ocultar filtros" : "Filtros"}
-            {activeFilterChips.length > 0 ? (
-              <span className="ml-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">
-                {activeFilterChips.length}
-              </span>
-            ) : null}
-          </Button>
+          {activeFilterChips.length > 0 ? (
+            <span className="flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600">
+              <Filter className="h-3.5 w-3.5 text-uni-royal" />
+              {activeFilterChips.length} filtro(s) ativo(s)
+            </span>
+          ) : null}
           <Button variant="outline" size="sm" onClick={clearFilters} disabled={!hasFilters}>
             Limpar
           </Button>
@@ -398,10 +409,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
         </div>
       ) : null}
 
+      {/* Bloco único de filtros: controle segmentado de status + todos os filtros visíveis lado a
+          lado (sem o antigo colapso "Filtros avançados", que escondia Regional/Colaborador/SLA). */}
       <div className="shrink-0 border-b bg-slate-50 px-4 py-3">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Status da O.S</div>
-          <div className="mt-1.5 flex items-center gap-2 overflow-x-auto pb-1">
+        <div className="flex flex-col gap-1.5">
+          <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Status da O.S</div>
+          <div className="inline-flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1">
             {[
               ["all", "Todas"],
               ["scored", "Pontuadas"],
@@ -412,25 +425,37 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
               ["diagnosis_blocked", "Diag. bloqueados"],
               ["non_recurrent", "Sem reincid."]
             ].map(([value, label]) => (
-              <Button key={value} variant={mode === value ? "default" : "outline"} size="sm" onClick={() => setMode(value as FilterMode)} className="h-8 shrink-0 px-3">
+              <button
+                key={value}
+                type="button"
+                onClick={() => setMode(value as FilterMode)}
+                className={
+                  mode === value
+                    ? "h-7 shrink-0 rounded-md bg-uni-royal px-3 text-xs font-semibold text-white"
+                    : "h-7 shrink-0 rounded-md px-3 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                }
+              >
                 {label}
-              </Button>
+              </button>
             ))}
           </div>
         </div>
 
-        <div className="mt-3 border-t border-slate-200 pt-3">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Agrupamento e busca</div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <select className="h-8 shrink-0 rounded-md border border-input bg-white px-2 text-xs" value={groupMode} onChange={(event) => setGroupMode(event.target.value as GroupMode)}>
-              <option value="group">Agrupar por grupo</option>
-              <option value="subject">Agrupar por assunto</option>
-              <option value="regional">Agrupar por regional</option>
-              <option value="collaborator">Agrupar por colaborador</option>
-              <option value="status">Agrupar por status</option>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="grid gap-1">
+            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Agrupar por</Label>
+            <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={groupMode} onChange={(event) => setGroupMode(event.target.value as GroupMode)}>
+              <option value="group">Grupo</option>
+              <option value="subject">Assunto</option>
+              <option value="regional">Regional</option>
+              <option value="collaborator">Colaborador</option>
+              <option value="status">Status</option>
             </select>
+          </div>
 
-            <select className="h-8 min-w-40 shrink-0 rounded-md border border-input bg-white px-2 text-xs" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
+          <div className="grid gap-1">
+            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Grupo</Label>
+            <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
               <option value="">Todos os grupos</option>
               {activeGroups.map((group) => (
                 <option key={group.id} value={group.id}>
@@ -438,10 +463,13 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                 </option>
               ))}
             </select>
+          </div>
 
+          <div className="grid gap-1">
+            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Assunto</Label>
             <Popover.Root open={subjectMenuOpen && subjectSuggestions.length > 0} onOpenChange={setSubjectMenuOpen}>
               <Popover.Anchor asChild>
-                <div className="relative min-w-52 flex-1">
+                <div className="relative">
                   <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-slate-400" />
                   <Input
                     value={subject}
@@ -483,63 +511,55 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
               </Popover.Portal>
             </Popover.Root>
           </div>
-        </div>
 
-        {filtersOpen ? (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Filtros avançados</div>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
-              <div className="grid gap-1">
-                <Label className="text-[10px] uppercase text-slate-500">Regional</Label>
-                <AppCombobox
-                  value={regional}
-                  onChange={setRegional}
-                  placeholder="Todas as regionais"
-                  ariaLabel="Filtrar por regional"
-                  className="h-8 rounded-md text-xs"
-                  options={[
-                    { value: "", label: "Todas as regionais" },
-                    ...regionalOptions.map((option) => ({ value: option, label: regionalName(option) }))
-                  ]}
-                />
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-[10px] uppercase text-slate-500">Colaborador</Label>
-                <AppCombobox
-                  value={collaboratorId}
-                  onChange={setCollaboratorId}
-                  placeholder="Todos os colaboradores"
-                  ariaLabel="Filtrar por colaborador"
-                  className="h-8 rounded-md text-xs"
-                  options={[
-                    { value: "", label: "Todos os colaboradores" },
-                    ...filteredCollaboratorOptions.map((option) => ({ value: String(option.id), label: option.name }))
-                  ]}
-                />
-                <div className="text-[11px] text-slate-500">
-                  {regional ? `${filteredCollaboratorOptions.length} colaborador(es) nesta regional.` : "Selecione uma regional para reduzir a lista."}
-                </div>
-              </div>
-              <div className="grid gap-1">
-                <Label className="text-[10px] uppercase text-slate-500">SLA</Label>
-                <AppCombobox
-                  value={sla}
-                  onChange={setSla}
-                  placeholder="Todos os SLAs"
-                  ariaLabel="Filtrar por SLA"
-                  className="h-8 rounded-md text-xs"
-                  options={[
-                    { value: "", label: "Todos os SLAs" },
-                    { value: "Encerrada no Prazo", label: "Encerrada no Prazo" },
-                    { value: "Encerrada Atrasada", label: "Encerrada Atrasada" },
-                    { value: "No prazo", label: "No prazo" },
-                    { value: "Fora do prazo", label: "Fora do prazo" }
-                  ]}
-                />
-              </div>
-            </div>
+          <div className="grid gap-1">
+            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Regional</Label>
+            <AppCombobox
+              value={regional}
+              onChange={setRegional}
+              placeholder="Todas"
+              ariaLabel="Filtrar por regional"
+              className="h-8 rounded-md text-xs"
+              options={[
+                { value: "", label: "Todas as regionais" },
+                ...regionalOptions.map((option) => ({ value: option, label: regionalName(option) }))
+              ]}
+            />
           </div>
-        ) : null}
+
+          <div className="grid gap-1">
+            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Colaborador</Label>
+            <AppCombobox
+              value={collaboratorId}
+              onChange={setCollaboratorId}
+              placeholder="Todos"
+              ariaLabel="Filtrar por colaborador"
+              className="h-8 rounded-md text-xs"
+              options={[
+                { value: "", label: "Todos os colaboradores" },
+                ...filteredCollaboratorOptions.map((option) => ({ value: String(option.id), label: option.name }))
+              ]}
+            />
+          </div>
+
+          <div className="grid gap-1">
+            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">SLA</Label>
+            <AppCombobox
+              value={sla}
+              onChange={setSla}
+              placeholder="Todos"
+              ariaLabel="Filtrar por SLA"
+              className="h-8 rounded-md text-xs"
+              options={[
+                { value: "", label: "Todos os SLAs" },
+                { value: "Encerrada no Prazo", label: "Encerrada no Prazo" },
+                { value: "Encerrada Atrasada", label: "Encerrada Atrasada" },
+                { value: "No prazo", label: "No prazo" },
+                { value: "Fora do prazo", label: "Fora do prazo" }
+              ]}
+            />
+          </div>
+        </div>
       </div>
 
       {activeFilterChips.length ? (
@@ -550,7 +570,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
               key={chip.key}
               type="button"
               onClick={chip.onRemove}
-              className="flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100"
+              className="flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-uni-royal hover:bg-blue-100"
             >
               {chip.label}
               <X className="h-3 w-3" />
@@ -563,10 +583,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       ) : null}
 
       {error ? <div className="mx-3 mt-2 shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
-      {loading ? (
+      {/* Loading sutil: a tabela anterior continua visível durante o refresh (nada de banner
+          empurrando o layout) - só um spinner discreto quando ainda não há dado nenhum. */}
+      {loading && !audit ? (
         <div className="mx-3 mt-2 flex shrink-0 items-center gap-2 rounded-md border bg-slate-50 px-3 py-2 text-xs text-slate-600">
           <RefreshCw className="h-4 w-4 animate-spin" />
-          Atualizando auditoria...
+          Carregando auditoria...
         </div>
       ) : null}
 
@@ -585,8 +607,11 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
 
       {audit ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="hidden shrink-0 border-b bg-white px-3 py-1 text-xs text-slate-600 sm:block">
-            {formatInteger(audit.total_orders ?? visibleOrders.length)} O.S no filtro atual, exibindo página {audit.page ?? page} de {audit.total_pages ?? 1}, por {groupModeLabel(groupMode)}.
+          <div className="hidden shrink-0 items-center gap-2 border-b bg-white px-3 py-1 text-xs text-slate-600 sm:flex">
+            <span>
+              {formatInteger(audit.total_orders ?? visibleOrders.length)} O.S no filtro atual, exibindo página {audit.page ?? page} de {audit.total_pages ?? 1}, por {groupModeLabel(groupMode)}.
+            </span>
+            {loading ? <RefreshCw className="h-3 w-3 animate-spin text-uni-royal" /> : null}
           </div>
 
           {visibleOrders.length === 0 && !loading ? (
@@ -628,7 +653,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                 <div className="text-left">
                   <div className="text-[10px] text-slate-500">Agrupamento</div>
                   <div className="flex items-center gap-2 truncate font-semibold text-slate-950">
-                    <ClipboardCheck className="h-4 w-4 text-blue-600" />
+                    <ClipboardCheck className="h-4 w-4 text-uni-royal" />
                     <span className="truncate">{activeGroup.label}</span>
                   </div>
                 </div>
@@ -646,7 +671,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                 </div>
                 <div>
                   <div className="text-[10px] text-slate-500">Valor a ser pago</div>
-                  <div className="font-semibold tabular-nums text-blue-700">{formatMoney(activeGroup.estimatedPayment)}</div>
+                  <div className="font-semibold tabular-nums text-uni-royal">{formatMoney(activeGroup.estimatedPayment)}</div>
                 </div>
               </div>
 
@@ -707,7 +732,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                             </div>
                           </td>
                           <td>
-                            <div className="font-semibold tabular-nums text-blue-700">{formatMoney(order.net_points * pointValue)}</div>
+                            <div className="font-semibold tabular-nums text-uni-royal">{formatMoney(order.net_points * pointValue)}</div>
                           </td>
                           <td>
                             {/* Etiqueta única por O.S: 1 badge de status + no máximo 1 pill secundário

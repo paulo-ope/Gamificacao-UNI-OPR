@@ -3,7 +3,6 @@ from __future__ import annotations
 import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
 
 from fastapi import HTTPException
 from sqlalchemy import desc, select
@@ -15,14 +14,13 @@ from app.models import (
     Collaborator,
     CollaboratorScore,
     GamificationConfigVersion,
-    HealthRule,
     ImportRun,
-    ScoringRule,
     ServiceOrder,
 )
 import logging
 
-from app.services import point_balance, scoring_detail
+from app.services import cpk_health, point_balance, scoring_detail
+from app.services.cpk_client import CpkApiError
 from app.services.calculation_closure import (
     build_rule_snapshot,
     ensure_period_not_closed,
@@ -31,8 +29,7 @@ from app.services.calculation_closure import (
     serialize_run_status,
 )
 from app.services.leadership_bonus import calculate_and_store_leadership_bonus
-from app.services.regional import normalize_regional
-from app.services.sla import SLA_FORA_DO_PRAZO, SLA_NO_PRAZO, normalize_sla_status
+from app.services.regional import normalize_regional_grouped as normalize_regional
 
 logger = logging.getLogger("calculation")
 
@@ -75,21 +72,6 @@ def get_point_value(db: Session) -> float:
     return _safe_float(get_setting(db, "point_value", "2.50"), 2.50)
 
 
-def _completed(order: ServiceOrder) -> bool:
-    return normalize(order.status) in {
-        "concluida",
-        "concluido",
-        "finalizada",
-        "finalizado",
-        "fechada",
-        "fechado",
-        "encerrada",
-        "encerrado",
-        "closed",
-        "done",
-    }
-
-
 def _period_orders(db: Session, reference_month: int, reference_year: int, regional: str | None) -> list[ServiceOrder]:
     return scoring_detail.period_orders(db, reference_month, reference_year, regional)
 
@@ -100,97 +82,34 @@ def _official_collaborator_regional(collaborator: Collaborator, fallback: str | 
     return normalize_regional(fallback) if fallback else fallback
 
 
-def _active_scoring_rules(db: Session) -> list[ScoringRule]:
-    return list(
-        db.scalars(
-            select(ScoringRule)
-            .options(selectinload(ScoringRule.group))
-            .where(ScoringRule.active.is_(True))
-            .order_by(ScoringRule.os_type.asc(), ScoringRule.os_subject.asc())
-        )
-    )
-
-
-def _matching_scoring_rule(order: ServiceOrder, rules: Iterable[ScoringRule]) -> ScoringRule | None:
-    active_rules = [rule for rule in rules if rule.group and rule.group.active]
-    os_type = normalize(order.os_type)
-    os_subject = normalize(order.os_subject)
-
-    for rule in active_rules:
-        if normalize(rule.os_type) == os_type and normalize(rule.os_subject) == os_subject:
-            return rule
-
-    for rule in active_rules:
-        if normalize(rule.os_type) == os_type and not rule.os_subject:
-            return rule
-
-    for rule in active_rules:
-        if normalize(rule.os_type) == os_type:
-            return rule
-
-    return None
-
-
-def _order_points(order: ServiceOrder, rules: Iterable[ScoringRule]) -> float:
-    rule = _matching_scoring_rule(order, rules)
-    return float(rule.points) if rule else 0.0
-
-
-def count_orders_without_scoring_rule(db: Session, orders: list[ServiceOrder]) -> int:
-    details = scoring_detail.explain_orders(db, orders)
-    return sum(1 for order in details if order["is_unscored"])
-
-
-def _sla_inside(order: ServiceOrder) -> bool:
-    normalized_status = normalize_sla_status(order.sla_status)
-    if normalized_status == SLA_FORA_DO_PRAZO:
-        return False
-    if normalized_status == SLA_NO_PRAZO:
-        return True
-    if order.sla_hours is None or order.closing_time_hours is None:
-        return False
-    return order.closing_time_hours <= order.sla_hours
-
-
-def recurrence_penalties(
-    db: Session,
-    orders: list[ServiceOrder],
-    scoring_rules: list[ScoringRule],
-) -> dict[int, float]:
-    centralized = scoring_detail.recurrence_penalties(
-        db,
-        orders,
-        scoring_detail.build_scoring_rule_lookup(scoring_detail.active_scoring_rules(db)),
-    )
-    return {order_id: float(item.get("points", 0)) for order_id, item in centralized.items()}
-
-
-def select_health_rule(rules: list[HealthRule], sla_rate: float, recurrence_rate: float) -> HealthRule | None:
-    active_rules = [rule for rule in rules if rule.active]
-    if not active_rules:
-        return None
-
-    def rule_matches(rule: HealthRule) -> bool:
-        sla_matches = sla_rate >= float(rule.min_sla)
-        # `100` means "do not restrict by recurrence yet"; smaller values activate the gate.
-        recurrence_gate_enabled = float(rule.max_recurrence_rate) < 100
-        recurrence_matches = recurrence_rate <= float(rule.max_recurrence_rate) if recurrence_gate_enabled else True
-        return sla_matches and recurrence_matches
-
-    ranked = sorted(
-        active_rules,
-        key=lambda rule: (rule.min_sla, -rule.max_recurrence_rate),
-        reverse=True,
-    )
-    for rule in ranked:
-        if rule_matches(rule):
-            return rule
-
-    return None
-
-
 def calculate_regional_health(db: Session, orders: list[ServiceOrder]) -> dict[str, dict[str, float | int | str]]:
     return scoring_detail.calculate_regional_health(db, orders)
+
+
+def _apply_cpk_adjustment(
+    db: Session, health_by_regional: dict[str, dict[str, float | int | str]], month: int, year: int
+) -> dict[str, dict[str, float | int | str]]:
+    """Soma o ajuste de CPK (+/-cpk_bonus_points, ver cpk_health.py) ao multiplicador de cada
+    regional, do MESMO mes/ano sendo calculado. Se `cpk_sync_enabled` estiver ligado, busca o
+    snapshot mais recente na API da frota antes de aplicar - se a API falhar (fora do ar, rede),
+    o erro e apenas logado e o calculo segue com o ultimo snapshot ja salvo (nunca trava o
+    calculo de folha por causa de um sistema externo)."""
+    if get_setting(db, cpk_health.CPK_SYNC_ENABLED_SETTING, "false") == "true":
+        try:
+            cpk_health.sync_cpk_snapshot(db, year, month)
+        except CpkApiError as exc:
+            logger.warning("Falha ao sincronizar CPK automaticamente (ano=%s mes=%s): %s", year, month, exc)
+    adjustments = cpk_health.get_cpk_adjustment_by_regional(db, year, month)
+    if not adjustments:
+        return health_by_regional
+    for regional, adjustment in adjustments.items():
+        if not adjustment:
+            continue
+        entry = health_by_regional.get(regional)
+        if not entry:
+            continue
+        entry["multiplier"] = max(0.0, float(entry.get("multiplier", 0.0)) + adjustment)
+    return health_by_regional
 
 
 def calculate_penalty_distribution(
@@ -259,6 +178,7 @@ def calculate_scores(
     health_by_regional = calculate_regional_health(db, completed_orders)
     order_details = scoring_detail.explain_orders(db, orders, default_point_value=float(value_per_point))
     health_by_regional = scoring_detail.calculate_regional_health_from_details(db, order_details, health_by_regional)
+    health_by_regional = _apply_cpk_adjustment(db, health_by_regional, month, year)
     details_by_collaborator: dict[int, list[dict]] = defaultdict(list)
     for detail in order_details:
         if not scoring_detail.is_identified_collaborator_detail(detail):
@@ -311,6 +231,9 @@ def calculate_scores(
         "estimated_payment": 0.0,
     }
     cached_score_summaries: dict[str, dict[str, float | int | str]] = {}
+    pending_entries_by_collaborator = point_balance.pending_entries_by_collaborator_batch(
+        db, [collaborator.id for collaborator in collaborators]
+    )
 
     for collaborator in collaborators:
         collaborator_details = details_by_collaborator.get(collaborator.id, [])
@@ -344,7 +267,12 @@ def calculate_scores(
         # so acontece quando este fechamento efetivamente vira "paid" (calculation_runs.py).
         pre_balance_final_points = float(summary["final_points"])
         pre_balance_estimated_payment = float(summary["estimated_payment"])
-        balance_preview = point_balance.preview_pending_adjustment(db, collaborator.id, pre_balance_final_points)
+        balance_preview = point_balance.preview_pending_adjustment(
+            db,
+            collaborator.id,
+            pre_balance_final_points,
+            pending=pending_entries_by_collaborator.get(collaborator.id, []),
+        )
         summary["balance_adjustment_points"] = balance_preview["adjustment_points"]
         summary["balance_after"] = balance_preview["projected_balance"]
         # Preserva os valores "brutos" (antes do saldo) em cache para o momento em que este fechamento
@@ -486,6 +414,7 @@ def _run_extra_summaries(db: Session, run: CalculationRun) -> dict[int, dict[str
     summaries: dict[int, dict[str, float | int | str]] = {}
     health_by_regional = scoring_detail.calculate_regional_health(db, [order for order in orders if scoring_detail.completed(order)])
     health_by_regional = scoring_detail.calculate_regional_health_from_details(db, details, health_by_regional)
+    health_by_regional = _apply_cpk_adjustment(db, health_by_regional, run.reference_month, run.reference_year)
     for score in run.scores:
         collaborator_details = grouped.get(score.collaborator_id, [])
         effective_regional, health = scoring_detail.health_for_details(

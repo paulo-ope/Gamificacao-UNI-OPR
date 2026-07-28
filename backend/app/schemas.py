@@ -224,35 +224,6 @@ class ScoringGroupDeleteResult(BaseModel):
     deleted_group_name: str
     moved_subject_rules: int = 0
     deleted_subject_rules: int = 0
-    moved_legacy_rules: int = 0
-    deleted_legacy_rules: int = 0
-
-
-class ScoringRuleBase(BaseModel):
-    group_id: int
-    os_type: str
-    os_subject: str | None = None
-    points: float = 0
-    active: bool = True
-
-
-class ScoringRuleCreate(ScoringRuleBase):
-    pass
-
-
-class ScoringRuleUpdate(BaseModel):
-    group_id: int | None = None
-    os_type: str | None = None
-    os_subject: str | None = None
-    points: float | None = None
-    active: bool | None = None
-
-
-class ScoringRuleOut(ScoringRuleBase):
-    id: int
-    group: ScoringGroupOut | None = None
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class ScoringSubjectRuleBase(BaseModel):
@@ -312,32 +283,6 @@ class UnmappedSubjectOut(BaseModel):
     predominant_regional: str
     estimated_points: float
     estimated_financial_impact: float
-
-
-class PenaltyRuleBase(BaseModel):
-    name: str
-    penalty_type: str
-    points: float = 0
-    calculation_mode: str = "fixed"
-    active: bool = True
-
-
-class PenaltyRuleCreate(PenaltyRuleBase):
-    pass
-
-
-class PenaltyRuleUpdate(BaseModel):
-    name: str | None = None
-    penalty_type: str | None = None
-    points: float | None = None
-    calculation_mode: str | None = None
-    active: bool | None = None
-
-
-class PenaltyRuleOut(PenaltyRuleBase):
-    id: int
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class DiagnosisPenaltyRuleBase(BaseModel):
@@ -428,6 +373,7 @@ class RecurrenceClassificationRuleBase(BaseModel):
     classification: str = "nao_identificado"
     discount_points: bool = False
     max_days: int | None = None
+    min_hours_between: float | None = None
     require_same_subject: bool = False
     require_same_diagnosis: bool = False
     priority: int = 100
@@ -453,6 +399,7 @@ class RecurrenceClassificationRuleUpdate(BaseModel):
     classification: str | None = None
     discount_points: bool | None = None
     max_days: int | None = None
+    min_hours_between: float | None = None
     require_same_subject: bool | None = None
     require_same_diagnosis: bool | None = None
     priority: int | None = None
@@ -479,6 +426,23 @@ class GamificationConfigOut(BaseModel):
     sla_penalty_rules: list[dict] = []
     recurrence_classification_rules: list[dict] = []
     health_rules: list[dict] = []
+    warnings: list[str] = []
+
+
+class CpkRegionalSnapshotOut(BaseModel):
+    regional: str
+    status: str
+    cpk_realizado: float | None = None
+    cpk_meta: float | None = None
+    mes_fechado: bool
+    synced_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CpkSyncRequest(BaseModel):
+    year: int = Field(ge=2000, le=2100)
+    month: int = Field(ge=1, le=12)
 
 
 class GamificationConfigImport(BaseModel):
@@ -522,7 +486,6 @@ class HealthRuleBase(BaseModel):
     min_sla: float = 0
     max_recurrence_rate: float = 100
     multiplier: float = 1
-    condition_operator: str = "and"
     active: bool = True
 
 
@@ -535,7 +498,6 @@ class HealthRuleUpdate(BaseModel):
     min_sla: float | None = None
     max_recurrence_rate: float | None = None
     multiplier: float | None = None
-    condition_operator: str | None = None
     active: bool | None = None
 
 

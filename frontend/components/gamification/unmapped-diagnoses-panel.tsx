@@ -224,7 +224,7 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
                 <TableCell className="min-w-80 text-xs text-slate-600">{item.related_subjects.join(" | ") || "-"}</TableCell>
                 <TableCell>{formatInteger(item.collaborators_count)}</TableCell>
                 <TableCell>{item.predominant_regional}</TableCell>
-                <TableCell className="font-medium text-blue-700">{formatMoney(item.estimated_impact)}</TableCell>
+                <TableCell className="font-medium text-uni-royal">{formatMoney(item.estimated_impact)}</TableCell>
                 <TableCell className="min-w-48">
                   <AppCombobox
                     value={currentDraft.action_type}

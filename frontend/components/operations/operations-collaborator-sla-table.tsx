@@ -97,7 +97,7 @@ export function OperationsCollaboratorSlaTable({
     });
   }
 
-  const totalColumns = data.type_columns.length + 9;
+  const totalColumns = data.type_columns.length + 10;
 
   return (
     <Card
@@ -111,7 +111,9 @@ export function OperationsCollaboratorSlaTable({
         <p className="text-[11px] text-slate-300">
           Técnicos ficam agrupados por regional. Clique nos títulos para
           ordenar; Ctrl/Cmd + clique cria um recorte temporário. Tempos usam
-          somente execução → finalização.
+          somente execução → finalização. Aderência agenda compara o horário
+          agendado com o início real (tolerância de 60 min); só conta O.S. com
+          agendamento registrado.
         </p>
       </CardHeader>
       <CardContent className="overflow-x-auto p-0">
@@ -143,6 +145,7 @@ export function OperationsCollaboratorSlaTable({
               </TableHead>
               <TableHead className="text-center">Dias</TableHead>
               <TableHead className="text-center">Média/dia</TableHead>
+              <TableHead className="text-center">Aderência agenda</TableHead>
               <TableHead className="text-center">Exec. mensuráveis</TableHead>
               <TableHead className="text-right">
                 <button
@@ -252,6 +255,15 @@ export function OperationsCollaboratorSlaTable({
                             </TableCell>
                             <TableCell className="text-center">
                               {value(item.daily_average)}
+                            </TableCell>
+                            <TableCell className="text-center">
+                              {item.scheduled_orders ? (
+                                <Badge className={slaBadgeClass(item.schedule_adherence_rate)}>
+                                  {value(item.schedule_adherence_rate, "%")}
+                                </Badge>
+                              ) : (
+                                <span className="text-slate-400">Sem agenda</span>
+                              )}
                             </TableCell>
                             <TableCell className="text-center tabular-nums">
                               {item.measurable_execution_orders}

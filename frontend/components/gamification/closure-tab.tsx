@@ -534,7 +534,7 @@ export function ClosureTab({
                   { label: "Contexto", value: chartContext.label, icon: BarChart3, tone: "text-slate-950" },
                   { label: "Colaboradores", value: `${formatNumber(chartContext.collaborators)} colaboradores`, icon: UsersRound, tone: "text-slate-950" },
                   { label: "Reincidências", value: `${formatNumber(chartContext.recurrenceOrders)} O.S`, icon: AlertTriangle, tone: "text-amber-700" },
-                  { label: "% reincidência", value: `${formatNumber(chartContext.recurrenceRate)}%`, icon: RefreshCw, tone: "text-blue-700" }
+                  { label: "% reincidência", value: `${formatNumber(chartContext.recurrenceRate)}%`, icon: RefreshCw, tone: "text-uni-royal" }
                 ].map((item) => {
                   const Icon = item.icon;
                   return (

@@ -461,7 +461,7 @@ export function CollaboratorOrdersSheet({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-slate-900">Valor a pagar</span>
-                    <span className="text-lg font-semibold text-blue-700">{formatMoney(valueToPay)}</span>
+                    <span className="text-lg font-semibold text-uni-royal">{formatMoney(valueToPay)}</span>
                   </div>
                 </div>
                 {hasGarantiaDiscount ? (
@@ -672,7 +672,7 @@ export function CollaboratorOrdersSheet({
                             )}
                           </TableCell>
                           <TableCell className="max-w-0">
-                            <div className="font-medium tabular-nums text-blue-700">
+                            <div className="font-medium tabular-nums text-uni-royal">
                               {formatMoney(order.net_points * (effectivePointValue ?? 0))}
                             </div>
                           </TableCell>

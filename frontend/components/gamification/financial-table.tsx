@@ -52,7 +52,7 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Valor a ser pago</div>
-            <div className="mt-1 text-lg font-semibold text-blue-700">{formatMoney(totalPayment)}</div>
+            <div className="mt-1 text-lg font-semibold text-uni-royal">{formatMoney(totalPayment)}</div>
           </div>
         </div>
       </div>
@@ -80,7 +80,7 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
                     </div>
                   </TableCell>
                   <TableCell className="font-medium text-slate-700">{formatNumber(Number(row.orders ?? 0))} O.S</TableCell>
-                  <TableCell className="font-semibold text-blue-700">{formatMoney(Number(row.estimated_payment ?? 0))}</TableCell>
+                  <TableCell className="font-semibold text-uni-royal">{formatMoney(Number(row.estimated_payment ?? 0))}</TableCell>
                 </TableRow>
               ))}
               {rows.length === 0 ? (

@@ -153,6 +153,8 @@ def ensure_runtime_schema(engine: Engine) -> None:
         for column_name, column_type in recurrence_columns.items():
             if column_name not in recurrence_rule_columns:
                 statements.append(f"ALTER TABLE recurrence_classification_rules ADD COLUMN {column_name} {column_type}")
+        if "min_hours_between" not in recurrence_rule_columns:
+            statements.append("ALTER TABLE recurrence_classification_rules ADD COLUMN min_hours_between FLOAT")
 
     if "calculation_runs" in table_names:
         calculation_run_columns = {column["name"] for column in inspector.get_columns("calculation_runs")}
@@ -551,6 +553,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                 classification VARCHAR(60) DEFAULT 'nao_identificado' NOT NULL,
                 discount_points BOOLEAN DEFAULT FALSE NOT NULL,
                 max_days INTEGER,
+                min_hours_between FLOAT,
                 require_same_subject BOOLEAN DEFAULT FALSE NOT NULL,
                 require_same_diagnosis BOOLEAN DEFAULT FALSE NOT NULL,
                 priority INTEGER DEFAULT 100 NOT NULL,
@@ -577,6 +580,7 @@ def ensure_runtime_schema(engine: Engine) -> None:
                 classification VARCHAR(60) DEFAULT 'nao_identificado' NOT NULL,
                 discount_points BOOLEAN DEFAULT FALSE NOT NULL,
                 max_days INTEGER,
+                min_hours_between FLOAT,
                 require_same_subject BOOLEAN DEFAULT FALSE NOT NULL,
                 require_same_diagnosis BOOLEAN DEFAULT FALSE NOT NULL,
                 priority INTEGER DEFAULT 100 NOT NULL,

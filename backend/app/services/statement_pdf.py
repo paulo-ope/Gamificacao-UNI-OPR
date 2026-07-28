@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from app.models import CalculationRun, Collaborator, CollaboratorScore, PointBalanceEntry
 from app.services.calculation_closure import now_porto_velho
 from app.services.point_balance import pending_entries_for_collaborator
-from app.services.regional import normalize_regional
+from app.services.regional import normalize_regional_grouped as normalize_regional
 from app.services.scoring_detail import get_collaborator_service_orders_detail
 
 MONTH_NAMES = [

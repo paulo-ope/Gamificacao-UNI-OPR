@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.models import Collaborator, ImportRun, ImportServiceOrderAudit, ServiceOrder
 from app.services.calculation_closure import find_paid_run_for_service_order_context
 from app.services.point_balance import detect_post_payment_warranty_debits
-from app.services.regional import is_valid_regional, normalize_regional
+from app.services.regional import is_valid_regional, normalize_regional_grouped as normalize_regional
 from app.services.sla import normalize_sla_status
 
 
@@ -864,8 +864,12 @@ def get_or_create_collaborator(
                 if not is_valid_regional(collaborator.regional):
                     collaborator.regional = regional
             if not collaborator.active:
+                # Achado real: forcar is_registered=False aqui derrubava o cadastro de quem tinha
+                # sido desativado temporariamente pela tela (ex.: licenca) SEM passar pela exclusao
+                # (que ja zera is_registered explicitamente) - a pessoa reaparecia sem pontuar/pagar
+                # ate alguem notar e recadastrar na mao. Reativar so deve reverter o active; o
+                # cadastro que ja existia (ou nao) fica como estava.
                 collaborator.active = True
-                collaborator.is_registered = False
             return collaborator, False
 
     collaborator = Collaborator(

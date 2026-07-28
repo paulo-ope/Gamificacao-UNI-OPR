@@ -195,7 +195,6 @@ class ScoringGroup(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=True)
 
-    rules: Mapped[list["ScoringRule"]] = relationship(back_populates="group")
     subject_rules: Mapped[list["ScoringSubjectRule"]] = relationship(back_populates="group")
 
 
@@ -216,31 +215,6 @@ class ScoringSubjectRule(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=True)
 
     group: Mapped["ScoringGroup"] = relationship(back_populates="subject_rules")
-
-
-class ScoringRule(Base):
-    __tablename__ = "scoring_rules"
-    __table_args__ = (UniqueConstraint("group_id", "os_type", "os_subject", name="uq_scoring_rule_subject"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("scoring_groups.id"), nullable=False)
-    os_type: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
-    os_subject: Mapped[str | None] = mapped_column(String(180), index=True, nullable=True)
-    points: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    group: Mapped["ScoringGroup"] = relationship(back_populates="rules")
-
-
-class PenaltyRule(Base):
-    __tablename__ = "penalty_rules"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(160), unique=True, nullable=False)
-    penalty_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
-    points: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    calculation_mode: Mapped[str] = mapped_column(String(80), default="fixed", nullable=False)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class DiagnosisPenaltyRule(Base):
@@ -287,6 +261,7 @@ class RecurrenceClassificationRule(Base):
     classification: Mapped[str] = mapped_column(String(60), default="nao_identificado", index=True, nullable=False)
     discount_points: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     max_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    min_hours_between: Mapped[float | None] = mapped_column(Float, nullable=True)
     require_same_subject: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     require_same_diagnosis: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
@@ -315,8 +290,27 @@ class HealthRule(Base):
     min_sla: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     max_recurrence_rate: Mapped[float] = mapped_column(Float, default=100, nullable=False)
     multiplier: Mapped[float] = mapped_column(Float, default=1, nullable=False)
-    condition_operator: Mapped[str] = mapped_column(String(20), default="and", nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class CpkRegionalSnapshot(Base):
+    """Ultimo status de CPK sincronizado da API da frota, por (ano, mes, regional). Guardado em
+    cache local em vez de chamar a API ao vivo a cada calculo de folha - se a API da frota cair
+    na hora do fechamento, o calculo usa o ultimo snapshot em vez de travar (ver cpk_health.py)."""
+
+    __tablename__ = "cpk_regional_snapshots"
+    __table_args__ = (UniqueConstraint("reference_year", "reference_month", "regional", name="uq_cpk_snapshot_period_regional"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    reference_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    reference_month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    regional: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    # "na_meta" | "fora_meta" | "sem_base" (regional sem condutores elegiveis suficientes)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    cpk_realizado: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cpk_meta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mes_fechado: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class CalculationRun(Base):

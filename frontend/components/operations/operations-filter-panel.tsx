@@ -38,6 +38,10 @@ type ArrayFilterKey = Exclude<
   | "responsible_mode"
   | "closed_time_from"
   | "closed_time_to"
+  | "custom_window_start_weekday"
+  | "custom_window_start_time"
+  | "custom_window_end_weekday"
+  | "custom_window_end_time"
 >;
 type FilterDefinition = {
   key: ArrayFilterKey;
@@ -382,7 +386,41 @@ const advancedGroups: Array<{
       },
     ],
   },
+  {
+    title: "Dia da semana",
+    description: "Recorte por dia da semana de abertura ou fechamento.",
+    fields: [
+      {
+        key: "opened_weekdays",
+        label: "Dia da semana (abertura)",
+        options: "opened_weekdays",
+      },
+      {
+        key: "closed_weekdays",
+        label: "Dia da semana (fechamento)",
+        options: "closed_weekdays",
+      },
+    ],
+  },
+  {
+    title: "Janela personalizada",
+    description:
+      "Recorte contínuo de dia+hora (ex.: sábado 12h até domingo 23h59), ignora o filtro de Setor. No Calendário, os dias exibidos são sempre pela data de fechamento - marque \"Fechamento\" aqui pra restringir o calendário à janela; usar só \"Abertura\" filtra quais O.S. entram, mas elas continuam aparecendo espalhadas pelos dias em que fecharam.",
+    fields: [],
+  },
 ];
+
+const WEEKDAY_LABELS: Record<string, string> = {
+  monday: "Segunda-feira",
+  tuesday: "Terça-feira",
+  wednesday: "Quarta-feira",
+  thursday: "Quinta-feira",
+  friday: "Sexta-feira",
+  saturday: "Sábado",
+  sunday: "Domingo",
+};
+
+const WEEKDAY_OPTIONS: Array<[string, string]> = Object.entries(WEEKDAY_LABELS);
 
 const filterLabels: Array<[ArrayFilterKey, string]> = [
   ...mainFilters,
@@ -397,6 +435,9 @@ function filterOptionLabel(key: ArrayFilterKey, value: string) {
     if (value === "on_time") return "No prazo";
     if (value === "out_of_time") return "Fora do prazo";
     return "Não identificada";
+  }
+  if (key === "opened_weekdays" || key === "closed_weekdays") {
+    return WEEKDAY_LABELS[value] || value;
   }
   return value;
 }
@@ -958,12 +999,35 @@ export function OperationsFilterPanel({
         label: `Fechamento até ${filters.closed_time_to}`,
         remove: () => onChange("closed_time_to", ""),
       });
+    if (
+      (filters.custom_window_basis || []).length &&
+      filters.custom_window_start_weekday &&
+      filters.custom_window_start_time &&
+      filters.custom_window_end_weekday &&
+      filters.custom_window_end_time
+    ) {
+      const basisLabel = (filters.custom_window_basis || [])
+        .map((item) => (item === "opened" ? "abertura" : "fechamento"))
+        .join(" ou ");
+      chips.push({
+        id: "custom_window",
+        label: `Janela (${basisLabel}): ${WEEKDAY_LABELS[filters.custom_window_start_weekday]} ${filters.custom_window_start_time} até ${WEEKDAY_LABELS[filters.custom_window_end_weekday]} ${filters.custom_window_end_time}`,
+        remove: () => {
+          onChange("custom_window_basis", []);
+          onChange("custom_window_start_weekday", "");
+          onChange("custom_window_start_time", "");
+          onChange("custom_window_end_weekday", "");
+          onChange("custom_window_end_time", "");
+        },
+      });
+    }
     return chips;
   }, [filters, onChange]);
   const advancedAppliedCount = activeChips.filter(
     (chip) =>
       advancedKeys.has(chip.id.split(":", 1)[0] as ArrayFilterKey) ||
       chip.id === "responsible_mode" ||
+      chip.id === "custom_window" ||
       chip.id.startsWith("closed_time_"),
   ).length;
   const advancedPanel = (
@@ -973,9 +1037,11 @@ export function OperationsFilterPanel({
           const fields = group.fields.filter(
             (field) => options[field.options].length > 0,
           );
-          const isOperation = group.title === "OperaÃ§Ã£o";
+          const isOperation = group.title === "Operação";
           const isSla = group.title === "SLA";
-          if (!fields.length && !isOperation && !isSla) return null;
+          const isCustomWindow = group.title === "Janela personalizada";
+          if (!fields.length && !isOperation && !isSla && !isCustomWindow)
+            return null;
           return (
             <fieldset
               key={group.title}
@@ -999,7 +1065,7 @@ export function OperationsFilterPanel({
               ))}
               {isOperation ? (
                 <label className="grid gap-1.5 text-[11px] font-medium text-slate-600">
-                  OpÃ§Ãµes de responsÃ¡vel
+                  Opções de responsável
                   <select
                     value={filters?.responsible_mode || "all"}
                     onChange={(event) =>
@@ -1025,7 +1091,7 @@ export function OperationsFilterPanel({
                     />
                   </label>
                   <label className="grid gap-1 text-[10px] text-slate-500">
-                    Fechamento atÃ©
+                    Fechamento até
                     <Input
                       type="time"
                       value={filters?.closed_time_to || ""}
@@ -1034,6 +1100,112 @@ export function OperationsFilterPanel({
                       }
                     />
                   </label>
+                </div>
+              ) : null}
+              {isCustomWindow ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-3 text-[11px] text-slate-600">
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={(filters?.custom_window_basis || []).includes(
+                          "opened",
+                        )}
+                        onChange={(event) => {
+                          const current = filters?.custom_window_basis || [];
+                          const next = event.target.checked
+                            ? [...current, "opened"]
+                            : current.filter((item) => item !== "opened");
+                          onChange("custom_window_basis", next);
+                        }}
+                      />
+                      Abertura
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={(filters?.custom_window_basis || []).includes(
+                          "closed",
+                        )}
+                        onChange={(event) => {
+                          const current = filters?.custom_window_basis || [];
+                          const next = event.target.checked
+                            ? [...current, "closed"]
+                            : current.filter((item) => item !== "closed");
+                          onChange("custom_window_basis", next);
+                        }}
+                      />
+                      Fechamento
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="grid gap-1 text-[10px] text-slate-500">
+                      De (dia)
+                      <select
+                        value={filters?.custom_window_start_weekday || ""}
+                        onChange={(event) =>
+                          onChange(
+                            "custom_window_start_weekday",
+                            event.target.value,
+                          )
+                        }
+                        className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800"
+                      >
+                        <option value="">Selecione</option>
+                        {WEEKDAY_OPTIONS.map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-[10px] text-slate-500">
+                      De (hora)
+                      <Input
+                        type="time"
+                        value={filters?.custom_window_start_time || ""}
+                        onChange={(event) =>
+                          onChange(
+                            "custom_window_start_time",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="grid gap-1 text-[10px] text-slate-500">
+                      Até (dia)
+                      <select
+                        value={filters?.custom_window_end_weekday || ""}
+                        onChange={(event) =>
+                          onChange(
+                            "custom_window_end_weekday",
+                            event.target.value,
+                          )
+                        }
+                        className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-800"
+                      >
+                        <option value="">Selecione</option>
+                        {WEEKDAY_OPTIONS.map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="grid gap-1 text-[10px] text-slate-500">
+                      Até (hora)
+                      <Input
+                        type="time"
+                        value={filters?.custom_window_end_time || ""}
+                        onChange={(event) =>
+                          onChange(
+                            "custom_window_end_time",
+                            event.target.value,
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
                 </div>
               ) : null}
             </fieldset>

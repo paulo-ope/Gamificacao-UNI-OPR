@@ -21,7 +21,7 @@ export function SectionCard({ eyebrow, title, subtitle, badge, actions, children
     <Card className={cn("overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm", className)}>
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-0">
         <div className="min-w-0">
-          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">{eyebrow}</p>
+          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">{eyebrow}</p>
           <h3 className="mt-1 text-base font-semibold text-slate-950">{title}</h3>
           {subtitle ? <p className="mt-1 text-[11px] text-slate-500">{subtitle}</p> : null}
         </div>

@@ -242,7 +242,7 @@ export function UpvalueImportPanel({
               Período de análise
             </span>
             {activePeriodKey ? (
-              <span className="inline-flex rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+              <span className="inline-flex rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-uni-royal">
                 Em uso: {currentPeriod?.reference_month && currentPeriod?.reference_year ? periodLabel({
                   reference_month: currentPeriod.reference_month,
                   reference_year: currentPeriod.reference_year
@@ -268,7 +268,7 @@ export function UpvalueImportPanel({
           <div className="flex flex-col gap-2 border-b bg-slate-50/70 px-4 py-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-                <Database className="h-4 w-4 text-blue-700" />
+                <Database className="h-4 w-4 text-uni-royal" />
                 Períodos importados
               </h3>
               <p className="text-xs text-slate-500">
@@ -317,7 +317,7 @@ export function UpvalueImportPanel({
                           <div className="flex flex-wrap items-center gap-2">
                             <span>{periodLabel(period)}</span>
                             {isActive ? (
-                              <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                              <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-uni-royal">
                                 Em uso
                               </span>
                             ) : null}
@@ -565,7 +565,7 @@ export function UpvalueImportPanel({
           <div className="rounded-lg border bg-white">
             <div className="border-b bg-slate-50/70 px-4 py-3">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-                <UploadCloud className="h-4 w-4 text-blue-700" />
+                <UploadCloud className="h-4 w-4 text-uni-royal" />
                 Incorporar nova base operacional
               </h3>
               <p className="text-xs text-slate-500">Área administrativa para validar e importar planilhas Excel ou CSV.</p>
@@ -594,7 +594,7 @@ export function UpvalueImportPanel({
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="rounded-md border">
                 <div className="flex items-center gap-2 border-b px-4 py-3 text-sm font-semibold">
-                  <FileSpreadsheet className="h-4 w-4 text-blue-700" />
+                  <FileSpreadsheet className="h-4 w-4 text-uni-royal" />
                   Colunas detectadas
                 </div>
                 <div className="max-h-56 overflow-auto p-3">

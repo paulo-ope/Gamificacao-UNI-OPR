@@ -23,7 +23,7 @@ from app.services.ixc_client import (
     fetch_setores,
 )
 from app.services.point_balance import detect_post_payment_warranty_debits
-from app.services.regional import normalize_regional
+from app.services.regional import normalize_regional_grouped as normalize_regional
 from app.services.upvalue_importer import (
     ImportRowValidationError,
     UNKNOWN_VALUE,

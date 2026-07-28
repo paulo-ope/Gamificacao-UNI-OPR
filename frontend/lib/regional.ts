@@ -9,24 +9,25 @@ const REGIONAL_CODE_MAP: Record<string, string> = {
   "13": "UNI - São Felipe D'Oeste",
   "14": "UNI - Alvorada D'Oeste",
   "15": "UNI - Alta Floresta D'Oeste",
-  "16": "UNI - São Francisco do Guaporé",
-  "17": "UNI - São Francisco do Guaporé",
+  "16": "UNI - São Miguel do Guaporé",
+  "17": "UNI - Seringueiras",
   "18": "UNI - São Francisco do Guaporé"
 };
 
-const SAO_FRANCISCO_REGIONAL = "UNI - São Francisco do Guaporé";
-
+// A gamificação apura e paga São Miguel do Guaporé, Seringueiras e São Francisco do Guaporé como
+// uma única regional (a Operação Analítica, que usa seu próprio código de exibição, mantém as 3
+// separadas - ela não importa deste arquivo).
 const REGIONAL_GROUP_ALIASES: Record<string, string> = {
-  "UNI - SAO MIGUEL DO GUAPORE": SAO_FRANCISCO_REGIONAL,
-  "UNI - SAO MIGUEL": SAO_FRANCISCO_REGIONAL,
-  "SAO MIGUEL DO GUAPORE": SAO_FRANCISCO_REGIONAL,
-  "SAO MIGUEL": SAO_FRANCISCO_REGIONAL,
-  "UNI - SERINGUEIRAS": SAO_FRANCISCO_REGIONAL,
-  "SERINGUEIRAS": SAO_FRANCISCO_REGIONAL,
-  "UNI - SAO FRANCISCO DO GUAPORE": SAO_FRANCISCO_REGIONAL,
-  "UNI - SAO FRANCISCO": SAO_FRANCISCO_REGIONAL,
-  "SAO FRANCISCO DO GUAPORE": SAO_FRANCISCO_REGIONAL,
-  "SAO FRANCISCO": SAO_FRANCISCO_REGIONAL
+  "UNI - SAO MIGUEL DO GUAPORE": "UNI - São Francisco do Guaporé",
+  "UNI - SAO MIGUEL": "UNI - São Francisco do Guaporé",
+  "SAO MIGUEL DO GUAPORE": "UNI - São Francisco do Guaporé",
+  "SAO MIGUEL": "UNI - São Francisco do Guaporé",
+  "UNI - SERINGUEIRAS": "UNI - São Francisco do Guaporé",
+  "SERINGUEIRAS": "UNI - São Francisco do Guaporé",
+  "UNI - SAO FRANCISCO DO GUAPORE": "UNI - São Francisco do Guaporé",
+  "UNI - SAO FRANCISCO": "UNI - São Francisco do Guaporé",
+  "SAO FRANCISCO DO GUAPORE": "UNI - São Francisco do Guaporé",
+  "SAO FRANCISCO": "UNI - São Francisco do Guaporé"
 };
 
 function regionalKey(value: string) {

@@ -61,6 +61,7 @@ class OperationIxcSyncSettings(BaseModel):
     enabled: bool = False
     interval_minutes: int = Field(default=20, ge=5, le=1440)
     backlog_sweep_interval_minutes: int = Field(default=60, ge=15, le=1440)
+    lookback_days: int = Field(default=1, ge=1, le=30)
     sector_ids: list[str] = Field(default_factory=list, max_length=100)
     sector_scope_label: str
     available_sectors: list[OperationIxcSectorOut] = Field(default_factory=list)
@@ -70,6 +71,7 @@ class OperationIxcSyncSettingsUpdate(BaseModel):
     enabled: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=5, le=1440)
     backlog_sweep_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
+    lookback_days: int | None = Field(default=None, ge=1, le=30)
     sector_ids: list[str] | None = Field(default=None, max_length=100)
 
 
@@ -128,6 +130,8 @@ class OperationFilters(BaseModel):
     sla_statuses: list[str] = Field(default_factory=list)
     projects: list[str] = Field(default_factory=list)
     pops: list[str] = Field(default_factory=list)
+    opened_weekdays: list[str] = Field(default_factory=list)
+    closed_weekdays: list[str] = Field(default_factory=list)
 
 
 class OperationSavedFilterValues(BaseModel):
@@ -151,6 +155,13 @@ class OperationSavedFilterValues(BaseModel):
     sla_statuses: list[str] = Field(default_factory=list, max_length=100)
     projects: list[str] = Field(default_factory=list, max_length=100)
     pops: list[str] = Field(default_factory=list, max_length=100)
+    opened_weekdays: list[str] = Field(default_factory=list, max_length=7)
+    closed_weekdays: list[str] = Field(default_factory=list, max_length=7)
+    custom_window_basis: list[str] = Field(default_factory=list, max_length=2)
+    custom_window_start_weekday: str | None = Field(default=None, max_length=20)
+    custom_window_start_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    custom_window_end_weekday: str | None = Field(default=None, max_length=20)
+    custom_window_end_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     responsible_mode: Literal["all", "completed"] = "all"
     search: str | None = Field(default=None, max_length=160)
     closed_time_from: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -276,6 +287,7 @@ class OperationControlTowerSummary(BaseModel):
     persistent_days: int
     critical_nodes: int
     attention_nodes: int
+    reasons: list[str] = Field(default_factory=list)
 
 
 class OperationControlTowerItem(BaseModel):
@@ -293,6 +305,7 @@ class OperationControlTowerItem(BaseModel):
     average_backlog_age_hours: float | None
     persistent_days: int
     status: Literal["normal", "attention", "critical", "insufficient"]
+    reasons: list[str] = Field(default_factory=list)
     has_children: bool
 
 
@@ -319,6 +332,71 @@ class OperationControlTower(BaseModel):
     summary: OperationControlTowerSummary
     timeline: list[OperationControlTowerTimelinePoint]
     items: list[OperationControlTowerItem]
+
+
+class OperationOpeningsSummary(BaseModel):
+    opened: int
+    completed: int
+    net_flow: int
+    pressure_ratio: float | None
+    average_daily_opened: float
+    expected_opened: float
+    deviation_percentage: float | None
+    backlog: int
+    overdue_backlog: int
+    without_responsible: int
+    average_first_action_minutes: float | None
+
+
+class OperationOpeningsTimelinePoint(BaseModel):
+    date: date
+    opened: int
+    completed: int
+    expected_opened: float
+    upper_limit: float
+    outside_expected: bool
+    backlog: int
+
+
+class OperationOpeningsHeatmapItem(BaseModel):
+    weekday: int
+    hour: int
+    opened: int
+
+
+class OperationOpeningsRankingItem(BaseModel):
+    label: str
+    opened: int
+    completed: int
+    backlog: int
+    overdue_backlog: int
+    share_percentage: float
+
+
+class OperationOpeningsAgingItem(BaseModel):
+    bucket: str
+    label: str
+    quantity: int
+
+
+class OperationOpeningsInsight(BaseModel):
+    severity: Literal["normal", "attention", "critical", "insufficient"]
+    title: str
+    description: str
+
+
+class OperationOpeningsAnalytics(BaseModel):
+    date_from: date
+    date_to: date
+    baseline_weeks: int
+    granularity: Literal["day", "week", "month"]
+    calculation_note: str
+    summary: OperationOpeningsSummary
+    timeline: list[OperationOpeningsTimelinePoint]
+    heatmap: list[OperationOpeningsHeatmapItem]
+    aging: list[OperationOpeningsAgingItem]
+    rankings: dict[str, list[OperationOpeningsRankingItem]]
+    insights: list[OperationOpeningsInsight]
 
 
 class OperationDataFreshness(BaseModel):
@@ -379,6 +457,8 @@ class OperationCollaboratorSlaItem(BaseModel):
     minimum_execution_minutes: float | None
     maximum_execution_minutes: float | None
     type_counts: dict[str, int] = Field(default_factory=dict)
+    scheduled_orders: int
+    schedule_adherence_rate: float | None
 
 
 class OperationCollaboratorSla(BaseModel):
@@ -581,6 +661,13 @@ class OperationBreakdownItem(BaseModel):
     percentage: float
 
 
+class OperationSlaRiskItem(BaseModel):
+    bucket: Literal["breached", "critical", "attention", "on_track", "no_target"]
+    label: str
+    quantity: int
+    percentage: float
+
+
 class OperationOrderOut(BaseModel):
     id: int
     source_order_id: str
@@ -716,6 +803,13 @@ class OperationQuery(BaseModel):
     sla_statuses: list[str] = Field(default_factory=list)
     projects: list[str] = Field(default_factory=list)
     pops: list[str] = Field(default_factory=list)
+    opened_weekdays: list[str] = Field(default_factory=list)
+    closed_weekdays: list[str] = Field(default_factory=list)
+    custom_window_basis: list[str] = Field(default_factory=list)
+    custom_window_start_weekday: str | None = Field(default=None)
+    custom_window_start_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    custom_window_end_weekday: str | None = Field(default=None)
+    custom_window_end_time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     closed_time_from: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     closed_time_to: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     responsible_mode: Literal["all", "completed"] = "all"

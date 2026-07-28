@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     ixc_api_verify_ssl: bool = True
     ixc_sync_enabled: bool = False
     ixc_sync_interval_minutes: int = 20
+    cpk_api_base_url: str = ""
+    cpk_api_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.services.ixc_client import get_ixc_client
+from app.services.ixc_client import IxcApiError, get_ixc_client
 from app.services.regional import normalize_regional
 
 from .ixc_ingestion import (
@@ -89,15 +89,52 @@ def run_backfill(
 
     current = job.next_date
     while current <= job.date_to:
+        lock_retries = 0
+        api_retries = 0
         try:
-            result = import_current_month_period(
-                db,
-                client,
-                date_from=current,
-                date_to=current,
-                imported_by=job.requested_by,
-                sector_ids=list(job.sector_ids),
-            )
+            while True:
+                try:
+                    result = import_current_month_period(
+                        db,
+                        client,
+                        date_from=current,
+                        date_to=current,
+                        imported_by=job.requested_by,
+                        sector_ids=list(job.sector_ids),
+                    )
+                    break
+                except IxcApiError as exc:
+                    # Soluços de rede com o IXC (conexão derrubada, timeout) são passageiros e não
+                    # devem matar um backfill de meses inteiro por um único dia. Sem este retry, o
+                    # job morria e ficava "failed" parado, exigindo retomada manual pela tela.
+                    # Precisa vir antes do except RuntimeError abaixo: IxcApiError é subclasse dele.
+                    if api_retries >= 5:
+                        raise
+                    api_retries += 1
+                    wait_seconds = 15 * api_retries
+                    print(
+                        f"backfill_job={job.id} day={current.isoformat()} falha de rede no IXC, "
+                        f"tentativa {api_retries}/5, aguardando {wait_seconds}s... ({exc})",
+                        flush=True,
+                    )
+                    db.rollback()
+                    time.sleep(wait_seconds)
+                except RuntimeError as exc:
+                    # Outro import (ciclo automático, clique manual na UI) segurou o lock global
+                    # nesse instante - é contenção passageira, não um erro real do dia. Sem este
+                    # retry, um backfill de meses inteiro morria por causa de um choque de alguns
+                    # segundos com outro processo, e a retomada tinha que ser feita na mão de novo.
+                    if "já está em andamento" not in str(exc) or lock_retries >= 5:
+                        raise
+                    lock_retries += 1
+                    wait_seconds = 15 * lock_retries
+                    print(
+                        f"backfill_job={job.id} day={current.isoformat()} lock ocupado, "
+                        f"tentativa {lock_retries}/5, aguardando {wait_seconds}s...",
+                        flush=True,
+                    )
+                    db.rollback()
+                    time.sleep(wait_seconds)
             job.fetched_count += result["fetched_count"]
             job.created_count += result["created_count"]
             job.updated_count += result["updated_count"]

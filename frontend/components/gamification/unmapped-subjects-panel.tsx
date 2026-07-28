@@ -291,7 +291,7 @@ export function UnmappedSubjectsPanel({
                   </TableCell>
                   <TableCell>{numberFormat.format(subject.collaborators_count)}</TableCell>
                   <TableCell>{subject.predominant_regional}</TableCell>
-                  <TableCell className="font-medium text-blue-700">
+                  <TableCell className="font-medium text-uni-royal">
                     {moneyFormat.format(subject.estimated_financial_impact)}
                   </TableCell>
                   <TableCell className="min-w-64">

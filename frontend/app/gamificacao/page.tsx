@@ -870,6 +870,16 @@ export default function GamificacaoPage() {
     }
   }
 
+  async function refreshCollaboratorRegistryOnly() {
+    // Achado real: criar/vincular/desvincular um acesso de portal não muda pontuação, saúde ou
+    // status ativo/cadastrado de ninguém - só a conta de login. Chamar
+    // refreshAfterCollaboratorRegistryChange() aqui recalculava a apuração do mês inteiro (pesado,
+    // com uma consulta por colaborador) e recarregava o resumo do dashboard à toa, fazendo uma
+    // ação de segundos parecer travada. Só a lista de colaboradores precisa ser atualizada.
+    const collaboratorRegistryData = await api.collaboratorsRegistry();
+    setCollaboratorRegistry(collaboratorRegistryData);
+  }
+
   async function refreshAfterCollaboratorRegistryChange() {
     // Um fechamento encerrado (pago, ou que já não é mais o mês corrente no fuso de Porto Velho) é
     // imutável: recalcular sem "create_revision" seria rejeitado pelo backend (409) e, como esse
@@ -1607,21 +1617,21 @@ export default function GamificacaoPage() {
                             collaborator_id: collaboratorId,
                           });
                           setUsers(await api.users());
-                          await refreshAfterCollaboratorRegistryChange();
+                          await refreshCollaboratorRegistryOnly();
                         }, "Acesso ao portal criado.")
                       }
                       onLinkPortalUser={({ userId, collaboratorId }) =>
                         withFeedback(async () => {
                           await api.updateUser(userId, { collaborator_id: collaboratorId });
                           setUsers(await api.users());
-                          await refreshAfterCollaboratorRegistryChange();
+                          await refreshCollaboratorRegistryOnly();
                         }, "Colaborador vinculado ao acesso do portal.")
                       }
                       onUnlinkPortalUser={(userId) =>
                         withFeedback(async () => {
                           await api.updateUser(userId, { collaborator_id: null });
                           setUsers(await api.users());
-                          await refreshAfterCollaboratorRegistryChange();
+                          await refreshCollaboratorRegistryOnly();
                         }, "Vínculo com o portal removido.")
                       }
                     />
@@ -1930,7 +1940,7 @@ export default function GamificacaoPage() {
               </div>
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Valor a pagar</div>
-                <div className="mt-2 text-2xl font-semibold text-blue-700">{formatMoney(selectedLeadershipResult.bonus_amount)}</div>
+                <div className="mt-2 text-2xl font-semibold text-uni-royal">{formatMoney(selectedLeadershipResult.bonus_amount)}</div>
                 <div className="mt-1 text-sm text-slate-500">Base x multiplicador {formatNumber(selectedLeadershipResult.multiplier)}x.</div>
               </div>
             </div>
@@ -2024,7 +2034,7 @@ export default function GamificacaoPage() {
                           </TableCell>
                           <TableCell>{score.source_type === "leader" ? "—" : `${formatNumber(score.health_multiplier)}x`}</TableCell>
                           <TableCell className="font-medium text-slate-950">{formatPoints(score.final_points)}</TableCell>
-                          <TableCell className="text-right font-semibold text-blue-700">{formatMoney(score.estimated_payment)}</TableCell>
+                          <TableCell className="text-right font-semibold text-uni-royal">{formatMoney(score.estimated_payment)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

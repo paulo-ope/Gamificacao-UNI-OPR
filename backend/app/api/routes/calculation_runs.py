@@ -249,6 +249,8 @@ def _refresh_stale_draft_previews(db: Session, collaborator_ids: set[int], exclu
             .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
         )
     )
+    pending_entries_by_collaborator = point_balance.pending_entries_by_collaborator_batch(db, list(collaborator_ids))
+
     for stale_run in stale_runs:
         score_summaries = stale_run.result_summary.get("score_summaries") if isinstance(stale_run.result_summary, dict) else None
         changed = False
@@ -265,7 +267,12 @@ def _refresh_stale_draft_previews(db: Session, collaborator_ids: set[int], exclu
                 if "gross_estimated_payment" in cached
                 else round(gross_final_points * float(stale_run.point_value), 2)
             )
-            preview = point_balance.preview_pending_adjustment(db, score.collaborator_id, gross_final_points)
+            preview = point_balance.preview_pending_adjustment(
+                db,
+                score.collaborator_id,
+                gross_final_points,
+                pending=pending_entries_by_collaborator.get(score.collaborator_id, []),
+            )
             effective_rate = (gross_estimated_payment / gross_final_points) if gross_final_points else float(stale_run.point_value)
             new_final_points = round(max(float(preview["projected_balance"]), 0.0), 2)
             new_estimated_payment = round(new_final_points * effective_rate, 2)

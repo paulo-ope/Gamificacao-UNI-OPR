@@ -19,7 +19,11 @@ from app.models import (
     User,
 )
 from app.services.calculation import serialize_run
-from app.services.regional import effective_managed_regionals, normalize_regional
+from app.services.regional import (
+    effective_managed_regionals,
+    effective_managed_regionals_grouped,
+    normalize_regional_grouped as normalize_regional,
+)
 from app.services.scoring_detail import explain_orders, period_orders
 
 
@@ -454,7 +458,9 @@ def build_portal_team_summary(db: Session, user: User) -> dict[str, Any]:
     mundo daquelas regionais direto, igual o bloco por-regional de build_portal_overview, mas
     escopado às regionais vinculadas a este gestor (uma ou várias - migration 20260718_0011)."""
     run = _latest_run(db)
-    target_regionals = effective_managed_regionals(user.managed_regional, user.managed_regionals)
+    # Agrupado (São Miguel do Guaporé, Seringueiras e São Francisco do Guaporé como uma regional só)
+    # porque compara contra `row["regional"]`, que já sai agrupado de `_score_rows`/scoring_detail.
+    target_regionals = effective_managed_regionals_grouped(user.managed_regional, user.managed_regionals)
     if not run:
         return {"period": {}, "regional": ", ".join(target_regionals) or None, "regionals": target_regionals, "message": "Nenhum fechamento foi calculado ainda."}
 

@@ -148,7 +148,7 @@ function SummaryCard({
 }) {
   const accentClass =
     accent === "highlight"
-      ? "text-blue-700"
+      ? "text-uni-royal"
       : accent === "warning"
         ? "text-amber-700"
         : "text-slate-950";
@@ -386,7 +386,7 @@ export function LeadershipBonusPanel({
                           <div className="mt-1 text-sm text-slate-500">{ROLE_SCOPE_HINTS[profile.scope_type]}</div>
                         </TableCell>
                         <TableCell>{ROLE_SCOPE_LABELS[profile.scope_type]}</TableCell>
-                        <TableCell className="font-semibold text-blue-700">{formatNumber(profile.default_multiplier)}x</TableCell>
+                        <TableCell className="font-semibold text-uni-royal">{formatNumber(profile.default_multiplier)}x</TableCell>
                         <TableCell>{roleStatusBadge(profile.active)}</TableCell>
                         <TableCell>{profile.linked_leaders_count}</TableCell>
                         <TableCell className="text-right">
@@ -459,7 +459,7 @@ export function LeadershipBonusPanel({
                             <div className="mt-1 text-sm text-slate-500">{AVERAGE_SOURCE_HINTS[leader.average_source ?? "collaborators"]}</div>
                           </TableCell>
                           <TableCell>
-                            <div className="font-semibold text-blue-700">{formatNumber(leader.multiplier)}x</div>
+                            <div className="font-semibold text-uni-royal">{formatNumber(leader.multiplier)}x</div>
                             <div className="mt-1 text-sm text-slate-500">
                               {leader.use_custom_multiplier ? "Personalizado" : "Herdado do perfil"}
                             </div>
@@ -602,7 +602,7 @@ export function LeadershipBonusPanel({
               <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
                 <input
                   type="checkbox"
-                  className="h-4 w-4 accent-blue-700"
+                  className="h-4 w-4 accent-uni-royal"
                   checked={roleDraft.active}
                   onChange={(event) => setRoleDraft((current) => ({ ...current, active: event.target.checked }))}
                   disabled={readOnly}
@@ -738,7 +738,7 @@ export function LeadershipBonusPanel({
                 <label className="flex items-center gap-3 text-sm text-slate-700">
                   <input
                     type="checkbox"
-                    className="h-4 w-4 accent-blue-700"
+                    className="h-4 w-4 accent-uni-royal"
                     checked={leaderDraft.use_custom_multiplier}
                     disabled={readOnly}
                     onChange={(event) => {
@@ -808,7 +808,7 @@ export function LeadershipBonusPanel({
             <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
               <input
                 type="checkbox"
-                className="h-4 w-4 accent-blue-700"
+                className="h-4 w-4 accent-uni-royal"
                 checked={leaderDraft.active}
                 onChange={(event) => setLeaderDraft((current) => ({ ...current, active: event.target.checked }))}
                 disabled={readOnly}

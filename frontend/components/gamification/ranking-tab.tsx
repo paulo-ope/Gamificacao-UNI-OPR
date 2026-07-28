@@ -263,7 +263,7 @@ export function RankingTab({
                             </div>
                           </TableCell>
                           <TableCell className="text-right">
-                            <span className="font-semibold text-blue-700">{formatMoney(item.bonus_amount)}</span>
+                            <span className="font-semibold text-uni-royal">{formatMoney(item.bonus_amount)}</span>
                           </TableCell>
                         </TableRow>
                       );

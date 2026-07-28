@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, AlertTriangle, ChevronDown, ChevronRight, ExternalLink, ShieldAlert } from "lucide-react";
 
-import { OperationsTrendChart } from "@/components/operations/operations-trend-chart";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +16,6 @@ import {
   type OperationControlTowerStatus,
   type OperationFilterState
 } from "@/lib/operations-api";
-import { buildControlTowerOption } from "@/lib/operations-chart-options";
 import { cn } from "@/lib/utils";
 
 const STATUS: Record<OperationControlTowerStatus, { label: string; icon: typeof Activity; className: string; panel: string }> = {
@@ -115,9 +113,6 @@ export function OperationsControlTower({
   const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set());
   const [nodeError, setNodeError] = useState<string | null>(null);
   const [isOpen, setIsOpen] = useState(false);
-  const [showMap, setShowMap] = useState(false);
-  const [showTechnical, setShowTechnical] = useState(false);
-  const chartOption = useMemo(() => buildControlTowerOption(data), [data]);
   const reading = useMemo(() => operationalReading(data), [data]);
 
   useEffect(() => {
@@ -125,8 +120,6 @@ export function OperationsControlTower({
     setChildren({});
     setLoadingNodes(new Set());
     setNodeError(null);
-    setShowMap(false);
-    setShowTechnical(false);
   }, [data.reference_date, data.path, filters]);
 
   async function toggle(item: OperationControlTowerItem) {
@@ -176,7 +169,16 @@ export function OperationsControlTower({
             <div className="min-w-0"><p className="break-words text-xs font-semibold text-slate-900">{item.label}</p><p className="text-[9px] uppercase tracking-wide text-slate-400">{LEVEL_LABEL[item.level]}</p></div>
           </div>
         </TableCell>
-        <TableCell><StatusBadge status={item.status} persistentDays={item.persistent_days} /></TableCell>
+        <TableCell>
+          <StatusBadge status={item.status} persistentDays={item.persistent_days} />
+          {item.reasons.length ? (
+            <ul className="mt-1 max-w-48 space-y-0.5 text-[9px] leading-tight text-slate-500">
+              {item.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+        </TableCell>
         <TableCell className="text-right font-semibold tabular-nums">{item.opened_recent}</TableCell>
         <TableCell className={cn("text-right font-semibold tabular-nums", (item.deviation_percentage || 0) >= 25 ? "text-red-600" : "text-slate-700")}>{item.deviation_percentage === null ? "—" : `${item.deviation_percentage > 0 ? "+" : ""}${number(item.deviation_percentage)}%`}</TableCell>
         <TableCell className={cn("text-right font-semibold tabular-nums", item.net_flow > 0 ? "text-red-600" : "text-emerald-700")}>{signed(item.net_flow)}</TableCell>
@@ -190,7 +192,7 @@ export function OperationsControlTower({
 
   const status = STATUS[data.summary.status];
   const StatusIcon = status.icon;
-  if (isLoading && !data.reference_date) return <div className="mt-4 h-[520px] animate-pulse rounded-2xl border bg-white" aria-label="Carregando torre de controle" />;
+  if (isLoading && !data.reference_date) return <div className="mt-4 h-[520px] animate-pulse rounded-2xl border bg-white" aria-label="Carregando monitor preventivo" />;
 
   return <section className="mt-4 space-y-4" aria-label="Monitor preventivo de aberturas">
     <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
@@ -201,35 +203,43 @@ export function OperationsControlTower({
     </Card>
     {isOpen ? <>
       <div className={cn("grid gap-4 rounded-2xl border px-4 py-4 lg:grid-cols-[minmax(0,1fr)_auto]", status.panel)}>
-        <div><div className="flex flex-wrap items-center gap-2"><Badge className={cn("gap-1", status.className)}><StatusIcon className="h-3.5 w-3.5" />{status.label}</Badge><span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Situação atual</span></div><h2 className="mt-2 text-lg font-semibold text-slate-950">{reading.title}</h2><p className="mt-1 max-w-3xl text-sm leading-5 text-slate-700">{reading.description}</p><p className="mt-3 rounded-lg border border-white/70 bg-white/70 px-3 py-2 text-xs font-medium text-slate-700"><strong>Próximo passo:</strong> {reading.action}</p></div>
+        <div>
+          <div className="flex flex-wrap items-center gap-2"><Badge className={cn("gap-1", status.className)}><StatusIcon className="h-3.5 w-3.5" />{status.label}</Badge><span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Situação atual</span></div>
+          <h2 className="mt-2 text-lg font-semibold text-slate-950">{reading.title}</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-5 text-slate-700">{reading.description}</p>
+          {data.summary.reasons.length ? (
+            <ul className="mt-3 max-w-3xl space-y-1 rounded-lg border border-white/70 bg-white/70 px-3 py-2 text-xs text-slate-700">
+              {data.summary.reasons.map((reason) => (
+                <li key={reason} className="flex gap-1.5"><span aria-hidden>•</span>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="mt-2 text-xs font-medium text-slate-700"><strong>Próximo passo:</strong> {reading.action}</p>
+        </div>
         <div className="min-w-32 text-left lg:text-right"><p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Variação das aberturas</p><p className={cn("mt-1 text-3xl font-semibold tabular-nums", (data.summary.deviation_percentage || 0) > 0 ? "text-red-700" : "text-emerald-700")}>{data.summary.deviation_percentage === null ? "—" : `${data.summary.deviation_percentage > 0 ? "+" : ""}${number(data.summary.deviation_percentage)}%`}</p><p className="text-[10px] text-slate-500">comparado ao esperado</p></div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <SummaryMetric label="Aberturas recentes" value={number(data.summary.opened_recent, 0)} helper={`Esperado para o período: ${number(data.summary.expected_opened)}`} />
-        <SummaryMetric label="Balanço operacional" value={signed(data.summary.net_flow)} helper={`${number(data.summary.completed_recent, 0)} finalizadas · negativo reduz estoque`} accent={data.summary.net_flow > 0 ? "text-red-600" : "text-emerald-700"} />
-        <SummaryMetric label="Estoque aberto" value={number(data.summary.backlog, 0)} helper={`${data.summary.overdue_backlog} O.S. vencidas`} accent={data.summary.overdue_backlog > 0 ? "text-red-600" : undefined} />
-        <SummaryMetric label="Onde exige atenção" value={number(data.summary.critical_nodes + data.summary.attention_nodes, 0)} helper={`${data.summary.critical_nodes} críticos · ${data.summary.attention_nodes} em atenção`} />
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-6">
+        <SummaryMetric label="Aberturas recentes" value={number(data.summary.opened_recent, 0)} helper={`Esperado: ${number(data.summary.expected_opened)}`} />
+        <SummaryMetric label="Balanço operacional" value={signed(data.summary.net_flow)} helper={`${number(data.summary.completed_recent, 0)} finalizadas`} accent={data.summary.net_flow > 0 ? "text-red-600" : "text-emerald-700"} />
+        <SummaryMetric label="Estoque aberto" value={number(data.summary.backlog, 0)} helper={`${data.summary.overdue_backlog} vencidas`} accent={data.summary.overdue_backlog > 0 ? "text-red-600" : undefined} />
+        <SummaryMetric label="Onde exige atenção" value={number(data.summary.critical_nodes + data.summary.attention_nodes, 0)} helper={`${data.summary.critical_nodes} críticos`} />
+        <SummaryMetric label="Índice entradas/saídas" value={data.summary.pressure_ratio === null ? "—" : `${number(data.summary.pressure_ratio, 2)}x`} helper="Acima de 1x: entra mais do que sai" />
+        <SummaryMetric label="Idade média do backlog" value={hours(data.summary.average_backlog_age_hours)} helper="Das O.S. ainda abertas" />
       </div>
 
-      <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-3">
-        <Button type="button" variant={showMap ? "default" : "outline"} size="sm" aria-expanded={showMap} onClick={() => setShowMap((current) => !current)}>{showMap ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}{showMap ? "Recolher locais de ação" : "Ver onde agir"}</Button>
-        <Button type="button" variant="ghost" size="sm" aria-expanded={showTechnical} onClick={() => setShowTechnical((current) => !current)}>{showTechnical ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}{showTechnical ? "Recolher evolução e cálculo" : "Ver evolução e cálculo"}</Button>
-      </div>
-
-      {showMap ? <Card className="overflow-hidden rounded-2xl border-slate-200 shadow-sm">
+      <Card className="overflow-hidden rounded-2xl border-slate-200 shadow-sm">
         <CardHeader className="flex-row items-start justify-between gap-4 pb-3"><div><p className="text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">Onde agir</p><CardTitle className="mt-1 text-base font-semibold text-slate-950">Assuntos que mais precisam de atenção</CardTitle><p className="mt-1 text-[11px] text-slate-500">Clique no assunto para avançar por Regional → Cidade → Setor → Responsável.</p></div><Badge className="border-blue-200 bg-blue-50 text-blue-700">{data.items.length} assuntos</Badge></CardHeader>
         <CardContent className="px-0 pb-0">
           {nodeError ? <div role="alert" className="mx-4 mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{nodeError}</div> : null}
           <div className="overflow-x-auto"><Table className="min-w-[880px]"><TableHeader><TableRow><TableHead className="sticky left-0 z-20 bg-slate-50">Grupo operacional</TableHead><TableHead>Situação</TableHead><TableHead className="text-right">Abertas</TableHead><TableHead className="text-right">Variação</TableHead><TableHead className="text-right">Saldo</TableHead><TableHead className="text-right">Backlog</TableHead><TableHead className="text-right">Vencidas</TableHead><TableHead /></TableRow></TableHeader><TableBody>{data.items.length ? rows(data.items) : <TableRow><TableCell colSpan={8} className="py-14 text-center text-sm text-slate-500">Não há volume suficiente para indicar pontos de ação.</TableCell></TableRow>}</TableBody></Table></div>
         </CardContent>
-      </Card> : null}
+      </Card>
 
-      {showTechnical ? <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4"><SummaryMetric label="Índice entradas/saídas" value={data.summary.pressure_ratio === null ? "—" : `${number(data.summary.pressure_ratio, 2)}x`} helper="Acima de 1: chegam mais O.S. do que são finalizadas" /><SummaryMetric label="Idade média do backlog" value={hours(data.summary.average_backlog_age_hours)} helper="Tempo médio das O.S. ainda abertas" /><SummaryMetric label="Dias consecutivos" value={`${data.summary.persistent_days}`} helper="Dias acima do limite esperado" /><SummaryMetric label="Finalizadas recentes" value={number(data.summary.completed_recent, 0)} helper={`Mesmo recorte de ${data.recent_days} dias`} /></div>
-        <OperationsTrendChart eyebrow="Evolução técnica" title="Aberturas, finalizações e backlog" description="Barras azuis são aberturas; a linha verde representa finalizações; a linha roxa acompanha o estoque aberto." badge={`${data.timeline_days} dias`} option={chartOption} />
-        <details className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-[10px] text-slate-500"><summary className="cursor-pointer font-semibold text-slate-700">Como o esperado e o risco são calculados?</summary><p className="mt-2 max-w-4xl leading-5">{data.calculation_note} O esperado compara o mesmo dia da semana nas {data.baseline_weeks} semanas anteriores. Crítico exige persistência ou crescimento relevante junto com incapacidade de absorção; um pico isolado tende a ficar apenas em atenção. O filtro de responsável não altera as aberturas, porque a entrada da operação não pertence ao técnico que posteriormente recebe a O.S.</p></details>
-      </div> : null}
+      <details className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-[10px] text-slate-500">
+        <summary className="cursor-pointer font-semibold text-slate-700">Como o esperado e o risco são calculados?</summary>
+        <p className="mt-2 max-w-4xl leading-5">{data.calculation_note} O esperado compara o mesmo dia da semana nas {data.baseline_weeks} semanas anteriores. Crítico exige persistência ou crescimento relevante junto com incapacidade de absorção; um pico isolado tende a ficar apenas em atenção. O filtro de responsável não altera as aberturas, porque a entrada da operação não pertence ao técnico que posteriormente recebe a O.S. O gráfico "Aberturas x finalizações" já mostrado nesta página cobre a mesma evolução ao longo do tempo.</p>
+      </details>
     </> : null}
   </section>;
 }

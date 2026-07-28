@@ -15,6 +15,7 @@ import type {
   CollaboratorOrdersDetail,
   CollaboratorPointBalance,
   CollaboratorMonthlyHistoryItem,
+  CpkRegionalSnapshot,
   DashboardSummary,
   DashboardBootstrap,
   DashboardFilteredBreakdown,
@@ -45,7 +46,6 @@ import type {
   RecurrenceClassificationRule,
   ScoringGroupDeleteResult,
   ScoringGroup,
-  ScoringRule,
   ScoringSubjectRuleDeleteResult,
   ScoringSubjectRule,
   ServiceOrder,
@@ -312,6 +312,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  syncCpkSnapshot: (year: number, month: number) =>
+    request<CpkRegionalSnapshot[]>("/gamification/cpk/sync", {
+      method: "POST",
+      body: JSON.stringify({ year, month })
+    }),
+  cpkSnapshot: (year: number, month: number) =>
+    request<CpkRegionalSnapshot[]>(`/gamification/cpk/snapshot?year=${year}&month=${month}`),
   calculate: (
     pointValue?: number | null,
     period?: { reference_month?: number; reference_year?: number; regional?: string | null },
@@ -350,12 +357,6 @@ export const api = {
     request<ScoringGroupDeleteResult>(`/scoring-groups/${id}`, {
       method: "DELETE",
       body: JSON.stringify(payload ?? {})
-    }),
-  scoringRules: () => request<ScoringRule[]>("/scoring-rules"),
-  updateScoringRule: (id: number, payload: Partial<ScoringRule>) =>
-    request<ScoringRule>(`/scoring-rules/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(payload)
     }),
   scoringSubjectRules: () => request<ScoringSubjectRule[]>("/scoring-subject-rules"),
   createScoringSubjectRule: (payload: Partial<ScoringSubjectRule>) =>

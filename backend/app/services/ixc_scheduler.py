@@ -43,6 +43,12 @@ IXC_SYNC_INTERVAL_MINUTES_KEY = "ixc_sync_interval_minutes"
 IXC_SYNC_AUTO_RECALCULATE_KEY = "ixc_sync_auto_recalculate"
 IXC_SYNC_SECTOR_IDS_KEY = "ixc_sync_sector_ids"
 
+# Quantos dias antes de hoje o ciclo automático (todo ciclo, não só o backlog periódico) reimporta -
+# cobre O.S. que só fecham/atualizam alguns dias depois de abertas. Configurável pela tela (evita
+# precisar de um backfill manual toda vez que esse recorte precisar crescer).
+IXC_SYNC_LOOKBACK_DAYS_KEY = "ixc_sync_lookback_days"
+IXC_SYNC_DEFAULT_LOOKBACK_DAYS = 1
+
 # A varredura de backlog aberto (`import_open_backlog`) particiona a consulta por setor x status
 # (3 setores x 9 códigos = ~27 chamadas sequenciais ao IXC) - rodar isso em TODO ciclo do polling
 # (a cada poucos minutos) prendia a conexão/transação do banco por dezenas de segundos e deixava
@@ -78,6 +84,19 @@ def _current_interval_minutes(default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(minutes, 1)
+
+
+def _current_lookback_days() -> int:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, IXC_SYNC_LOOKBACK_DAYS_KEY, "")
+    except SQLAlchemyError:
+        return IXC_SYNC_DEFAULT_LOOKBACK_DAYS
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        return IXC_SYNC_DEFAULT_LOOKBACK_DAYS
+    return min(max(days, 1), 30)
 
 
 def _current_sector_ids() -> list[str]:
@@ -172,6 +191,23 @@ def _record_sync_attempt_started(interval_minutes: int | None = None) -> None:
         db.commit()
 
 
+def recompute_next_allowed_at(db: Session, interval_minutes: int) -> None:
+    """Chamado pela tela de configuração quando o intervalo muda - recalcula `next_allowed_at` a
+    partir da última tentativa registrada. Sem isso, baixar o intervalo de 60 para 5 min só valeria
+    na tentativa seguinte ao horário antigo (até 1h depois) ou exigiria reiniciar o backend, porque
+    `next_allowed_at` é um horário absoluto já gravado com o intervalo anterior.
+    """
+    last_attempt_at = _setting_timestamp(IXC_SYNC_LAST_ATTEMPT_AT_KEY)
+    base = last_attempt_at or datetime.now(timezone.utc)
+    next_allowed_at = base + timedelta(minutes=max(interval_minutes, 1))
+    upsert_setting(
+        db,
+        IXC_SYNC_NEXT_ALLOWED_AT_KEY,
+        next_allowed_at.isoformat(),
+        description="Proximo horario em que a sincronizacao automatica pode consultar o IXC.",
+    )
+
+
 def _auto_recalculate_enabled() -> bool:
     with SessionLocal() as db:
         raw = get_setting(db, IXC_SYNC_AUTO_RECALCULATE_KEY, "true")
@@ -196,18 +232,20 @@ def _should_run_backlog_sweep(db: Session) -> bool:
 
 def _run_operations_ixc_import_cycle(db: Session, client: IxcClient) -> dict:
     """Único ponto do sistema que consulta O.S. no IXC (`fetch_service_orders`). Importa para
-    `operations_orders` (módulo de operações analíticas) o dia de hoje e o de ontem (pega O.S. que
-    atravessam a meia-noite) todo ciclo, e periodicamente (não todo ciclo - ver
+    `operations_orders` (módulo de operações analíticas) hoje e os `IXC_SYNC_LOOKBACK_DAYS_KEY` dias
+    anteriores (pega O.S. que atravessam a meia-noite ou só fecham/atualizam alguns dias depois de
+    abertas) todo ciclo, e periodicamente (não todo ciclo - ver
     `IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES_KEY`) o backlog aberto corrente. Em seguida projeta o
     resultado em `service_orders` (ver `run_operations_to_service_orders_sync`) - a gamificação não
     faz mais nenhuma chamada direta ao IXC, ela só lê o que o módulo operations já importou.
     """
     today = datetime.now(OPERATIONS_TIMEZONE).date()
-    yesterday = today - timedelta(days=1)
+    lookback_days = _current_lookback_days()
+    days = [today - timedelta(days=offset) for offset in range(lookback_days, -1, -1)]
     sector_ids = _current_sector_ids()
 
     operations_imports = []
-    for day in (yesterday, today):
+    for day in days:
         operations_imports.append(
             import_current_month_period(
                 db, client, date_from=day, date_to=day, imported_by=None, sector_ids=sector_ids,
@@ -282,15 +320,23 @@ async def run_ixc_sync_loop(interval_minutes: int, initial_enabled: bool = True)
     isso pela própria tela de configuração, sem reiniciar o backend. Enquanto ninguém mexer na tela, o
     comportamento é exatamente o mesmo de antes (controlado só pelo `.env`).
     """
-    while True:
-        if _current_sync_enabled(default=initial_enabled):
-            wait_seconds = _seconds_until_next_sync(default_interval_minutes=interval_minutes)
-            if wait_seconds > 0:
-                logger.info("Proxima sincronizacao IXC em %.0f segundos.", wait_seconds)
-                await asyncio.sleep(wait_seconds)
-                continue
-            current_interval = _current_interval_minutes(default=interval_minutes)
-            await asyncio.to_thread(run_ixc_sync_once, current_interval)
+    # Dormir em fatias curtas (em vez de um único `sleep(wait_seconds)`) para que uma mudança de
+    # intervalo feita na tela de configuração enquanto o loop está dormindo valha em segundos, não
+    # só depois que o sono antigo (calculado com o intervalo anterior) terminar sozinho.
+    POLL_SECONDS = 15.0
 
+    while True:
+        if not _current_sync_enabled(default=initial_enabled):
+            await asyncio.sleep(POLL_SECONDS)
+            continue
+
+        wait_seconds = _seconds_until_next_sync(default_interval_minutes=interval_minutes)
+        if wait_seconds > 0:
+            await asyncio.sleep(min(wait_seconds, POLL_SECONDS))
+            continue
+
+        # `run_ixc_sync_once` já grava o próximo `next_allowed_at` (ver `_record_sync_attempt_started`),
+        # então a próxima iteração recalcula a espera correta sozinha - dormir de novo aqui dobraria
+        # o intervalo configurado a cada ciclo.
         current_interval = _current_interval_minutes(default=interval_minutes)
-        await asyncio.sleep(current_interval * 60)
+        await asyncio.to_thread(run_ixc_sync_once, current_interval)
