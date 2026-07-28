@@ -5,7 +5,7 @@ import unicodedata
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import ScoringRule, ScoringSubjectRule, ServiceOrder
+from app.models import ScoringSubjectRule, ServiceOrder
 
 
 DEMO_SERVICE_ORDER_CODES = {f"OS-{code}" for code in range(1001, 1021)}
@@ -51,31 +51,6 @@ def real_subject_keys(db: Session) -> set[tuple[str, str]]:
 
 def real_service_orders(orders: list[ServiceOrder]) -> list[ServiceOrder]:
     return [order for order in orders if not is_demo_service_order(order)]
-
-
-def cleanup_demo_scoring_matrix(db: Session) -> dict[str, int]:
-    imported_subjects = real_subject_keys(db)
-    deleted_subject_rules = 0
-    deleted_legacy_rules = 0
-
-    subject_rules = list(db.scalars(select(ScoringSubjectRule)))
-    for rule in subject_rules:
-        key = subject_key(rule.os_type, rule.os_subject)
-        if key in DEMO_SUBJECT_PAIRS and key not in imported_subjects:
-            db.delete(rule)
-            deleted_subject_rules += 1
-
-    legacy_rules = list(db.scalars(select(ScoringRule)))
-    for rule in legacy_rules:
-        key = subject_key(rule.os_type, rule.os_subject)
-        if key in DEMO_SUBJECT_PAIRS and key not in imported_subjects:
-            db.delete(rule)
-            deleted_legacy_rules += 1
-
-    return {
-        "deleted_subject_rules": deleted_subject_rules,
-        "deleted_legacy_rules": deleted_legacy_rules,
-    }
 
 
 def matrix_subject_rules(db: Session) -> list[ScoringSubjectRule]:

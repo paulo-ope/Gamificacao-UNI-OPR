@@ -1,9 +1,10 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, ScrollText, Search, ShieldAlert, Wallet } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Avatar } from "@/components/gamification/config-ui";
 import { CollaboratorBalanceHistorySheet } from "@/components/gamification/collaborator-balance-history-sheet";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Input } from "@/components/ui/input";
@@ -32,13 +33,6 @@ type CollaboratorGroup = {
 
 type StatusFilter = "all" | "review";
 type SortMode = "severity" | "name" | "recent";
-
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-}
 
 function StatCard({
   icon: Icon,
@@ -92,8 +86,14 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("severity");
   const [historyCollaboratorId, setHistoryCollaboratorId] = useState<number | null>(null);
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
+    // Guarda por id de requisicao (nao so um cancelled flag de useEffect): "Atualizar" manual,
+    // o onChanged do CollaboratorBalanceHistorySheet e a troca automatica de periodo podem
+    // disparar chamadas sobrepostas - sem isso, uma resposta antiga (periodo anterior) que
+    // chega DEPOIS de uma mais recente sobrescreve a tela com o saldo do periodo errado.
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -104,11 +104,13 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
             ? { reference_month: referenceMonth, reference_year: referenceYear }
             : undefined
       );
+      if (requestIdRef.current !== requestId) return;
       setEntries(data);
     } catch (err) {
+      if (requestIdRef.current !== requestId) return;
       setError(err instanceof Error ? err.message : "Erro ao carregar o saldo de pontos.");
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId) setLoading(false);
     }
   }, [calculationRunId, referenceMonth, referenceYear]);
 
@@ -256,8 +258,8 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
 
       <div className="table-frame overflow-hidden rounded-[20px] border border-slate-200 bg-white">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+            <TableRow className="border-slate-700 hover:bg-slate-900">
               <TableHead>Colaborador</TableHead>
               <TableHead>Garantias pendentes</TableHead>
               <TableHead>Impacto total no pagamento</TableHead>
@@ -273,12 +275,10 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
                 <TableRow key={group.collaboratorId}>
                   <TableCell className="font-medium text-slate-900">
                     <div className="flex items-center gap-2.5">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-semibold text-white">
-                        {initials(group.collaboratorName)}
-                      </div>
+                      <Avatar name={group.collaboratorName} size="md" />
                       <button
                         type="button"
-                        className="text-left underline decoration-dotted underline-offset-2 hover:text-teal-700"
+                        className="text-left underline decoration-dotted underline-offset-2 hover:text-uni-royal"
                         onClick={() => setHistoryCollaboratorId(group.collaboratorId)}
                         title="Detalhar todas as garantias deste colaborador"
                       >

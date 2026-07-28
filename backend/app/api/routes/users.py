@@ -5,12 +5,53 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import serialize_user
 from app.core.security import hash_password, require_permission
 from app.db.session import get_db
-from app.models import AuditLog, User
+from app.models import AccessProfile, AuditLog, Collaborator, User, UserAccessProfile
 from app.schemas import UserCreate, UserOut, UserUpdate
 from app.services.audit_log import record_audit_log, snapshot
+from app.services.regional import effective_managed_regionals, normalize_regional
 
 router = APIRouter(prefix="/users", tags=["users"])
-ALLOWED_ROLES = {"viewer", "operator", "admin"}
+ALLOWED_ROLES = {"viewer", "operator", "admin", "collaborator", "regional_manager_viewer", "workspace_restricted"}
+
+
+def _resolve_collaborator_link(db: Session, collaborator_id: int | None, current_user_id: int | None) -> Collaborator | None:
+    """Valida um `collaborator_id` recebido em create/update de usuário: precisa existir e não
+    pode já estar vinculado a outro usuário (vínculo é 1-para-1, ver models.py User.collaborator_id).
+    """
+    if collaborator_id is None:
+        return None
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
+    existing = db.scalar(select(User).where(User.collaborator_id == collaborator_id))
+    if existing and existing.id != current_user_id:
+        raise HTTPException(status_code=409, detail=f"Este colaborador já está vinculado ao usuário {existing.email}.")
+    return collaborator
+
+
+def _set_user_profiles(db: Session, user: User, profile_ids: list[int] | None) -> None:
+    if profile_ids is None:
+        return
+    unique_ids = sorted({int(profile_id) for profile_id in profile_ids})
+    profiles = db.scalars(select(AccessProfile).where(AccessProfile.id.in_(unique_ids))).all() if unique_ids else []
+    found_ids = {profile.id for profile in profiles}
+    missing = [profile_id for profile_id in unique_ids if profile_id not in found_ids]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Perfil de acesso inválido: {missing[0]}.")
+    inactive = next((profile for profile in profiles if not profile.active), None)
+    if inactive:
+        raise HTTPException(status_code=422, detail="Perfil inativo não pode ser vinculado a um usuário.")
+    db.query(UserAccessProfile).filter(UserAccessProfile.user_id == user.id).delete(synchronize_session=False)
+    for profile_id in unique_ids:
+        db.add(UserAccessProfile(user_id=user.id, profile_id=profile_id))
+    if not unique_ids:
+        # A remoção do último perfil é uma revogação real. Sem este marcador,
+        # o role legado (ex.: operator) ainda concederia permissões.
+        user.role = "workspace_restricted"
+    elif len(unique_ids) == 1:
+        profile = profiles[0]
+        if profile.legacy_role:
+            user.role = profile.legacy_role
 
 
 @router.get("", response_model=list[UserOut])
@@ -25,15 +66,21 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), user: User =
     email = payload.email.strip().lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(status_code=409, detail="Email já cadastrado.")
+    _resolve_collaborator_link(db, payload.collaborator_id, current_user_id=None)
+    managed_regionals = effective_managed_regionals(payload.managed_regional, payload.managed_regionals)
     item = User(
         name=payload.name,
         email=email,
         password_hash=hash_password(payload.password),
         role=payload.role,
         active=payload.active,
+        collaborator_id=payload.collaborator_id,
+        managed_regional=None,
+        managed_regionals=managed_regionals,
     )
     db.add(item)
     db.flush()
+    _set_user_profiles(db, item, payload.access_profile_ids)
     record_audit_log(db, user, "create", "users", item.id, None, snapshot(item))
     db.commit()
     db.refresh(item)
@@ -62,9 +109,17 @@ def update_user(
         item.email = email
     if "password" in updates and updates["password"]:
         item.password_hash = hash_password(str(updates["password"]))
+    if "collaborator_id" in updates:
+        _resolve_collaborator_link(db, updates["collaborator_id"], current_user_id=item.id)
+        item.collaborator_id = updates["collaborator_id"]
+    if "managed_regional" in updates or "managed_regionals" in updates:
+        item.managed_regionals = effective_managed_regionals(updates.get("managed_regional"), updates.get("managed_regionals"))
+        item.managed_regional = None
     for field in ("name", "role", "active"):
         if field in updates and updates[field] is not None:
             setattr(item, field, updates[field])
+    if "access_profile_ids" in updates:
+        _set_user_profiles(db, item, updates["access_profile_ids"])
     record_audit_log(db, user, "update", "users", item.id, before, snapshot(item))
     db.commit()
     db.refresh(item)

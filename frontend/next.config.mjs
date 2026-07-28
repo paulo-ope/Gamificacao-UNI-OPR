@@ -3,7 +3,8 @@ const backendUrl = process.env.INTERNAL_API_URL ?? "http://localhost:8000";
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  allowedDevOrigins: ["127.0.0.1"],
+  devIndicators: false,
+  allowedDevOrigins: ["127.0.0.1", "192.168.2.100", "192.168.137.1"],
   async rewrites() {
     return [
       {

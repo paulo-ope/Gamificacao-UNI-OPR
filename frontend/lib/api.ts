@@ -1,8 +1,10 @@
 import type {
   AppSetting,
+  AccessProfile,
   AuthUser,
   AuditLog,
   AuditOrders,
+  PortalAudit,
   CalculationRunHistory,
   CalculationRunSnapshot,
   CollaboratorOrderFilters,
@@ -13,6 +15,7 @@ import type {
   CollaboratorOrdersDetail,
   CollaboratorPointBalance,
   CollaboratorMonthlyHistoryItem,
+  CpkRegionalSnapshot,
   DashboardSummary,
   DashboardBootstrap,
   DashboardFilteredBreakdown,
@@ -28,13 +31,21 @@ import type {
   LeadershipProfile,
   LeadershipRoleProfile,
   LoginResult,
+  EcosystemPermission,
+  Permission,
   PenaltyRule,
   PointBalanceEntry,
+  PortalOrder,
+  PortalOverview,
+  PortalProfile,
+  PortalRules,
+  PortalSimulation,
+  PortalSummary,
+  PortalTeamSummary,
   RecurrenceAudit,
   RecurrenceClassificationRule,
   ScoringGroupDeleteResult,
   ScoringGroup,
-  ScoringRule,
   ScoringSubjectRuleDeleteResult,
   ScoringSubjectRule,
   ServiceOrder,
@@ -45,7 +56,7 @@ import type {
   UnmappedSubject
 } from "@/lib/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 const TOKEN_KEY = "gamification_auth_token";
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
@@ -99,19 +110,27 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    if (body) {
-      try {
-        const parsed = JSON.parse(body) as { detail?: string; message?: string };
-        const message = parsed.detail || parsed.message || body;
-        throw new Error(typeof message === "string" ? message : "Erro inesperado ao processar a solicitação.");
-      } catch {
-        throw new Error(body);
-      }
-    }
-    throw new Error(`Erro HTTP ${response.status}`);
+    throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
   }
 
   return response.json() as Promise<T>;
+}
+
+// O corpo de erro do backend normalmente e um JSON `{"detail": "..."}` - extrai so o texto legivel.
+// Nota: parsing e o throw precisam estar em blocos try/catch SEPARADOS - um throw dentro do mesmo
+// try que faz o parsing e capturado pelo catch da mesma instrucao, entao o fallback (texto cru,
+// as vezes o JSON inteiro sem parsear) sempre "vencia" mesmo quando o parsing tinha dado certo
+// (achado real: apareceu um `{"detail":"..."}` cru numa caixa de confirmacao em vez do texto).
+function extractApiErrorMessage(body: string, fallback: string): string {
+  if (!body) return fallback;
+  try {
+    const parsed = JSON.parse(body) as { detail?: string; message?: string };
+    if (typeof parsed.detail === "string" && parsed.detail) return parsed.detail;
+    if (typeof parsed.message === "string" && parsed.message) return parsed.message;
+  } catch {
+    // corpo nao e JSON valido - cai no fallback abaixo (texto cru)
+  }
+  return body || fallback;
 }
 
 async function requestBlob(path: string): Promise<Blob> {
@@ -121,12 +140,7 @@ async function requestBlob(path: string): Promise<Blob> {
   });
   if (!response.ok) {
     const body = await response.text();
-    try {
-      const parsed = JSON.parse(body) as { detail?: string; message?: string };
-      throw new Error(parsed.detail || parsed.message || `Erro HTTP ${response.status}`);
-    } catch {
-      throw new Error(body || `Erro HTTP ${response.status}`);
-    }
+    throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
   }
   return response.blob();
 }
@@ -144,15 +158,7 @@ async function uploadRequest<T>(path: string, file: File): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    if (body) {
-      try {
-        const parsed = JSON.parse(body) as { detail?: string; message?: string };
-        throw new Error(parsed.detail || parsed.message || "Falha ao enviar o arquivo.");
-      } catch {
-        throw new Error("Falha ao enviar o arquivo.");
-      }
-    }
-    throw new Error(`Erro HTTP ${response.status}`);
+    throw new Error(extractApiErrorMessage(body, "Falha ao enviar o arquivo."));
   }
 
   return response.json() as Promise<T>;
@@ -165,19 +171,63 @@ export const api = {
       body: JSON.stringify({ email, password })
     }),
   me: () => request<AuthUser>("/auth/me"),
+  portalSummary: (period?: { reference_month: number; reference_year: number }) => {
+    const query = period ? `?reference_month=${period.reference_month}&reference_year=${period.reference_year}` : "";
+    return request<PortalSummary>(`/portal/summary${query}`);
+  },
+  portalProfile: () => request<PortalProfile>("/portal/profile"),
+  updatePortalProfile: (payload: { phone?: string | null; email?: string | null }) =>
+    request<PortalProfile>("/portal/profile", { method: "PUT", body: JSON.stringify(payload) }),
+  uploadPortalProfilePhoto: (file: File) => uploadRequest<PortalProfile>("/portal/profile/photo", file),
+  portalProfilePhoto: () => requestBlob("/portal/profile/photo"),
+  deletePortalProfilePhoto: () => request<PortalProfile>("/portal/profile/photo", { method: "DELETE", body: JSON.stringify({}) }),
+  portalOverview: () => request<PortalOverview>("/portal/overview"),
+  portalOrders: (limit = 80, period?: { reference_month: number; reference_year: number }) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (period) {
+      params.set("reference_month", String(period.reference_month));
+      params.set("reference_year", String(period.reference_year));
+    }
+    return request<PortalOrder[]>(`/portal/my-orders?${params.toString()}`);
+  },
+  portalAudit: (period?: { reference_month: number; reference_year: number }) => {
+    const query = period ? `?reference_month=${period.reference_month}&reference_year=${period.reference_year}` : "";
+    return request<PortalAudit>(`/portal/my-audit${query}`);
+  },
+  portalRules: () => request<PortalRules>("/portal/rules"),
+  portalSimulation: (extraPoints: number) =>
+    request<PortalSimulation>(`/portal/simulation?extra_points=${encodeURIComponent(String(extraPoints))}`),
+  portalTeamSummary: () => request<PortalTeamSummary>("/portal/team-summary"),
   users: () => request<AuthUser[]>("/users"),
-  createUser: (payload: { name?: string; email?: string; role?: string; active?: boolean; password: string }) =>
+  createUser: (payload: { name?: string; email?: string; role?: string; active?: boolean; password: string; collaborator_id?: number | null; managed_regionals?: string[]; access_profile_ids?: number[] }) =>
     request<AuthUser>("/users", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  updateUser: (id: number, payload: { name?: string; email?: string; role?: string; active?: boolean; password?: string }) =>
+  updateUser: (id: number, payload: { name?: string; email?: string; role?: string; active?: boolean; password?: string; collaborator_id?: number | null; managed_regionals?: string[]; access_profile_ids?: number[] }) =>
     request<AuthUser>(`/users/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
   deleteUser: (id: number) =>
     request<AuthUser>(`/users/${id}`, {
+      method: "DELETE"
+    }),
+  operationRegionals: () => request<string[]>("/admin/operation-regionals"),
+  ecosystemPermissions: () => request<EcosystemPermission[]>("/admin/permissions"),
+  accessProfiles: () => request<AccessProfile[]>("/admin/access-profiles"),
+  createAccessProfile: (payload: { name: string; description?: string | null; active: boolean; permission_keys: Permission[] }) =>
+    request<AccessProfile>("/admin/access-profiles", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateAccessProfile: (id: number, payload: { name?: string; description?: string | null; active?: boolean; permission_keys?: Permission[] }) =>
+    request<AccessProfile>(`/admin/access-profiles/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  deleteAccessProfile: (id: number) =>
+    request<AccessProfile>(`/admin/access-profiles/${id}`, {
       method: "DELETE"
     }),
   leadershipProfiles: () => request<LeadershipProfile[]>("/leadership/profiles"),
@@ -262,6 +312,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
+  syncCpkSnapshot: (year: number, month: number) =>
+    request<CpkRegionalSnapshot[]>("/gamification/cpk/sync", {
+      method: "POST",
+      body: JSON.stringify({ year, month })
+    }),
+  cpkSnapshot: (year: number, month: number) =>
+    request<CpkRegionalSnapshot[]>(`/gamification/cpk/snapshot?year=${year}&month=${month}`),
   calculate: (
     pointValue?: number | null,
     period?: { reference_month?: number; reference_year?: number; regional?: string | null },
@@ -300,12 +357,6 @@ export const api = {
     request<ScoringGroupDeleteResult>(`/scoring-groups/${id}`, {
       method: "DELETE",
       body: JSON.stringify(payload ?? {})
-    }),
-  scoringRules: () => request<ScoringRule[]>("/scoring-rules"),
-  updateScoringRule: (id: number, payload: Partial<ScoringRule>) =>
-    request<ScoringRule>(`/scoring-rules/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(payload)
     }),
   scoringSubjectRules: () => request<ScoringSubjectRule[]>("/scoring-subject-rules"),
   createScoringSubjectRule: (payload: Partial<ScoringSubjectRule>) =>
@@ -481,6 +532,12 @@ export const api = {
     request<CollaboratorDeleteResult>(`/collaborators/${id}`, {
       method: "DELETE",
       body: JSON.stringify({})
+    }),
+  uploadCollaboratorPhoto: (id: number, file: File) => uploadRequest<Collaborator>(`/collaborators/${id}/photo`, file),
+  collaboratorPhoto: (id: number) => requestBlob(`/collaborators/${id}/photo`),
+  deleteCollaboratorPhoto: (id: number) =>
+    request<Collaborator>(`/collaborators/${id}/photo`, {
+      method: "DELETE"
     }),
   collaboratorOrdersDetail: (collaboratorId: number, filters: CollaboratorOrderFilters = {}) => {
     const params = new URLSearchParams();

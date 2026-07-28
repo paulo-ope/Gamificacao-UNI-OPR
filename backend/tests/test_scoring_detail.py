@@ -7,7 +7,16 @@ reintroducing the bug.
 """
 from datetime import datetime, timezone
 
-from app.models import ScoringGroup, ScoringSubjectRule, ServiceOrder, SlaPenaltyRule
+from app.models import (
+    AppSetting,
+    DiagnosisPenaltyRule,
+    HealthRule,
+    RecurrenceClassificationRule,
+    ScoringGroup,
+    ScoringSubjectRule,
+    ServiceOrder,
+    SlaPenaltyRule,
+)
 from app.services import scoring_detail as sd
 
 
@@ -172,6 +181,93 @@ def test_non_discount_recurrence_match_does_not_erase_sla_annulment(db_session, 
     assert detail["is_scored"] is False
 
 
+def test_audit_screen_uses_collaborators_official_regional_not_the_orders_own_regional(
+    db_session, make_collaborator, scoring_setup
+):
+    """Regression (audit finding B2): the period-audit screen looked up the health multiplier
+    using each O.S's OWN regional, while the real payment always uses the collaborator's
+    OFFICIAL registered regional for every O.S in the period (see _official_collaborator_regional
+    in calculation.py). A registered collaborator who attends an O.S outside their official
+    regional got a DIFFERENT (wrong) multiplier on the audit screen than what they're actually
+    paid."""
+    db_session.add(HealthRule(name="Excelente", min_sla=90, max_recurrence_rate=100, multiplier=2.0, active=True))
+    db_session.add(HealthRule(name="Critica", min_sla=0, max_recurrence_rate=100, multiplier=0.4, active=True))
+    db_session.flush()
+
+    collaborator = make_collaborator(name="Tecnico Oficial Ji-Parana", regional="UNI - JI PARANA")
+    filler_a = make_collaborator(name="Tecnico Filler A", regional="UNI - JI PARANA")
+    filler_b = make_collaborator(name="Tecnico Filler B", regional="UNI - MACHADINHO DOESTE")
+
+    filler_order_a = ServiceOrder(
+        os_code="OS-FILLER-A", contract_id="CA", customer_login="clia", customer_name="Cliente A",
+        collaborator_id=filler_a.id, regional="UNI - JI PARANA", os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida", sla_status="Encerrada no Prazo",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    filler_order_b = ServiceOrder(
+        os_code="OS-FILLER-B", contract_id="CB", customer_login="clib", customer_name="Cliente B",
+        collaborator_id=filler_b.id, regional="UNI - MACHADINHO DOESTE", os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida", sla_status="Fora do prazo",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    order_out_of_official_regional = ServiceOrder(
+        os_code="OS-CROSS-REGIONAL", contract_id="CC", customer_login="clic", customer_name="Cliente C",
+        collaborator_id=collaborator.id, regional="UNI - MACHADINHO DOESTE", os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida", sla_status="Encerrada no Prazo",
+        opened_at=datetime(2026, 6, 2, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    db_session.add_all([filler_order_a, filler_order_b, order_out_of_official_regional])
+    db_session.flush()
+
+    orders = [filler_order_a, filler_order_b, order_out_of_official_regional]
+    details = sd.explain_orders(db_session, orders)
+    detail = next(d for d in details if d["os_code"] == "OS-CROSS-REGIONAL")
+    assert detail["net_points"] > 0  # sanity: scoring_setup da pontos reais pra Manutencao/Reparo
+
+    summary = sd.summarize_audit_details(db_session, [detail], orders, point_value=1.0)
+
+    assert summary["final_points"] == round(detail["net_points"] * 2.0, 2), (
+        "deveria usar o multiplicador da regional OFICIAL do colaborador (Excelente, 2.0), nao da regional da O.S (Critica, 0.4)"
+    )
+
+
+def test_manual_review_status_is_not_overwritten_by_a_later_numeric_penalty(db_session, make_collaborator, scoring_setup):
+    """Regression (audit finding B1): an order flagged 'Revisão manual' by one rule (ex.: a
+    diagnosis configured as requires_review) had its display status silently overwritten to
+    'Penalizada' if ANY other rule (ex.: an SLA penalty) also added numeric penalty points
+    afterward - the requires_manual_review boolean stayed correct, but the label shown in the
+    audit drawer/panel lied about why the order needs attention."""
+    collaborator = make_collaborator()
+    db_session.add(
+        DiagnosisPenaltyRule(diagnosis_name="Falha critica", action_type="requires_review", penalty_points=0, active=True)
+    )
+    db_session.add(
+        SlaPenaltyRule(name="SLA fora do prazo", condition_type="status_sla_out_of_time", penalty_type="subtract_points", penalty_value=3, active=True)
+    )
+    db_session.flush()
+
+    order = ServiceOrder(
+        os_code="OS-REVIEW", contract_id="C1", customer_login="cliente1", customer_name="Cliente Um",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha critica", status="Concluida", sla_status="Fora do prazo",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    db_session.add(order)
+    db_session.flush()
+
+    rules = sd.active_scoring_rules(db_session)
+    diagnosis_rules = sd.active_diagnosis_rules(db_session)
+    sla_rules = sd.active_sla_penalty_rules(db_session)
+
+    detail = sd.explain_order(
+        order, rules, diagnosis_rules, sla_rules, {},
+        warranty_mode="score_normally", warranty_reduction_percentage=0, default_point_value=1.0,
+    )
+
+    assert detail["requires_manual_review"] is True
+    assert detail["scoring_status"] == "Revisão manual", "status nao deveria ter sido trocado para 'Penalizada'"
+
+
 def test_real_recurrence_discount_still_annuls_the_original_order(db_session, make_collaborator, scoring_setup, recurrence_setup):
     """Sanity check for the fix above: a genuine warranty return (classification=garantia,
     discount_points=True) must still annul the original order's points and be labeled
@@ -206,3 +302,237 @@ def test_real_recurrence_discount_still_annuls_the_original_order(db_session, ma
     assert detail["scoring_status"] == "Anulada por reincidência"
     assert detail["net_points"] == 0
     assert detail["is_annulled"] is True
+
+
+def test_warranty_and_recurrence_flags_are_mutually_exclusive_in_audit_payload(
+    db_session, make_collaborator, scoring_setup, recurrence_setup
+):
+    """Regression: classification='garantia' used to set BOTH is_warranty AND is_recurrence in the
+    audit payload (explain_order), making the frontend show two labels on one O.S. Product decision:
+    at most ONE label per order - garantia keeps counting as discountable (health/points math via
+    RECURRENCE_DISCOUNT_CLASSIFICATIONS is untouched), but the display flags are exclusive."""
+    collaborator = make_collaborator()
+    original = ServiceOrder(
+        os_code="OS-EXCL-ORIG", contract_id="C9", customer_login="cliente9", customer_name="Cliente Nove",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    warranty_return = ServiceOrder(
+        os_code="OS-EXCL-RET", contract_id="C9", customer_login="cliente9", customer_name="Cliente Nove",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 5, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+        is_warranty=True,
+    )
+    db_session.add_all([original, warranty_return])
+    db_session.flush()
+
+    rules = sd.active_scoring_rules(db_session)
+    diagnosis_rules = sd.active_diagnosis_rules(db_session)
+    sla_rules = sd.active_sla_penalty_rules(db_session)
+    recurrence = sd.recurrence_penalties(db_session, [original, warranty_return], rules)
+
+    detail = sd.explain_order(
+        original, rules, diagnosis_rules, sla_rules, recurrence,
+        warranty_mode="score_normally", warranty_reduction_percentage=0, default_point_value=1.0,
+    )
+
+    assert detail["recurrence_classification"] == "garantia"
+    assert detail["is_warranty"] is True
+    assert detail["is_recurrence"] is False, "garantia nao pode ligar a flag de reincidencia junto (etiqueta unica)"
+
+
+def test_recurrence_pairing_survives_a_gap_of_exactly_the_window_plus_hours(
+    db_session, make_collaborator, scoring_setup, recurrence_setup
+):
+    """Regression found via a real audit screenshot: two O.S opened "30 dias e 17 horas" apart
+    (days_between=30, within a 30-day window by the same integer day-count used for the rule's
+    max_days check and the evidence text) were silently excluded, because the loop's cutoff
+    compared the RAW timedelta (which includes the extra hours) against timedelta(days=30) -
+    making it stricter than the days_between=30 metric used everywhere else. The cutoff must use
+    the same floored days_between, not the raw timedelta."""
+    collaborator = make_collaborator()
+    original = ServiceOrder(
+        os_code="OS-EDGE-ORIG", contract_id="C12", customer_login="cliente12", customer_name="Cliente Doze",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 19, 21, 18, 55, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 30, 20, 15, 49, tzinfo=timezone.utc),
+    )
+    later_at_the_edge = ServiceOrder(
+        os_code="OS-EDGE-RET", contract_id="C12", customer_login="cliente12", customer_name="Cliente Doze",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 7, 20, 15, 7, 26, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 7, 21, 15, 50, 22, tzinfo=timezone.utc),
+        is_warranty=True,
+    )
+    db_session.add_all([original, later_at_the_edge])
+    db_session.flush()
+
+    lookup = sd.build_scoring_rule_lookup(sd.active_scoring_rules(db_session))
+    penalties = sd.recurrence_penalties(db_session, [original, later_at_the_edge], lookup)
+
+    assert original.id in penalties, "par na borda da janela (30 dias e horas) nao deveria ser cortado pelo loop"
+    assert penalties[original.id]["related_os_code"] == "OS-EDGE-RET"
+    assert penalties[original.id]["days_between"] == 30
+
+
+def test_recurrence_pairing_is_not_lost_when_original_takes_long_to_close(
+    db_session, make_collaborator, scoring_setup, recurrence_setup
+):
+    """Regression: the gap used to be computed as later.opened_at - original.closed_at (mixed
+    fields). When the original order stayed open for a while and only closed AFTER the return
+    order had already been opened, that mix produced a negative delta and the loop silently
+    skipped a legitimate, later-opened recurrence. Comparing opened_at-vs-opened_at on both
+    sides fixes this without changing the outcome for the normal (same-day close) case."""
+    collaborator = make_collaborator()
+    original = ServiceOrder(
+        os_code="OS-SLOW-ORIG", contract_id="C10", customer_login="cliente10", customer_name="Cliente Dez",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 5, 16, 0, tzinfo=timezone.utc),
+    )
+    later_return = ServiceOrder(
+        os_code="OS-SLOW-RET", contract_id="C10", customer_login="cliente10", customer_name="Cliente Dez",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 3, 9, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
+        is_warranty=True,
+    )
+    db_session.add_all([original, later_return])
+    db_session.flush()
+
+    lookup = sd.build_scoring_rule_lookup(sd.active_scoring_rules(db_session))
+    penalties = sd.recurrence_penalties(db_session, [original, later_return], lookup)
+
+    assert original.id in penalties, "reincidencia com O.S original demorada pra fechar voltou a ser perdida"
+    assert penalties[original.id]["related_os_code"] == "OS-SLOW-RET"
+
+
+def test_min_hours_between_blocks_near_simultaneous_orders_from_counting_as_recurrence(
+    db_session, make_collaborator, scoring_setup
+):
+    """The configurable minimum-gap field on RecurrenceClassificationRule.min_hours_between:
+    two orders opened minutes apart (e.g. the tech split one visit into two O.S) must NOT be
+    classified as recurrence when the rule requires a minimum gap that they don't meet, even
+    though they match every other pattern/window criterion."""
+    collaborator = make_collaborator()
+    db_session.add(
+        RecurrenceClassificationRule(
+            name="Garantia com intervalo minimo", classification="garantia", discount_points=True,
+            active=True, priority=1, max_days=30, min_hours_between=4,
+        )
+    )
+    db_session.add(AppSetting(key="recurrence_action", value="annul_original"))
+    db_session.add(AppSetting(key="recurrence_window_days", value="30"))
+    db_session.flush()
+
+    original = ServiceOrder(
+        os_code="OS-NEARSIM-ORIG", contract_id="C11", customer_login="cliente11", customer_name="Cliente Onze",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 1, 9, 30, tzinfo=timezone.utc),
+    )
+    near_simultaneous = ServiceOrder(
+        os_code="OS-NEARSIM-RET", contract_id="C11", customer_login="cliente11", customer_name="Cliente Onze",
+        collaborator_id=collaborator.id, regional=collaborator.regional, os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 1, 9, 20, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 1, 9, 45, tzinfo=timezone.utc),
+        is_warranty=True,
+    )
+    db_session.add_all([original, near_simultaneous])
+    db_session.flush()
+
+    lookup = sd.build_scoring_rule_lookup(sd.active_scoring_rules(db_session))
+    penalties = sd.recurrence_penalties(db_session, [original, near_simultaneous], lookup)
+
+    assert original.id not in penalties or penalties[original.id]["classification"] != "garantia", (
+        "par quase simultaneo nao deveria contar como reincidencia com intervalo minimo de 4h configurado"
+    )
+
+
+def test_cascade_os_type_for_subject_updates_only_matching_subject(db_session, make_collaborator):
+    """Regression: ServiceOrder.os_type is stamped once at import time and never rewritten
+    afterward - correcting a subject's Tipo Geral via the rule (ScoringSubjectRule) used to
+    only affect FUTURE imports, leaving already-imported orders permanently unmatched
+    against the corrected rule until someone ran a manual bulk UPDATE (this happened for
+    real, ~15k rows, before this cascade existed). `cascade_os_type_for_subject` must
+    rewrite every existing order for that exact os_subject, and touch nothing else."""
+    collaborator = make_collaborator()
+    stale_order_1 = ServiceOrder(
+        os_code="OS-1", contract_id="C1", customer_login="cli1", customer_name="X",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Suporte Externo", os_subject="Reativação de Suspensão Temporária - Externo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    stale_order_2 = ServiceOrder(
+        os_code="OS-2", contract_id="C1", customer_login="cli2", customer_name="X",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="PENDENTE DE CLASSIFICAÇÃO", os_subject="Reativação de Suspensão Temporária - Externo",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 2, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+    unrelated_order = ServiceOrder(
+        os_code="OS-3", contract_id="C1", customer_login="cli3", customer_name="X",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Suporte Externo", os_subject="Um Assunto Completamente Diferente",
+        diagnosis="Falha", status="Concluida",
+        opened_at=datetime(2026, 6, 3, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    db_session.add_all([stale_order_1, stale_order_2, unrelated_order])
+    db_session.flush()
+
+    changed = sd.cascade_os_type_for_subject(
+        db_session, "Reativação de Suspensão Temporária - Externo", "Outros"
+    )
+    db_session.flush()
+
+    assert changed == 2
+    assert stale_order_1.os_type == "Outros"
+    assert stale_order_2.os_type == "Outros"
+    assert unrelated_order.os_type == "Suporte Externo", "assunto diferente nao deveria ser afetado"
+
+    # Idempotente: rodar de novo depois que ja esta tudo corrigido nao acha mais nada pra mudar.
+    assert sd.cascade_os_type_for_subject(db_session, "Reativação de Suspensão Temporária - Externo", "Outros") == 0
+
+
+def test_penalty_distribution_excludes_unregistered_collaborator_orders(db_session, make_collaborator, scoring_setup):
+    """Regression: the "Distribuição de pontos anulados" chart (Fechamento > Análise) must only
+    count O.S from formally registered collaborators - same rule already applied to
+    calculate_regional_health. An O.S penalized by SLA from an unregistered collaborator used to
+    still show up in this breakdown even though it never contributes to anything payable."""
+    db_session.add(
+        SlaPenaltyRule(name="SLA fora do prazo", condition_type="status_sla_out_of_time", penalty_type="cancel_points", penalty_value=0, active=True)
+    )
+    db_session.flush()
+
+    registered = make_collaborator(name="Registrado", regional="UNI SUL", registered=True)
+    unregistered = make_collaborator(name="Nao Registrado", regional="UNI SUL", registered=False)
+
+    order_registered = ServiceOrder(
+        os_code="OS-REG-SLA", contract_id="C1", customer_login="cli.reg", customer_name="Cliente Reg",
+        collaborator_id=registered.id, regional="UNI SUL", os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida", sla_status="Fora do prazo",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    order_unregistered = ServiceOrder(
+        os_code="OS-UNREG-SLA", contract_id="C1", customer_login="cli.unreg", customer_name="Cliente Unreg",
+        collaborator_id=unregistered.id, regional="UNI SUL", os_type="Manutencao", os_subject="Reparo",
+        diagnosis="Falha", status="Concluida", sla_status="Fora do prazo",
+        opened_at=datetime(2026, 6, 1, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 3, tzinfo=timezone.utc),
+    )
+    db_session.add_all([order_registered, order_unregistered])
+    db_session.flush()
+
+    details = sd.explain_orders(db_session, [order_registered, order_unregistered])
+    distribution = sd.calculate_penalty_distribution(db_session, [order_registered, order_unregistered], details=details)
+
+    sla_entry = next(item for item in distribution if item["name"] == "SLA fora do prazo")
+    assert sla_entry["service_orders_count"] == 1, "only the registered collaborator's O.S should be counted"

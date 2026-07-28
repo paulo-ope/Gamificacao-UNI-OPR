@@ -33,6 +33,8 @@ DEFAULT_SETTINGS = {
     "recurrence_penalty_points": ("0", "Desconto fixo quando reincidência usa subtract_original."),
     "payment_cap": ("0", "Teto de pagamento. Zero significa sem teto."),
     "health_below_minimum_multiplier": ("0", "Multiplicador aplicado quando a regional não atinge nenhuma faixa ativa de saúde operacional."),
+    "cpk_bonus_points": ("0.2", "Ajuste somado (na meta) ou subtraído (fora da meta) do multiplicador de saúde da regional, com base no CPK da frota."),
+    "cpk_sync_enabled": ("false", "Liga a sincronização automática do CPK da frota."),
 }
 
 DEFAULT_GROUPS = [
@@ -143,6 +145,7 @@ def serialize_current_config(db: Session) -> dict[str, Any]:
                 "classification": rule.classification,
                 "discount_points": rule.discount_points,
                 "max_days": rule.max_days,
+                "min_hours_between": rule.min_hours_between,
                 "require_same_subject": rule.require_same_subject,
                 "require_same_diagnosis": rule.require_same_diagnosis,
                 "priority": rule.priority,
@@ -163,7 +166,6 @@ def serialize_current_config(db: Session) -> dict[str, Any]:
                 "min_sla": rule.min_sla,
                 "max_recurrence_rate": rule.max_recurrence_rate,
                 "multiplier": rule.multiplier,
-                "condition_operator": rule.condition_operator,
                 "active": rule.active,
             }
             for rule in db.scalars(select(HealthRule).order_by(HealthRule.id.asc()))
@@ -184,6 +186,7 @@ def save_config_version(db: Session, config: dict[str, Any], name: str = CONFIG_
 def apply_config(db: Session, config: dict[str, Any], version_name: str | None = None) -> dict[str, Any]:
     group_id_map: dict[int, int] = {}
     group_name_map: dict[str, int] = {}
+    warnings: list[str] = []
 
     for key, value in (config.get("settings") or {}).items():
         upsert_setting(db, str(key), str(value))
@@ -215,6 +218,9 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         os_type = str(item.get("os_type") or "").strip()
         os_subject = str(item.get("os_subject") or "").strip()
         if not os_type or not os_subject:
+            warnings.append(
+                f"Regra de assunto ignorada: item sem tipo geral ou assunto preenchido ({item!r})."
+            )
             continue
 
         rule = db.get(ScoringSubjectRule, item.get("id")) if item.get("id") else None
@@ -229,6 +235,13 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         if not group_id and item.get("group_name"):
             group_id = group_name_map.get(str(item["group_name"]))
         if not group_id:
+            # Achado real: sem este aviso, uma config restaurada entre ambientes (ou depois de
+            # limpar grupos zerados) perdia regras de pontuação silenciosamente - a regra
+            # desaparecia da regua sem nenhum sinal pra quem aplicou a config.
+            group_reference = item.get("group_name") or item.get("group_id") or "desconhecido"
+            warnings.append(
+                f"Regra de assunto '{os_type} / {os_subject}' ignorada: grupo '{group_reference}' não encontrado."
+            )
             continue
 
         if not rule:
@@ -301,6 +314,7 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         rule.classification = str(item.get("classification") or "nao_identificado")
         rule.discount_points = _bool(item.get("discount_points"), False)
         rule.max_days = int(item["max_days"]) if item.get("max_days") not in (None, "") else None
+        rule.min_hours_between = float(item["min_hours_between"]) if item.get("min_hours_between") not in (None, "") else None
         rule.require_same_subject = _bool(item.get("require_same_subject"), False)
         rule.require_same_diagnosis = _bool(item.get("require_same_diagnosis"), False)
         rule.priority = int(item.get("priority") or 100)
@@ -322,13 +336,14 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         rule.min_sla = float(item.get("min_sla") or 0)
         rule.max_recurrence_rate = float(item.get("max_recurrence_rate") or 100)
         rule.multiplier = float(item.get("multiplier") or 1)
-        rule.condition_operator = str(item.get("condition_operator") or "and")
         rule.active = _bool(item.get("active"), True)
 
     db.flush()
     current_config = serialize_current_config(db)
     save_config_version(db, current_config, version_name or str(config.get("name") or CONFIG_NAME))
-    return serialize_current_config(db)
+    if warnings:
+        current_config = dict(current_config, warnings=warnings)
+    return current_config
 
 
 def ensure_default_logic_config(db: Session) -> dict[str, Any]:

@@ -1,13 +1,13 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.performance import performance_step
 from app.core.security import require_permission
-from app.db.session import get_db
-from app.models import CalculationRun, DiagnosisPenaltyRule, ScoringGroup, ScoringRule, ScoringSubjectRule, ServiceOrder, User
+from app.db.session import SessionLocal, get_db
+from app.models import CalculationRun, DiagnosisPenaltyRule, ScoringGroup, ScoringSubjectRule, ServiceOrder, User
 from app.seed import forget_deleted_default_group, remember_deleted_default_group
 from app.schemas import (
     DiagnosisConfigureRequest,
@@ -18,9 +18,6 @@ from app.schemas import (
     ScoringGroupDeleteResult,
     ScoringGroupOut,
     ScoringGroupUpdate,
-    ScoringRuleCreate,
-    ScoringRuleOut,
-    ScoringRuleUpdate,
     ScoringSubjectRuleCreate,
     ScoringSubjectRuleDeleteResult,
     ScoringSubjectRuleOut,
@@ -30,8 +27,9 @@ from app.schemas import (
     ImportedDiagnosisOut,
     UnmappedSubjectOut,
 )
-from app.services.calculation import latest_run
+from app.services.calculation import latest_run, recalculate_current_period
 from app.services.scoring_detail import (
+    cascade_os_type_for_subject,
     effective_rule_point_value,
     effective_rule_points,
     get_point_value,
@@ -46,12 +44,19 @@ ALLOWED_DIAGNOSIS_ACTIONS = {"subtract_points", "cancel_points", "no_penalty", "
 
 
 def _subject_rule_stats_map(db: Session, rules: list[ScoringSubjectRule]) -> dict[int, dict[str, float | int]]:
+    # Achado real (lentidao ao abrir Configuracao): antes buscava os_code/os_type/os_subject de
+    # TODA a tabela service_orders (todos os meses, sem filtro) e contava em Python a cada
+    # chamada - inclusive apos editar UMA regra, que so precisa da contagem dela. Deixa o Postgres
+    # agregar (GROUP BY) e so traz um total por par (os_type, os_subject) distinto.
     counts: dict[tuple[str, str], int] = {}
-    for os_code, os_type, os_subject in db.execute(select(ServiceOrder.os_code, ServiceOrder.os_type, ServiceOrder.os_subject)):
-        if str(os_code or "").strip().upper() in DEMO_SERVICE_ORDER_CODES:
-            continue
+    count_rows = db.execute(
+        select(ServiceOrder.os_type, ServiceOrder.os_subject, func.count())
+        .where(ServiceOrder.os_code.notin_(DEMO_SERVICE_ORDER_CODES))
+        .group_by(ServiceOrder.os_type, ServiceOrder.os_subject)
+    )
+    for os_type, os_subject, count in count_rows:
         key = subject_key(os_type, os_subject)
-        counts[key] = counts.get(key, 0) + 1
+        counts[key] = counts.get(key, 0) + count
 
     point_value = get_point_value(db)
     stats: dict[int, dict[str, float | int]] = {}
@@ -98,67 +103,24 @@ def _serialize_subject_rule(
     }
 
 
-def _subject_rule_points(rule: ScoringSubjectRule, group: ScoringGroup | None = None) -> float:
-    if not rule.use_group_default and rule.custom_points is not None:
-        return float(rule.custom_points)
-    target_group = group or rule.group
-    return float(target_group.default_points) if target_group else 0.0
-
-
-def _find_legacy_subject_rules(db: Session, os_type: str, os_subject: str) -> list[ScoringRule]:
-    return list(
+def _reconcile_duplicate_subject_rules(db: Session, os_subject: str, keep_rule_id: int) -> None:
+    """Tipo Geral é uma classificação do assunto (`os_subject`), não deveria conviver com mais de uma
+    regra pro mesmo assunto sob um `os_type` diferente. Quando o Tipo Geral de um assunto é definido/
+    corrigido, apaga qualquer outra `ScoringSubjectRule` órfã que ainda exista pro mesmo assunto sob o
+    tipo antigo - sem isso, cada correção de Tipo Geral reacumula duplicatas (achado real: foi preciso
+    limpar 41 regras órfãs à mão nesta mesma sessão antes desta função existir)."""
+    stale_rules = list(
         db.scalars(
-            select(ScoringRule)
-            .where(ScoringRule.os_type == os_type)
-            .where(ScoringRule.os_subject == os_subject)
-            .order_by(ScoringRule.id.asc())
+            select(ScoringSubjectRule)
+            .where(ScoringSubjectRule.os_subject == os_subject)
+            .where(ScoringSubjectRule.id != keep_rule_id)
         )
     )
+    for stale in stale_rules:
+        db.delete(stale)
 
 
-def _sync_legacy_subject_rule(
-    db: Session,
-    rule: ScoringSubjectRule,
-    previous_os_type: str | None = None,
-    previous_os_subject: str | None = None,
-) -> None:
-    group = db.get(ScoringGroup, rule.group_id)
-    if not group:
-        return
-
-    current_rules = _find_legacy_subject_rules(db, rule.os_type, rule.os_subject)
-    previous_rules: list[ScoringRule] = []
-    if previous_os_type and previous_os_subject and (previous_os_type, previous_os_subject) != (rule.os_type, rule.os_subject):
-        previous_rules = _find_legacy_subject_rules(db, previous_os_type, previous_os_subject)
-
-    primary = current_rules[0] if current_rules else (previous_rules[0] if previous_rules else None)
-    if not primary:
-        primary = ScoringRule(
-            group_id=rule.group_id,
-            os_type=rule.os_type,
-            os_subject=rule.os_subject,
-            points=_subject_rule_points(rule, group),
-            active=rule.active,
-        )
-        db.add(primary)
-    else:
-        primary.group_id = rule.group_id
-        primary.os_type = rule.os_type
-        primary.os_subject = rule.os_subject
-        primary.points = _subject_rule_points(rule, group)
-        primary.active = rule.active
-
-    for duplicate in [*current_rules, *previous_rules]:
-        if duplicate.id != primary.id:
-            db.delete(duplicate)
-
-
-def _delete_legacy_subject_rule(db: Session, os_type: str, os_subject: str) -> None:
-    for legacy_rule in _find_legacy_subject_rules(db, os_type, os_subject):
-        db.delete(legacy_rule)
-
-
-def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> ScoringSubjectRule:
+def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> tuple[ScoringSubjectRule, int]:
     group = db.get(ScoringGroup, payload.group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
@@ -179,6 +141,7 @@ def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> Scori
             active=True,
         )
         db.add(rule)
+        db.flush()
     else:
         rule.group_id = payload.group_id
         rule.use_group_default = True
@@ -186,8 +149,12 @@ def _link_subject_rule(db: Session, payload: SubjectLinkToGroupRequest) -> Scori
         rule.active = True
         rule.updated_at = datetime.now(timezone.utc)
 
-    _sync_legacy_subject_rule(db, rule)
-    return rule
+    _reconcile_duplicate_subject_rules(db, rule.os_subject, rule.id)
+    # Vincular um assunto sempre carimba o Tipo Geral escolhido nas O.S já importadas com esse
+    # assunto - sem isso, O.S antigas ficam com o os_type velho (setor/pendente) e nunca casam com a
+    # regra recém-criada (achado real - ver docs/plano-integracao-ixc.md).
+    cascaded = cascade_os_type_for_subject(db, payload.os_subject, payload.os_type)
+    return rule, cascaded
 
 
 def _configure_diagnosis_rule(db: Session, payload: DiagnosisConfigureRequest) -> DiagnosisPenaltyRule:
@@ -262,14 +229,12 @@ def delete_scoring_group(
             raise HTTPException(status_code=404, detail="Grupo de destino não encontrado.")
 
     subject_rules = list(db.scalars(select(ScoringSubjectRule).where(ScoringSubjectRule.group_id == group_id)))
-    legacy_rules = list(db.scalars(select(ScoringRule).where(ScoringRule.group_id == group_id)))
 
-    if (subject_rules or legacy_rules) and not replacement_group and not delete_request.delete_linked_rules:
+    if subject_rules and not replacement_group and not delete_request.delete_linked_rules:
         raise HTTPException(
             status_code=409,
             detail=(
-                "O grupo possui "
-                f"{len(subject_rules)} assunto(s) vinculado(s) e {len(legacy_rules)} regra(s) legada(s). "
+                f"O grupo possui {len(subject_rules)} assunto(s) vinculado(s). "
                 "Escolha um grupo de destino ou confirme a exclusão dos vínculos."
             ),
         )
@@ -284,28 +249,10 @@ def delete_scoring_group(
             rule.group = replacement_group
             rule.updated_at = datetime.now(timezone.utc)
         result.moved_subject_rules = len(subject_rules)
-
-        for legacy_rule in legacy_rules:
-            replacement_rule = db.scalar(
-                select(ScoringRule)
-                .where(ScoringRule.group_id == replacement_group.id)
-                .where(ScoringRule.os_type == legacy_rule.os_type)
-                .where(ScoringRule.os_subject == legacy_rule.os_subject)
-            )
-            if replacement_rule:
-                replacement_rule.points = legacy_rule.points
-                replacement_rule.active = legacy_rule.active
-                db.delete(legacy_rule)
-                continue
-            legacy_rule.group = replacement_group
-        result.moved_legacy_rules = len(legacy_rules)
     else:
         for rule in subject_rules:
             db.delete(rule)
-        for legacy_rule in legacy_rules:
-            db.delete(legacy_rule)
         result.deleted_subject_rules = len(subject_rules)
-        result.deleted_legacy_rules = len(legacy_rules)
 
     record_audit_log(db, user, "delete", "scoring_groups", group.id, snapshot(group), result.model_dump(mode="json"))
     remember_deleted_default_group(db, group.name)
@@ -338,9 +285,17 @@ def create_scoring_subject_rule(payload: ScoringSubjectRuleCreate, db: Session =
     rule = ScoringSubjectRule(**payload.model_dump())
     db.add(rule)
     db.flush()
-    _sync_legacy_subject_rule(db, rule)
+    _reconcile_duplicate_subject_rules(db, rule.os_subject, rule.id)
+    cascaded = cascade_os_type_for_subject(db, rule.os_subject, rule.os_type)
     record_audit_log(db, user, "create", "scoring_subject_rules", rule.id, None, snapshot(rule))
     db.commit()
+    if cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note=f'Recálculo automático após cadastrar o Tipo Geral do assunto "{rule.os_subject}".',
+            )
     db.refresh(rule)
     rule = db.scalar(
         select(ScoringSubjectRule).options(selectinload(ScoringSubjectRule.group)).where(ScoringSubjectRule.id == rule.id)
@@ -364,9 +319,21 @@ def update_scoring_subject_rule(rule_id: int, payload: ScoringSubjectRuleUpdate,
     for field, value in updates.items():
         setattr(rule, field, value)
     rule.updated_at = datetime.now(timezone.utc)
-    _sync_legacy_subject_rule(db, rule, previous_os_type, previous_os_subject)
+
+    cascaded = 0
+    if "os_type" in updates and updates["os_type"] != previous_os_type:
+        _reconcile_duplicate_subject_rules(db, rule.os_subject, rule.id)
+        cascaded = cascade_os_type_for_subject(db, rule.os_subject, rule.os_type)
+
     record_audit_log(db, user, "update", "scoring_subject_rules", rule.id, before, snapshot(rule))
     db.commit()
+    if cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note=f'Recálculo automático após corrigir o Tipo Geral do assunto "{rule.os_subject}".',
+            )
     rule = db.scalar(
         select(ScoringSubjectRule).options(selectinload(ScoringSubjectRule.group)).where(ScoringSubjectRule.id == rule.id)
     )
@@ -385,7 +352,6 @@ def delete_scoring_subject_rule(rule_id: int, db: Session = Depends(get_db), use
         os_subject=rule.os_subject,
     )
     record_audit_log(db, user, "delete", "scoring_subject_rules", rule.id, snapshot(rule), None)
-    _delete_legacy_subject_rule(db, rule.os_type, rule.os_subject)
     db.delete(rule)
     db.commit()
     return result
@@ -421,10 +387,17 @@ def list_unmapped_subjects_alias(
 
 @router.post("/scoring-matrix/subjects/link-to-group", response_model=ScoringSubjectRuleOut)
 def link_subject_to_group(payload: SubjectLinkToGroupRequest, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
-    rule = _link_subject_rule(db, payload)
+    rule, cascaded = _link_subject_rule(db, payload)
     db.flush()
     record_audit_log(db, user, "link_to_group", "scoring_subject_rules", rule.id, None, snapshot(rule))
     db.commit()
+    if cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note=f'Recálculo automático após classificar o Tipo Geral do assunto "{payload.os_subject}".',
+            )
     rule = db.scalar(
         select(ScoringSubjectRule).options(selectinload(ScoringSubjectRule.group)).where(ScoringSubjectRule.id == rule.id)
     )
@@ -433,11 +406,20 @@ def link_subject_to_group(payload: SubjectLinkToGroupRequest, db: Session = Depe
 
 @router.post("/scoring-matrix/subjects/link-to-group/bulk", response_model=list[ScoringSubjectRuleOut])
 def link_subjects_to_group_bulk(payload: SubjectLinkToGroupBulkRequest, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
-    rules = [_link_subject_rule(db, item) for item in payload.items]
+    results = [_link_subject_rule(db, item) for item in payload.items]
+    rules = [rule for rule, _ in results]
+    total_cascaded = sum(count for _, count in results)
     db.flush()
     for rule in rules:
         record_audit_log(db, user, "link_to_group", "scoring_subject_rules", rule.id, None, snapshot(rule))
     db.commit()
+    if total_cascaded:
+        with SessionLocal() as recalculation_db:
+            recalculate_current_period(
+                recalculation_db,
+                triggered_by=user.id,
+                execution_note="Recálculo automático após classificar o Tipo Geral de assuntos em lote.",
+            )
     rule_ids = [rule.id for rule in rules]
     persisted_rules = list(
         db.scalars(
@@ -518,47 +500,3 @@ def configure_diagnosis_rules_bulk(payload: DiagnosisConfigureBulkRequest, db: S
     return rules
 
 
-@router.get("/scoring-rules", response_model=list[ScoringRuleOut])
-def list_scoring_rules(db: Session = Depends(get_db)):
-    return db.scalars(
-        select(ScoringRule)
-        .options(selectinload(ScoringRule.group))
-        .order_by(ScoringRule.os_type.asc(), ScoringRule.os_subject.asc())
-    ).all()
-
-
-@router.post("/scoring-rules", response_model=ScoringRuleOut, status_code=201)
-def create_scoring_rule(payload: ScoringRuleCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
-    group = db.get(ScoringGroup, payload.group_id)
-    if not group:
-        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
-
-    rule = ScoringRule(**payload.model_dump())
-    db.add(rule)
-    db.flush()
-    record_audit_log(db, user, "create", "scoring_rules", rule.id, None, snapshot(rule))
-    db.commit()
-    db.refresh(rule)
-    return db.scalar(
-        select(ScoringRule).options(selectinload(ScoringRule.group)).where(ScoringRule.id == rule.id)
-    )
-
-
-@router.put("/scoring-rules/{rule_id}", response_model=ScoringRuleOut)
-def update_scoring_rule(rule_id: int, payload: ScoringRuleUpdate, db: Session = Depends(get_db), user: User = Depends(require_permission("scoring:write"))):
-    rule = db.get(ScoringRule, rule_id)
-    if not rule:
-        raise HTTPException(status_code=404, detail="Regra de pontuação não encontrada.")
-
-    before = snapshot(rule)
-    updates = payload.model_dump(exclude_unset=True)
-    if "group_id" in updates and not db.get(ScoringGroup, updates["group_id"]):
-        raise HTTPException(status_code=404, detail="Grupo de pontuação não encontrado.")
-
-    for field, value in updates.items():
-        setattr(rule, field, value)
-    record_audit_log(db, user, "update", "scoring_rules", rule.id, before, snapshot(rule))
-    db.commit()
-    return db.scalar(
-        select(ScoringRule).options(selectinload(ScoringRule.group)).where(ScoringRule.id == rule.id)
-    )

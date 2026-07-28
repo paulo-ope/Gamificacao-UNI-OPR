@@ -18,7 +18,13 @@ from app.models import (
 )
 from app.services import scoring_detail
 from app.services.audit_log import record_audit_log, snapshot
-from app.services.calculation_closure import find_paid_run_for_service_order_context, now_utc
+from app.services.calculation_closure import (
+    current_reference_period,
+    find_paid_run_for_service_order_context,
+    find_run_for_service_order_context,
+    is_period_in_the_past,
+    now_utc,
+)
 from app.services.scoring_matrix import real_service_orders
 
 
@@ -123,17 +129,43 @@ def _existing_entry(db: Session, original: ServiceOrder, later: ServiceOrder) ->
     )
 
 
+def _original_already_debited(db: Session, original: ServiceOrder) -> bool:
+    """Uma O.S original so pode ser debitada UMA vez por este mecanismo, nao importa quantos
+    retornos de garantia distintos aparecam depois - achado real: um cliente com problema
+    cronico (varias visitas ao longo de meses) fazia CADA visita nova gerar um novo debito
+    contra a MESMA O.S original (uma chegou a 12 debitos, -72 pontos so dela)."""
+    return (
+        db.scalar(
+            select(PointBalanceEntry.id)
+            .where(
+                PointBalanceEntry.status != "reverted",
+                or_(
+                    PointBalanceEntry.original_service_order_id == original.id,
+                    PointBalanceEntry.original_os_code == original.os_code,
+                ),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def detect_post_payment_warranty_debits(
     db: Session,
     candidate_orders: list[ServiceOrder],
     triggered_by: int | None = None,
 ) -> list[PointBalanceEntry]:
-    """Detecta garantias/reincidencias tecnicas cuja O.S original ja pertence a um periodo pago.
+    """Detecta garantias/reincidencias tecnicas cuja O.S original ja pertence a um periodo encerrado.
 
     `candidate_orders` sao as O.S "posteriores" a considerar (recem importadas, ou o periodo sendo
-    calculado). So gera lancamento quando a O.S original ja esta num CalculationRun com status="paid" -
-    caso contrario o mecanismo existente (scoring_detail.recurrence_penalties) resolve normalmente quando
-    aquele periodo for calculado, pois a O.S posterior ja vai existir no banco.
+    calculado). Um periodo e considerado "encerrado" quando esta pago OU quando o mes corrente (fuso
+    de Porto Velho, ver `is_period_in_the_past`) ja virou para o periodo seguinte - mesmo sem ninguem
+    ter marcado como pago ainda. Sem o segundo caso, o rascunho de um mes que ja passou continuava
+    mutavel indefinidamente ate alguem lembrar de pagar, e uma reincidencia descoberta nesse meio tempo
+    mudava um total que o dono do produto ja considerava decidido (achado real - ver
+    docs/plano-integracao-ixc.md). Caso contrario (periodo original ainda e o mes corrente e nao esta
+    pago), o mecanismo existente (scoring_detail.recurrence_penalties) resolve normalmente quando aquele
+    periodo for calculado, pois a O.S posterior ja vai existir no banco.
     """
     later_orders = [order for order in candidate_orders if scoring_detail.completed(order)]
     if not later_orders:
@@ -142,6 +174,14 @@ def detect_post_payment_warranty_debits(
     action = scoring_detail.get_setting(db, "recurrence_action", "annul_original")
     normalized_action = scoring_detail.normalize(action)
     window_days = int(scoring_detail._safe_float(scoring_detail.get_setting(db, "recurrence_window_days", "30"), 30))
+    # So a O.S original do mes IMEDIATAMENTE anterior ao mes corrente e elegivel pra esse mecanismo -
+    # achado real: uma janela rolante de dias (ex.: 60) podia alcancar 2 meses pra tras dependendo do
+    # dia do mes em que a deteccao rodava (ex.: dia 25 de julho alcancava o fim de maio), descontando
+    # colaboradores por O.S de um mes que ninguem esperava mais ver mexido.
+    current_month, current_year = current_reference_period()
+    eligible_month, eligible_year = (
+        (12, current_year - 1) if current_month == 1 else (current_month - 1, current_year)
+    )
     configured_points = scoring_detail._safe_float(scoring_detail.get_setting(db, "recurrence_penalty_points", "0"), 0)
     identity_fields = scoring_detail._configured_recurrence_identity_fields(db)
     rules = scoring_detail.active_recurrence_classification_rules(db)
@@ -195,7 +235,8 @@ def detect_post_payment_warranty_debits(
         classifications = []
         for original in originals:
             original_date = _order_date(original)
-            days_between = int((later_date - original_date).days)
+            gap = later_date - original_date
+            days_between = int(gap.days)
             classification = scoring_detail.classify_recurrence_pair(
                 original,
                 later,
@@ -203,6 +244,7 @@ def detect_post_payment_warranty_debits(
                 window_days,
                 rules,
                 identity_label=scoring_detail._recurrence_identity_label_for_fields(original, identity_fields),
+                hours_between=gap.total_seconds() / 3600,
             )
             classification["original_order"] = original
             classifications.append(classification)
@@ -217,19 +259,43 @@ def detect_post_payment_warranty_debits(
 
         selected = sorted(discount_candidates, key=lambda item: int(item["days_between"]))[0]
         original = selected["original_order"]
+
+        original_collaborator = original.collaborator
+        if not original_collaborator or not original_collaborator.active or not original_collaborator.is_registered:
+            # Achado real: colaborador inativo/nao cadastrado nunca entra num fechamento futuro pra
+            # esse debito ser aplicado - ele so ficava acumulando pendente pra sempre, sem efeito
+            # nenhum (e virava um passivo "surpresa" se a pessoa fosse cadastrada depois).
+            continue
+
         original_date = _order_date(original)
 
         paid_run = find_paid_run_for_service_order_context(db, original_date, original.regional)
-        if not paid_run:
-            # Periodo original ainda nao esta pago: o mecanismo normal de recurrence_penalties vai
-            # encontrar este par quando aquele periodo for calculado (a O.S posterior ja vai existir).
+        period_is_closed = bool(paid_run) or is_period_in_the_past(original_date.month, original_date.year)
+        if not period_is_closed:
+            # Periodo original ainda e o mes corrente (fuso de Porto Velho) e nao esta pago: o
+            # mecanismo normal de recurrence_penalties vai encontrar este par quando aquele periodo
+            # for calculado (a O.S posterior ja vai existir).
+            continue
+
+        if (original_date.month, original_date.year) != (eligible_month, eligible_year):
+            # So o mes imediatamente anterior e elegivel (ver comentario na definicao de
+            # eligible_month/eligible_year acima) - qualquer coisa 2+ meses atras nao gera debito novo.
             continue
 
         if _existing_entry(db, original, later):
             continue
 
+        if _original_already_debited(db, original):
+            continue
+
         if normalized_action in {scoring_detail.normalize("no_penalty"), scoring_detail.normalize("nao_penaliza")}:
             continue
+
+        # Sem fechamento pago (periodo so fechou por ter virado o mes), usa a apuracao mais recente
+        # daquele periodo - se existir - so para herdar a regua congelada e compor o motivo do
+        # lancamento. Pode nao existir nenhuma (mes nunca calculado) - nesse caso cai no fallback da
+        # regua atual, igual ja acontecia para fechamentos pagos sem config_snapshot.
+        reference_run = paid_run or find_run_for_service_order_context(db, original_date, original.regional)
 
         requires_review = False
         points = 0.0
@@ -241,20 +307,26 @@ def detect_post_payment_warranty_debits(
             points = -abs(float(configured_points))
             reason_note = f"desconto configurado de {abs(float(configured_points)):g} pontos"
         else:
-            snapshot_points = _order_points_from_snapshot(original, paid_run.config_snapshot)
+            snapshot_points = _order_points_from_snapshot(original, reference_run.config_snapshot if reference_run else None)
             if snapshot_points is None:
                 snapshot_points = scoring_detail.order_points(original, active_rules_lookup)
-                reason_note = (
-                    f"anulação de {snapshot_points:g} pontos (régua atual, fechamento #{paid_run.id} sem config_snapshot)"
-                )
+                run_descriptor = f"fechamento #{reference_run.id}" if reference_run else "nenhum fechamento calculado"
+                reason_note = f"anulação de {snapshot_points:g} pontos (régua atual, {run_descriptor} sem config_snapshot)"
             else:
-                reason_note = f"anulação de {snapshot_points:g} pontos (régua vigente no fechamento #{paid_run.id})"
+                reason_note = f"anulação de {snapshot_points:g} pontos (régua vigente no fechamento #{reference_run.id})"
             points = -abs(float(snapshot_points))
+
+        period_label = f"{original_date.month:02d}/{original_date.year}"
+        closure_descriptor = (
+            f"fechamento pago #{paid_run.id}, {period_label}"
+            if paid_run
+            else f"período {period_label} já encerrado (mês corrente já virou, horário de Porto Velho)"
+        )
 
         entry = PointBalanceEntry(
             # O debito e sempre do colaborador da O.S ORIGINAL: foi ele quem ganhou os pontos no
-            # periodo pago que estao sendo estornados. O tecnico da visita de garantia (later) pode
-            # ser outra pessoa e nao deve ser penalizado - mesmo criterio de recurrence_penalties,
+            # periodo encerrado que estao sendo estornados. O tecnico da visita de garantia (later)
+            # pode ser outra pessoa e nao deve ser penalizado - mesmo criterio de recurrence_penalties,
             # que penaliza a O.S original.
             collaborator_id=original.collaborator_id,
             entry_type="post_payment_warranty_debit",
@@ -263,14 +335,14 @@ def detect_post_payment_warranty_debits(
             related_service_order_id=later.id,
             original_os_code=original.os_code,
             related_os_code=later.os_code,
-            origin_calculation_run_id=paid_run.id,
+            origin_calculation_run_id=reference_run.id if reference_run else None,
             status="pending",
             requires_review=requires_review,
             recurrence_classification=selected["classification"],
             recurrence_action=normalized_action,
             reason=(
                 f"Garantia detectada pela O.S {later.os_code} referente a O.S original {original.os_code} "
-                f"(fechamento pago #{paid_run.id}, {paid_run.reference_month:02d}/{paid_run.reference_year}): {reason_note}."
+                f"({closure_descriptor}): {reason_note}."
             ),
         )
         db.add(entry)
@@ -318,9 +390,40 @@ def current_balance(db: Session, collaborator_id: int) -> float:
     return round(sum(float(entry.points) for entry in pending), 2)
 
 
-def preview_pending_adjustment(db: Session, collaborator_id: int, available_points: float) -> dict[str, float]:
-    """Prévia (não muta nada) do efeito dos lançamentos pendentes - usada para exibir em rascunhos."""
-    pending = [entry for entry in pending_entries_for_collaborator(db, collaborator_id) if not entry.requires_review]
+def pending_entries_by_collaborator_batch(db: Session, collaborator_ids: list[int]) -> dict[int, list[PointBalanceEntry]]:
+    """Mesma consulta de `pending_entries_for_collaborator`, mas para vários colaboradores de uma
+    só vez - achado real: `calculate_scores` chamava a versão de um colaborador por vez dentro de
+    um loop (uma consulta por colaborador do período, ~300+ idas ao banco a cada recálculo), um
+    dos maiores gargalos de performance ao recalcular a apuração ou vincular/desvincular acesso
+    de portal (que disparava um recálculo completo desnecessariamente - ver page.tsx)."""
+    if not collaborator_ids:
+        return {}
+    entries = list(
+        db.scalars(
+            select(PointBalanceEntry)
+            .where(PointBalanceEntry.collaborator_id.in_(collaborator_ids), PointBalanceEntry.status == "pending")
+            .order_by(PointBalanceEntry.created_at.asc(), PointBalanceEntry.id.asc())
+        )
+    )
+    grouped: dict[int, list[PointBalanceEntry]] = defaultdict(list)
+    for entry in entries:
+        grouped[entry.collaborator_id].append(entry)
+    return grouped
+
+
+def preview_pending_adjustment(
+    db: Session,
+    collaborator_id: int,
+    available_points: float,
+    *,
+    pending: list[PointBalanceEntry] | None = None,
+) -> dict[str, float]:
+    """Prévia (não muta nada) do efeito dos lançamentos pendentes - usada para exibir em rascunhos.
+    `pending`, se informado (ex.: uma fatia de `pending_entries_by_collaborator_batch`), evita
+    rebuscar do banco - quem processa vários colaboradores de uma vez deve buscar em lote."""
+    if pending is None:
+        pending = pending_entries_for_collaborator(db, collaborator_id)
+    pending = [entry for entry in pending if not entry.requires_review]
     total_debit = round(sum(float(entry.points) for entry in pending), 2)
     projected_balance = round(float(available_points) + total_debit, 2)
     return {"adjustment_points": total_debit, "projected_balance": projected_balance}

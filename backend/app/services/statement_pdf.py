@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from io import BytesIO
 from typing import Any
 from xml.sax.saxutils import escape
@@ -24,8 +24,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import CalculationRun, Collaborator, CollaboratorScore, PointBalanceEntry
+from app.services.calculation_closure import now_porto_velho
 from app.services.point_balance import pending_entries_for_collaborator
-from app.services.regional import normalize_regional
+from app.services.regional import normalize_regional_grouped as normalize_regional
 from app.services.scoring_detail import get_collaborator_service_orders_detail
 
 MONTH_NAMES = [
@@ -152,7 +153,7 @@ def build_collaborator_statement_pdf(
         [
             ["Colaborador", collaborator.name, "Período", period_label],
             ["Cargo/função", collaborator.role or "Não informado", "Regional", normalize_regional(collaborator.regional) or "Não informado"],
-            ["Situação do fechamento", RUN_STATUS_LABEL.get(run.status, run.status), "Emitido em", _format_datetime(datetime.now(timezone.utc))],
+            ["Situação do fechamento", RUN_STATUS_LABEL.get(run.status, run.status), "Emitido em", _format_datetime(now_porto_velho())],
         ],
         colWidths=[38 * mm, 58 * mm, 32 * mm, 52 * mm],
     )
@@ -256,7 +257,7 @@ def build_collaborator_statement_pdf(
                 Paragraph(date_html, cell_style),
                 _p(order["customer_name"], cell_style),
                 _p(order["os_subject"], cell_style),
-                _p(order["sla_status"], cell_style),
+                _p(order["sla_status_normalized"], cell_style),
                 Paragraph(_format_points(net_points), cell_style_right),
                 Paragraph(_format_money(net_points * point_value), cell_style_right),
                 _p(order["scoring_status"], cell_style),
@@ -297,7 +298,7 @@ def build_collaborator_statement_pdf(
         canvas.saveState()
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(colors.HexColor("#94a3b8"))
-        canvas.drawString(14 * mm, 10 * mm, f"Extrato gerado em {_format_datetime(datetime.now(timezone.utc))}")
+        canvas.drawString(14 * mm, 10 * mm, f"Extrato gerado em {_format_datetime(now_porto_velho())}")
         canvas.drawRightString(doc_.pagesize[0] - 14 * mm, 10 * mm, f"Página {doc_.page}")
         canvas.restoreState()
 

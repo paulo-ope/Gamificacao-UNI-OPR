@@ -9,7 +9,22 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"]
+      },
       colors: {
+        // Manual da marca UNI Internet 2026 (mesmos valores das variáveis --uni-* em globals.css).
+        // Acentos de marca usam estas cores; emerald/amber/red continuam como cores SEMÂNTICAS
+        // (sucesso/alerta/erro), que o manual não substitui.
+        uni: {
+          royal: "#2d5fff",
+          turquoise: "#27d9bf",
+          impact: "#0028f3",
+          electric: "#000ecc",
+          midnight: "#010c8b",
+          cyan: "#02fffa",
+          rich: "#151f27"
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

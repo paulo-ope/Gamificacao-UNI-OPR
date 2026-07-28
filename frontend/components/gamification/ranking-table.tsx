@@ -13,7 +13,7 @@ const moneyFormat = new Intl.NumberFormat("pt-BR", { style: "currency", currency
 function healthBadgeClass(status: string) {
   const normalized = status.toLowerCase();
   if (normalized.includes("excel")) return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (normalized.includes("boa")) return "border-blue-200 bg-blue-50 text-blue-700";
+  if (normalized.includes("boa")) return "border-blue-200 bg-blue-50 text-uni-royal";
   if (normalized.includes("aten")) return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-red-200 bg-red-50 text-red-700";
 }
@@ -67,7 +67,7 @@ function MiniMetric({
         : tone === "danger"
           ? "text-red-600"
           : tone === "money"
-            ? "text-teal-700"
+            ? "text-uni-royal"
             : "text-slate-950";
 
   return (
@@ -101,10 +101,10 @@ export function RankingTable({ data, onViewOrders }: RankingTableProps) {
       </div>
 
       {data.map((score, index) => (
-        <article key={score.id} className="grid min-w-0 gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:border-teal-200 hover:shadow-md xl:grid-cols-[240px_1fr_220px] xl:items-center">
+        <article key={score.id} className="grid min-w-0 gap-3 rounded-lg border bg-white p-3 shadow-sm transition hover:border-blue-200 hover:shadow-md xl:grid-cols-[240px_1fr_220px] xl:items-center">
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <span className={index < 3 ? "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-teal-700 text-xs font-semibold text-white" : "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white"}>
+              <span className={index < 3 ? "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-uni-royal text-xs font-semibold text-white" : "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white"}>
                 {index + 1}
               </span>
               <div className="min-w-0">
@@ -132,7 +132,7 @@ export function RankingTable({ data, onViewOrders }: RankingTableProps) {
           <div className="flex min-w-0 items-center justify-between gap-3 xl:flex-col xl:items-end xl:justify-start xl:gap-1.5">
             <div className="min-w-0 xl:text-right">
               <div className="flex items-center gap-1.5 xl:justify-end">
-                <span className="text-lg font-semibold leading-none text-teal-700">{moneyFormat.format(score.estimated_payment)}</span>
+                <span className="text-lg font-semibold leading-none text-uni-royal">{moneyFormat.format(score.estimated_payment)}</span>
                 <InfoHint ariaLabel={`Como chegamos no valor de ${score.collaborator_name}`} description={finalPointsFormula(score)} side="left" />
               </div>
               <div className="mt-1 text-xs text-slate-500">

@@ -15,7 +15,7 @@ from app.schemas import (
     ServiceOrderSubjectSummary,
 )
 from app.seed import seed_database
-from app.services.regional import normalize_regional, same_regional
+from app.services.regional import normalize_regional_grouped as normalize_regional, same_regional_grouped as same_regional
 from app.services.scoring_matrix import DEMO_SERVICE_ORDER_CODES, is_demo_service_order, real_service_orders
 from app.services.audit_log import record_audit_log
 from app.services.scoring_detail import period_orders

@@ -51,6 +51,13 @@ export function formatHours(value: number | null | undefined) {
   return `${numberFormat.format(value)}h`;
 }
 
+// Fuso da operação (Rondônia - sem horário de verão). O backend grava tudo em UTC, mas quem opera o
+// sistema está em Porto Velho - mostrar em UTC (como era antes) exibia toda hora 4h adiantada em
+// relação ao horário real de quem está olhando a tela (achado real: usuário reportou "hora do sistema
+// errada" vendo a trilha de auditoria). Consistente com `now_porto_velho()` no backend
+// (calculation_closure.py), que já usa este mesmo fuso para decidir o mês corrente.
+const OPERATION_TIME_ZONE = "America/Porto_Velho";
+
 export function formatDateTime(value: string | null | undefined) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("pt-BR", {
@@ -59,6 +66,6 @@ export function formatDateTime(value: string | null | undefined) {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-    timeZone: "UTC"
+    timeZone: OPERATION_TIME_ZONE
   }).format(new Date(value));
 }

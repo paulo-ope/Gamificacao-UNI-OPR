@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -38,9 +38,22 @@ class Collaborator(Base):
     regional: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_registered: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    # Vincula o colaborador ao id do funcionario/tecnico no IXC (su_rh_funcionarios / campo
+    # id_tecnico nas O.S.). Usado para casar o mesmo colaborador entre a gamificacao e o modulo
+    # de operacoes analiticas sem depender de comparacao de nome (nome pode divergir/ter typo).
+    ixc_employee_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True, index=True)
+    # Foto de perfil guardada como bytes direto no banco (sem infraestrutura de arquivo neste
+    # projeto - ver docs/plano-integracao-ixc.md não se aplica aqui, decisão registrada na
+    # migration 20260717_0008). `photo_content_type` (ex: "image/jpeg") é necessário pra servir
+    # com o Content-Type correto - sem isso o navegador não sabe renderizar os bytes crus.
+    photo: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    photo_content_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
     service_orders: Mapped[list["ServiceOrder"]] = relationship(back_populates="collaborator")
     scores: Mapped[list["CollaboratorScore"]] = relationship(back_populates="collaborator")
+    portal_user: Mapped["User | None"] = relationship(back_populates="collaborator", uselist=False)
 
 
 class User(Base):
@@ -52,12 +65,77 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(30), default="viewer", nullable=False, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Vínculo direto com o colaborador que este usuário representa no /portal - substitui a
+    # heurística por nome/e-mail aproximado (achado real: sem vínculo direto, um usuário sem match
+    # caía no fallback "primeiro colocado do ranking", vazando dados de outro colaborador).
+    # Único (um colaborador só pode estar vinculado a um usuário) e nullable (nem todo usuário
+    # representa um colaborador - admin/operator/viewer internos não precisam de vínculo).
+    collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id"), unique=True, nullable=True)
+    # Vínculo por regional pro perfil "regional_manager_viewer" - esse usuário não representa UM
+    # colaborador (não tem O.S própria), ele acompanha a equipe inteira de uma filial. Guardado como
+    # texto livre (normalizado na leitura via services/regional.normalize_regional, igual toda outra
+    # comparação de regional no sistema), não como FK - não existe uma tabela de "regional" própria.
+    managed_regional: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Sucessor de managed_regional: permite um gestor regional cobrir várias filiais ao mesmo
+    # tempo (mesmo caso de uso que LeadershipProfileRegional resolve pra líderes). Lista de texto
+    # livre em JSON em vez de tabela filha própria - não há necessidade de join em SQL, é só lida
+    # em Python depois do usuário já carregado. managed_regional (singular) fica só como legado de
+    # leitura pra contas antigas ainda não migradas; toda escrita nova usa managed_regionals.
+    managed_regionals: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
     import_runs: Mapped[list["ImportRun"]] = relationship(back_populates="imported_by_user")
     import_service_order_audits: Mapped[list["ImportServiceOrderAudit"]] = relationship(back_populates="created_by_user")
+    collaborator: Mapped[Collaborator | None] = relationship(back_populates="portal_user")
+    access_profiles: Mapped[list["AccessProfile"]] = relationship(
+        secondary="user_access_profiles",
+        back_populates="users",
+    )
+
+
+class AccessProfile(Base):
+    __tablename__ = "access_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    legacy_role: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    permissions: Mapped[list["AccessProfilePermission"]] = relationship(
+        back_populates="profile",
+        cascade="all, delete-orphan",
+    )
+    users: Mapped[list[User]] = relationship(
+        secondary="user_access_profiles",
+        back_populates="access_profiles",
+    )
+
+
+class AccessProfilePermission(Base):
+    __tablename__ = "access_profile_permissions"
+    __table_args__ = (UniqueConstraint("profile_id", "permission", name="uq_access_profile_permission"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+
+    profile: Mapped[AccessProfile] = relationship(back_populates="permissions")
+
+
+class UserAccessProfile(Base):
+    __tablename__ = "user_access_profiles"
+    __table_args__ = (UniqueConstraint("user_id", "profile_id", name="uq_user_access_profile"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class AuditLog(Base):
@@ -117,7 +195,6 @@ class ScoringGroup(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=True)
 
-    rules: Mapped[list["ScoringRule"]] = relationship(back_populates="group")
     subject_rules: Mapped[list["ScoringSubjectRule"]] = relationship(back_populates="group")
 
 
@@ -138,31 +215,6 @@ class ScoringSubjectRule(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=True)
 
     group: Mapped["ScoringGroup"] = relationship(back_populates="subject_rules")
-
-
-class ScoringRule(Base):
-    __tablename__ = "scoring_rules"
-    __table_args__ = (UniqueConstraint("group_id", "os_type", "os_subject", name="uq_scoring_rule_subject"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("scoring_groups.id"), nullable=False)
-    os_type: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
-    os_subject: Mapped[str | None] = mapped_column(String(180), index=True, nullable=True)
-    points: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
-    group: Mapped["ScoringGroup"] = relationship(back_populates="rules")
-
-
-class PenaltyRule(Base):
-    __tablename__ = "penalty_rules"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(160), unique=True, nullable=False)
-    penalty_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
-    points: Mapped[float] = mapped_column(Float, default=0, nullable=False)
-    calculation_mode: Mapped[str] = mapped_column(String(80), default="fixed", nullable=False)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class DiagnosisPenaltyRule(Base):
@@ -209,6 +261,7 @@ class RecurrenceClassificationRule(Base):
     classification: Mapped[str] = mapped_column(String(60), default="nao_identificado", index=True, nullable=False)
     discount_points: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     max_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    min_hours_between: Mapped[float | None] = mapped_column(Float, nullable=True)
     require_same_subject: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     require_same_diagnosis: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
@@ -237,8 +290,27 @@ class HealthRule(Base):
     min_sla: Mapped[float] = mapped_column(Float, default=0, nullable=False)
     max_recurrence_rate: Mapped[float] = mapped_column(Float, default=100, nullable=False)
     multiplier: Mapped[float] = mapped_column(Float, default=1, nullable=False)
-    condition_operator: Mapped[str] = mapped_column(String(20), default="and", nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class CpkRegionalSnapshot(Base):
+    """Ultimo status de CPK sincronizado da API da frota, por (ano, mes, regional). Guardado em
+    cache local em vez de chamar a API ao vivo a cada calculo de folha - se a API da frota cair
+    na hora do fechamento, o calculo usa o ultimo snapshot em vez de travar (ver cpk_health.py)."""
+
+    __tablename__ = "cpk_regional_snapshots"
+    __table_args__ = (UniqueConstraint("reference_year", "reference_month", "regional", name="uq_cpk_snapshot_period_regional"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    reference_year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    reference_month: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    regional: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    # "na_meta" | "fora_meta" | "sem_base" (regional sem condutores elegiveis suficientes)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    cpk_realizado: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cpk_meta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mes_fechado: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
 class CalculationRun(Base):

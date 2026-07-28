@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.models import Collaborator, ImportRun, ImportServiceOrderAudit, ServiceOrder
 from app.services.calculation_closure import find_paid_run_for_service_order_context
 from app.services.point_balance import detect_post_payment_warranty_debits
-from app.services.regional import is_valid_regional, normalize_regional
+from app.services.regional import is_valid_regional, normalize_regional_grouped as normalize_regional
 from app.services.sla import normalize_sla_status
 
 
@@ -848,9 +848,15 @@ def generated_os_code(contract_id: str, os_subject: str, opened_at: datetime, ro
     return f"UPV-{hashlib.sha1(raw).hexdigest()[:14].upper()}"
 
 
-def get_or_create_collaborator(db: Session, name: str, regional: str) -> tuple[Collaborator, bool]:
+def get_or_create_collaborator(
+    db: Session, name: str, regional: str, *, collaborators_cache: list[Collaborator] | None = None
+) -> tuple[Collaborator, bool]:
+    """`collaborators_cache`, se informado, evita buscar todos os colaboradores do banco a cada chamada -
+    quem passar deve ter carregado a lista uma vez por rodada de importação e reaproveitado aqui (importa
+    muito em lotes grandes, ex. importação retroativa da API do IXC com dezenas de milhares de O.S.). Sem
+    isso, mantém o comportamento de sempre (busca do zero) - não muda nada para quem já chama sem o cache."""
     normalized_name = normalize_header(name)
-    collaborators = db.scalars(select(Collaborator)).all()
+    collaborators = collaborators_cache if collaborators_cache is not None else db.scalars(select(Collaborator)).all()
     for collaborator in collaborators:
         if normalize_header(collaborator.name) == normalized_name:
             if regional and (collaborator.regional != regional or not is_valid_regional(collaborator.regional)):
@@ -858,8 +864,12 @@ def get_or_create_collaborator(db: Session, name: str, regional: str) -> tuple[C
                 if not is_valid_regional(collaborator.regional):
                     collaborator.regional = regional
             if not collaborator.active:
+                # Achado real: forcar is_registered=False aqui derrubava o cadastro de quem tinha
+                # sido desativado temporariamente pela tela (ex.: licenca) SEM passar pela exclusao
+                # (que ja zera is_registered explicitamente) - a pessoa reaparecia sem pontuar/pagar
+                # ate alguem notar e recadastrar na mao. Reativar so deve reverter o active; o
+                # cadastro que ja existia (ou nao) fica como estava.
                 collaborator.active = True
-                collaborator.is_registered = False
             return collaborator, False
 
     collaborator = Collaborator(
@@ -871,6 +881,8 @@ def get_or_create_collaborator(db: Session, name: str, regional: str) -> tuple[C
     )
     db.add(collaborator)
     db.flush()
+    if collaborators_cache is not None:
+        collaborators_cache.append(collaborator)
     return collaborator, True
 
 

@@ -10,7 +10,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 ARG INTERNAL_API_URL=http://backend:8000
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000/api
+ARG NEXT_PUBLIC_API_URL=
 ENV INTERNAL_API_URL=$INTERNAL_API_URL
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
@@ -24,7 +24,6 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV INTERNAL_API_URL=http://backend:8000
-ENV NEXT_PUBLIC_API_URL=http://localhost:8000/api
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules

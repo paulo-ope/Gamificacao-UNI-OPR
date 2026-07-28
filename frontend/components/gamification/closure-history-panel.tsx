@@ -28,7 +28,7 @@ export function ClosureHistoryPanel({ runs }: Props) {
           </div>
         </div>
         {latest ? (
-          <Badge className="border-teal-200 bg-teal-50 text-teal-700">
+          <Badge className="border-blue-200 bg-blue-50 text-uni-royal">
             Última apuração #{latest.id} - {latest.reference_month}/{latest.reference_year}
           </Badge>
         ) : null}
@@ -73,26 +73,26 @@ export function ClosureHistoryPanel({ runs }: Props) {
 
       <div className="table-frame min-h-0 flex-1 overflow-auto">
         <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Apuração</TableHead>
-              <TableHead>Período</TableHead>
-              <TableHead>Regional</TableHead>
-              <TableHead>Data do cálculo</TableHead>
-              <TableHead>Arquivo</TableHead>
-              <TableHead>Versão da regra</TableHead>
-              <TableHead>O.S</TableHead>
-              <TableHead>Colab.</TableHead>
-              <TableHead>Pontos brutos</TableHead>
-              <TableHead>Pontos anulados</TableHead>
-              <TableHead>Pontos finais</TableHead>
-              <TableHead>Valor a ser pago</TableHead>
-              <TableHead>Top colaborador</TableHead>
+          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm">
+            <TableRow className="border-slate-700 hover:bg-slate-900">
+              <TableHead className="text-slate-200">Apuração</TableHead>
+              <TableHead className="text-slate-200">Período</TableHead>
+              <TableHead className="text-slate-200">Regional</TableHead>
+              <TableHead className="text-slate-200">Data do cálculo</TableHead>
+              <TableHead className="text-slate-200">Arquivo</TableHead>
+              <TableHead className="text-slate-200">Versão da regra</TableHead>
+              <TableHead className="text-slate-200">O.S</TableHead>
+              <TableHead className="text-slate-200">Colab.</TableHead>
+              <TableHead className="text-slate-200">Pontos brutos</TableHead>
+              <TableHead className="text-slate-200">Pontos anulados</TableHead>
+              <TableHead className="text-slate-200">Pontos finais</TableHead>
+              <TableHead className="text-slate-200">Valor a ser pago</TableHead>
+              <TableHead className="text-slate-200">Top colaborador</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {runs.map((run) => (
-              <TableRow key={run.id}>
+              <TableRow key={run.id} className="odd:bg-white even:bg-slate-50/70 hover:bg-blue-50/40">
                 <TableCell className="font-semibold">#{run.id}</TableCell>
                 <TableCell>
                   {run.reference_month}/{run.reference_year}
@@ -108,7 +108,7 @@ export function ClosureHistoryPanel({ runs }: Props) {
                 <TableCell>{formatPoints(run.gross_points)}</TableCell>
                 <TableCell className="text-red-600">{formatAnnulledPoints(run.penalty_points)}</TableCell>
                 <TableCell className="font-semibold">{formatPoints(run.final_points)}</TableCell>
-                <TableCell className="font-semibold text-teal-700">{formatMoney(run.estimated_payment)}</TableCell>
+                <TableCell className="font-semibold text-uni-royal">{formatMoney(run.estimated_payment)}</TableCell>
                 <TableCell className="min-w-56">
                   <div className="truncate font-medium text-slate-950" title={run.top_collaborator_name ?? ""}>
                     {run.top_collaborator_name ?? "-"}

@@ -19,7 +19,7 @@ from app.services.calculation import (
     serialize_run,
 )
 from app.services.leadership_bonus import leadership_bonus_from_ranking, pending_unregistered_for_run
-from app.services.regional import same_regional
+from app.services.regional import same_regional_grouped as same_regional
 from app.services.scoring_matrix import real_service_orders
 from app.services.scoring_detail import (
     calculate_regional_health,

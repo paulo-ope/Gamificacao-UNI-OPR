@@ -1,6 +1,6 @@
-# OPR Gamificacao Operacional
+# UNI Workspace - Ecossistema Operacional
 
-Sistema inicial para Remuneracao Variavel Operacional / Gamificacao da Produtividade do time de campo da OPR.
+Ecossistema modular da operacao da UNI. A mesma aplicacao, autenticacao e infraestrutura atendem a Gamificacao e a Operacao Analitica, enquanto cada modulo preserva suas proprias APIs, servicos e tabelas.
 
 ## Stack
 
@@ -43,18 +43,51 @@ Sistema inicial para Remuneracao Variavel Operacional / Gamificacao da Produtivi
 Copy-Item .env.example .env
 ```
 
-2. Suba a stack:
+2. Suba a stack em segundo plano:
 
 ```powershell
-docker compose up --build
+docker compose up -d --build
 ```
 
-3. Acesse:
+3. Aplique as migrations do banco:
 
-- Frontend: [http://localhost:3000/gamificacao](http://localhost:3000/gamificacao)
+```powershell
+docker compose exec backend alembic upgrade head
+```
+
+4. Acesse:
+
+- Ecossistema: [http://localhost:3000](http://localhost:3000)
+- Gamificacao: [http://localhost:3000/gamificacao](http://localhost:3000/gamificacao)
+- Operacao Analitica: [http://localhost:3000/operacao](http://localhost:3000/operacao)
 - Backend health: [http://localhost:8000/api/health](http://localhost:8000/api/health)
 - Swagger/OpenAPI: [http://localhost:8000/docs](http://localhost:8000/docs)
-- PostgreSQL: `localhost:5432`
+- PostgreSQL: `localhost:5434`
+
+## Operacao Analitica
+
+O modulo `/operacao` importa O.S. diretamente da API do IXC e grava sua propria projecao analitica nas tabelas `operations_*`. Nesta primeira etapa:
+
+- o periodo e selecionavel entre o primeiro dia do terceiro mes-calendario disponivel e a data atual;
+- a interface divide atualizacoes de varios dias em chamadas diarias sequenciais;
+- atualizacoes interativas sao limitadas a sete dias; cargas maiores usam o backfill retomavel do servidor;
+- cada consulta ao IXC e interrompida antes da paginacao se exceder o limite seguro de registros;
+- a importacao de periodo consulta apenas O.S. abertas ou finalizadas no intervalo solicitado;
+- a aba Andamento aceita datas vazias e consulta todo o estoque aberto sincronizado; sua atualizacao no IXC e separada em consultas limitadas por setor e status, com reconciliacao pontual dos IDs antigos e sem varredura irrestrita;
+- o filtro apresenta os 21 setores ativos do IXC; a primeira cobertura historica completa pertence aos setores 7, 8 e 9;
+- os cadastros auxiliares do IXC sao consultados somente pelos IDs presentes nesse lote;
+- nao existe leitura historica completa, varredura de toda a base ou rotina automatica desse modulo;
+- filtros globais com multisselecao alimentam Visao Geral, SLA, Andamento atual e drill-through de O.S.; valores nulos de presets nao viram texto de busca;
+- a aba SLA inclui produtividade por colaborador, tipos realizados, dias produtivos e tempos de fechamento;
+- o Calendario agrupa a competencia mensal por filial e colaborador; cada celula abre as O.S. fechadas naquele dia em um drawer autenticado;
+- modelos de equipe configuram meta diaria, faixas percentuais e cores do Calendario, com vinculo seguro entre responsavel IXC e colaborador da Gamificacao;
+- a navegacao interna usa um menu lateral recolhivel, preparado para receber as proximas areas do modulo na mesma URL e autenticacao;
+- os dropdowns sao encadeados e o responsavel pode considerar todas as O.S. ou somente as finalizadas;
+- cidade, UF, tipo de pessoa, status e SLA sao traduzidos para nomes de negocio;
+- cada usuario pode salvar, reaplicar, atualizar e excluir seus proprios filtros sem ultrapassar o escopo regional autorizado;
+- autenticacao, permissoes, banco, backend e frontend sao compartilhados com o ecossistema.
+
+Para atualizar o intervalo pela interface, use `Atualizar IXC`. O usuario precisa da permissao `operations:manage`; a visualizacao exige `operations:read`.
 
 ## Seed inicial
 

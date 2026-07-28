@@ -9,12 +9,9 @@ from app.models import (
     HealthRule,
     RecurrenceClassificationRule,
     ScoringGroup,
-    ScoringRule,
-    ScoringSubjectRule,
     SlaPenaltyRule,
 )
 from app.services.calculation import upsert_setting
-from app.services.scoring_matrix import is_demo_subject
 
 
 DELETED_DEFAULT_GROUPS_SETTING = "deleted_default_scoring_groups"
@@ -71,44 +68,6 @@ def _get_or_create_group(
     return group
 
 
-def _get_or_create_subject_rule(
-    db: Session,
-    group: ScoringGroup,
-    os_type: str,
-    os_subject: str,
-    points: float,
-) -> ScoringSubjectRule:
-    rule = db.scalar(
-        select(ScoringSubjectRule)
-        .where(ScoringSubjectRule.os_type == os_type)
-        .where(ScoringSubjectRule.os_subject == os_subject)
-    )
-    if rule:
-        return rule
-
-    use_default = float(points) == float(group.default_points)
-    rule = ScoringSubjectRule(
-        group_id=group.id,
-        os_type=os_type,
-        os_subject=os_subject,
-        custom_points=None if use_default else points,
-        use_group_default=use_default,
-        active=True,
-    )
-    db.add(rule)
-    db.flush()
-    return rule
-
-
-def migrate_legacy_scoring_rules(db: Session) -> None:
-    legacy_rules = list(db.scalars(select(ScoringRule)))
-    for legacy in legacy_rules:
-        group = db.get(ScoringGroup, legacy.group_id)
-        if not group or not legacy.os_subject or is_demo_subject(legacy.os_type, legacy.os_subject):
-            continue
-        _get_or_create_subject_rule(db, group, legacy.os_type, legacy.os_subject, legacy.points)
-
-
 def ensure_setting(db: Session, key: str, value: str, description: str) -> None:
     if db.scalar(select(AppSetting).where(AppSetting.key == key)):
         return
@@ -135,8 +94,6 @@ def seed_database(db: Session, include_demo: bool = False) -> None:
     )
     _get_or_create_group(db, "Mudança de Tecnologia", "Precificação padrão para mudanças de tecnologia.", 15)
     _get_or_create_group(db, "Recolhimento", "Precificação padrão para recolhimentos.", 5)
-
-    migrate_legacy_scoring_rules(db)
 
     diagnosis_rules = [
         ("Resolvido", 0, "no_penalty", "Diagnóstico conclusivo sem penalidade."),
@@ -213,12 +170,12 @@ def seed_database(db: Session, include_demo: bool = False) -> None:
             db.add(RecurrenceClassificationRule(active=True, **rule))
 
     health_rules = [
-        ("Excelente", 90, 3, 1.2, "and"),
-        ("Boa", 80, 6, 1.0, "and"),
-        ("Atenção", 70, 10, 0.8, "and"),
-        ("Crítica", 0, 100, 0.6, "and"),
+        ("Excelente", 90, 3, 1.2),
+        ("Boa", 80, 6, 1.0),
+        ("Atenção", 70, 10, 0.8),
+        ("Crítica", 0, 100, 0.6),
     ]
-    for name, min_sla, max_recurrence, multiplier, operator in health_rules:
+    for name, min_sla, max_recurrence, multiplier in health_rules:
         exists = db.scalar(select(HealthRule).where(HealthRule.name == name))
         if not exists:
             db.add(
@@ -227,7 +184,6 @@ def seed_database(db: Session, include_demo: bool = False) -> None:
                     min_sla=min_sla,
                     max_recurrence_rate=max_recurrence,
                     multiplier=multiplier,
-                    condition_operator=operator,
                     active=True,
                 )
             )

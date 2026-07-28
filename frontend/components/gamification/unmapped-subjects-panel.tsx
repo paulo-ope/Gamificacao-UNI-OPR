@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { ClipboardList, Info, Link2, Plus, Save, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -22,15 +22,30 @@ function severityTone(serviceOrdersCount: number): "danger" | "warning" | "neutr
 type Props = {
   groups: ScoringGroup[];
   subjects: UnmappedSubject[];
-  onLinkSubject: (subject: UnmappedSubject, groupId: number) => Promise<void>;
-  onLinkSubjects: (items: Array<{ subject: UnmappedSubject; groupId: number }>) => Promise<void>;
-  onCreateGroupForSubject: (subject: UnmappedSubject) => Promise<void>;
+  // Tipos Gerais já cadastrados em alguma regra - lista fechada: o usuário escolhe um destes, não
+  // digita um valor novo (evita variações/erros de digitação criando categorias divergentes).
+  osTypeOptions: string[];
+  onLinkSubject: (subject: UnmappedSubject, groupId: number, osType: string) => Promise<void>;
+  onLinkSubjects: (items: Array<{ subject: UnmappedSubject; groupId: number; osType: string }>) => Promise<void>;
+  onCreateGroupForSubject: (subject: UnmappedSubject, osType: string) => Promise<void>;
 };
 
-export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkSubjects, onCreateGroupForSubject }: Props) {
+export function UnmappedSubjectsPanel({
+  groups,
+  subjects,
+  osTypeOptions,
+  onLinkSubject,
+  onLinkSubjects,
+  onCreateGroupForSubject
+}: Props) {
   const [query, setQuery] = useState("");
   const [selectedGroups, setSelectedGroups] = useState<Record<string, number>>({});
+  const [selectedOsTypes, setSelectedOsTypes] = useState<Record<string, string>>({});
   const [bulkGroupId, setBulkGroupId] = useState("");
+  const [bulkOsType, setBulkOsType] = useState("");
+
+  const knownOsTypes = useMemo(() => new Set(osTypeOptions), [osTypeOptions]);
+  const osTypeSelectOptions = useMemo(() => osTypeOptions.map((type) => ({ value: type, label: type })), [osTypeOptions]);
 
   const filteredSubjects = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -48,12 +63,33 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
     return `${subject.os_type}::${subject.os_subject}`;
   }
 
+  // O Tipo Geral que veio junto da O.S (subject.os_type) só serve de sugestão pré-preenchida quando
+  // parece uma classificação de verdade (já usada por alguma regra) - nunca pré-preenche com um
+  // marcador de pendência ou nome de setor, porque o usuário precisa escolher/confirmar ativamente
+  // (é exatamente essa escolha implícita, herdada sem ninguém decidir, que causava o problema).
+  function initialOsType(subject: UnmappedSubject) {
+    return knownOsTypes.has(subject.os_type) ? subject.os_type : "";
+  }
+
+  function osTypeFor(subject: UnmappedSubject) {
+    const key = subjectKey(subject);
+    return key in selectedOsTypes ? selectedOsTypes[key] : initialOsType(subject);
+  }
+
   const selectedItems = useMemo(
     () =>
       subjects
-        .map((subject) => ({ subject, groupId: selectedGroups[subjectKey(subject)] }))
-        .filter((item): item is { subject: UnmappedSubject; groupId: number } => Boolean(item.groupId)),
-    [selectedGroups, subjects]
+        .map((subject) => ({
+          subject,
+          groupId: selectedGroups[subjectKey(subject)],
+          osType: (osTypeFor(subject) || "").trim()
+        }))
+        .filter(
+          (item): item is { subject: UnmappedSubject; groupId: number; osType: string } =>
+            Boolean(item.groupId) && Boolean(item.osType)
+        ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedGroups, selectedOsTypes, subjects]
   );
 
   function updateSubjectGroup(subject: UnmappedSubject, value: string) {
@@ -67,6 +103,11 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
     setSelectedGroups(next);
   }
 
+  function updateSubjectOsType(subject: UnmappedSubject, value: string) {
+    const key = subjectKey(subject);
+    setSelectedOsTypes((current) => ({ ...current, [key]: value }));
+  }
+
   function applyBulkGroupToFiltered() {
     if (!bulkGroupId) return;
     const next = { ...selectedGroups };
@@ -76,16 +117,36 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
     setSelectedGroups(next);
   }
 
+  function applyBulkOsTypeToFiltered() {
+    const nextValue = bulkOsType.trim();
+    if (!nextValue) return;
+    setSelectedOsTypes((current) => {
+      const next = { ...current };
+      for (const subject of filteredSubjects) {
+        next[subjectKey(subject)] = nextValue;
+      }
+      return next;
+    });
+  }
+
   async function link(subject: UnmappedSubject) {
     const groupId = selectedGroups[subjectKey(subject)];
-    if (!groupId) return;
-    await onLinkSubject(subject, groupId);
+    const osType = osTypeFor(subject).trim();
+    if (!groupId || !osType) return;
+    await onLinkSubject(subject, groupId, osType);
   }
 
   async function saveBulkLinks() {
     if (!selectedItems.length) return;
     await onLinkSubjects(selectedItems);
     setSelectedGroups({});
+    setSelectedOsTypes({});
+  }
+
+  async function createGroup(subject: UnmappedSubject) {
+    const osType = osTypeFor(subject).trim();
+    if (!osType) return;
+    await onCreateGroupForSubject(subject, osType);
   }
 
   return (
@@ -122,10 +183,20 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
 
       <div className="flex items-center gap-2 border-b bg-amber-50 px-5 py-3 text-sm text-amber-800">
         <Info className="h-4 w-4 shrink-0" />
-        Vincule cada assunto ao grupo correto e recalcule para atualizar ranking, auditoria e valor a ser pago.
+        Escolha o Tipo Geral e o grupo corretos de cada assunto e recalcule para atualizar ranking, auditoria e valor a ser pago.
       </div>
 
-      <div className="grid gap-3 border-b bg-white px-5 py-4 lg:grid-cols-[minmax(240px,1fr)_auto_auto_auto] lg:items-end">
+      <div className="grid gap-3 border-b bg-white px-5 py-4 lg:grid-cols-[minmax(200px,1fr)_minmax(240px,1fr)_auto_auto_auto] lg:items-end">
+        <div className="grid gap-2">
+          <Label>Aplicar Tipo Geral aos assuntos filtrados</Label>
+          <AppCombobox
+            value={bulkOsType}
+            onChange={setBulkOsType}
+            placeholder="Selecionar Tipo Geral"
+            ariaLabel="Aplicar Tipo Geral aos assuntos filtrados"
+            options={osTypeSelectOptions}
+          />
+        </div>
         <div className="grid gap-2">
           <Label>Aplicar grupo aos assuntos filtrados</Label>
           <AppCombobox
@@ -139,14 +210,28 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
             }))}
           />
         </div>
-        <Button variant="outline" onClick={applyBulkGroupToFiltered} disabled={!bulkGroupId || filteredSubjects.length === 0}>
+        <Button
+          variant="outline"
+          onClick={() => {
+            applyBulkOsTypeToFiltered();
+            applyBulkGroupToFiltered();
+          }}
+          disabled={(!bulkGroupId && !bulkOsType.trim()) || filteredSubjects.length === 0}
+        >
           Aplicar aos filtrados
         </Button>
         <Button onClick={saveBulkLinks} disabled={selectedItems.length === 0}>
           <Save className="h-4 w-4" />
           Salvar {numberFormat.format(selectedItems.length)} vínculo(s)
         </Button>
-        <Button variant="ghost" onClick={() => setSelectedGroups({})} disabled={selectedItems.length === 0}>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setSelectedGroups({});
+            setSelectedOsTypes({});
+          }}
+          disabled={selectedItems.length === 0}
+        >
           <X className="h-4 w-4" />
           Limpar seleção
         </Button>
@@ -154,14 +239,14 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
 
       <div className="border-b bg-slate-50 px-5 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
         {selectedItems.length > 0
-          ? `${numberFormat.format(selectedItems.length)} assunto(s) selecionado(s) para salvar em massa.`
-          : "Selecione grupos nas linhas ou aplique um grupo aos assuntos filtrados antes de salvar."}
+          ? `${numberFormat.format(selectedItems.length)} assunto(s) com Tipo Geral e grupo selecionados para salvar em massa.`
+          : "Escolha o Tipo Geral e o grupo nas linhas (ambos obrigatórios) antes de salvar."}
       </div>
 
       <div className="table-frame">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+            <TableRow className="border-slate-700 hover:bg-slate-900">
               <TableHead>Tipo Geral</TableHead>
               <TableHead>Assunto</TableHead>
               <TableHead>Qtd O.S</TableHead>
@@ -182,9 +267,22 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
             ) : null}
             {filteredSubjects.map((subject) => {
               const key = subjectKey(subject);
+              const osType = osTypeFor(subject);
+              const canAct = Boolean(selectedGroups[key]) && Boolean(osType.trim());
               return (
                 <TableRow key={key}>
-                  <TableCell className="min-w-44">{subject.os_type}</TableCell>
+                  <TableCell className="min-w-56">
+                    <AppCombobox
+                      value={osType}
+                      onChange={(value) => updateSubjectOsType(subject, value)}
+                      placeholder="Selecionar Tipo Geral"
+                      ariaLabel={`Tipo Geral do assunto ${subject.os_subject}`}
+                      options={osTypeSelectOptions}
+                    />
+                    {!knownOsTypes.has(subject.os_type) ? (
+                      <p className="mt-1 text-xs text-amber-700">Origem: "{subject.os_type}" (não classificado)</p>
+                    ) : null}
+                  </TableCell>
                   <TableCell className="min-w-80 font-medium text-slate-950">{subject.os_subject}</TableCell>
                   <TableCell>
                     <StatusBadge tone={severityTone(subject.service_orders_count)}>
@@ -193,7 +291,7 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
                   </TableCell>
                   <TableCell>{numberFormat.format(subject.collaborators_count)}</TableCell>
                   <TableCell>{subject.predominant_regional}</TableCell>
-                  <TableCell className="font-medium text-teal-700">
+                  <TableCell className="font-medium text-uni-royal">
                     {moneyFormat.format(subject.estimated_financial_impact)}
                   </TableCell>
                   <TableCell className="min-w-64">
@@ -210,11 +308,11 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => link(subject)} disabled={!selectedGroups[key]}>
+                      <Button variant="outline" size="sm" onClick={() => link(subject)} disabled={!canAct}>
                         <Link2 className="h-4 w-4" />
                         Vincular
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => onCreateGroupForSubject(subject)}>
+                      <Button variant="ghost" size="sm" onClick={() => createGroup(subject)} disabled={!osType.trim()}>
                         <Plus className="h-4 w-4" />
                         Criar Grupo
                       </Button>
@@ -229,6 +327,3 @@ export function UnmappedSubjectsPanel({ groups, subjects, onLinkSubject, onLinkS
     </section>
   );
 }
-
-
-

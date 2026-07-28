@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Plus, Undo2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, Undo2, Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -83,7 +83,7 @@ function WarrantyTraceTimeline({
       <button
         type="button"
         onClick={() => onOpenOrder(entry.original_service_order_id)}
-        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-teal-300 hover:bg-teal-50/50"
+        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-blue-300 hover:bg-blue-50/50"
         title="Ver auditoria da O.S original"
       >
         <span className="truncate font-semibold text-slate-800">{entry.original_os_code}</span>
@@ -93,7 +93,7 @@ function WarrantyTraceTimeline({
       <button
         type="button"
         onClick={() => onOpenOrder(entry.related_service_order_id)}
-        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-teal-300 hover:bg-teal-50/50"
+        className="flex min-w-0 flex-col items-center gap-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1 transition hover:border-blue-300 hover:bg-blue-50/50"
         title="Ver auditoria da O.S de garantia"
       >
         <span className="truncate font-semibold text-slate-800">{entry.related_os_code ?? "-"}</span>
@@ -111,6 +111,7 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
   const [data, setData] = useState<CollaboratorPointBalance | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showReverted, setShowReverted] = useState(false);
   const [busyEntryId, setBusyEntryId] = useState<number | null>(null);
   const [auditOrder, setAuditOrder] = useState<(CollaboratorOrderDetail & { collaborator_name?: string }) | null>(null);
   const [monthly, setMonthly] = useState<CollaboratorMonthlyHistoryItem[]>([]);
@@ -261,6 +262,10 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
     }
   }
 
+  const allEntries = data?.entries ?? [];
+  const revertedCount = allEntries.filter((entry) => entry.status === "reverted").length;
+  const visibleEntries = showReverted ? allEntries : allEntries.filter((entry) => entry.status !== "reverted");
+
   return (
     <>
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -304,8 +309,8 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Histórico mês a mês</div>
               <div className="table-frame overflow-hidden rounded-lg border border-slate-200">
                 <Table>
-                  <TableHeader>
-                    <TableRow>
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
                       <TableHead>Mês</TableHead>
                       <TableHead>Situação</TableHead>
                       <TableHead>O.S</TableHead>
@@ -330,7 +335,7 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
                         <TableCell className={row.balance_adjustment_points ? "font-medium text-red-600" : "text-slate-400"}>
                           {row.balance_adjustment_points ? formatSignedPoints(row.balance_adjustment_points) : "-"}
                         </TableCell>
-                        <TableCell className="font-medium text-teal-700">{formatMoney(row.estimated_payment)}</TableCell>
+                        <TableCell className="font-medium text-uni-royal">{formatMoney(row.estimated_payment)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -339,10 +344,22 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
             </div>
           ) : null}
 
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Lançamentos de saldo de garantia</div>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Lançamentos de saldo de garantia</div>
+            {revertedCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowReverted((current) => !current)}
+                className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700"
+              >
+                {showReverted ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                {showReverted ? `Ocultar ${revertedCount} estornado(s)` : `Mostrar ${revertedCount} estornado(s)`}
+              </button>
+            ) : null}
+          </div>
           <Table>
-            <TableHeader>
-              <TableRow>
+            <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
+              <TableRow className="border-slate-700 hover:bg-slate-900">
                 <TableHead>Status</TableHead>
                 <TableHead>Tipo</TableHead>
                 <TableHead>Impacto no pagamento</TableHead>
@@ -352,7 +369,7 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(data?.entries ?? []).map((entry) => (
+              {visibleEntries.map((entry) => (
                 <TableRow key={entry.id}>
                   <TableCell>
                     <Badge className={STATUS_META[entry.status]?.className ?? ""}>{STATUS_META[entry.status]?.label ?? entry.status}</Badge>
@@ -410,10 +427,12 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
                   ) : null}
                 </TableRow>
               ))}
-              {!loading && (data?.entries ?? []).length === 0 ? (
+              {!loading && visibleEntries.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={isAdmin ? 6 : 5} className="py-8 text-center text-sm text-slate-500">
-                    Nenhum lançamento de saldo para este colaborador.
+                    {allEntries.length === 0
+                      ? "Nenhum lançamento de saldo para este colaborador."
+                      : `Todos os ${revertedCount} lançamentos deste colaborador estão estornados.`}
                   </TableCell>
                 </TableRow>
               ) : null}

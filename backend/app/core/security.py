@@ -15,11 +15,56 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import User
+from app.models import AccessProfile, AccessProfilePermission, User, UserAccessProfile
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
-    "viewer": {"dashboard:read", "audit:read", "orders:read", "scoring:read"},
-    "operator": {"dashboard:read", "audit:read", "orders:read", "scoring:read", "orders:import"},
+    "collaborator": {
+        "portal:read_self",
+        "portal:update_self_profile",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+    },
+    "regional_manager_viewer": {
+        "portal:read_self",
+        "portal:update_self_profile",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+        "portal:read_regional_summary",
+        "operations:read",
+        "operations:views:read_global",
+    },
+    "viewer": {
+        "dashboard:read",
+        "audit:read",
+        "orders:read",
+        "scoring:read",
+        "portal:read_self",
+        "portal:update_self_profile",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+        "operations:read",
+        "operations:views:read_global",
+    },
+    "operator": {
+        "dashboard:read",
+        "audit:read",
+        "orders:read",
+        "scoring:read",
+        "orders:import",
+        "portal:read_self",
+        "portal:update_self_profile",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+        "operations:read",
+        "operations:manage",
+        "operations:views:read_global",
+        "operations:sync_ixc",
+        "operations:view_order_details",
+    },
     "admin": {
         "dashboard:read",
         "audit:read",
@@ -32,7 +77,87 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "settings:write",
         "calculation:run",
         "users:manage",
+        "portal:read_self",
+        "portal:update_self_profile",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+        "portal:read_regional_summary",
+        "portal:read_overview",
+        "operations:read",
+        "operations:manage",
+        "operations:sync_ixc",
+        "operations:manage_filters",
+        "operations:views:read_global",
+        "operations:views:create_global",
+        "operations:views:update_global",
+        "operations:views:delete_global",
+        "operations:manage_team_models",
+        "operations:manage_subjects",
+        "operations:view_order_details",
+        "operations:view_sla",
+        "operations:view_calendar",
+        "operations:view_backlog",
+        "operations:export",
+        "admin:users:read",
+        "admin:users:write",
+        "admin:users:delete",
+        "admin:roles:read",
+        "admin:roles:write",
+        "admin:permissions:read",
+        "admin:audit:read",
     },
+}
+
+PERMISSION_LABELS: dict[str, str] = {
+    "dashboard:read": "Ver dashboard da gamificação",
+    "audit:read": "Ver auditoria",
+    "orders:read": "Ver O.S. da gamificação",
+    "orders:import": "Importar O.S.",
+    "scoring:read": "Ver pontuação",
+    "scoring:write": "Alterar pontuação",
+    "penalties:write": "Configurar penalidades",
+    "health_rules:write": "Configurar saúde/regras",
+    "settings:write": "Alterar configurações",
+    "calculation:run": "Rodar fechamento",
+    "users:manage": "Gerenciar usuários legado",
+    "portal:read_self": "Portal: ver próprio acesso",
+    "portal:update_self_profile": "Portal: atualizar perfil",
+    "portal:read_regional_ranking": "Portal: ranking regional",
+    "portal:simulate_self": "Portal: simular pontuação",
+    "portal:read_rules": "Portal: ver regras",
+    "portal:read_regional_summary": "Portal: resumo regional",
+    "portal:read_overview": "Portal: visão geral",
+    "operations:read": "Operação: acessar módulo",
+    "operations:manage": "Operação: administrar módulo",
+    "operations:sync_ixc": "Operação: sincronizar IXC",
+    "operations:manage_filters": "Operação: gerenciar visões/filtros",
+    "operations:views:read_global": "Operação: ver visões globais",
+    "operations:views:create_global": "Operação: criar visões globais",
+    "operations:views:update_global": "Operação: atualizar visões globais",
+    "operations:views:delete_global": "Operação: excluir visões globais",
+    "operations:manage_team_models": "Operação: configurar modelos de equipe",
+    "operations:manage_subjects": "Operação: configurar assuntos",
+    "operations:view_order_details": "Operação: ver detalhes de O.S.",
+    "operations:view_sla": "Operação: ver SLA",
+    "operations:view_calendar": "Operação: ver calendário",
+    "operations:view_backlog": "Operação: ver backlog",
+    "operations:export": "Operação: exportar dados",
+    "admin:users:read": "Administração: listar usuários",
+    "admin:users:write": "Administração: criar/editar usuários",
+    "admin:users:delete": "Administração: excluir usuários",
+    "admin:roles:read": "Administração: listar perfis",
+    "admin:roles:write": "Administração: criar/editar perfis",
+    "admin:permissions:read": "Administração: listar permissões",
+    "admin:audit:read": "Administração: ver auditoria",
+}
+
+PROFILE_LABELS: dict[str, tuple[str, str]] = {
+    "collaborator": ("Colaborador Portal", "Acesso próprio ao portal do colaborador."),
+    "regional_manager_viewer": ("Gestor Regional Portal", "Acompanha portal e operação das regionais vinculadas."),
+    "viewer": ("Leitor Operacional", "Consulta dashboards, auditoria e operação sem alterações críticas."),
+    "operator": ("Operador Operacional", "Opera importações e rotinas da operação com acesso gerencial."),
+    "admin": ("Admin Ecossistema", "Controle total de módulos, usuários, perfis e configurações."),
 }
 
 security = HTTPBearer(auto_error=False)
@@ -42,8 +167,18 @@ def permissions_for_role(role: str) -> set[str]:
     return ROLE_PERMISSIONS.get(role, set())
 
 
+def permissions_for_user(user: User) -> set[str]:
+    profile_permissions = {
+        permission.permission
+        for profile in getattr(user, "access_profiles", []) or []
+        if profile.active
+        for permission in profile.permissions
+    }
+    return profile_permissions or permissions_for_role(user.role)
+
+
 def is_admin_user(user: User | None) -> bool:
-    return bool(user and user.role == "admin")
+    return bool(user and ("admin:users:write" in permissions_for_user(user) or user.role == "admin"))
 
 
 def hash_password(password: str) -> str:
@@ -127,11 +262,39 @@ def get_current_user(
 
 def require_permission(permission: str):
     def dependency(user: User = Depends(get_current_user)) -> User:
-        if permission not in permissions_for_role(user.role):
+        if permission not in permissions_for_user(user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permissão insuficiente.")
         return user
 
     return dependency
+
+
+def ensure_access_profiles(db: Session) -> None:
+    for legacy_role, permissions in ROLE_PERMISSIONS.items():
+        name, description = PROFILE_LABELS[legacy_role]
+        profile = db.scalar(select(AccessProfile).where(AccessProfile.legacy_role == legacy_role))
+        if not profile:
+            profile = AccessProfile(
+                name=name,
+                description=description,
+                legacy_role=legacy_role,
+                active=True,
+                is_system=True,
+            )
+            db.add(profile)
+            db.flush()
+        existing = {item.permission for item in profile.permissions}
+        for permission in permissions - existing:
+            db.add(AccessProfilePermission(profile_id=profile.id, permission=permission))
+
+    db.flush()
+    for user in db.scalars(select(User)).all():
+        if user.access_profiles:
+            continue
+        profile = db.scalar(select(AccessProfile).where(AccessProfile.legacy_role == user.role))
+        if profile:
+            db.add(UserAccessProfile(user_id=user.id, profile_id=profile.id))
+    db.commit()
 
 
 def ensure_initial_admin(db: Session) -> None:
@@ -141,6 +304,7 @@ def ensure_initial_admin(db: Session) -> None:
         return
     existing = db.scalar(select(User).where(User.email == email))
     if existing:
+        ensure_access_profiles(db)
         return
     db.add(
         User(
@@ -152,3 +316,4 @@ def ensure_initial_admin(db: Session) -> None:
         )
     )
     db.commit()
+    ensure_access_profiles(db)

@@ -45,14 +45,17 @@ function CollapsibleTrigger({
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) {
   const context = React.useContext(CollapsibleContext);
   if (!context) return null;
-  const child = React.Children.only(children) as React.ReactElement | null;
   const triggerProps = {
     "aria-expanded": context.open,
     onClick: () => context.setOpen(!context.open),
     ...props
   };
 
-  if (asChild && child) {
+  // React.Children.only só pode ser chamado quando de fato vamos clonar um único filho (asChild).
+  // Chamá-lo incondicionalmente quebrava todo trigger com mais de um filho (ex.: texto + ícone) -
+  // achado real: toda abertura do drawer de auditoria (label + ChevronDown) travava a tela inteira.
+  if (asChild) {
+    const child = React.Children.only(children) as React.ReactElement;
     return React.cloneElement(child, triggerProps);
   }
   return (

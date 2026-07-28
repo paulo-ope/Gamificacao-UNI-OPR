@@ -2,7 +2,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _reject_blank(value: str | None) -> str | None:
+    """Rejeita string vazia/só espaço em campos essenciais - por padrão o Pydantic só exige que a
+    chave esteja presente, não que tenha conteúdo (achado real: dava pra salvar um cadastro de
+    assunto ou colaborador com campo essencial em branco). `None` passa direto (usado pelos schemas
+    de update, onde o campo é opcional e `None` significa "não alterar")."""
+    if value is None:
+        return value
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("Este campo é obrigatório e não pode ficar em branco.")
+    return stripped
 
 
 class LoginRequest(BaseModel):
@@ -15,6 +28,10 @@ class UserBase(BaseModel):
     email: str
     role: str = "viewer"
     active: bool = True
+    collaborator_id: int | None = None
+    managed_regional: str | None = None
+    managed_regionals: list[str] = []
+    access_profile_ids: list[int] | None = None
 
 
 class UserCreate(UserBase):
@@ -27,6 +44,10 @@ class UserUpdate(BaseModel):
     role: str | None = None
     active: bool | None = None
     password: str | None = None
+    collaborator_id: int | None = None
+    managed_regional: str | None = None
+    managed_regionals: list[str] | None = None
+    access_profile_ids: list[int] | None = None
 
 
 class UserOut(UserBase):
@@ -34,6 +55,8 @@ class UserOut(UserBase):
     created_at: datetime
     updated_at: datetime
     permissions: list[str] = []
+    collaborator_name: str | None = None
+    access_profile_names: list[str] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +73,10 @@ class CollaboratorBase(BaseModel):
     regional: str
     active: bool = True
     is_registered: bool = True
+    phone: str | None = None
+    email: str | None = None
+
+    _validate_not_blank = field_validator("name", "role", "regional")(_reject_blank)
 
 
 class CollaboratorCreate(CollaboratorBase):
@@ -62,6 +89,10 @@ class CollaboratorUpdate(BaseModel):
     regional: str | None = None
     active: bool | None = None
     is_registered: bool | None = None
+    phone: str | None = None
+    email: str | None = None
+
+    _validate_not_blank = field_validator("name", "role", "regional")(_reject_blank)
 
 
 class CollaboratorOut(CollaboratorBase):
@@ -75,6 +106,9 @@ class CollaboratorRegistryItem(CollaboratorOut):
     suggested_regional: str | None = None
     suggested_role: str | None = None
     has_linked_orders: bool = False
+    has_photo: bool = False
+    portal_user_id: int | None = None
+    portal_user_email: str | None = None
 
 
 class CollaboratorRegistryOut(BaseModel):
@@ -190,35 +224,6 @@ class ScoringGroupDeleteResult(BaseModel):
     deleted_group_name: str
     moved_subject_rules: int = 0
     deleted_subject_rules: int = 0
-    moved_legacy_rules: int = 0
-    deleted_legacy_rules: int = 0
-
-
-class ScoringRuleBase(BaseModel):
-    group_id: int
-    os_type: str
-    os_subject: str | None = None
-    points: float = 0
-    active: bool = True
-
-
-class ScoringRuleCreate(ScoringRuleBase):
-    pass
-
-
-class ScoringRuleUpdate(BaseModel):
-    group_id: int | None = None
-    os_type: str | None = None
-    os_subject: str | None = None
-    points: float | None = None
-    active: bool | None = None
-
-
-class ScoringRuleOut(ScoringRuleBase):
-    id: int
-    group: ScoringGroupOut | None = None
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class ScoringSubjectRuleBase(BaseModel):
@@ -230,6 +235,8 @@ class ScoringSubjectRuleBase(BaseModel):
     point_value_override: float | None = None
     use_group_default: bool = True
     active: bool = True
+
+    _validate_not_blank = field_validator("os_type", "os_subject")(_reject_blank)
 
 
 class ScoringSubjectRuleCreate(ScoringSubjectRuleBase):
@@ -245,6 +252,8 @@ class ScoringSubjectRuleUpdate(BaseModel):
     point_value_override: float | None = None
     use_group_default: bool | None = None
     active: bool | None = None
+
+    _validate_not_blank = field_validator("os_type", "os_subject")(_reject_blank)
 
 
 class ScoringSubjectRuleOut(ScoringSubjectRuleBase):
@@ -274,32 +283,6 @@ class UnmappedSubjectOut(BaseModel):
     predominant_regional: str
     estimated_points: float
     estimated_financial_impact: float
-
-
-class PenaltyRuleBase(BaseModel):
-    name: str
-    penalty_type: str
-    points: float = 0
-    calculation_mode: str = "fixed"
-    active: bool = True
-
-
-class PenaltyRuleCreate(PenaltyRuleBase):
-    pass
-
-
-class PenaltyRuleUpdate(BaseModel):
-    name: str | None = None
-    penalty_type: str | None = None
-    points: float | None = None
-    calculation_mode: str | None = None
-    active: bool | None = None
-
-
-class PenaltyRuleOut(PenaltyRuleBase):
-    id: int
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class DiagnosisPenaltyRuleBase(BaseModel):
@@ -390,6 +373,7 @@ class RecurrenceClassificationRuleBase(BaseModel):
     classification: str = "nao_identificado"
     discount_points: bool = False
     max_days: int | None = None
+    min_hours_between: float | None = None
     require_same_subject: bool = False
     require_same_diagnosis: bool = False
     priority: int = 100
@@ -415,6 +399,7 @@ class RecurrenceClassificationRuleUpdate(BaseModel):
     classification: str | None = None
     discount_points: bool | None = None
     max_days: int | None = None
+    min_hours_between: float | None = None
     require_same_subject: bool | None = None
     require_same_diagnosis: bool | None = None
     priority: int | None = None
@@ -441,6 +426,23 @@ class GamificationConfigOut(BaseModel):
     sla_penalty_rules: list[dict] = []
     recurrence_classification_rules: list[dict] = []
     health_rules: list[dict] = []
+    warnings: list[str] = []
+
+
+class CpkRegionalSnapshotOut(BaseModel):
+    regional: str
+    status: str
+    cpk_realizado: float | None = None
+    cpk_meta: float | None = None
+    mes_fechado: bool
+    synced_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CpkSyncRequest(BaseModel):
+    year: int = Field(ge=2000, le=2100)
+    month: int = Field(ge=1, le=12)
 
 
 class GamificationConfigImport(BaseModel):
@@ -458,6 +460,8 @@ class SubjectLinkToGroupRequest(BaseModel):
     group_id: int
     os_type: str
     os_subject: str
+
+    _validate_not_blank = field_validator("os_type", "os_subject")(_reject_blank)
 
 
 class SubjectLinkToGroupBulkRequest(BaseModel):
@@ -482,7 +486,6 @@ class HealthRuleBase(BaseModel):
     min_sla: float = 0
     max_recurrence_rate: float = 100
     multiplier: float = 1
-    condition_operator: str = "and"
     active: bool = True
 
 
@@ -495,7 +498,6 @@ class HealthRuleUpdate(BaseModel):
     min_sla: float | None = None
     max_recurrence_rate: float | None = None
     multiplier: float | None = None
-    condition_operator: str | None = None
     active: bool | None = None
 
 
@@ -1157,3 +1159,291 @@ class AuditServiceOrdersOut(BaseModel):
     page: int = 1
     page_size: int = 100
     total_pages: int = 1
+
+
+class PortalPeriodOut(BaseModel):
+    calculation_run_id: int | None = None
+    reference_month: int | None = None
+    reference_year: int | None = None
+    status: str | None = None
+    updated_at: datetime | None = None
+
+
+class PortalCollaboratorOut(BaseModel):
+    id: int
+    name: str
+    role: str | None = None
+    regional: str
+
+
+class PortalScoreOut(BaseModel):
+    collaborator_id: int
+    collaborator_name: str
+    role: str | None = None
+    regional: str
+    service_orders_count: int
+    gross_points: float
+    penalty_points: float
+    net_points: float
+    health_multiplier: float
+    health_status: str
+    final_points: float
+    estimated_payment: float
+    balance_adjustment_points: float = 0
+    scored_service_orders: int
+    unscored_service_orders: int
+    penalized_service_orders: int
+    warranty_service_orders: int
+    recurrence_service_orders: int
+    rescheduled_service_orders: int
+    pending_service_orders: int
+    sla_out_service_orders: int
+    annulled_service_orders: int
+    diagnosis_penalized_service_orders: int
+    manual_review_service_orders: int
+    diagnosis_unmapped_service_orders: int
+
+
+class PortalRankingItemOut(BaseModel):
+    position: int
+    collaborator_id: int
+    collaborator_name: str
+    role: str | None = None
+    regional: str
+    final_points: float
+    estimated_payment: float
+    service_orders_count: int
+    scored_service_orders: int
+    penalty_points: float
+    health_multiplier: float = 1
+    health_status: str | None = None
+    sla_out_service_orders: int = 0
+    recurrence_service_orders: int = 0
+    unscored_service_orders: int = 0
+    manual_review_service_orders: int = 0
+    points_to_average: float | None = None
+    performance_band: str | None = None
+    is_current_user: bool = False
+
+
+class PortalSummaryOut(BaseModel):
+    user: UserOut
+    collaborator: PortalCollaboratorOut | None = None
+    period: PortalPeriodOut
+    score: PortalScoreOut | None = None
+    regional_position: int | None = None
+    regional_total: int = 0
+    regional_service_orders: int = 0
+    regional_sla_out_service_orders: int = 0
+    regional_sla_rate: float | None = None
+    general_position: int | None = None
+    general_total: int = 0
+    next_position_gap: float | None = None
+    ranking: list[PortalRankingItemOut] = []
+    message: str | None = None
+
+
+class PortalProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phone: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=160)
+
+    @field_validator("phone", "email")
+    @classmethod
+    def normalize_contact(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str | None) -> str | None:
+        if value is not None and "@" not in value:
+            raise ValueError("Informe um e-mail de contato válido.")
+        return value
+
+
+class PortalProfileOut(BaseModel):
+    collaborator_id: int
+    name: str
+    role: str
+    regional: str
+    phone: str | None = None
+    email: str | None = None
+    has_photo: bool = False
+
+
+class PortalOrderOut(BaseModel):
+    id: int
+    os_code: str
+    opened_at: datetime
+    closed_at: datetime | None = None
+    os_type: str
+    os_subject: str
+    customer_name: str | None = None
+    diagnosis: str | None = None
+    status: str
+    sla_status: str
+    sla_status_normalized: str = "NAO_IDENTIFICADO"
+    base_points: float = 0
+    penalty_points: float = 0
+    net_points: float = 0
+    status_label: str
+    reason: str | None = None
+    diagnosis_action_type: str | None = None
+    diagnosis_penalty_reason: str | None = None
+    recurrence_related_os_code: str | None = None
+    recurrence_days_between: int | None = None
+
+
+class PortalRulesOut(BaseModel):
+    groups: list[dict] = []
+    subjects: list[dict] = []
+    diagnosis_rules: list[dict] = []
+    sla_rules: list[dict] = []
+    recurrence_rules: list[dict] = []
+
+
+class PortalSimulationOut(BaseModel):
+    current_position: int | None = None
+    simulated_position: int | None = None
+    extra_points: float
+    points_to_next: float | None = None
+    disclaimer: str
+
+
+class PortalRegionalOverviewOut(BaseModel):
+    regional: str
+    collaborators: int
+    service_orders: int
+    scored_service_orders: int
+    final_points: float
+    estimated_payment: float
+    penalty_points: float
+    health_average: float
+    sla_out_service_orders: int = 0
+    recurrence_service_orders: int = 0
+    unscored_service_orders: int = 0
+    manual_review_service_orders: int = 0
+    sla_rate: float = 0
+    recurrence_rate: float = 0
+
+
+class PortalTeamHistoryOut(BaseModel):
+    reference_month: int
+    reference_year: int
+    collaborators: int
+    service_orders: int
+    sla_out_service_orders: int
+    recurrence_service_orders: int
+    final_points: float
+    estimated_payment: float
+    health_average: float
+    sla_rate: float
+    recurrence_rate: float
+
+
+class PortalTeamAttentionOut(PortalRankingItemOut):
+    attention_reason: str
+    target_gap: float = 0
+
+
+class PortalTeamBandOut(BaseModel):
+    label: str
+    collaborators: int
+    min_points: float
+    max_points: float
+    description: str
+
+
+class PortalTeamSummaryOut(BaseModel):
+    period: PortalPeriodOut
+    regional: str | None = None
+    totals: PortalRegionalOverviewOut | None = None
+    ranking: list[PortalRankingItemOut] = []
+    attention: list[PortalTeamAttentionOut] = []
+    history: list[PortalTeamHistoryOut] = []
+    bands: list[PortalTeamBandOut] = []
+    alerts: list[str] = []
+    message: str | None = None
+
+
+class PortalOverviewOut(BaseModel):
+    period: PortalPeriodOut
+    total_collaborators: int = 0
+    total_regionals: int = 0
+    total_service_orders: int = 0
+    scored_service_orders: int = 0
+    final_points: float = 0
+    estimated_payment: float = 0
+    penalty_points: float = 0
+    unscored_service_orders: int = 0
+    manual_review_service_orders: int = 0
+    regional_summary: list[PortalRegionalOverviewOut] = []
+    ranking: list[PortalRankingItemOut] = []
+    alerts: list[str] = []
+    message: str | None = None
+
+
+class PortalAuditOrderOut(BaseModel):
+    os_code: str
+    os_type: str
+    os_subject: str
+    customer_name: str | None = None
+    group_name: str | None = None
+    base_points: float
+    net_points: float
+    penalty_points: float
+    status_label: str
+    sla_status_normalized: str = "NAO_IDENTIFICADO"
+    reason: str | None = None
+    diagnosis_action_type: str | None = None
+    diagnosis_penalty_reason: str | None = None
+    recurrence_related_os_code: str | None = None
+    recurrence_days_between: int | None = None
+
+
+class PortalAuditHistoryOut(BaseModel):
+    reference_month: int
+    reference_year: int
+    final_points: float
+    estimated_payment: float
+    service_orders_count: int
+
+
+class PortalAuditBreakdownOut(BaseModel):
+    label: str
+    service_orders: int
+    base_points: float
+    penalty_points: float
+    net_points: float
+
+
+class PortalAuditOut(BaseModel):
+    gross_points: float = 0
+    penalty_points: float = 0
+    net_points: float = 0
+    health_multiplier: float = 1
+    final_points: float = 0
+    estimated_payment: float = 0
+    balance_adjustment_points: float = 0
+    health_status: str = "Nao informado"
+    service_orders_count: int = 0
+    scored_service_orders: int = 0
+    unscored_service_orders: int = 0
+    penalized_service_orders: int = 0
+    warranty_service_orders: int = 0
+    recurrence_service_orders: int = 0
+    pending_service_orders: int = 0
+    sla_out_service_orders: int = 0
+    sla_on_time_service_orders: int = 0
+    sla_unidentified_service_orders: int = 0
+    sla_rate: float | None = None
+    manual_review_service_orders: int = 0
+    points_to_next_position: float | None = None
+    top_positive_orders: list[PortalAuditOrderOut] = []
+    attention_orders: list[PortalAuditOrderOut] = []
+    groups: list[PortalAuditBreakdownOut] = []
+    subjects: list[PortalAuditBreakdownOut] = []
+    orders: list[PortalAuditOrderOut] = []
+    history: list[PortalAuditHistoryOut] = []
+    message: str | None = None

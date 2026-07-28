@@ -1,0 +1,14 @@
+# Overlay de DESENVOLVIMENTO - re-adiciona hot-reload e os volumes de código que a produção não usa.
+# Uso:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Nomeado .dev.yml de propósito (NÃO docker-compose.override.yml): o override é carregado
+# automaticamente por qualquer `docker compose up`, o que reativaria silenciosamente o modo dev
+# na VM de produção. Aqui o modo dev só entra quando pedido explicitamente com -f.
+services:
+  backend:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./backend/pytest.ini:/app/pytest.ini
+      - ./backend/requirements-dev.txt:/app/requirements-dev.txt

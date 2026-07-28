@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from collections import Counter
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
@@ -21,25 +21,12 @@ from app.schemas import (
 )
 from app.services.calculation import latest_run
 from app.services.point_balance import current_balance, serialize_entry as serialize_point_balance_entry
-from app.services.regional import is_valid_regional, normalize_regional
+from app.services.regional import is_valid_regional, normalize_regional_grouped as normalize_regional
 from app.services.scoring_detail import get_collaborator_service_orders_detail, get_point_value
 from app.services.statement_pdf import build_collaborator_statement_pdf
 from app.services.audit_log import record_audit_log, snapshot
 
 router = APIRouter(prefix="/collaborators", tags=["collaborators"])
-
-
-@router.get("", response_model=list[CollaboratorOut])
-def list_collaborators(db: Session = Depends(get_db), user: User = Depends(require_permission("audit:read"))):
-    return (
-        db.scalars(
-            select(Collaborator)
-            .join(ServiceOrder, ServiceOrder.collaborator_id == Collaborator.id)
-            .distinct()
-            .order_by(Collaborator.name.asc())
-        )
-        .all()
-    )
 
 
 @router.get("/registry", response_model=CollaboratorRegistryOut)
@@ -49,9 +36,14 @@ def collaborators_registry(db: Session = Depends(get_db), user: User = Depends(r
     orders_by_collaborator: dict[int, list[ServiceOrder]] = {}
     for order in orders:
         orders_by_collaborator.setdefault(order.collaborator_id, []).append(order)
+    portal_users_by_collaborator: dict[int, User] = {
+        item.collaborator_id: item
+        for item in db.scalars(select(User).where(User.collaborator_id.is_not(None)))
+    }
 
     def build_item(collaborator: Collaborator):
         linked_orders = orders_by_collaborator.get(collaborator.id, [])
+        portal_user = portal_users_by_collaborator.get(collaborator.id)
         regionals = [normalize_regional(order.regional) for order in linked_orders if is_valid_regional(order.regional)]
         roles = [collaborator.role] if collaborator.role and collaborator.role != "Importado UpValue" else []
         suggested_regional = Counter(regionals).most_common(1)[0][0] if regionals else normalize_regional(collaborator.regional)
@@ -63,10 +55,15 @@ def collaborators_registry(db: Session = Depends(get_db), user: User = Depends(r
             "regional": normalize_regional(collaborator.regional),
             "active": collaborator.active,
             "is_registered": collaborator.is_registered,
+            "phone": collaborator.phone,
+            "email": collaborator.email,
             "service_orders_count": len(linked_orders),
             "suggested_regional": suggested_regional,
             "suggested_role": suggested_role,
             "has_linked_orders": bool(linked_orders),
+            "has_photo": collaborator.photo is not None,
+            "portal_user_id": portal_user.id if portal_user else None,
+            "portal_user_email": portal_user.email if portal_user else None,
         }
 
     items = [build_item(collaborator) for collaborator in collaborators if is_valid_regional(collaborator.regional) or orders_by_collaborator.get(collaborator.id)]
@@ -103,7 +100,13 @@ def delete_collaborator(
         raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
 
     linked_orders = list(db.scalars(select(ServiceOrder).where(ServiceOrder.collaborator_id == collaborator_id)))
-    if linked_orders:
+    # CollaboratorScore.collaborator_id é NOT NULL - sem checar isso aqui, apagar um colaborador com
+    # pontuação já calculada (mesmo sem nenhuma O.S. vinculada no momento) derruba o delete com um
+    # IntegrityError (achado real: o ORM tenta nulificar a FK ao invés de bloquear/soft-deletar).
+    has_scores = db.scalar(
+        select(CollaboratorScore.id).where(CollaboratorScore.collaborator_id == collaborator_id).limit(1)
+    )
+    if linked_orders or has_scores:
         before = snapshot(collaborator)
         collaborator.active = False
         collaborator.is_registered = False
@@ -378,6 +381,80 @@ def update_collaborator(
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(collaborator, field, normalize_regional(value) if field == "regional" else value)
     record_audit_log(db, user, "update", "collaborators", collaborator.id, before, snapshot(collaborator))
+    db.commit()
+    db.refresh(collaborator)
+    return collaborator
+
+
+# Foto de perfil guardada como bytes no banco (ver migration 20260717_0008) - sem infraestrutura de
+# arquivo neste projeto, e o volume de colaboradores (algumas centenas) cabe perfeitamente bem nisso.
+MAX_COLLABORATOR_PHOTO_BYTES = 2 * 1024 * 1024  # 2MB
+ALLOWED_COLLABORATOR_PHOTO_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+@router.post("/{collaborator_id}/photo", response_model=CollaboratorOut)
+async def upload_collaborator_photo(
+    collaborator_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scoring:write")),
+):
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
+
+    if file.content_type not in ALLOWED_COLLABORATOR_PHOTO_CONTENT_TYPES:
+        raise HTTPException(status_code=422, detail="Formato de imagem não suportado. Use JPEG, PNG ou WEBP.")
+
+    contents = await file.read()
+    if len(contents) > MAX_COLLABORATOR_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Imagem maior que 2MB. Envie uma foto menor.")
+
+    # Snapshot manual e leve (não usa `snapshot()`/`before/after` genérico) - esse helper serializa
+    # TODAS as colunas do modelo pro log de auditoria, incluindo os bytes crus da foto, o que
+    # quebraria (bytes não são JSON-serializável de forma segura) ou incharia o log de auditoria
+    # com o conteúdo binário da imagem.
+    had_photo_before = collaborator.photo is not None
+    collaborator.photo = contents
+    collaborator.photo_content_type = file.content_type
+    record_audit_log(
+        db, user, "update", "collaborators", collaborator.id,
+        {"has_photo": had_photo_before}, {"has_photo": True, "photo_content_type": file.content_type},
+    )
+    db.commit()
+    db.refresh(collaborator)
+    return collaborator
+
+
+@router.get("/{collaborator_id}/photo")
+def get_collaborator_photo(
+    collaborator_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("audit:read")),
+):
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator or not collaborator.photo:
+        raise HTTPException(status_code=404, detail="Colaborador sem foto de perfil.")
+    return Response(content=collaborator.photo, media_type=collaborator.photo_content_type or "application/octet-stream")
+
+
+@router.delete("/{collaborator_id}/photo", response_model=CollaboratorOut)
+def delete_collaborator_photo(
+    collaborator_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scoring:write")),
+):
+    collaborator = db.get(Collaborator, collaborator_id)
+    if not collaborator:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
+
+    had_photo_before = collaborator.photo is not None
+    collaborator.photo = None
+    collaborator.photo_content_type = None
+    record_audit_log(
+        db, user, "update", "collaborators", collaborator.id,
+        {"has_photo": had_photo_before}, {"has_photo": False},
+    )
     db.commit()
     db.refresh(collaborator)
     return collaborator

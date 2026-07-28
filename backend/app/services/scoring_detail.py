@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.performance import performance_step
@@ -21,7 +21,11 @@ from app.models import (
     SlaPenaltyRule,
 )
 from app.services.scoring_matrix import real_service_orders
-from app.services.regional import is_valid_regional, normalize_regional, same_regional
+from app.services.regional import (
+    is_valid_regional,
+    normalize_regional_grouped as normalize_regional,
+    same_regional_grouped as same_regional,
+)
 from app.services.sla import SLA_FORA_DO_PRAZO, SLA_NO_PRAZO, normalize_sla_status, sla_status_label
 
 
@@ -454,8 +458,11 @@ def _rule_matches_recurrence_pair(
     original: ServiceOrder,
     later: ServiceOrder,
     days_between: int,
+    hours_between: float,
 ) -> tuple[bool, str | None]:
     if rule.max_days is not None and days_between > int(rule.max_days):
+        return False, None
+    if rule.min_hours_between is not None and hours_between < float(rule.min_hours_between):
         return False, None
     if rule.require_same_subject and normalize(original.os_subject) != normalize(later.os_subject):
         return False, None
@@ -512,7 +519,10 @@ def classify_recurrence_pair(
     window_days: int,
     rules: list[RecurrenceClassificationRule],
     identity_label: tuple[str, str] | None = None,
+    hours_between: float | None = None,
 ) -> dict[str, Any]:
+    if hours_between is None:
+        hours_between = days_between * 24.0
     same_subject = normalize(original.os_subject) == normalize(later.os_subject)
     same_diagnosis = _meaningful(original.diagnosis) and normalize(original.diagnosis) == normalize(later.diagnosis)
     later_is_flagged_return = later.is_warranty or later.is_recurrence
@@ -535,7 +545,7 @@ def classify_recurrence_pair(
                 "rule_id": rule.id,
                 "rule_name": rule.name,
             }
-        rule_matches, match_side = _rule_matches_recurrence_pair(rule, original, later, days_between)
+        rule_matches, match_side = _rule_matches_recurrence_pair(rule, original, later, days_between, hours_between)
         if not rule_matches:
             continue
         evidence.append(f"Regra configurada: {rule.name}")
@@ -665,9 +675,9 @@ def recurrence_penalties(
             )
             if completed(order)
         ],
-        # Ordenar pela MESMA data usada na comparacao da janela (later_date = opened_at or closed_at,
-        # linha ~688). Ordenar por _order_date (closed_at) quebraria a monotonicidade e o `break`
-        # poderia pular uma reincidencia valida (O.S que abriu cedo mas fechou tarde).
+        # Ordenar pelo MESMO campo usado no delta do loop abaixo (opened_at-vs-opened_at).
+        # Ordenar por outro criterio quebraria a monotonicidade e o `break` poderia pular uma
+        # reincidencia valida (O.S que abriu cedo mas fechou tarde).
         key=lambda item: item.opened_at or item.closed_at,
     )
 
@@ -681,8 +691,7 @@ def recurrence_penalties(
     normalized_action = normalize(action)
 
     for original in base_orders:
-        original_date = _order_date(original)
-        if original_date is None:
+        if original.opened_at is None:
             continue
 
         candidates: list[dict[str, Any]] = []
@@ -693,15 +702,25 @@ def recurrence_penalties(
         for later in orders_by_login.get(identity, []):
             if later.id == original.id:
                 continue
-            later_date = later.opened_at or later.closed_at
-            if later_date is None:
+            if later.opened_at is None:
                 continue
-            delta = later_date - original_date
+            # Comparacao simetrica opened_at-vs-opened_at (mesmo criterio usado pra ordenar
+            # `all_orders` acima). Antes comparava original.closed_at com later.opened_at: quando
+            # a O.S original demorava pra fechar (ou fechava so depois de uma visita concorrente),
+            # essa mistura de campos gerava delta negativo mesmo com later tendo aberto depois do
+            # original - descartando silenciosamente reincidencias legitimas.
+            delta = later.opened_at - original.opened_at
             if delta < timedelta(0):
                 continue
-            if delta > timedelta(days=search_window_days):
-                break
             days_between = int(delta.days)
+            # Corta pelo mesmo days_between (int, arredondado pra baixo) usado no match da regra
+            # (max_days) e no texto de evidencia - comparar o `delta` bruto contra
+            # timedelta(days=search_window_days) e inconsistente: um par "30 dias e 17h" teria
+            # days_between=30 (dentro de uma janela de 30 dias) mas seria cortado aqui por ter
+            # horas sobrando, descartando silenciosamente uma reincidencia valida bem na borda.
+            if days_between > search_window_days:
+                break
+            hours_between = delta.total_seconds() / 3600
             classification = classify_recurrence_pair(
                 original,
                 later,
@@ -709,6 +728,7 @@ def recurrence_penalties(
                 window_days,
                 rules,
                 identity_label=_recurrence_identity_label_for_fields(original, identity_fields),
+                hours_between=hours_between,
             )
             candidates.append(classification)
 
@@ -778,7 +798,23 @@ def sla_inside(order: ServiceOrder) -> bool:
         return True
     if order.sla_hours is None or order.closing_time_hours is None:
         return False
-    return order.closing_time_hours <= order.sla_hours
+    # Arredonda pra hora cheia antes de comparar - o mesmo criterio do relatorio de BI usado pela
+    # operacao, que nao considera "fora do prazo" quando o fechamento estourou por poucos minutos
+    # (ex.: 72,34h contra um SLA de 72h).
+    return round(order.closing_time_hours) <= order.sla_hours
+
+
+def sla_display_label(order: ServiceOrder) -> str:
+    """Rótulo de SLA pra exibição/filtro, com o MESMO critério que decide a penalidade (`sla_inside`).
+
+    `order.sla_status` (texto) vem sempre vazio para O.S da API do IXC (decisão de projeto, ver
+    docs/plano-integracao-ixc.md seção 6) - sem esse fallback, qualquer tela mostraria/filtraria
+    "NAO_IDENTIFICADO" mesmo quando o sistema já determinou dentro/fora do prazo pelas horas.
+    """
+    label = sla_status_label(order.sla_status)
+    if label == "NAO_IDENTIFICADO" and order.sla_hours is not None and order.closing_time_hours is not None:
+        label = SLA_FORA_DO_PRAZO if not sla_inside(order) else SLA_NO_PRAZO
+    return label
 
 
 def sla_rule_applies(order: ServiceOrder, rule: SlaPenaltyRule) -> bool:
@@ -787,7 +823,7 @@ def sla_rule_applies(order: ServiceOrder, rule: SlaPenaltyRule) -> bool:
     if rule.condition_type == "sla_hours_greater_than":
         if order.sla_hours is None or order.closing_time_hours is None:
             return False
-        return order.closing_time_hours > order.sla_hours
+        return round(order.closing_time_hours) > order.sla_hours
     if rule.condition_type == "closed_after_deadline":
         return not sla_inside(order)
     return False
@@ -831,6 +867,11 @@ def calculate_regional_health(db: Session, orders: list[ServiceOrder]) -> dict[s
     for order in orders:
         if not is_valid_regional(order.regional):
             continue
+        # O.S de colaborador não cadastrado (ex.: alguém do back office que fecha uma O.S externa sem
+        # ter feito o atendimento) não deve influenciar o SLA/saúde da regional - decisão do dono do
+        # produto, ver docs/plano-integracao-ixc.md.
+        if not order.collaborator or not order.collaborator.is_registered:
+            continue
         grouped[normalize_regional(order.regional)].append(order)
 
     health: dict[str, dict[str, float | int | str]] = {}
@@ -867,6 +908,10 @@ def calculate_regional_health_from_details(
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for detail in details:
         if not is_identified_collaborator_detail(detail) or not is_valid_regional(str(detail["regional"])):
+            continue
+        # Mesma regra de `calculate_regional_health`: colaborador não cadastrado não deve contar pro
+        # SLA/saúde da regional.
+        if not detail.get("collaborator_is_registered"):
             continue
         grouped[normalize_regional(str(detail["regional"]))].append(detail)
 
@@ -937,7 +982,7 @@ def explain_order(
     sla_rule = matching_sla_penalty_rule(order, sla_rules)
     is_completed = completed(order)
     is_sla_out = not sla_inside(order)
-    normalized_sla_status = sla_status_label(order.sla_status)
+    normalized_sla_status = sla_display_label(order)
     base_points = 0.0
     penalty_points = 0.0
     diagnosis_penalty_points = 0.0
@@ -968,7 +1013,7 @@ def explain_order(
     recurrence_suppresses_point_penalties = has_recurrence_penalty
 
     if is_completed:
-        calculation_reasons.append(f"SLA original da planilha: {order.sla_status or 'Não informado'}")
+        calculation_reasons.append(f"SLA original importado: {order.sla_status or 'Não informado'}")
         calculation_reasons.append(f"SLA normalizado: {normalized_sla_status}")
 
     if not order.collaborator_id:
@@ -1133,7 +1178,8 @@ def explain_order(
     if (
         base_points > 0
         and penalty_points > 0
-        and scoring_status not in {"Anulada por reincidência", "Anulada por diagnóstico", "Anulada por SLA"}
+        and scoring_status
+        not in {"Anulada por reincidência", "Anulada por diagnóstico", "Anulada por SLA", "Revisão manual"}
     ):
         scoring_status = "Penalizada"
 
@@ -1145,6 +1191,7 @@ def explain_order(
         "id": order.id,
         "collaborator_id": order.collaborator_id,
         "collaborator_name": order.collaborator.name if order.collaborator else "NAO IDENTIFICADO",
+        "collaborator_is_registered": bool(order.collaborator.is_registered) if order.collaborator else False,
         "os_code": order.os_code,
         "contract_id": order.contract_id,
         "customer_login": order.customer_login,
@@ -1160,8 +1207,12 @@ def explain_order(
         "closing_time_hours": order.closing_time_hours,
         "opened_at": order.opened_at,
         "closed_at": order.closed_at,
+        # Flags de exibição mutuamente exclusivas (decisão do dono do produto): uma O.S mostra UMA
+        # etiqueta - garantia OU reincidência, nunca as duas. "garantia" NÃO liga is_recurrence
+        # aqui; a matemática de desconto/saúde continua tratando garantia como descontável via
+        # RECURRENCE_DISCOUNT_CLASSIFICATIONS (não mudou).
         "is_warranty": order.is_warranty or recurrence_classification == "garantia",
-        "is_recurrence": order.is_recurrence or recurrence_classification in {"reincidencia_tecnica", "garantia"},
+        "is_recurrence": order.is_recurrence or recurrence_classification == "reincidencia_tecnica",
         "has_reschedule": order.has_reschedule,
         "has_pending": order.has_pending,
         "group_id": scoring_rule.group_id if scoring_rule else None,
@@ -1305,6 +1356,20 @@ def summarize_details(
     }
 
 
+def _payment_regional_for_detail(detail: dict[str, Any], collaborator_by_id: dict[int, "Collaborator"]) -> str:
+    """A mesma regional que efetivamente decide o multiplicador do colaborador no pagamento real
+    (ver `_official_collaborator_regional` em calculation.py: para quem esta cadastrado, a
+    regional oficial vale pra TODAS as O.S do periodo, nao a regional de cada O.S individual).
+    Achado real (auditoria B2): telas que agrupavam/somavam por `detail["regional"]" (a regional
+    da O.S) buscavam um multiplicador diferente do que realmente e/sera pago sempre que o
+    colaborador atende O.S fora da sua regional oficial - usar esta funcao em vez de
+    `detail["regional"]" diretamente mantem os dois calculos consistentes."""
+    collaborator = collaborator_by_id.get(detail.get("collaborator_id"))
+    if collaborator and collaborator.is_registered and collaborator.regional:
+        return normalize_regional(collaborator.regional)
+    return normalize_regional(str(detail.get("regional") or ""))
+
+
 def summarize_audit_details(
     db: Session,
     details: list[dict[str, Any]],
@@ -1313,10 +1378,11 @@ def summarize_audit_details(
 ) -> dict[str, float | int]:
     health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
     below_minimum_multiplier = get_health_below_minimum_multiplier(db)
+    collaborator_by_id = {order.collaborator_id: order.collaborator for order in orders if order.collaborator_id and order.collaborator}
     final_points = round(
         sum(
             float(item["net_points"])
-            * float(health_by_regional.get(normalize_regional(str(item["regional"])), {}).get("multiplier", below_minimum_multiplier))
+            * float(health_by_regional.get(_payment_regional_for_detail(item, collaborator_by_id), {}).get("multiplier", below_minimum_multiplier))
             for item in details
         ),
         2,
@@ -1351,7 +1417,7 @@ def summarize_audit_details(
         "estimated_payment": round(
             sum(
                 float(item["net_points"])
-                * float(health_by_regional.get(normalize_regional(str(item["regional"])), {}).get("multiplier", below_minimum_multiplier))
+                * float(health_by_regional.get(_payment_regional_for_detail(item, collaborator_by_id), {}).get("multiplier", below_minimum_multiplier))
                 * float(item.get("point_value", point_value))
                 for item in details
             ),
@@ -1382,6 +1448,7 @@ def calculate_audit_group_summaries(
 ) -> dict[str, list[dict[str, float | int | str]]]:
     health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
     below_minimum_multiplier = get_health_below_minimum_multiplier(db)
+    collaborator_by_id = {order.collaborator_id: order.collaborator for order in orders if order.collaborator_id and order.collaborator}
     summaries: dict[str, list[dict[str, float | int | str]]] = {}
     available_modes = {"group", "subject", "regional", "collaborator", "status"}
     selected_modes = [mode for mode in (modes or ["group"]) if mode in available_modes] or ["group"]
@@ -1402,7 +1469,7 @@ def calculate_audit_group_summaries(
                     "penalized_service_orders": 0,
                 },
             )
-            multiplier = float(health_by_regional.get(normalize_regional(str(detail["regional"])), {}).get("multiplier", below_minimum_multiplier))
+            multiplier = float(health_by_regional.get(_payment_regional_for_detail(detail, collaborator_by_id), {}).get("multiplier", below_minimum_multiplier))
             item_point_value = float(detail.get("point_value", point_value))
             item["service_orders_count"] = int(item["service_orders_count"]) + 1
             item["base_points"] = float(item["base_points"]) + float(detail["base_points"])
@@ -1434,6 +1501,11 @@ def calculate_penalty_distribution(
     totals: dict[str, float] = defaultdict(float)
     counts: dict[str, int] = defaultdict(int)
     for detail in details:
+        # Mesma regra de calculate_regional_health: O.S de colaborador nao cadastrado nao deve
+        # aparecer nos graficos de analise (distribuicao de pontos anulados), so nos indicadores
+        # operacionais brutos (ex: cards de pendencia) onde ela ja e tratada separadamente.
+        if not detail.get("collaborator_is_registered"):
+            continue
         for penalty in detail["penalty_items"]:
             name = str(penalty["name"])
             totals[name] += float(penalty["points"])
@@ -1468,7 +1540,7 @@ def prefilter_orders_for_detail_processing(
     if status_sla:
         normalized_filter = sla_status_label(status_sla)
         if normalized_filter != "NAO_IDENTIFICADO":
-            filtered = [order for order in filtered if sla_status_label(order.sla_status) == normalized_filter]
+            filtered = [order for order in filtered if sla_display_label(order) == normalized_filter]
         else:
             filtered = [order for order in filtered if normalize(status_sla) in normalize(order.sla_status)]
     if group_id:
@@ -2026,6 +2098,23 @@ def unmapped_subjects(
         )
 
     return sorted(result, key=lambda item: item["service_orders_count"], reverse=True)
+
+
+def cascade_os_type_for_subject(db: Session, os_subject: str, new_os_type: str) -> int:
+    """Reescreve o `os_type` de toda `service_order` já importada com este `os_subject`, para que
+    corrigir o Tipo Geral de um assunto valha imediatamente para as O.S antigas, não só para as
+    futuras. `ServiceOrder.os_type` é gravado uma única vez na importação e nunca reescrito depois -
+    sem esta cascata, o casamento de regra (`matching_scoring_rule`, que exige `(order.os_type,
+    os_subject)` batendo exatamente com `(rule.os_type, os_subject)`) nunca reconhecia a correção nas
+    O.S já importadas, e ficavam órfãs até alguém rodar uma correção manual em massa no banco (achado
+    real - ver docs/plano-integracao-ixc.md). Retorna quantas linhas foram alteradas."""
+    result = db.execute(
+        update(ServiceOrder)
+        .where(ServiceOrder.os_subject == os_subject)
+        .where(ServiceOrder.os_type != new_os_type)
+        .values(os_type=new_os_type)
+    )
+    return result.rowcount or 0
 
 
 def unmapped_diagnosis_stats_from_orders(db: Session, orders: list[ServiceOrder]) -> list[dict[str, Any]]:

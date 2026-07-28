@@ -16,7 +16,7 @@ from app.models import (
     LeadershipProfileRegional,
     ServiceOrder,
 )
-from app.services.regional import is_valid_regional, normalize_regional
+from app.services.regional import is_valid_regional, normalize_regional_grouped as normalize_regional
 
 
 LEADERSHIP_ROLE_TYPES = {"supervisor", "regional_manager", "portfolio_manager"}
