@@ -89,6 +89,19 @@ def completed(order: ServiceOrder) -> bool:
     }
 
 
+def counts_for_regional_health(order: ServiceOrder) -> bool:
+    """Mesmo escopo de completed(), mas TAMBEM inclui O.S. cancelada - alinhado com a regra da
+    Operação Analítica, que não filtra por status nas agregações de SLA/saúde por regional
+    (decisão confirmada com o usuário: cancelada volta a contar no SLA/multiplicador, pra bater
+    com a Analítica quando os mesmos filtros de regional/período forem usados nas duas telas).
+    Usado SOMENTE nos pontos que alimentam calculate_regional_health - completed() continua sem
+    essa inclusão pra pontuação, reincidência e débito de garantia, que devem seguir ignorando
+    O.S. cancelada como sempre fizeram."""
+    if completed(order):
+        return True
+    return normalize(order.status).startswith("cancel")
+
+
 def period_orders(db: Session, reference_month: int, reference_year: int, regional: str | None = None) -> list[ServiceOrder]:
     stmt = select(ServiceOrder).options(selectinload(ServiceOrder.collaborator))
     period_start = datetime(reference_year, reference_month, 1)
@@ -1376,7 +1389,7 @@ def summarize_audit_details(
     orders: list[ServiceOrder],
     point_value: float,
 ) -> dict[str, float | int]:
-    health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
+    health_by_regional = calculate_regional_health(db, [order for order in orders if counts_for_regional_health(order)])
     below_minimum_multiplier = get_health_below_minimum_multiplier(db)
     collaborator_by_id = {order.collaborator_id: order.collaborator for order in orders if order.collaborator_id and order.collaborator}
     final_points = round(
@@ -1446,7 +1459,7 @@ def calculate_audit_group_summaries(
     point_value: float,
     modes: Iterable[str] | None = None,
 ) -> dict[str, list[dict[str, float | int | str]]]:
-    health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
+    health_by_regional = calculate_regional_health(db, [order for order in orders if counts_for_regional_health(order)])
     below_minimum_multiplier = get_health_below_minimum_multiplier(db)
     collaborator_by_id = {order.collaborator_id: order.collaborator for order in orders if order.collaborator_id and order.collaborator}
     summaries: dict[str, list[dict[str, float | int | str]]] = {}
@@ -1657,8 +1670,11 @@ def get_collaborator_service_orders_detail(
     )
     value_per_point = point_value if point_value is not None else get_point_value(db)
     details = explain_orders(db, orders, default_point_value=float(value_per_point))
-    health_by_regional = calculate_regional_health(db, [order for order in all_period_orders if completed(order)])
+    health_by_regional = calculate_regional_health(db, [order for order in all_period_orders if counts_for_regional_health(order)])
     health_by_regional = calculate_regional_health_from_details(db, details, health_by_regional)
+    from app.services.calculation import _apply_cpk_adjustment  # import tardio: calculation.py importa este módulo, evita ciclo
+
+    health_by_regional = _apply_cpk_adjustment(db, health_by_regional, reference_month, reference_year)
     effective_regional, health = health_for_details(details, health_by_regional, collaborator.regional)
     official_regional = normalize_regional(collaborator.regional) if collaborator.is_registered and is_valid_regional(collaborator.regional) else None
     if official_regional and official_regional in health_by_regional:
@@ -1896,7 +1912,7 @@ def financial_breakdowns(
     collaborator_context: dict[int, dict[str, float | int | str]] | None = None,
 ) -> dict[str, list[dict[str, float | int | str]]]:
     details = details if details is not None else explain_orders(db, orders)
-    health_by_regional = health_by_regional or calculate_regional_health(db, [order for order in orders if completed(order)])
+    health_by_regional = health_by_regional or calculate_regional_health(db, [order for order in orders if counts_for_regional_health(order)])
     regional_totals: dict[str, dict[str, float | int | str]] = {}
     group_totals: dict[str, dict[str, float | int | str]] = {}
     subject_totals: dict[str, dict[str, float | int | str]] = {}

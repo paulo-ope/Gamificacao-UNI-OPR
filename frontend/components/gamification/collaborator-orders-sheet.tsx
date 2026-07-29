@@ -37,6 +37,18 @@ import type { CollaboratorOrderDetail, CollaboratorOrdersDetail, CollaboratorPoi
 
 type FilterMode = "all" | "scored" | "unscored" | "penalized" | "sla_out" | "recurrence" | "non_recurrent" | "diagnosis_blocked";
 
+const CPK_STATUS_LABEL: Record<string, string> = {
+  na_meta: "Na meta",
+  fora_meta: "Fora da meta",
+  sem_base: "Sem base"
+};
+
+const CPK_STATUS_TONE: Record<string, Tone> = {
+  na_meta: "emerald",
+  fora_meta: "red",
+  sem_base: "slate"
+};
+
 type CollaboratorOrdersSheetProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -489,6 +501,18 @@ export function CollaboratorOrdersSheet({
                           <div>
                             Reincidência da regional: <span className="font-medium text-slate-900">{regionalHealth.recurrence_rate.toFixed(1)}%</span>
                             <span className="ml-1 text-xs text-slate-400">({formatInteger(regionalHealth.recurrence_orders)} de {formatInteger(regionalHealth.total_orders)} O.S)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span>CPK da regional:</span>
+                            <StatusBadge tone={CPK_STATUS_TONE[regionalHealth.cpk_status ?? "sem_base"]} dot>
+                              {CPK_STATUS_LABEL[regionalHealth.cpk_status ?? "sem_base"]}
+                            </StatusBadge>
+                            {regionalHealth.cpk_adjustment ? (
+                              <span className="text-xs text-slate-400">
+                                ({regionalHealth.cpk_adjustment > 0 ? "+" : ""}
+                                {regionalHealth.cpk_adjustment.toFixed(2)} no multiplicador)
+                              </span>
+                            ) : null}
                           </div>
                           <p className="mt-2 text-xs text-slate-500">
                             O multiplicador é definido pela faixa de saúde da regional (combinação de SLA e reincidência). Ele multiplica os pontos

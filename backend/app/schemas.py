@@ -775,6 +775,8 @@ class RegionalHealthItem(BaseModel):
     total_orders: int
     pending_orders: int
     rescheduled_orders: int
+    cpk_status: str | None = None
+    cpk_adjustment: float = 0.0
 
 
 class DashboardSummary(BaseModel):

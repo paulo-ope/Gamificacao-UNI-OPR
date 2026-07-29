@@ -100,15 +100,13 @@ def _apply_cpk_adjustment(
         except CpkApiError as exc:
             logger.warning("Falha ao sincronizar CPK automaticamente (ano=%s mes=%s): %s", year, month, exc)
     adjustments = cpk_health.get_cpk_adjustment_by_regional(db, year, month)
-    if not adjustments:
-        return health_by_regional
-    for regional, adjustment in adjustments.items():
-        if not adjustment:
-            continue
-        entry = health_by_regional.get(regional)
-        if not entry:
-            continue
-        entry["multiplier"] = max(0.0, float(entry.get("multiplier", 0.0)) + adjustment)
+    statuses = cpk_health.get_cpk_status_by_regional(db, year, month)
+    for regional, entry in health_by_regional.items():
+        entry["cpk_status"] = statuses.get(regional)
+        adjustment = adjustments.get(regional, 0.0)
+        entry["cpk_adjustment"] = adjustment
+        if adjustment:
+            entry["multiplier"] = max(0.0, float(entry.get("multiplier", 0.0)) + adjustment)
     return health_by_regional
 
 
@@ -175,7 +173,8 @@ def calculate_scores(
         )
     completed_orders = [order for order in orders if scoring_detail.completed(order)]
     point_balance.detect_post_payment_warranty_debits(db, completed_orders, triggered_by=executed_by)
-    health_by_regional = calculate_regional_health(db, completed_orders)
+    health_eligible_orders = [order for order in orders if scoring_detail.counts_for_regional_health(order)]
+    health_by_regional = calculate_regional_health(db, health_eligible_orders)
     order_details = scoring_detail.explain_orders(db, orders, default_point_value=float(value_per_point))
     health_by_regional = scoring_detail.calculate_regional_health_from_details(db, order_details, health_by_regional)
     health_by_regional = _apply_cpk_adjustment(db, health_by_regional, month, year)
@@ -412,7 +411,7 @@ def _run_extra_summaries(db: Session, run: CalculationRun) -> dict[int, dict[str
         grouped[int(detail["collaborator_id"])].append(detail)
 
     summaries: dict[int, dict[str, float | int | str]] = {}
-    health_by_regional = scoring_detail.calculate_regional_health(db, [order for order in orders if scoring_detail.completed(order)])
+    health_by_regional = scoring_detail.calculate_regional_health(db, [order for order in orders if scoring_detail.counts_for_regional_health(order)])
     health_by_regional = scoring_detail.calculate_regional_health_from_details(db, details, health_by_regional)
     health_by_regional = _apply_cpk_adjustment(db, health_by_regional, run.reference_month, run.reference_year)
     for score in run.scores:

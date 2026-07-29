@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.models import CalculationRun, CollaboratorScore, LeadershipBonusResult, LeadershipProfile, ServiceOrder
 from app.schemas import DashboardBootstrapOut, DashboardFilteredBreakdownOut, DashboardSummary
 from app.services.calculation import (
+    _apply_cpk_adjustment,
     _period_orders,
     _run_extra_summaries,
     calculate_penalty_distribution,
@@ -24,7 +25,7 @@ from app.services.scoring_matrix import real_service_orders
 from app.services.scoring_detail import (
     calculate_regional_health,
     calculate_regional_health_from_details,
-    completed,
+    counts_for_regional_health,
     explain_orders,
     financial_breakdowns,
 )
@@ -277,8 +278,9 @@ def dashboard_summary(
 
     orders = _period_orders(db, run.reference_month, run.reference_year, run.regional)
     details = explain_orders(db, orders, default_point_value=point_value)
-    health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
+    health_by_regional = calculate_regional_health(db, [order for order in orders if counts_for_regional_health(order)])
     health_by_regional = calculate_regional_health_from_details(db, details, health_by_regional)
+    health_by_regional = _apply_cpk_adjustment(db, health_by_regional, run.reference_month, run.reference_year)
     breakdowns = financial_breakdowns(
         db,
         orders,
@@ -343,8 +345,9 @@ def dashboard_filtered_breakdowns(
 
         point_value = float(run.point_value)
         details = explain_orders(db, orders, default_point_value=point_value)
-        health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
+        health_by_regional = calculate_regional_health(db, [order for order in orders if counts_for_regional_health(order)])
         health_by_regional = calculate_regional_health_from_details(db, details, health_by_regional)
+        health_by_regional = _apply_cpk_adjustment(db, health_by_regional, run.reference_month, run.reference_year)
         breakdowns = financial_breakdowns(
             db,
             orders,
@@ -404,8 +407,9 @@ def dashboard_filtered_breakdowns(
     with performance_step("dashboard.filtered-breakdowns", "explain_orders"):
         details = explain_orders(db, orders, default_point_value=point_value)
     with performance_step("dashboard.filtered-breakdowns", "regional_health"):
-        health_by_regional = calculate_regional_health(db, [order for order in orders if completed(order)])
+        health_by_regional = calculate_regional_health(db, [order for order in orders if counts_for_regional_health(order)])
         health_by_regional = calculate_regional_health_from_details(db, details, health_by_regional)
+        health_by_regional = _apply_cpk_adjustment(db, health_by_regional, run.reference_month, run.reference_year)
     with performance_step("dashboard.filtered-breakdowns", "financial_breakdowns"):
         breakdowns = financial_breakdowns(
             db,

@@ -567,6 +567,8 @@ export type RegionalHealthItem = {
   total_orders: number;
   pending_orders: number;
   rescheduled_orders: number;
+  cpk_status: "na_meta" | "fora_meta" | "sem_base" | null;
+  cpk_adjustment: number;
 };
 
 export type DashboardSummary = {

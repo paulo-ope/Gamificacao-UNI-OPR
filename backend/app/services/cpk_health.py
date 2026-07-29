@@ -89,6 +89,21 @@ def sync_cpk_snapshot(db: Session, ano: int, mes: int) -> dict[str, int]:
     return {"synced": synced, "skipped_unmapped": len(skipped_unmapped)}
 
 
+def get_cpk_status_by_regional(db: Session, ano: int, mes: int) -> dict[str, str]:
+    """Le o status bruto ja sincronizado ("na_meta"/"fora_meta"/"sem_base") sem aplicar
+    cpk_bonus_points - usado so pra exibicao (extrato do colaborador, dashboard), separado do
+    ajuste numerico que get_cpk_adjustment_by_regional calcula pro multiplicador."""
+    rows = list(
+        db.scalars(
+            select(CpkRegionalSnapshot).where(
+                CpkRegionalSnapshot.reference_year == ano,
+                CpkRegionalSnapshot.reference_month == mes,
+            )
+        )
+    )
+    return {row.regional: row.status for row in rows}
+
+
 def get_cpk_adjustment_by_regional(db: Session, ano: int, mes: int) -> dict[str, float]:
     """Le o snapshot JA SINCRONIZADO (nao chama a API ao vivo) e devolve o ajuste de multiplicador
     por regional: +cpk_bonus_points (na meta), -cpk_bonus_points (fora da meta), ou 0.0 (sem

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from app.models import (
     AppSetting,
+    CpkRegionalSnapshot,
     DiagnosisPenaltyRule,
     HealthRule,
     RecurrenceClassificationRule,
@@ -536,3 +537,57 @@ def test_penalty_distribution_excludes_unregistered_collaborator_orders(db_sessi
 
     sla_entry = next(item for item in distribution if item["name"] == "SLA fora do prazo")
     assert sla_entry["service_orders_count"] == 1, "only the registered collaborator's O.S should be counted"
+
+
+def test_counts_for_regional_health_includes_cancelled_but_completed_does_not(db_session, make_collaborator, make_service_order):
+    """Alinhamento com a Operacao Analitica (decisao do usuario): O.S. cancelada passa a contar
+    no SLA/saude/multiplicador da regional, mas continua fora da pontuacao normal - completed()
+    (usado pra pontuacao/reincidencia/debito de garantia) nao pode mudar, so
+    counts_for_regional_health() (usado exclusivamente pra calculate_regional_health)."""
+    collaborator = make_collaborator(regional="UNI SUL")
+    cancelled = make_service_order(collaborator, os_code="OS-CANC", status="Cancelada", sla_status="Dentro do prazo")
+
+    assert sd.completed(cancelled) is False, "cancelada nao deve contar como concluida pra pontuacao/reincidencia"
+    assert sd.counts_for_regional_health(cancelled) is True, "cancelada deve contar no calculo de saude/SLA"
+
+
+def test_calculate_regional_health_counts_cancelled_orders_in_denominator(db_session, make_collaborator, make_service_order, scoring_setup):
+    """Uma O.S. cancelada fora do prazo deve puxar o sla_rate da regional pra baixo quando a lista
+    passada usa counts_for_regional_health - o mesmo calculo usando completed() (comportamento
+    antigo) nao deveria enxergar essa O.S. de jeito nenhum."""
+    collaborator = make_collaborator(regional="UNI SUL")
+    on_time = make_service_order(collaborator, os_code="OS-OK", status="Concluida", sla_status="Dentro do prazo")
+    cancelled_late = make_service_order(collaborator, os_code="OS-CANC", status="Cancelada", sla_status="Fora do prazo")
+
+    all_orders = [on_time, cancelled_late]
+    old_scope = [order for order in all_orders if sd.completed(order)]
+    new_scope = [order for order in all_orders if sd.counts_for_regional_health(order)]
+
+    old_health = sd.calculate_regional_health(db_session, old_scope)
+    new_health = sd.calculate_regional_health(db_session, new_scope)
+
+    assert old_health["UNI SUL"]["total_orders"] == 1, "regra antiga nunca via a O.S. cancelada"
+    assert old_health["UNI SUL"]["sla_rate"] == 100.0
+
+    assert new_health["UNI SUL"]["total_orders"] == 2, "regra nova (alinhada a Analitica) inclui a cancelada"
+    assert new_health["UNI SUL"]["sla_rate"] == 50.0, "a cancelada fora do prazo derruba o sla_rate"
+
+
+def test_get_collaborator_service_orders_detail_applies_cpk_adjustment(db_session, make_collaborator, make_service_order, scoring_setup):
+    """Regression: get_collaborator_service_orders_detail (extrato do colaborador) tinha o mesmo
+    bug encontrado no dashboard - calculava a saude/multiplicador da regional sem aplicar o
+    ajuste de CPK, entao o valor mostrado no extrato podia divergir do que de fato seria usado
+    no fechamento de folha."""
+    collaborator = make_collaborator(regional="UNI SUL")
+    make_service_order(collaborator, sla_status="Dentro do prazo")
+
+    db_session.add(CpkRegionalSnapshot(reference_year=2026, reference_month=6, regional="UNI SUL", status="na_meta"))
+    db_session.add(AppSetting(key="cpk_bonus_points", value="0.3"))
+    db_session.flush()
+
+    result = sd.get_collaborator_service_orders_detail(db_session, collaborator.id, 6, 2026)
+
+    net_points = float(result["summary"]["net_points"])
+    assert float(result["summary"]["final_points"]) == round(net_points * 1.3, 2), (
+        "HealthRule 'Boa' (scoring_setup) da multiplier=1.0; com CPK na_meta (+0.3) o efetivo deveria ser 1.3"
+    )

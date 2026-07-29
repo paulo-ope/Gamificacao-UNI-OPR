@@ -48,6 +48,8 @@ function buildHealth(overrides: Partial<RegionalHealthItem> = {}): RegionalHealt
     total_orders: 100,
     pending_orders: 0,
     rescheduled_orders: 0,
+    cpk_status: null,
+    cpk_adjustment: 0,
     ...overrides
   };
 }
