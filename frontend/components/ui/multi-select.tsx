@@ -153,7 +153,7 @@ export function MultiSelect({
                       className={cn(
                         "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
                         selected
-                          ? "border-blue-600 bg-blue-600 text-white"
+                          ? "border-uni-royal bg-uni-royal text-white"
                           : "border-slate-300 text-transparent",
                       )}
                     >

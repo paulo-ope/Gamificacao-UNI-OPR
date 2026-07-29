@@ -14,6 +14,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppRadio } from "@/components/ui/radio";
 import {
   TableBody,
   TableCell,
@@ -394,12 +395,11 @@ export function OperationsSlaHierarchyTable({
             ["diagnosis", "Diagnóstico"],
           ] as const).map(([level, label]) => (
             <label key={level} className="flex items-center gap-1.5 font-medium text-slate-700">
-              <input
-                type="radio"
-                name="sla-root-level"
+              <AppRadio
                 checked={rootLevel === level}
                 disabled={rootLoading}
-                onChange={() => void changeRootLevel(level)}
+                onSelect={() => void changeRootLevel(level)}
+                ariaLabel={label}
               />
               {label}
             </label>

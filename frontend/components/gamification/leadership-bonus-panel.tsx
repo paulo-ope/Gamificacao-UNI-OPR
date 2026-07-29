@@ -17,6 +17,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppCheckbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -600,12 +601,11 @@ export function LeadershipBonusPanel({
                 />
               </div>
               <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-uni-royal"
+                <AppCheckbox
                   checked={roleDraft.active}
-                  onChange={(event) => setRoleDraft((current) => ({ ...current, active: event.target.checked }))}
+                  onCheckedChange={(checked) => setRoleDraft((current) => ({ ...current, active: checked }))}
                   disabled={readOnly}
+                  ariaLabel="Perfil ativo"
                 />
                 Perfil ativo para novos líderes e herança de multiplicador
               </label>
@@ -736,13 +736,10 @@ export function LeadershipBonusPanel({
                   </div>
                 </div>
                 <label className="flex items-center gap-3 text-sm text-slate-700">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-uni-royal"
+                  <AppCheckbox
                     checked={leaderDraft.use_custom_multiplier}
                     disabled={readOnly}
-                    onChange={(event) => {
-                      const checked = event.target.checked;
+                    onCheckedChange={(checked) => {
                       setLeaderDraft((current) => ({
                         ...current,
                         use_custom_multiplier: checked,
@@ -752,6 +749,7 @@ export function LeadershipBonusPanel({
                           : (selectedRoleProfile?.default_multiplier ?? current.multiplier),
                       }));
                     }}
+                    ariaLabel="Usar multiplicador personalizado"
                   />
                   Usar multiplicador personalizado
                 </label>
@@ -806,12 +804,11 @@ export function LeadershipBonusPanel({
             )}
 
             <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-uni-royal"
+              <AppCheckbox
                 checked={leaderDraft.active}
-                onChange={(event) => setLeaderDraft((current) => ({ ...current, active: event.target.checked }))}
+                onCheckedChange={(checked) => setLeaderDraft((current) => ({ ...current, active: checked }))}
                 disabled={readOnly}
+                ariaLabel="Líder ativo"
               />
               Líder ativo para cálculo e conferência das filiais vinculadas
             </label>

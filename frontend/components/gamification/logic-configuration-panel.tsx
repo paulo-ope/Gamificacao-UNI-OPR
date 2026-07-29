@@ -26,6 +26,7 @@ import {
 import { GovernanceRulesPanel } from "@/components/gamification/governance-rules-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppCheckbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusToast } from "@/components/ui/status-toast";
@@ -1457,7 +1458,7 @@ export function LogicConfigurationPanel({
               <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                 <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead className="w-10">
-                    <AppSwitch checked={allVisibleGroupsSelected} onCheckedChange={toggleAllVisibleGroups} label={allVisibleGroupsSelected ? "Todos" : "Selecionar"} />
+                    <AppCheckbox checked={allVisibleGroupsSelected} onCheckedChange={toggleAllVisibleGroups} ariaLabel={allVisibleGroupsSelected ? "Desmarcar todos" : "Selecionar todos"} />
                   </TableHead>
                   <TableHead>Grupo</TableHead>
                   <TableHead>Pontos do grupo</TableHead>
@@ -1475,7 +1476,7 @@ export function LogicConfigurationPanel({
                   return (
                     <TableRow key={group.id} className={cn("align-top transition-colors hover:bg-slate-50/70", dirty ? "bg-blue-50/40" : "bg-white")}>
                       <TableCell className="py-4">
-                        <AppSwitch checked={selectedGroupIds.has(group.id)} onCheckedChange={(checked) => toggleGroupSelected(group.id, checked)} label="" />
+                        <AppCheckbox checked={selectedGroupIds.has(group.id)} onCheckedChange={(checked) => toggleGroupSelected(group.id, checked)} ariaLabel={`Selecionar ${group.name}`} />
                       </TableCell>
                       <TableCell className="min-w-72 py-4">
                         <div className="flex flex-wrap items-center gap-2">
@@ -1614,7 +1615,7 @@ export function LogicConfigurationPanel({
               <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                 <TableRow className="border-slate-700 hover:bg-slate-900">
                   <TableHead className="w-10">
-                    <AppSwitch checked={allVisibleSubjectsSelected} onCheckedChange={toggleAllVisibleSubjects} label={allVisibleSubjectsSelected ? "Todos" : "Selecionar"} />
+                    <AppCheckbox checked={allVisibleSubjectsSelected} onCheckedChange={toggleAllVisibleSubjects} ariaLabel={allVisibleSubjectsSelected ? "Desmarcar todos" : "Selecionar todos"} />
                   </TableHead>
                   <TableHead>Assunto</TableHead>
                   <TableHead>Grupo vinculado</TableHead>
@@ -1634,7 +1635,7 @@ export function LogicConfigurationPanel({
                   return (
                   <TableRow key={rule.id}>
                     <TableCell>
-                      <AppSwitch checked={selectedSubjectIds.has(rule.id)} onCheckedChange={(checked) => toggleSubjectSelected(rule.id, checked)} label="" />
+                      <AppCheckbox checked={selectedSubjectIds.has(rule.id)} onCheckedChange={(checked) => toggleSubjectSelected(rule.id, checked)} ariaLabel="Selecionar assunto" />
                     </TableCell>
                     <TableCell className="min-w-72">
                       <div className="font-medium text-slate-950">{rule.os_subject}</div>
@@ -1932,11 +1933,10 @@ export function LogicConfigurationPanel({
                             {rule.active ? "Ativo" : "Inativo"}
                           </Badge>
                           <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 accent-uni-royal"
+                            <AppCheckbox
                               checked={rule.active}
-                              onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { active: event.target.checked }))}
+                              onCheckedChange={(checked) => setHealthRules(replaceById(healthRules, rule.id, { active: checked }))}
+                              ariaLabel="Usar faixa"
                             />
                             Usar faixa
                           </label>
@@ -2069,16 +2069,15 @@ export function LogicConfigurationPanel({
                         ["cpf_cnpj", "CPF/CNPJ"]
                       ].map(([field, label]) => (
                         <label key={field} className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 accent-uni-royal"
+                          <AppCheckbox
                             checked={recurrenceIdentityFields(localSettings).includes(field)}
                             disabled={field === "cpf_cnpj"}
-                            onChange={(event) => {
-                              const value = toggleIdentityField(localSettings, field, event.target.checked);
+                            onCheckedChange={(checked) => {
+                              const value = toggleIdentityField(localSettings, field, checked);
                               setLocalSettings({ ...localSettings, recurrence_identity_fields: value });
                               saveSettings({ recurrence_identity_fields: value });
                             }}
+                            ariaLabel={label}
                           />
                           {label}
                         </label>
@@ -2238,30 +2237,27 @@ export function LogicConfigurationPanel({
                           !classificationSupportsDiscount(newRecurrenceRule.classification ?? "reincidencia_tecnica") && "text-slate-400"
                         )}
                       >
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 accent-uni-royal"
+                        <AppCheckbox
                           checked={Boolean(newRecurrenceRule.discount_points)}
                           disabled={!classificationSupportsDiscount(newRecurrenceRule.classification ?? "reincidencia_tecnica")}
-                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, discount_points: event.target.checked })}
+                          onCheckedChange={(checked) => setNewRecurrenceRule({ ...newRecurrenceRule, discount_points: checked })}
+                          ariaLabel="Pode anular a O.S original"
                         />
                         Pode anular a O.S original
                       </label>
                       <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 accent-uni-royal"
+                        <AppCheckbox
                           checked={Boolean(newRecurrenceRule.require_same_subject)}
-                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_subject: event.target.checked })}
+                          onCheckedChange={(checked) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_subject: checked })}
+                          ariaLabel="Exigir mesmo assunto"
                         />
                         Exigir mesmo assunto
                       </label>
                       <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 accent-uni-royal"
+                        <AppCheckbox
                           checked={Boolean(newRecurrenceRule.require_same_diagnosis)}
-                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_diagnosis: event.target.checked })}
+                          onCheckedChange={(checked) => setNewRecurrenceRule({ ...newRecurrenceRule, require_same_diagnosis: checked })}
+                          ariaLabel="Exigir mesmo diagnóstico"
                         />
                         Exigir mesmo diagnóstico
                       </label>
@@ -2481,14 +2477,14 @@ export function LogicConfigurationPanel({
                           classificationSupportsDiscount(rule.classification) ? "text-slate-700" : "text-slate-400"
                         )}
                       >
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 h-4 w-4 shrink-0 accent-uni-royal"
+                        <AppCheckbox
+                          className="mt-0.5"
                           checked={rule.discount_points}
                           disabled={!classificationSupportsDiscount(rule.classification)}
-                          onChange={(event) =>
-                            setRecurrenceRules(replaceById(recurrenceRules, rule.id, { discount_points: event.target.checked }))
+                          onCheckedChange={(checked) =>
+                            setRecurrenceRules(replaceById(recurrenceRules, rule.id, { discount_points: checked }))
                           }
+                          ariaLabel="Anula pontuação da O.S original"
                         />
                         <span>
                           {rule.discount_points ? "Anula pontuação da O.S original" : "Apenas sinaliza reincidência"}
@@ -2497,34 +2493,31 @@ export function LogicConfigurationPanel({
                       </label>
                       <div className="grid grid-cols-2 gap-2">
                         <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 shrink-0 accent-uni-royal"
+                          <AppCheckbox
                             checked={rule.require_same_subject}
-                            onChange={(event) =>
-                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_subject: event.target.checked }))
+                            onCheckedChange={(checked) =>
+                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_subject: checked }))
                             }
+                            ariaLabel="Exigir mesmo assunto"
                           />
                           Exigir mesmo assunto
                         </label>
                         <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 shrink-0 accent-uni-royal"
+                          <AppCheckbox
                             checked={rule.require_same_diagnosis}
-                            onChange={(event) =>
-                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_diagnosis: event.target.checked }))
+                            onCheckedChange={(checked) =>
+                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { require_same_diagnosis: checked }))
                             }
+                            ariaLabel="Exigir mesmo diagnóstico"
                           />
                           Exigir mesmo diagnóstico
                         </label>
                       </div>
                       <label className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 shrink-0 accent-uni-royal"
+                        <AppCheckbox
                           checked={rule.active}
-                          onChange={(event) => setRecurrenceRules(replaceById(recurrenceRules, rule.id, { active: event.target.checked }))}
+                          onCheckedChange={(checked) => setRecurrenceRules(replaceById(recurrenceRules, rule.id, { active: checked }))}
+                          ariaLabel="Regra ativa"
                         />
                         {rule.active ? "Regra ativa" : "Regra inativa"}
                       </label>
@@ -2943,13 +2936,12 @@ export function LogicConfigurationPanel({
                           }
                         />
                         <label className="flex items-center gap-2 text-xs text-slate-600">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 accent-uni-royal"
+                          <AppCheckbox
                             checked={currentEditingSubject.use_group_default}
-                            onChange={(event) =>
-                              setSubjectRules(replaceById(subjectRules, currentEditingSubject.id, { use_group_default: event.target.checked }))
+                            onCheckedChange={(checked) =>
+                              setSubjectRules(replaceById(subjectRules, currentEditingSubject.id, { use_group_default: checked }))
                             }
+                            ariaLabel="Usar pontuação padrão do grupo"
                           />
                           Usar pontuação padrão do grupo
                         </label>

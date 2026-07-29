@@ -61,35 +61,9 @@ export function AppSwitch({
   );
 }
 
-// Visual de caixa de seleção (quadrado), deliberadamente diferente do AppSwitch (pill de
-// liga/desliga) - usado quando o clique SELECIONA uma linha para uma ação em lote, não quando
-// muda um estado real do colaborador. Ter os dois com a mesma cara de "switch" era o que
-// confundia (parecia ativar/desativar cada linha ao marcar).
-export function AppCheckbox({
-  checked,
-  onCheckedChange,
-  ariaLabel,
-}: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  ariaLabel?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
-      aria-label={ariaLabel}
-      onClick={() => onCheckedChange(!checked)}
-      className={cn(
-        "flex h-5 w-5 items-center justify-center rounded border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        checked ? "border-uni-royal bg-uni-royal text-white" : "border-slate-300 bg-white hover:border-slate-400"
-      )}
-    >
-      {checked ? <Check className="h-3.5 w-3.5" /> : null}
-    </button>
-  );
-}
+// Reexportado do local compartilhado (components/ui/checkbox.tsx) - outros módulos (operações,
+// admin) importam de lá diretamente; mantido aqui também para não quebrar imports existentes.
+export { AppCheckbox } from "@/components/ui/checkbox";
 
 export function AppCombobox({
   value,

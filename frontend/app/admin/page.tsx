@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppCheckbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -461,17 +462,17 @@ export default function AdminPage() {
                 <div className="grid gap-2 rounded-2xl border border-slate-200 p-3 sm:grid-cols-2">
                   {profiles.map((profile) => (
                     <label key={profile.id} className="flex items-start gap-2 rounded-xl p-2 text-sm hover:bg-slate-50">
-                      <input
-                        type="checkbox"
+                      <AppCheckbox
                         checked={userDraft.access_profile_ids.includes(profile.id)}
-                        onChange={(event) =>
+                        onCheckedChange={(checked) =>
                           setUserDraft({
                             ...userDraft,
-                            access_profile_ids: event.target.checked
+                            access_profile_ids: checked
                               ? [...userDraft.access_profile_ids, profile.id]
                               : userDraft.access_profile_ids.filter((id) => id !== profile.id),
                           })
                         }
+                        ariaLabel={profile.name}
                       />
                       <span>
                         <span className="font-medium text-slate-800">{profile.name}</span>
@@ -485,7 +486,7 @@ export default function AdminPage() {
                 </p>
               </div>
               <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={userDraft.active} onChange={(event) => setUserDraft({ ...userDraft, active: event.target.checked })} />
+                <AppCheckbox checked={userDraft.active} onCheckedChange={(checked) => setUserDraft({ ...userDraft, active: checked })} ariaLabel="Usuário ativo" />
                 Usuário ativo
               </label>
             </div>
@@ -509,7 +510,7 @@ export default function AdminPage() {
                 <Input value={profileDraft.name} onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
               </div>
               <label className="mt-7 flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={profileDraft.active} onChange={(event) => setProfileDraft({ ...profileDraft, active: event.target.checked })} />
+                <AppCheckbox checked={profileDraft.active} onCheckedChange={(checked) => setProfileDraft({ ...profileDraft, active: checked })} ariaLabel="Perfil ativo" />
                 Perfil ativo
               </label>
               <div className="grid gap-2 md:col-span-2">
@@ -524,10 +525,10 @@ export default function AdminPage() {
                   <div className="mt-2 grid gap-2">
                     {items.map((permission) => (
                       <label key={permission.key} className="flex items-start gap-2 rounded-xl p-2 text-sm hover:bg-slate-50">
-                        <input
-                          type="checkbox"
+                        <AppCheckbox
                           checked={profileDraft.permission_keys.includes(permission.key)}
-                          onChange={() => toggleProfilePermission(permission.key)}
+                          onCheckedChange={() => toggleProfilePermission(permission.key)}
+                          ariaLabel={permission.label}
                         />
                         <span>
                           <span className="font-medium text-slate-800">{permission.label}</span>

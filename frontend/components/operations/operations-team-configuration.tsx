@@ -23,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCheckbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -940,15 +941,15 @@ export function OperationsTeamConfiguration({
                           {label}
                         </p>
                         <label className="flex items-center gap-2 text-[11px] text-slate-500">
-                          <input
-                            type="checkbox"
+                          <AppCheckbox
                             checked={rule.enabled}
                             disabled={!canManage}
-                            onChange={(event) =>
+                            onCheckedChange={(checked) =>
                               updateRule(rule.period_type, {
-                                enabled: event.target.checked,
+                                enabled: checked,
                               })
                             }
+                            ariaLabel="Regra ativa"
                           />
                           {rule.enabled ? "Regra ativa" : "Sem meta"}
                         </label>
@@ -1135,13 +1136,13 @@ export function OperationsTeamConfiguration({
               </p>
             ) : null}
             <label className="flex items-center gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
+              <AppCheckbox
                 checked={form.active}
                 disabled={!canManage}
-                onChange={(event) =>
-                  setForm({ ...form, active: event.target.checked })
+                onCheckedChange={(checked) =>
+                  setForm({ ...form, active: checked })
                 }
+                ariaLabel="Modelo ativo"
               />{" "}
               Modelo ativo
             </label>
@@ -1439,9 +1440,8 @@ export function OperationsTeamConfiguration({
                 <thead className="sticky top-0 z-10 bg-slate-100 text-left text-[10px] uppercase text-slate-500">
                   <tr>
                     <th className="w-10 px-3 py-2">
-                      <input
-                        aria-label="Selecionar assuntos visíveis"
-                        type="checkbox"
+                      <AppCheckbox
+                        ariaLabel="Selecionar assuntos visíveis"
                         disabled={!canManageSubjects}
                         checked={
                           Boolean(filteredSubjects.length) &&
@@ -1449,9 +1449,9 @@ export function OperationsTeamConfiguration({
                             selectedSubjects.includes(item.subject),
                           )
                         }
-                        onChange={(event) =>
+                        onCheckedChange={(checked) =>
                           setSelectedSubjects(
-                            event.target.checked
+                            checked
                               ? filteredSubjects.map((item) => item.subject)
                               : [],
                           )
@@ -1470,14 +1470,13 @@ export function OperationsTeamConfiguration({
                       className={`border-t ${selectedSubjects.includes(item.subject) ? "bg-blue-50" : "odd:bg-white even:bg-slate-50/60"}`}
                     >
                       <td className="px-3 py-2">
-                        <input
-                          aria-label={`Selecionar ${item.subject}`}
-                          type="checkbox"
+                        <AppCheckbox
+                          ariaLabel={`Selecionar ${item.subject}`}
                           disabled={!canManageSubjects}
                           checked={selectedSubjects.includes(item.subject)}
-                          onChange={(event) =>
+                          onCheckedChange={(checked) =>
                             setSelectedSubjects((current) =>
-                              event.target.checked
+                              checked
                                 ? [...current, item.subject]
                                 : current.filter(
                                     (subject) => subject !== item.subject,
