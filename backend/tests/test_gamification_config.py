@@ -1,5 +1,5 @@
 """Regression tests for backend/app/services/gamification_config.py."""
-from app.models import Collaborator, DiagnosisPenaltyRule
+from app.models import Collaborator, DiagnosisPenaltyRule, LeadershipProfile, LeadershipRoleProfile
 from app.services import gamification_config as gc
 
 
@@ -202,6 +202,145 @@ def test_apply_config_diagnosis_rule_prefers_name_match_over_a_stale_id(db_sessi
     assert name_owner.diagnosis_name == "Resolvido"
     assert name_owner.description == "Diagnostico conclusivo sem penalidade.", "a atualizacao deveria ter sido aplicada na linha dona do nome"
     assert db_session.query(DiagnosisPenaltyRule).count() == 2, "nao deveria ter criado uma terceira linha"
+
+
+def test_apply_config_creates_leadership_role_profile_and_profile_linked_to_collaborator(db_session):
+    """Regression: liderança (perfis de cargo e lideres) nao era exportada/importada pela config
+    de gamificacao - migrar de ambiente (ex.: da VM pro local) nunca levava o cadastro de
+    supervisor/gerente, precisava ser recriado manualmente. Cobre o caminho feliz: perfil de
+    cargo e um lider vinculado a um colaborador por ixc_employee_id (portavel entre ambientes)."""
+    collaborator = Collaborator(name="Lider Um", role="Supervisor", regional="UNI SUL", ixc_employee_id=321)
+    db_session.add(collaborator)
+    db_session.flush()
+
+    config = _base_config(
+        leadership_role_profiles=[
+            {"name": "Supervisor Padrao", "scope_type": "supervisor", "default_multiplier": 1.5, "active": True}
+        ],
+        leadership_profiles=[
+            {
+                "name": "Lider Um",
+                "role_type": "supervisor",
+                "role_profile_name": "Supervisor Padrao",
+                "use_custom_multiplier": False,
+                "average_source": "collaborators",
+                "active": True,
+                "collaborator_ixc_employee_id": 321,
+                "regional_names": ["UNI SUL"],
+            }
+        ],
+    )
+
+    result = gc.apply_config(db_session, config)
+    db_session.flush()
+
+    assert not result.get("warnings")
+    role_profile = db_session.query(LeadershipRoleProfile).filter_by(name="Supervisor Padrao").one()
+    profile = db_session.query(LeadershipProfile).filter_by(name="Lider Um").one()
+    assert profile.role_profile_id == role_profile.id
+    assert profile.multiplier == 1.5, "sem multiplicador customizado, deveria herdar o default do perfil de cargo"
+    assert profile.collaborator_id == collaborator.id
+    assert sorted(item.regional_name for item in profile.regionals) == ["UNI SUL"]
+
+
+def test_apply_config_leadership_role_profile_prefers_name_match_over_a_stale_id(db_session):
+    """Regression: LeadershipRoleProfile.name e unico no banco - o mesmo bug corrigido para
+    diagnosis_penalty_rules (id desatualizado de outro ambiente colidindo com o dono real do
+    nome) se aplica aqui igual, pelo mesmo _resolve_by_id_or_name."""
+    stale_id_owner = LeadershipRoleProfile(name="Gerente de pasta", scope_type="portfolio_manager", default_multiplier=3.0)
+    name_owner = LeadershipRoleProfile(name="Supervisor Padrao", scope_type="supervisor", default_multiplier=1.5)
+    db_session.add_all([stale_id_owner, name_owner])
+    db_session.flush()
+    stale_id = stale_id_owner.id
+
+    config = _base_config(
+        leadership_role_profiles=[
+            {"id": stale_id, "name": "Supervisor Padrao", "scope_type": "supervisor", "default_multiplier": 1.8, "active": True}
+        ]
+    )
+
+    gc.apply_config(db_session, config)
+    db_session.flush()
+
+    db_session.refresh(stale_id_owner)
+    db_session.refresh(name_owner)
+    assert stale_id_owner.name == "Gerente de pasta", "a linha do id desatualizado nao deveria ser renomeada"
+    assert name_owner.default_multiplier == 1.8, "a atualizacao deveria ter sido aplicada na linha dona do nome"
+    assert db_session.query(LeadershipRoleProfile).count() == 2
+
+
+def test_apply_config_leadership_profile_without_required_regional_is_skipped_with_a_warning(db_session):
+    """Regression: supervisor/gerente da unidade sem filial vinculada tem o bonus sempre R$ 0
+    (ver validate_scope_regionals_required) - importar um perfil assim nao pode travar o import
+    inteiro nem criar silenciosamente um perfil invalido; deve avisar e pular, como o resto da
+    config ja faz para referencias que nao resolvem."""
+    config = _base_config(
+        leadership_profiles=[
+            {"name": "Lider Sem Filial", "role_type": "supervisor", "active": True, "regional_names": []}
+        ]
+    )
+
+    result = gc.apply_config(db_session, config)
+
+    assert result.get("warnings")
+    assert any("Lider Sem Filial" in warning for warning in result["warnings"])
+    assert db_session.query(LeadershipProfile).filter_by(name="Lider Sem Filial").first() is None
+
+
+def test_serialize_current_config_includes_leadership(db_session):
+    """O JSON exportado precisa trazer perfis de cargo e lideres com os vinculos resolvidos por
+    nome/ixc_employee_id (portaveis entre ambientes), nao so pelos ids internos."""
+    collaborator = Collaborator(name="Lider Export", role="Supervisor", regional="UNI SUL", ixc_employee_id=777)
+    role_profile = LeadershipRoleProfile(name="Supervisor Padrao", scope_type="supervisor", default_multiplier=1.5)
+    db_session.add_all([collaborator, role_profile])
+    db_session.flush()
+
+    profile = LeadershipProfile(
+        name="Lider Export",
+        role_type="supervisor",
+        percentage=0,
+        multiplier=1.5,
+        role_profile_id=role_profile.id,
+        collaborator_id=collaborator.id,
+    )
+    db_session.add(profile)
+    db_session.flush()
+    from app.services.leadership_bonus import replace_profile_regionals
+
+    replace_profile_regionals(db_session, profile, ["UNI SUL"])
+    db_session.flush()
+
+    result = gc.serialize_current_config(db_session)
+
+    assert any(item["name"] == "Supervisor Padrao" for item in result["leadership_role_profiles"])
+    exported = next(item for item in result["leadership_profiles"] if item["name"] == "Lider Export")
+    assert exported["role_profile_name"] == "Supervisor Padrao"
+    assert exported["collaborator_ixc_employee_id"] == 777
+    assert exported["regional_names"] == ["UNI SUL"]
+
+
+def test_gamification_config_schemas_do_not_drop_leadership_fields():
+    """Regression: os schemas Pydantic GamificationConfigImport/GamificationConfigOut (usados
+    pelas rotas /gamification/config/export e /import, via payload.model_dump()) declaram cada
+    secao explicitamente - por padrao o Pydantic descarta qualquer campo nao declarado. Sem
+    leadership_role_profiles/leadership_profiles aqui, o backend do apply_config estaria pronto
+    mas a rota real descartaria os dois campos antes de chegar la, e a exportacao real (via
+    GamificationConfigOut) nunca incluiria liderança no JSON baixado."""
+    from app.schemas import GamificationConfigImport, GamificationConfigOut
+
+    payload = GamificationConfigImport(
+        leadership_role_profiles=[{"name": "Supervisor Padrao"}],
+        leadership_profiles=[{"name": "Lider Um"}],
+    )
+    dumped = payload.model_dump()
+    assert dumped["leadership_role_profiles"] == [{"name": "Supervisor Padrao"}]
+    assert dumped["leadership_profiles"] == [{"name": "Lider Um"}]
+
+    out = GamificationConfigOut(
+        leadership_role_profiles=[{"name": "Supervisor Padrao"}],
+        leadership_profiles=[{"name": "Lider Um"}],
+    )
+    assert out.model_dump()["leadership_role_profiles"] == [{"name": "Supervisor Padrao"}]
 
 
 def test_serialize_current_config_includes_collaborators(db_session):

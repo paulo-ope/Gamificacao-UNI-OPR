@@ -875,6 +875,30 @@ export type RecurrenceClassificationRule = {
   updated_at: string | null;
 };
 
+export type GamificationConfigLeadershipRoleProfile = {
+  id: number | null;
+  name: string;
+  scope_type: LeadershipRoleType;
+  default_multiplier: number;
+  active: boolean;
+};
+
+export type GamificationConfigLeadershipProfile = {
+  id: number | null;
+  name: string;
+  role_type: LeadershipRoleType;
+  multiplier: number;
+  role_profile_id: number | null;
+  role_profile_name: string | null;
+  use_custom_multiplier: boolean;
+  custom_multiplier: number | null;
+  average_source: LeadershipAverageSource;
+  active: boolean;
+  collaborator_ixc_employee_id: number | null;
+  collaborator_name: string | null;
+  regional_names: string[];
+};
+
 export type GamificationConfig = {
   name: string;
   version_id: number | null;
@@ -887,6 +911,8 @@ export type GamificationConfig = {
   recurrence_classification_rules: RecurrenceClassificationRule[];
   health_rules: HealthRule[];
   collaborators?: GamificationConfigCollaborator[];
+  leadership_role_profiles?: GamificationConfigLeadershipRoleProfile[];
+  leadership_profiles?: GamificationConfigLeadershipProfile[];
   warnings?: string[];
 };
 

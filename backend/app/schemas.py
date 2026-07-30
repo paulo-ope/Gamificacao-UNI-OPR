@@ -427,6 +427,8 @@ class GamificationConfigOut(BaseModel):
     recurrence_classification_rules: list[dict] = []
     health_rules: list[dict] = []
     collaborators: list[dict] = []
+    leadership_role_profiles: list[dict] = []
+    leadership_profiles: list[dict] = []
     warnings: list[str] = []
 
 
@@ -456,6 +458,8 @@ class GamificationConfigImport(BaseModel):
     recurrence_classification_rules: list[dict] = []
     health_rules: list[dict] = []
     collaborators: list[dict] = []
+    leadership_role_profiles: list[dict] = []
+    leadership_profiles: list[dict] = []
 
 
 class SubjectLinkToGroupRequest(BaseModel):

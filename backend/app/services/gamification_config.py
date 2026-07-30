@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -12,12 +13,24 @@ from app.models import (
     DiagnosisPenaltyRule,
     GamificationConfigVersion,
     HealthRule,
+    LeadershipProfile,
+    LeadershipRoleProfile,
     RecurrenceClassificationRule,
     ScoringGroup,
     ScoringSubjectRule,
     SlaPenaltyRule,
+    default_percentage_for_role,
 )
 from app.services.calculation import upsert_setting
+from app.services.leadership_bonus import (
+    default_multiplier_for_role,
+    normalize_average_source,
+    normalize_regionals,
+    normalize_role_type,
+    replace_profile_regionals,
+    validate_no_scope_overlap,
+    validate_scope_regionals_required,
+)
 from app.seed import deleted_default_groups
 
 
@@ -200,7 +213,53 @@ def serialize_current_config(db: Session) -> dict[str, Any]:
             }
             for collaborator in db.scalars(select(Collaborator).order_by(Collaborator.name.asc()))
         ],
+        "leadership_role_profiles": [
+            {
+                "id": role_profile.id,
+                "name": role_profile.name,
+                "scope_type": role_profile.scope_type,
+                "default_multiplier": role_profile.default_multiplier,
+                "active": role_profile.active,
+            }
+            for role_profile in db.scalars(select(LeadershipRoleProfile).order_by(LeadershipRoleProfile.name.asc()))
+        ],
+        "leadership_profiles": _serialize_leadership_profiles(db),
     }
+
+
+def _serialize_leadership_profiles(db: Session) -> list[dict[str, Any]]:
+    profiles = list(db.scalars(select(LeadershipProfile).order_by(LeadershipProfile.name.asc())))
+    collaborator_ids = {profile.collaborator_id for profile in profiles if profile.collaborator_id}
+    collaborators_by_id = (
+        {c.id: c for c in db.scalars(select(Collaborator).where(Collaborator.id.in_(collaborator_ids)))}
+        if collaborator_ids
+        else {}
+    )
+    return [
+        {
+            "id": profile.id,
+            "name": profile.name,
+            "role_type": profile.role_type,
+            "multiplier": profile.multiplier,
+            "role_profile_id": profile.role_profile_id,
+            "role_profile_name": profile.role_profile.name if profile.role_profile else None,
+            "use_custom_multiplier": profile.use_custom_multiplier,
+            "custom_multiplier": profile.custom_multiplier,
+            "average_source": profile.average_source,
+            "active": profile.active,
+            # ixc_employee_id (nao collaborator_id) - o id de colaborador nao e portavel entre
+            # ambientes, igual ja resolvido para "collaborators" acima (ver casamento por
+            # ixc_employee_id em apply_config).
+            "collaborator_ixc_employee_id": (
+                collaborators_by_id[profile.collaborator_id].ixc_employee_id if profile.collaborator_id in collaborators_by_id else None
+            ),
+            "collaborator_name": (
+                collaborators_by_id[profile.collaborator_id].name if profile.collaborator_id in collaborators_by_id else None
+            ),
+            "regional_names": sorted(item.regional_name for item in profile.regionals),
+        }
+        for profile in profiles
+    ]
 
 
 def save_config_version(db: Session, config: dict[str, Any], name: str = CONFIG_NAME) -> GamificationConfigVersion:
@@ -384,6 +443,31 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         rule.multiplier = float(item.get("multiplier") or 1)
         rule.active = _bool(item.get("active"), True)
 
+    role_profile_id_map: dict[int, int] = {}
+    role_profile_name_map: dict[str, int] = {}
+    for item in config.get("leadership_role_profiles") or []:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        role_profile = _resolve_by_id_or_name(
+            db,
+            LeadershipRoleProfile,
+            item.get("id"),
+            select(LeadershipRoleProfile).where(LeadershipRoleProfile.name == name),
+        )
+        if not role_profile:
+            role_profile = LeadershipRoleProfile(name=name)
+            db.add(role_profile)
+        role_profile.name = name
+        role_profile.scope_type = str(item.get("scope_type") or "supervisor")
+        role_profile.default_multiplier = float(item.get("default_multiplier") or 1)
+        role_profile.active = _bool(item.get("active"), True)
+        role_profile.updated_at = _now()
+        db.flush()
+        if item.get("id"):
+            role_profile_id_map[int(item["id"])] = role_profile.id
+        role_profile_name_map[role_profile.name] = role_profile.id
+
     for item in config.get("collaborators") or []:
         name = str(item.get("name") or "").strip()
         if not name:
@@ -416,6 +500,90 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         # com o resultado da busca por nome) - nunca chegamos aqui com um id de outro dono.
         if ixc_employee_id is not None:
             collaborator.ixc_employee_id = ixc_employee_id
+
+    db.flush()
+
+    for item in config.get("leadership_profiles") or []:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+
+        role_profile = None
+        role_profile_ref = item.get("role_profile_id")
+        if role_profile_ref not in (None, ""):
+            resolved_role_profile_id = role_profile_id_map.get(int(role_profile_ref))
+            if resolved_role_profile_id:
+                role_profile = db.get(LeadershipRoleProfile, resolved_role_profile_id)
+        if not role_profile and item.get("role_profile_name"):
+            resolved_role_profile_id = role_profile_name_map.get(str(item["role_profile_name"]))
+            if resolved_role_profile_id:
+                role_profile = db.get(LeadershipRoleProfile, resolved_role_profile_id)
+
+        try:
+            role_type = normalize_role_type(role_profile.scope_type if role_profile else item.get("role_type"))
+        except HTTPException as exc:
+            warnings.append(f"Perfil de liderança '{name}' ignorado: {exc.detail}")
+            continue
+
+        try:
+            regionals = normalize_regionals(item.get("regional_names") or [])
+            validate_scope_regionals_required(role_type, regionals)
+        except HTTPException as exc:
+            warnings.append(f"Perfil de liderança '{name}' ignorado: {exc.detail}")
+            continue
+
+        profile = db.get(LeadershipProfile, item.get("id")) if item.get("id") else None
+        if not profile:
+            profile = db.scalar(
+                select(LeadershipProfile).where(LeadershipProfile.name == name, LeadershipProfile.role_type == role_type)
+            )
+
+        try:
+            validate_no_scope_overlap(db, role_type, regionals, profile_id=profile.id if profile else None)
+        except HTTPException as exc:
+            warnings.append(f"Perfil de liderança '{name}' ignorado: {exc.detail}")
+            continue
+
+        # Casamento do colaborador vinculado por ixc_employee_id (portavel entre ambientes) antes
+        # do nome, mesmo criterio usado no loop de collaborators acima - collaborator_id sozinho
+        # nao sobrevive a um reimport de outro ambiente.
+        collaborator_id = None
+        ixc_employee_id_raw = item.get("collaborator_ixc_employee_id")
+        if ixc_employee_id_raw not in (None, ""):
+            linked = db.scalar(select(Collaborator).where(Collaborator.ixc_employee_id == int(ixc_employee_id_raw)))
+            collaborator_id = linked.id if linked else None
+        if collaborator_id is None and item.get("collaborator_name"):
+            linked = db.scalar(select(Collaborator).where(func.lower(Collaborator.name) == str(item["collaborator_name"]).lower()))
+            collaborator_id = linked.id if linked else None
+
+        if not profile:
+            profile = LeadershipProfile(name=name, role_type=role_type, percentage=default_percentage_for_role(role_type))
+            db.add(profile)
+
+        profile.name = name
+        profile.role_type = role_type
+        profile.percentage = default_percentage_for_role(role_type)
+        profile.role_profile_id = role_profile.id if role_profile else None
+        use_custom_multiplier = _bool(item.get("use_custom_multiplier"), False)
+        custom_multiplier = _float_or_none(item.get("custom_multiplier"))
+        profile.use_custom_multiplier = use_custom_multiplier
+        profile.custom_multiplier = custom_multiplier
+        profile.multiplier = float(
+            custom_multiplier
+            if use_custom_multiplier and custom_multiplier is not None
+            else (
+                role_profile.default_multiplier
+                if role_profile
+                else (item.get("multiplier") if item.get("multiplier") is not None else default_multiplier_for_role(role_type))
+            )
+        )
+        profile.average_source = normalize_average_source(item.get("average_source"))
+        profile.active = _bool(item.get("active"), True)
+        profile.collaborator_id = collaborator_id
+        profile.updated_at = _now()
+        db.add(profile)
+        db.flush()
+        replace_profile_regionals(db, profile, regionals)
 
     db.flush()
     current_config = serialize_current_config(db)
