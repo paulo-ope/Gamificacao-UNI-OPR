@@ -2,16 +2,52 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
 from sqlalchemy import select
 
 from app.models import Collaborator, ServiceOrder
 from app.modules.operations.models import OperationOrder
+from app.services import ixc_importer
+from app.services.ixc_importer import IxcImportLockTimeoutError
 from app.services.operations_sync import (
     _resolve_collaborator,
     backfill_collaborator_ixc_ids,
+    run_operations_to_service_orders_sync,
     sync_service_orders_from_operations,
 )
 from app.services.scoring_detail import sla_inside
+
+
+def _patch_advisory_lock(monkeypatch, session, *, acquired: bool):
+    """SQLite (usado nos testes) nao entende pg_try_advisory_lock/pg_advisory_unlock (funcoes
+    exclusivas do Postgres) - simula a resposta dessas duas chamadas especificas e deixa
+    qualquer outra query passar direto pro execute real, pra poder exercitar o lock consultivo
+    (_ixc_import_lock) sem precisar de um Postgres de verdade no teste."""
+    # MAX_WAIT=0 faz o loop de espera tentar exatamente uma vez; POLL_INTERVAL precisa ser > 0
+    # (nao 0.0) - com os dois zerados, `waited` nunca ultrapassa 0.0 e o loop de espera do
+    # _ixc_import_lock nunca termina quando o lock nao e adquirido (achado real: travou o
+    # primeiro rascunho deste teste).
+    monkeypatch.setattr(ixc_importer, "IXC_IMPORT_LOCK_MAX_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr(ixc_importer, "IXC_IMPORT_LOCK_POLL_INTERVAL_SECONDS", 0.01)
+
+    real_execute = session.execute
+
+    class _ScalarResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar(self):
+            return self._value
+
+    def fake_execute(statement, *args, **kwargs):
+        sql = str(statement)
+        if "pg_try_advisory_lock" in sql:
+            return _ScalarResult(acquired)
+        if "pg_advisory_unlock" in sql:
+            return _ScalarResult(True)
+        return real_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(session, "execute", fake_execute)
 
 
 def test_reactivating_a_collaborator_does_not_reset_is_registered(db_session, make_collaborator):
@@ -158,3 +194,43 @@ def test_backfill_collaborator_ixc_ids_matches_by_normalized_name(db_session, ma
     db_session.refresh(collaborator)
     assert collaborator.ixc_employee_id == 777
     assert result["changed"] == 1
+
+
+def test_run_operations_to_service_orders_sync_raises_when_advisory_lock_is_already_held(db_session, make_collaborator, monkeypatch):
+    """Regression: run_operations_to_service_orders_sync (caminho periodico, chamado pelo
+    scheduler) nao adquiria o mesmo lock consultivo do Postgres (_ixc_import_lock) que o
+    backfill manual (import_ixc_service_orders) ja usa - o comentario dizia que os dois nunca
+    rodam ao mesmo tempo, mas nada no codigo garantia isso. Com o lock ja preso por outro
+    processo (simulado aqui), a sincronizacao periodica deve falhar com
+    IxcImportLockTimeoutError em vez de rodar por cima - sem isso, os dois caminhos concorrentes
+    podiam criar Collaborator duplicado ou colidir na chave unica de os_code."""
+    make_collaborator(name="Tecnico Um", regional="UNI SUL").ixc_employee_id = 555
+    order = _make_operation_order()
+    db_session.add(order)
+    db_session.flush()
+
+    _patch_advisory_lock(monkeypatch, db_session, acquired=False)
+
+    with pytest.raises(IxcImportLockTimeoutError):
+        run_operations_to_service_orders_sync(db_session)
+
+    assert db_session.scalars(select(ServiceOrder).where(ServiceOrder.os_code == "IXC-9001")).first() is None, (
+        "nada deveria ter sido sincronizado com o lock preso"
+    )
+
+
+def test_run_operations_to_service_orders_sync_proceeds_when_advisory_lock_is_free(db_session, make_collaborator, monkeypatch):
+    """Contraprova do teste acima: com o lock livre (simulado), a sincronizacao periodica passa
+    pelo _ixc_import_lock normalmente e sincroniza como sempre fez."""
+    collaborator = make_collaborator(name="Tecnico Um", regional="UNI SUL")
+    collaborator.ixc_employee_id = 555
+    order = _make_operation_order()
+    db_session.add(order)
+    db_session.flush()
+
+    _patch_advisory_lock(monkeypatch, db_session, acquired=True)
+
+    result = run_operations_to_service_orders_sync(db_session)
+
+    assert result["summary"]["created_count"] == 1
+    assert db_session.scalars(select(ServiceOrder).where(ServiceOrder.os_code == "IXC-9001")).one()

@@ -15,6 +15,7 @@ from app.services.ixc_importer import (
     IXC_PROVIDED_FIELDS,
     KNOWN_OS_TYPE_BY_SUBJECT,
     PENDING_OS_TYPE,
+    _ixc_import_lock,
     load_historical_os_type_mapping,
     load_subject_rule_os_type_mapping,
 )
@@ -294,22 +295,30 @@ def sync_service_orders_from_operations(
 def run_operations_to_service_orders_sync(db: Session, *, imported_by: int | None = None) -> dict[str, Any]:
     """Ponto de entrada periodico: le a marca d'agua salva, sincroniza so o que `operations_orders`
     recebeu/atualizou desde entao, e avanca a marca d'agua. Pensada pra rodar logo apos cada ciclo de
-    importacao do IXC no modulo operations (ver app/services/ixc_scheduler.py)."""
-    watermark_raw = get_setting(db, OPERATIONS_SYNC_WATERMARK_KEY, "")
-    since = datetime.fromisoformat(watermark_raw) if watermark_raw else None
-    until = datetime.now(timezone.utc)
+    importacao do IXC no modulo operations (ver app/services/ixc_scheduler.py).
 
-    result = sync_service_orders_from_operations(db, since=since, until=until, imported_by=imported_by)
-    result["watermark_used"] = watermark_raw or None
+    Adquire o mesmo lock consultivo (`_ixc_import_lock`, ver ixc_importer.py) que o backfill manual
+    (`import_ixc_service_orders`) ja usa - antes, so o caminho manual travava, e o comentario que
+    dizia "sincronizacao periodica e backfill manual nunca rodam ao mesmo tempo" nao era garantido
+    por codigo nenhum. Sem esse lock compartilhado, os dois caminhos rodando ao mesmo tempo podiam
+    criar `Collaborator` duplicado pro mesmo nome novo ou colidir na chave unica de `os_code` (mesmo
+    risco que motivou o lock no caminho manual)."""
+    with _ixc_import_lock(db):
+        watermark_raw = get_setting(db, OPERATIONS_SYNC_WATERMARK_KEY, "")
+        since = datetime.fromisoformat(watermark_raw) if watermark_raw else None
+        until = datetime.now(timezone.utc)
 
-    new_watermark = result.get("watermark_candidate") or until.isoformat()
-    upsert_setting(
-        db, OPERATIONS_SYNC_WATERMARK_KEY, new_watermark,
-        description="Até quando (source_updated_at de operations_orders) a projeção para service_orders já processou.",
-    )
-    db.flush()
-    result["watermark_advanced_to"] = new_watermark
-    return result
+        result = sync_service_orders_from_operations(db, since=since, until=until, imported_by=imported_by)
+        result["watermark_used"] = watermark_raw or None
+
+        new_watermark = result.get("watermark_candidate") or until.isoformat()
+        upsert_setting(
+            db, OPERATIONS_SYNC_WATERMARK_KEY, new_watermark,
+            description="Até quando (source_updated_at de operations_orders) a projeção para service_orders já processou.",
+        )
+        db.flush()
+        result["watermark_advanced_to"] = new_watermark
+        return result
 
 
 def backfill_collaborator_ixc_ids(db: Session) -> dict[str, int]:
