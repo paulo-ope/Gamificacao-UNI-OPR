@@ -31,7 +31,7 @@ describe("operations chart options", () => {
       timeline_days: 28,
       responsibles_ignored: true,
       calculation_note: "Teste",
-      summary: { status: "attention", opened_recent: 10, expected_opened: 7, deviation_percentage: 42.9, completed_recent: 8, net_flow: 2, pressure_ratio: 1.25, backlog: 20, overdue_backlog: 4, average_backlog_age_hours: 30, persistent_days: 1, critical_nodes: 0, attention_nodes: 1 },
+      summary: { status: "attention", opened_recent: 10, expected_opened: 7, deviation_percentage: 42.9, completed_recent: 8, net_flow: 2, pressure_ratio: 1.25, backlog: 20, overdue_backlog: 4, average_backlog_age_hours: 30, persistent_days: 1, critical_nodes: 0, attention_nodes: 1, reasons: ["Teste"] },
       items: [],
       timeline: [{ date: "2026-07-21", opened: 10, completed: 8, expected_opened: 7, upper_limit: 9, outside_expected: true, backlog: 20 }]
     };

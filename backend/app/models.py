@@ -565,3 +565,29 @@ class ImportServiceOrderAudit(Base):
     import_run: Mapped["ImportRun"] = relationship(back_populates="audits")
     service_order: Mapped["ServiceOrder | None"] = relationship(back_populates="import_audits")
     created_by_user: Mapped["User | None"] = relationship(back_populates="import_service_order_audits")
+
+
+SCHEDULING_JOB_STATUSES = ("pending", "running", "completed", "failed")
+
+
+class SchedulingJob(Base):
+    """Job assíncrono do módulo de Agendamento (`app/modules/scheduling`).
+
+    Hoje o único `job_type` em uso é "sync" (sincronização IXC → tabelas locais do módulo, que
+    leva 1-3 minutos por mês cheio - tempo real de rede, roda em background com polling, mesmo
+    padrão de `OperationBackfillJob`). `params` guarda os argumentos da chamada e `result` o
+    resumo final. Os tipos antigos "metrics"/"lead_time" (consulta ao vivo, substituída pelo sync
+    local) podem existir como histórico em linhas antigas."""
+
+    __tablename__ = "scheduling_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    job_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending", index=True)
+    params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

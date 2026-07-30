@@ -9,7 +9,12 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models import ScoringSubjectRule
-from app.services.ixc_client import IxcClient, fetch_service_orders
+from app.services.ixc_client import (
+    IxcClient,
+    IxcQueryLimitError,
+    fetch_service_order_id_bounds,
+    fetch_service_orders,
+)
 from app.services.ixc_importer import KNOWN_OS_TYPE_BY_SUBJECT
 from app.services.regional import normalize_regional
 
@@ -21,6 +26,10 @@ from .scope import IXC_SECTORS
 OPERATIONS_IMPORT_LOCK_KEY = 913_275_002
 LOOKUP_CHUNK_SIZE = 200
 MAX_IXC_RECORDS_PER_QUERY = 3_000
+# 2^12 subdivisões - blindagem contra faixa de id patológica (não monotônica/duplicada no IXC),
+# nunca deveria ser alcançado em uso normal (uma combinação setor+status real precisaria de mais
+# de 3000 * 2^12 O.S. para chegar até aqui).
+MAX_ID_PARTITION_DEPTH = 12
 
 
 def _clean(value: object) -> str:
@@ -163,6 +172,60 @@ def _fetch_period_records(
 OPEN_BACKLOG_STATUS_CODES = ("A", "EN", "AS", "AG", "EX", "R", "RAG", "D", "DS")
 
 
+def _fetch_id_range_partitioned(
+    client: IxcClient,
+    sector_id: str,
+    status_code: str,
+    id_min: int,
+    id_max: int,
+    depth: int = 0,
+) -> Iterable[dict[str, Any]]:
+    """Busca um (setor, status) que já se sabe estourar o limite de segurança, bissectando a faixa
+    de id até cada fatia caber em MAX_IXC_RECORDS_PER_QUERY. Nunca reduz o número de setores/status
+    nem o limite de segurança - só estreita o recorte de id. Se uma fatia não puder mais ser
+    dividida (id_min == id_max) e ainda assim estourar, ou a profundidade máxima for atingida,
+    propaga o IxcQueryLimitError original em vez de mascarar ou entrar em loop."""
+    try:
+        yield from fetch_service_orders(
+            client,
+            setor_ids=[sector_id],
+            statuses=[status_code],
+            id_after=id_min,
+            id_before=id_max,
+            max_records=MAX_IXC_RECORDS_PER_QUERY,
+        )
+        return
+    except IxcQueryLimitError:
+        if id_min >= id_max or depth >= MAX_ID_PARTITION_DEPTH:
+            raise
+    mid = id_min + (id_max - id_min) // 2
+    yield from _fetch_id_range_partitioned(client, sector_id, status_code, id_min, mid, depth + 1)
+    yield from _fetch_id_range_partitioned(client, sector_id, status_code, mid + 1, id_max, depth + 1)
+
+
+def _fetch_backlog_partition(
+    client: IxcClient,
+    sector_id: str,
+    status_code: str,
+) -> Iterable[dict[str, Any]]:
+    """Busca um (setor, status) do backlog aberto. Caminho feliz: consulta direta, sem custo extra
+    quando o recorte cabe no limite. Só descobre os limites de id e aciona o particionamento por
+    faixa quando a consulta direta realmente estoura MAX_IXC_RECORDS_PER_QUERY."""
+    try:
+        yield from fetch_service_orders(
+            client,
+            setor_ids=[sector_id],
+            statuses=[status_code],
+            max_records=MAX_IXC_RECORDS_PER_QUERY,
+        )
+    except IxcQueryLimitError:
+        bounds = fetch_service_order_id_bounds(client, setor_ids=[sector_id], statuses=[status_code])
+        if bounds is None:
+            raise
+        id_min, id_max = bounds
+        yield from _fetch_id_range_partitioned(client, sector_id, status_code, id_min, id_max)
+
+
 def _fetch_open_backlog_records(
     client: IxcClient,
     sector_ids: list[str],
@@ -172,12 +235,7 @@ def _fetch_open_backlog_records(
     by_id: dict[str, dict[str, Any]] = {}
     for sector_id in sector_ids:
         for status_code in OPEN_BACKLOG_STATUS_CODES:
-            for record in fetch_service_orders(
-                client,
-                setor_ids=[sector_id],
-                statuses=[status_code],
-                max_records=MAX_IXC_RECORDS_PER_QUERY,
-            ):
+            for record in _fetch_backlog_partition(client, sector_id, status_code):
                 key = _clean(record.get("id")) or _clean(record.get("protocolo"))
                 if key:
                     by_id[key] = record

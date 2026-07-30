@@ -53,6 +53,31 @@ class OperationBackfillJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class OperationOpenBacklogJob(Base):
+    """Job assíncrono da varredura de backlog aberto (todos os setores, sem recorte de data) - mesmo
+    espírito de OperationBackfillJob (status/progresso/erros pesquisáveis por polling), mas o
+    progresso é medido por setor processado, não por dia, já que o backlog aberto não é uma consulta
+    por período."""
+
+    __tablename__ = "operations_open_backlog_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sector_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="pending", index=True)
+    total_sectors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed_sectors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fetched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    errors: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    requested_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class OperationSavedFilter(Base):
     __tablename__ = "operations_saved_filters"
     __table_args__ = (

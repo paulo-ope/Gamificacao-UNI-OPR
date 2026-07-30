@@ -25,7 +25,7 @@ from app.services.ixc_scheduler import (
 from app.services.ixc_client import IxcApiError, IxcQueryLimitError, get_ixc_client
 
 from . import backfill, queries, services
-from .ixc_ingestion import import_current_month_period, import_open_backlog
+from .ixc_ingestion import import_current_month_period
 from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
@@ -48,6 +48,7 @@ from .schemas import (
     OperationIxcSyncSettingsUpdate,
     OperationIxcCollaboratorSyncResult,
     OperationOpeningsAnalytics,
+    OperationOpenBacklogJobOut,
     OperationOrderPage,
     OperationOverview,
     OperationWorkScheduleOverview,
@@ -469,34 +470,50 @@ def backfill_import_status(
         raise HTTPException(status_code=404, detail="Importacao historica nao encontrada.")
     return job
 
-@router.post("/imports/open-backlog", response_model=OperationImportResult)
-def import_all_open_orders(
+def _run_open_backlog_job(job_id: int) -> None:
+    with SessionLocal() as db:
+        job = db.get(backfill.OperationOpenBacklogJob, job_id)
+        if job is None:
+            return
+        try:
+            backfill.run_open_backlog_job(db, job_id=job.id, delay_seconds=0.25)
+        except Exception:
+            # run_open_backlog_job já marca o job como "failed" e grava o motivo em job.errors antes
+            # de repropagar - aqui só evita que uma BackgroundTask sem handler derrube o worker por
+            # uma exceção não tratada. O detalhe fica no log do backend, nunca exposto ao usuário.
+            logger.exception("Falha na varredura de backlog aberto do IXC (job=%s)", job_id)
+
+
+@router.post("/imports/open-backlog", response_model=OperationOpenBacklogJobOut)
+def start_open_backlog_import(
+    background_tasks: BackgroundTasks,
     sector_ids: list[str] = Query(default_factory=list),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
     try:
-        result = import_open_backlog(
+        job = backfill.create_open_backlog_job(
             db,
-            get_ixc_client(),
-            imported_by=user.id,
             sector_ids=_validated_ixc_sector_ids(sector_ids),
+            requested_by=user.id,
         )
-        db.commit()
-        return result
-    except IxcQueryLimitError as exc:
-        db.rollback()
+    except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except IxcApiError as exc:
-        db.rollback()
-        raise HTTPException(status_code=502, detail=f"Falha ao consultar o backlog no IXC: {exc}") from exc
-    except RuntimeError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Falha inesperada na importação do backlog aberto do IXC")
-        raise HTTPException(status_code=500, detail="Falha inesperada ao atualizar as O.S. abertas do IXC.") from exc
+    background_tasks.add_task(_run_open_backlog_job, job.id)
+    db.refresh(job)
+    return job
+
+
+@router.get("/imports/open-backlog/{job_id}", response_model=OperationOpenBacklogJobOut)
+def open_backlog_import_status(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("operations:sync_ixc")),
+):
+    job = db.get(backfill.OperationOpenBacklogJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Varredura de backlog aberto não encontrada.")
+    return job
 
 
 @router.get("/filters", response_model=OperationFilters)
@@ -637,7 +654,11 @@ def overview_control_tower(
     )
 
 
-@router.get("/openings/analytics", response_model=OperationOpeningsAnalytics)
+@router.get(
+    "/openings/analytics",
+    response_model=OperationOpeningsAnalytics,
+    dependencies=[Depends(require_permission("operations:view_openings"))],
+)
 def openings_analytics(
     date_from: date,
     date_to: date,
@@ -916,7 +937,14 @@ def orders(
     )
 
 
-@router.get("/openings/orders", response_model=OperationOrderPage, dependencies=[Depends(require_permission("operations:view_order_details"))])
+@router.get(
+    "/openings/orders",
+    response_model=OperationOrderPage,
+    dependencies=[
+        Depends(require_permission("operations:view_openings")),
+        Depends(require_permission("operations:view_order_details")),
+    ],
+)
 def opening_orders(
     date_from: date,
     date_to: date,

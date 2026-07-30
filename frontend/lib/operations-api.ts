@@ -535,6 +535,23 @@ export type OperationBackfillJob = {
   finished_at: string | null;
 };
 
+export type OperationOpenBacklogJob = {
+  id: number;
+  status: "pending" | "running" | "completed" | "failed" | string;
+  sector_ids: string[];
+  total_sectors: number;
+  processed_sectors: number;
+  fetched_count: number;
+  created_count: number;
+  updated_count: number;
+  unchanged_count: number;
+  rejected_count: number;
+  errors: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
 export type OperationIxcSector = {
   id: string;
   name: string;
@@ -738,14 +755,16 @@ export const operationsApi = {
     }),
   backfillImportStatus: (jobId: number) =>
     request<OperationBackfillJob>(`/operations/imports/backfill/${jobId}`),
-  importOpenBacklog: (sectorIds: string[] = []) => {
+  startOpenBacklogImport: (sectorIds: string[] = []) => {
     const params = new URLSearchParams();
     sectorIds.forEach((sectorId) => params.append("sector_ids", sectorId));
     const queryString = params.toString();
-    return request<OperationImportResult>(`/operations/imports/open-backlog${queryString ? `?${queryString}` : ""}`, {
+    return request<OperationOpenBacklogJob>(`/operations/imports/open-backlog${queryString ? `?${queryString}` : ""}`, {
       method: "POST",
     });
   },
+  openBacklogImportStatus: (jobId: number) =>
+    request<OperationOpenBacklogJob>(`/operations/imports/open-backlog/${jobId}`),
   filters: (
     filters: OperationFilterState,
     scope: "period" | "in_progress" = "period",

@@ -27,10 +27,14 @@ export type Permission =
   | "operations:manage_team_models"
   | "operations:manage_subjects"
   | "operations:view_order_details"
+  | "operations:view_openings"
   | "operations:view_sla"
   | "operations:view_calendar"
   | "operations:view_backlog"
   | "operations:export"
+  | "scheduling:read"
+  | "scheduling:sync"
+  | "scheduling:manage"
   | "admin:users:read"
   | "admin:users:write"
   | "admin:users:delete"
@@ -879,7 +883,20 @@ export type GamificationConfig = {
   sla_penalty_rules: SlaPenaltyRule[];
   recurrence_classification_rules: RecurrenceClassificationRule[];
   health_rules: HealthRule[];
+  collaborators?: GamificationConfigCollaborator[];
   warnings?: string[];
+};
+
+export type GamificationConfigCollaborator = {
+  id: number;
+  name: string;
+  role: string;
+  regional: string;
+  active: boolean;
+  is_registered: boolean;
+  ixc_employee_id: number | null;
+  phone: string | null;
+  email: string | null;
 };
 
 export type AppSetting = {

@@ -109,6 +109,25 @@ class OperationBackfillJobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OperationOpenBacklogJobOut(BaseModel):
+    id: int
+    status: str
+    sector_ids: list[str]
+    total_sectors: int
+    processed_sectors: int
+    fetched_count: int
+    created_count: int
+    updated_count: int
+    unchanged_count: int
+    rejected_count: int
+    errors: list[dict] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class OperationFilters(BaseModel):
     team_models: list[str] = Field(default_factory=list)
     companies: list[str] = Field(default_factory=list)

@@ -12,6 +12,7 @@ from app.db.session import SessionLocal, engine
 from app.core.security import ensure_access_profiles, ensure_initial_admin
 from app.modules.admin.router import router as admin_router
 from app.modules.operations.router import router as operations_router
+from app.modules.scheduling.router import router as scheduling_router
 from app.services.ixc_scheduler import run_ixc_sync_loop
 
 
@@ -71,3 +72,4 @@ app.include_router(point_balance.router, prefix=settings_obj.api_prefix)
 app.include_router(portal.router, prefix=settings_obj.api_prefix)
 app.include_router(admin_router, prefix=settings_obj.api_prefix)
 app.include_router(operations_router, prefix=settings_obj.api_prefix)
+app.include_router(scheduling_router, prefix=settings_obj.api_prefix)

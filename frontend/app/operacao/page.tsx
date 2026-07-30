@@ -221,7 +221,6 @@ const EMPTY_SLA_HIERARCHY: OperationSlaHierarchy = {
     average_closing_hours: null,
   },
 };
-const MAX_INTERACTIVE_IMPORT_DAYS = 7;
 const CLOSED_OPERATION_STATUSES = new Set(["finalizada", "cancelada"]);
 function filtersForOpenScope(current: OperationFilterState) {
   const statuses = (current.statuses || []).filter(
@@ -657,6 +656,7 @@ export default function OperacaoPage() {
     user?.permissions.includes("operations:manage_subjects"),
   );
   const canSyncIxc = Boolean(user?.permissions.includes("operations:sync_ixc"));
+  const canViewOpenings = Boolean(user?.permissions.includes("operations:view_openings"));
   const canViewSla = Boolean(user?.permissions.includes("operations:view_sla"));
   const canViewCalendar = Boolean(user?.permissions.includes("operations:view_calendar"));
   const canViewBacklog = Boolean(user?.permissions.includes("operations:view_backlog"));
@@ -668,14 +668,14 @@ export default function OperacaoPage() {
   const visibleTabs = useMemo<OperationTab[]>(
     () => [
       "overview",
-      "openings",
+      ...(canViewOpenings ? ["openings" as const] : []),
       ...(canViewSla ? ["sla" as const] : []),
       ...(canViewCalendar ? ["calendar" as const] : []),
       ...(canViewBacklog ? ["progress" as const] : []),
       ...(canViewOrderDetails ? ["details" as const] : []),
       ...(canManageTeamModels || canManageSubjects || canSyncIxc ? ["teams" as const] : []),
     ],
-    [canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOrderDetails, canViewSla],
+    [canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla],
   );
 
   const loadDashboard = useCallback(
@@ -1100,49 +1100,32 @@ export default function OperacaoPage() {
     setImportProgress(`0/${days.length} dias`);
     setMessage(null);
     setError(null);
-    const totals = { created: 0, updated: 0, unchanged: 0, rejected: 0 };
     const sectorIds = configuredIxcSectorIds(ixcSyncSettings);
     const scopeLabel = ixcSyncSettings?.sector_scope_label || "escopo padrão";
     try {
-      if (days.length > MAX_INTERACTIVE_IMPORT_DAYS) {
-        const started = await operationsApi.startBackfillImport(
-          filters.date_from,
-          filters.date_to,
-          sectorIds,
-        );
-        let job = started;
+      // Sempre via job assíncrono, mesmo para 1 dia - uma importação em processo (varredura de 21
+      // setores + lookups em cascata) passa fácil de 30s, e um request síncrono nessa duração
+      // estourava o timeout do proxy do Next na VM e voltava 500. O job roda em background e a tela
+      // só faz polling do status, então o botão nunca fica preso numa requisição longa.
+      const started = await operationsApi.startBackfillImport(
+        filters.date_from,
+        filters.date_to,
+        sectorIds,
+      );
+      let job = started;
+      setImportProgress(`${job.processed_days}/${job.total_days} dias`);
+      while (job.status === "pending" || job.status === "running") {
+        await wait(1500);
+        job = await operationsApi.backfillImportStatus(job.id);
         setImportProgress(`${job.processed_days}/${job.total_days} dias`);
-        while (job.status === "pending" || job.status === "running") {
-          await wait(1500);
-          job = await operationsApi.backfillImportStatus(job.id);
-          setImportProgress(`${job.processed_days}/${job.total_days} dias`);
-        }
-        if (job.status !== "completed") {
-          throw new Error(
-            `Importacao historica interrompida em ${job.processed_days}/${job.total_days} dias.`,
-          );
-        }
-        setMessage(
-          `IXC atualizado em importacao historica (${scopeLabel}): ${job.created_count} novas, ${job.updated_count} atualizadas, ${job.unchanged_count} sem alteracao e ${job.rejected_count} rejeitadas.`,
-        );
-        await loadDashboard(filters);
-        void operationsApi
-          .dataFreshness()
-          .then(setDataFreshness)
-          .catch(() => undefined);
-        return;
       }
-      for (let index = 0; index < days.length; index += 1) {
-        const day = days[index];
-        setImportProgress(`${index + 1}/${days.length} dias`);
-        const result = await operationsApi.importPeriod(day, day, sectorIds);
-        totals.created += result.created_count;
-        totals.updated += result.updated_count;
-        totals.unchanged += result.unchanged_count;
-        totals.rejected += result.rejected_count;
+      if (job.status !== "completed") {
+        throw new Error(
+          `Importacao interrompida em ${job.processed_days}/${job.total_days} dias.`,
+        );
       }
       setMessage(
-        `IXC atualizado em ${days.length} lote(s) diario(s) (${scopeLabel}): ${totals.created} novas, ${totals.updated} atualizadas, ${totals.unchanged} sem alteracao e ${totals.rejected} rejeitadas.`,
+        `IXC atualizado (${scopeLabel}): ${job.created_count} novas, ${job.updated_count} atualizadas, ${job.unchanged_count} sem alteracao e ${job.rejected_count} rejeitadas.`,
       );
       await loadDashboard(filters);
       void operationsApi
@@ -1169,9 +1152,23 @@ export default function OperacaoPage() {
     try {
       const sectorIds = configuredIxcSectorIds(ixcSyncSettings);
       const scopeLabel = ixcSyncSettings?.sector_scope_label || "escopo padrão";
-      const result = await operationsApi.importOpenBacklog(sectorIds);
+      // Mesmo raciocínio de runImport: a varredura de backlog aberto passa por todos os setores
+      // configurados (particionando internamente quando um setor+status excede o limite seguro de
+      // 3000 O.S.) e pode demorar bem mais que 30s - roda como job assíncrono, com polling de status.
+      let job = await operationsApi.startOpenBacklogImport(sectorIds);
+      setImportProgress(`${job.processed_sectors}/${job.total_sectors} setores`);
+      while (job.status === "pending" || job.status === "running") {
+        await wait(1500);
+        job = await operationsApi.openBacklogImportStatus(job.id);
+        setImportProgress(`${job.processed_sectors}/${job.total_sectors} setores`);
+      }
+      if (job.status !== "completed") {
+        throw new Error(
+          `Varredura de backlog interrompida em ${job.processed_sectors}/${job.total_sectors} setores.`,
+        );
+      }
       setMessage(
-        `Backlog IXC atualizado (${scopeLabel}): ${result.created_count} novas, ${result.updated_count} atualizadas, ${result.unchanged_count} sem alteração e ${result.rejected_count} rejeitadas.`,
+        `Backlog IXC atualizado (${scopeLabel}): ${job.created_count} novas, ${job.updated_count} atualizadas, ${job.unchanged_count} sem alteração e ${job.rejected_count} rejeitadas.`,
       );
       await loadDashboard(filters);
       void operationsApi
@@ -1186,6 +1183,7 @@ export default function OperacaoPage() {
       );
     } finally {
       setImportingBacklog(false);
+      setImportProgress(null);
     }
   }
 
@@ -1751,7 +1749,7 @@ export default function OperacaoPage() {
                     <Database className="h-4 w-4" />
                   )}
                   {importingBacklog
-                    ? "Consultando IXC..."
+                    ? `Consultando IXC${importProgress ? ` (${importProgress})` : "..."}`
                     : "Atualizar abertas no IXC"}
                 </Button>
               ) : null}

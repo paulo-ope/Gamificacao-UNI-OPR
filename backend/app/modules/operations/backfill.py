@@ -19,7 +19,8 @@ from .ixc_ingestion import (
     _to_int,
     import_current_month_period,
 )
-from .models import OperationBackfillJob, OperationOrder
+from .models import OperationBackfillJob, OperationOpenBacklogJob, OperationOrder
+from .period import OPERATIONS_TIMEZONE
 from .scope import PRIMARY_IXC_SECTOR_IDS
 
 
@@ -162,6 +163,127 @@ def run_backfill(
             job.status = "failed"
             job.updated_at = datetime.now(timezone.utc)
             job.errors = [*job.errors, {"date": current.isoformat(), "reason": str(exc)[:500]}][-100:]
+            db.commit()
+            raise
+
+    job.status = "completed"
+    job.finished_at = datetime.now(timezone.utc)
+    job.updated_at = job.finished_at
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def create_open_backlog_job(
+    db: Session,
+    *,
+    sector_ids: list[str],
+    requested_by: int | None,
+) -> OperationOpenBacklogJob:
+    deduped = list(dict.fromkeys(sector_ids))
+    if not deduped:
+        raise ValueError("Informe ao menos um setor para a varredura de backlog aberto.")
+    job = OperationOpenBacklogJob(
+        sector_ids=deduped,
+        status="pending",
+        total_sectors=len(deduped),
+        requested_by=requested_by,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def run_open_backlog_job(
+    db: Session,
+    *,
+    job_id: int,
+    delay_seconds: float = 0.25,
+) -> OperationOpenBacklogJob:
+    """Roda (ou retoma) um job de varredura de backlog aberto, um setor por vez - mesmo padrão de
+    retomada/retry de `run_backfill`, só que particionando por setor em vez de por dia, já que o
+    backlog aberto não tem recorte de data. Cada setor já é internamente particionado por status e,
+    quando necessário, por faixa de id (ver `ixc_ingestion._fetch_open_backlog_records`)."""
+    job = db.get(OperationOpenBacklogJob, job_id)
+    if job is None:
+        raise ValueError(f"Job de backlog aberto {job_id} não encontrado.")
+    if job.status == "completed":
+        return job
+
+    client = get_ixc_client()
+    job.status = "running"
+    job.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    today = datetime.now(OPERATIONS_TIMEZONE).date()
+    pending_sector_ids = list(job.sector_ids)[job.processed_sectors :]
+    for sector_id in pending_sector_ids:
+        lock_retries = 0
+        api_retries = 0
+        try:
+            while True:
+                try:
+                    result = import_current_month_period(
+                        db,
+                        client,
+                        date_from=today,
+                        date_to=today,
+                        imported_by=job.requested_by,
+                        sector_ids=[sector_id],
+                        open_backlog=True,
+                    )
+                    break
+                except IxcApiError as exc:
+                    # Mesmo raciocínio de run_backfill: soluço passageiro de rede com o IXC não deve
+                    # matar a varredura inteira por causa de um único setor.
+                    if api_retries >= 5:
+                        raise
+                    api_retries += 1
+                    wait_seconds = 15 * api_retries
+                    print(
+                        f"open_backlog_job={job.id} sector={sector_id} falha de rede no IXC, "
+                        f"tentativa {api_retries}/5, aguardando {wait_seconds}s... ({exc})",
+                        flush=True,
+                    )
+                    db.rollback()
+                    time.sleep(wait_seconds)
+                except RuntimeError as exc:
+                    if "já está em andamento" not in str(exc) or lock_retries >= 5:
+                        raise
+                    lock_retries += 1
+                    wait_seconds = 15 * lock_retries
+                    print(
+                        f"open_backlog_job={job.id} sector={sector_id} lock ocupado, "
+                        f"tentativa {lock_retries}/5, aguardando {wait_seconds}s...",
+                        flush=True,
+                    )
+                    db.rollback()
+                    time.sleep(wait_seconds)
+            job.fetched_count += result["fetched_count"]
+            job.created_count += result["created_count"]
+            job.updated_count += result["updated_count"]
+            job.unchanged_count += result["unchanged_count"]
+            job.rejected_count += result["rejected_count"]
+            if result["errors"]:
+                job.errors = [*job.errors, {"sector_id": sector_id, "items": result["errors"]}][-100:]
+            job.processed_sectors += 1
+            job.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            print(
+                f"open_backlog_job={job.id} sector={sector_id} "
+                f"progress={job.processed_sectors}/{job.total_sectors} fetched={result['fetched_count']} "
+                f"created={result['created_count']} updated={result['updated_count']} rejected={result['rejected_count']}",
+                flush=True,
+            )
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+        except Exception as exc:
+            db.rollback()
+            job = db.get(OperationOpenBacklogJob, job.id)
+            job.status = "failed"
+            job.updated_at = datetime.now(timezone.utc)
+            job.errors = [*job.errors, {"sector_id": sector_id, "reason": str(exc)[:500]}][-100:]
             db.commit()
             raise
 

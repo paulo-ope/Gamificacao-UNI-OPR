@@ -4,11 +4,46 @@
 # Nomeado .dev.yml de propósito (NÃO docker-compose.override.yml): o override é carregado
 # automaticamente por qualquer `docker compose up`, o que reativaria silenciosamente o modo dev
 # na VM de produção. Aqui o modo dev só entra quando pedido explicitamente com -f.
+#
+# Polling forçado nos dois watchers (WATCHFILES_FORCE_POLLING / WATCHPACK_POLLING): eventos de
+# alteração de arquivo do Windows NÃO propagam para dentro de um bind mount Linux - sem polling,
+# o hot-reload simplesmente nunca dispara nesta máquina (host Windows + OneDrive).
+#
+# --reload-delay 2 (achado real, 2026-07-29): o bind mount do OneDrive é ~1000x mais lento que
+# filesystem nativo (varrer 261 arquivos .py levou 0,72s contra milissegundos no normal). O
+# intervalo padrão de polling do watchfiles é bem mais curto que isso - cada ciclo de poll batia
+# nesse I/O lento constantemente, e um pico de sincronização do OneDrive em cima disso travava a
+# aplicação inteira por vários segundos (visto ao vivo: uma requisição chegou a levar 14,8s no meio
+# da sessão, sem ser a primeira compilação da rota). 2s de intervalo reduz drasticamente a
+# frequência de I/O sem atrapalhar o fluxo de "salvar e ver a mudança".
 services:
   backend:
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-delay 2
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
       - ./backend/tests:/app/tests
       - ./backend/pytest.ini:/app/pytest.ini
       - ./backend/requirements-dev.txt:/app/requirements-dev.txt
+
+  frontend:
+    # --webpack de propósito: o Turbopack (padrão do Next 16) não tem suporte a polling e não
+    # enxerga mudanças vindas de bind mount do Windows - testado ao vivo em 2026-07-29, edição no
+    # host nunca disparava recompile. O webpack respeita WATCHPACK_POLLING e funciona.
+    command: npm run dev -- --webpack --hostname 0.0.0.0 --port 3000
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./frontend:/app
+      # Volumes nomeados por cima do bind mount: preservam o node_modules Linux da imagem (o do
+      # host é Windows, binários incompatíveis) e mantêm o cache do .next fora do OneDrive.
+      - frontend_node_modules:/app/node_modules
+      - frontend_next_cache:/app/.next
+
+volumes:
+  frontend_node_modules:
+  frontend_next_cache:

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, LogOut, ShieldCheck, Trophy } from "lucide-react";
+import { BarChart3, CalendarClock, LogOut, ShieldCheck, Trophy } from "lucide-react";
 
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { workspaceModules } from "@/lib/module-registry";
 
 
-const icons = { gamification: Trophy, operations: BarChart3, admin: ShieldCheck };
+const icons = { gamification: Trophy, operations: BarChart3, scheduling: CalendarClock, admin: ShieldCheck };
 
 export function WorkspaceHome() {
   const { user, checking, error, login, logout } = useWorkspaceAuth();
