@@ -11,11 +11,11 @@ export type OperationTab = "overview" | "openings" | "sla" | "calendar" | "progr
 const ITEMS: Array<{ value: OperationTab; label: string; description: string; icon: typeof Gauge }> = [
   { value: "overview", label: "Visão Geral", description: "Indicadores do período", icon: Gauge },
   { value: "openings", label: "Aberturas", description: "Entrada e desvios", icon: Inbox },
+  { value: "progress", label: "Andamento", description: "Todo o backlog aberto", icon: ListChecks },
   { value: "sla", label: "SLA", description: "Prazos e produtividade", icon: BarChart3 },
   { value: "calendar", label: "Calendário", description: "Produção mensal", icon: CalendarDays },
-  { value: "progress", label: "Andamento", description: "Todo o backlog aberto", icon: ListChecks },
-  { value: "details", label: "Detalhes de O.S.", description: "Drill-through e busca", icon: ClipboardList },
-  { value: "teams", label: "Configurações", description: "Modelos, jornadas, metas e assuntos", icon: Settings2 }
+  { value: "details", label: "Detalhamento", description: "Drill-through e busca", icon: ClipboardList },
+  { value: "teams", label: "Config", description: "Modelos, jornadas, metas e assuntos", icon: Settings2 }
 ];
 
 export function OperationsModuleSidebar({ activeTab, detailsCount, canManage, visibleTabs, onChange }: { activeTab: OperationTab; detailsCount: number; canManage: boolean; visibleTabs: OperationTab[]; onChange: (tab: OperationTab) => void }) {

@@ -412,7 +412,14 @@ export default function AgendamentoPage() {
     setError(null);
     setMessage(null);
     try {
-      let job = await schedulingApi.startSync();
+      // Sem marca d'água ainda (primeira carga): usa o intervalo já selecionado na tela como
+      // backfill. Depois que a marca d'água existir, sincroniza incremental (sem datas) - mesma
+      // lógica que o backend já espera (ver POST /scheduling/sync).
+      const isFirstLoad = !syncStatus?.watermark;
+      let job = await schedulingApi.startSync(
+        isFirstLoad ? filters.date_from : undefined,
+        isFirstLoad ? filters.date_to : undefined,
+      );
       while (job.status === "pending" || job.status === "running") {
         await new Promise((resolve) => window.setTimeout(resolve, 2000));
         const status = await schedulingApi.syncStatus();
