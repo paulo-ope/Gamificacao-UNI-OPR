@@ -576,7 +576,7 @@ export function OperationsMonthlyCalendar({
               key={regional.regional}
               className="overflow-hidden rounded-xl border-slate-300 bg-white shadow-sm"
             >
-              <CardHeader className="border-b border-slate-700 bg-slate-900 p-0 text-white">
+              <CardHeader className="border-b border-slate-100 border-l-4 border-l-uni-royal bg-white p-0">
                 <button
                   type="button"
                   aria-expanded={expandedRegional === regional.regional}
@@ -586,22 +586,21 @@ export function OperationsMonthlyCalendar({
                       current === regional.regional ? null : regional.regional,
                     )
                   }
-                  className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-400"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-uni-royal"
                 >
                   <div className="min-w-0">
-                    <CardTitle className="truncate text-xs font-bold uppercase tracking-[0.08em]">
-                      <span className="mr-2 text-cyan-400">●</span>
+                    <CardTitle className="truncate text-xs font-bold uppercase tracking-[0.08em] text-slate-950">
                       {groupBy === "regional"
                         ? regional.regional
                         : "Produção consolidada por colaborador"}
                     </CardTitle>
-                    <p className="mt-0.5 text-[10px] text-slate-400">
+                    <p className="mt-0.5 text-[10px] text-slate-500">
                       {regional.collaborators.length} colaborador(es) na
                       competência
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Badge className="border-slate-600 bg-slate-800 text-white">
+                    <Badge className="border-uni-royal/20 bg-uni-royal/10 text-uni-royal">
                       {regional.total} O.S.
                     </Badge>
                     {expandedRegional === regional.regional ? (

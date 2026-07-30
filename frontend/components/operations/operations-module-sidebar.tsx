@@ -23,19 +23,19 @@ export function OperationsModuleSidebar({ activeTab, detailsCount, canManage, vi
   return (
     <Sheet>
       <SheetTrigger asChild><Button type="button" size="icon" variant="outline" aria-label="Abrir menu do módulo"><Menu className="h-5 w-5" /></Button></SheetTrigger>
-      <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r bg-slate-950 p-0 text-white sm:max-w-sm">
-        <SheetHeader className="border-slate-800 bg-slate-950"><SheetTitle className="text-white">Operação Analítica</SheetTitle><SheetDescription className="text-slate-400">Navegação modular do UNI Workspace</SheetDescription></SheetHeader>
+      <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r bg-white p-0 text-slate-950 sm:max-w-sm">
+        <SheetHeader className="border-slate-100"><SheetTitle className="text-slate-950">Operação Analítica</SheetTitle><SheetDescription className="text-slate-500">Navegação modular do UNI Workspace</SheetDescription></SheetHeader>
         <nav className="flex-1 space-y-1 p-3" aria-label="Navegação da Operação Analítica">
           {visibleItems.map((item) => { const Icon = item.icon; const selected = activeTab === item.value; return (
             <SheetClose asChild key={item.value}>
-              <button type="button" onClick={() => onChange(item.value)} className={cn("flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors", selected ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-900 hover:text-white")}>
-                <span className={cn("flex h-9 w-9 items-center justify-center rounded-lg", selected ? "bg-white/15" : "bg-slate-900")}><Icon className="h-4 w-4" /></span>
-                <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{item.label}{item.value === "details" ? ` (${detailsCount})` : ""}</span><span className={cn("block text-[11px]", selected ? "text-blue-100" : "text-slate-500")}>{item.description}</span></span>
+              <button type="button" onClick={() => onChange(item.value)} className={cn("flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors", selected ? "bg-uni-royal/10 text-uni-royal" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950")}>
+                <span className={cn("flex h-9 w-9 items-center justify-center rounded-lg", selected ? "bg-uni-royal text-white" : "bg-slate-100 text-slate-500")}><Icon className="h-4 w-4" /></span>
+                <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{item.label}{item.value === "details" ? ` (${detailsCount})` : ""}</span><span className={cn("block text-[11px]", selected ? "text-uni-royal/70" : "text-slate-400")}>{item.description}</span></span>
               </button>
             </SheetClose>
           ); })}
         </nav>
-        <div className="border-t border-slate-800 p-4 text-[11px] text-slate-500">Novos módulos podem ser adicionados a este menu sem alterar a navegação principal.</div>
+        <div className="border-t border-slate-100 p-4 text-[11px] text-slate-400">Novos módulos podem ser adicionados a este menu sem alterar a navegação principal.</div>
       </SheetContent>
     </Sheet>
   );
