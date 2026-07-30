@@ -141,6 +141,39 @@ def test_calculate_scores_zeroes_estimated_payment_for_unregistered_collaborator
     )
 
 
+def test_calculate_scores_populates_financial_breakdowns_from_cached_score_context(client, db_session, make_collaborator):
+    """Regression: calculate_scores stores score_summaries with JSON string keys, but the
+    financial breakdown builder expects integer collaborator ids. The saved run must still
+    include the cost breakdowns used by the dashboard cache."""
+    collaborator = make_collaborator(name="Tecnico Financeiro", regional="UNI SUL", registered=True)
+    group = ScoringGroup(name="Manutencao", default_points=10.0, active=True)
+    db_session.add(group)
+    db_session.flush()
+    db_session.add(ScoringSubjectRule(group_id=group.id, os_type="Manutencao", os_subject="Reparo", use_group_default=True, active=True))
+    db_session.add(AppSetting(key="point_value", value="2.00"))
+    db_session.add(HealthRule(name="Boa", min_sla=0, max_recurrence_rate=100, multiplier=1.0, active=True))
+    db_session.add(
+        ServiceOrder(
+            os_code="OS-FIN-1", contract_id="C-1", customer_login="cli.fin", customer_name="X",
+            collaborator_id=collaborator.id, regional="UNI SUL", os_type="Manutencao", os_subject="Reparo",
+            diagnosis="Falha", status="Concluida", sla_status="Dentro do prazo",
+            opened_at=datetime(2026, 6, 5, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    resp = client.post(
+        "/api/calculation-runs/calculate",
+        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True},
+    )
+    assert resp.status_code == 200, resp.text
+    summary = resp.json()["result_summary"]
+
+    assert summary["cost_by_regional"] == [{"regional": "UNI SUL", "orders": 1, "estimated_payment": 20.0}]
+    assert summary["cost_by_group"][0]["estimated_payment"] == 20.0
+    assert summary["cost_by_collaborator"][0]["collaborator_id"] == collaborator.id
+
+
 def test_marking_run_as_paid_is_blocked_while_unregistered_collaborator_has_payable_amount(db_session, admin_user, make_collaborator):
     """Regression: this is the last-resort safety net, independent of the calculation-time zeroing
     above - even if stale/edited data slips an unregistered collaborator through with a nonzero

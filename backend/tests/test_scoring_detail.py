@@ -591,3 +591,127 @@ def test_get_collaborator_service_orders_detail_applies_cpk_adjustment(db_sessio
     assert float(result["summary"]["final_points"]) == round(net_points * 1.3, 2), (
         "HealthRule 'Boa' (scoring_setup) da multiplier=1.0; com CPK na_meta (+0.3) o efetivo deveria ser 1.3"
     )
+
+
+def test_financial_breakdowns_exclude_unregistered_collaborators(db_session, make_collaborator, make_service_order, scoring_setup):
+    """Regression: unregistered collaborators can have visible points for audit, but they must
+    not inflate financial cost breakdowns because they are not payable."""
+    registered = make_collaborator(name="Registrado", regional="UNI SUL", registered=True)
+    unregistered = make_collaborator(name="Nao Cadastrado", regional="UNI SUL", registered=False)
+    make_service_order(registered, os_code="OS-REG")
+    make_service_order(unregistered, os_code="OS-UNREG")
+    orders = sd.period_orders(db_session, 6, 2026, "UNI SUL")
+    details = sd.explain_orders(db_session, orders, default_point_value=2.0)
+
+    breakdowns = sd.financial_breakdowns(db_session, orders, 2.0, details=details)
+
+    assert breakdowns["cost_by_regional"][0]["orders"] == 1
+    assert breakdowns["cost_by_regional"][0]["estimated_payment"] == 30.0
+    assert breakdowns["cost_by_collaborator"][0]["collaborator_id"] == registered.id
+    assert all(item["collaborator_id"] != unregistered.id for item in breakdowns["cost_by_collaborator"])
+
+
+def test_financial_breakdowns_applies_collaborator_discount_ratio_to_each_order(db_session, make_collaborator, make_service_order, scoring_setup):
+    """Regression: o desconto de garantia (point_balance.py) e lancado uma vez no total do
+    colaborador, sem estar amarrado a nenhuma O.S especifica - "por regional/grupo/assunto"
+    somava o valor BRUTO de cada O.S e nunca batia com "Total a pagar" (que ja vem liquido do
+    desconto) sempre que havia garantia no periodo, sem nenhum aviso pra quem comparava as duas
+    telas. financial_breakdowns agora aplica a mesma proporcao liquido/bruto do colaborador
+    (vinda de collaborator_context) em cada O.S dele, entao a soma por regional volta a bater
+    com o valor realmente pago."""
+    collaborator = make_collaborator(name="Tecnico Com Garantia", regional="UNI SUL")
+    make_service_order(collaborator, os_code="OS-1")
+    make_service_order(collaborator, os_code="OS-2")
+    orders = sd.period_orders(db_session, 6, 2026, "UNI SUL")
+    details = sd.explain_orders(db_session, orders, default_point_value=2.0)
+
+    gross_total = round(sum(float(item["net_points"]) * 1.0 * 2.0 for item in details), 2)
+    net_total = round(gross_total * 0.6, 2)  # simula 40% descontado de garantia
+    context = {
+        collaborator.id: {
+            "regional": "UNI SUL",
+            "health_multiplier": 1.0,
+            "gross_estimated_payment": gross_total,
+            "estimated_payment": net_total,
+        }
+    }
+
+    breakdowns = sd.financial_breakdowns(db_session, orders, 2.0, details=details, collaborator_context=context)
+
+    total_by_regional = round(sum(float(item["estimated_payment"]) for item in breakdowns["cost_by_regional"]), 2)
+    assert total_by_regional == net_total, (
+        "a soma por regional deveria bater com o valor liquido (ja com o desconto de garantia), nao com o bruto"
+    )
+
+
+def test_financial_breakdowns_sum_matches_exact_paid_amount_with_many_fractional_orders(db_session, make_collaborator, make_service_order, scoring_setup):
+    """Regression: arredondar o valor de cada O.S individualmente (em vez de arredondar so a soma
+    final por bucket) acumulava um residuo de poucos centavos ao longo de muitas O.S - um
+    fechamento real (07/2026) fechava com R$0,21 de diferenca entre "Total a pagar" e a soma de
+    "por regional", porque summarize_details (o calculo oficial) arredonda UMA VEZ por
+    colaborador, enquanto financial_breakdowns arredondava a CADA O.S. Numeros redondos (ex.:
+    desconto de 40% exato) escondem esse bug por coincidencia - este teste usa 7 O.S e um desconto
+    "feio" (87,34%) de proposito, o cenario que expunha a diferenca."""
+    collaborator = make_collaborator(name="Tecnico Fracionado", regional="UNI SUL")
+    for index in range(7):
+        make_service_order(collaborator, os_code=f"OS-FRAC-{index}")
+    orders = sd.period_orders(db_session, 6, 2026, "UNI SUL")
+    details = sd.explain_orders(db_session, orders, default_point_value=2.0)
+
+    gross_total = round(sum(float(item["net_points"]) * 1.0 * 2.0 for item in details), 2)
+    net_total = round(gross_total * 0.8734, 2)
+    context = {
+        collaborator.id: {
+            "regional": "UNI SUL",
+            "health_multiplier": 1.0,
+            "gross_estimated_payment": gross_total,
+            "estimated_payment": net_total,
+        }
+    }
+
+    breakdowns = sd.financial_breakdowns(db_session, orders, 2.0, details=details, collaborator_context=context)
+
+    total_by_regional = round(sum(float(item["estimated_payment"]) for item in breakdowns["cost_by_regional"]), 2)
+    assert total_by_regional == net_total, "a soma por regional precisa bater EXATO, nao so aproximado"
+
+
+def test_sla_comparison_is_exact_without_hour_rounding(db_session, make_collaborator, make_service_order, scoring_setup):
+    """Alinhamento com a Operacao Analitica (decisao do usuario): a comparacao de horas do SLA e
+    EXATA - 24,4h contra meta de 24h e fora do prazo, o mesmo numero que o painel analitico
+    mostra. Antes, round(24,4)=24 fazia a gamificacao considerar 'no prazo' uma O.S que a
+    Analitica mostrava como atrasada."""
+    collaborator = make_collaborator(regional="UNI SUL")
+    barely_late = make_service_order(
+        collaborator, os_code="OS-244", sla_status="", sla_hours=24.0, closing_time_hours=24.4
+    )
+    exactly_on_time = make_service_order(
+        collaborator, os_code="OS-240", sla_status="", sla_hours=24.0, closing_time_hours=24.0
+    )
+
+    assert sd.sla_measurement(barely_late) is False, "24,4h > meta de 24h = fora do prazo (sem arredondar)"
+    assert sd.sla_measurement(exactly_on_time) is True
+
+
+def test_sla_unmeasurable_orders_are_excluded_from_regional_sla_rate(db_session, make_collaborator, make_service_order, scoring_setup):
+    """Alinhamento com a Operacao Analitica (decisao do usuario): O.S sem meta de horas
+    configurada (assunto sem meta no IXC, sla_status 'unidentified') fica FORA do calculo de SLA
+    da regional - nem numerador nem denominador. Antes ela contava como 'fora do prazo' e
+    derrubava o SLA/multiplicador/pagamento da regional por uma O.S que nunca teve prazo."""
+    collaborator = make_collaborator(regional="UNI SUL")
+    on_time_1 = make_service_order(collaborator, os_code="OS-OK1", sla_status="on_time")
+    on_time_2 = make_service_order(collaborator, os_code="OS-OK2", sla_status="on_time")
+    unmeasurable = make_service_order(collaborator, os_code="OS-SEM-META", sla_status="unidentified")
+    # Atribuido DEPOIS da criacao: as colunas tem default (sla_hours=24, closing_time_hours=0)
+    # que e aplicado no INSERT quando o valor chega como None - passar None no construtor nao
+    # produz NULL de verdade.
+    unmeasurable.sla_hours = None
+    unmeasurable.closing_time_hours = None
+    db_session.flush()
+
+    assert sd.sla_measurement(unmeasurable) is None
+    assert sd.sla_inside(unmeasurable) is True, "nao mensuravel nunca deve ser tratada como atrasada"
+
+    health = sd.calculate_regional_health(db_session, [on_time_1, on_time_2, unmeasurable])
+
+    assert health["UNI SUL"]["sla_rate"] == 100.0, "2 de 2 mensuraveis no prazo; a sem meta fica fora da conta"
+    assert health["UNI SUL"]["total_orders"] == 3, "total de O.S (denominador da reincidencia) continua contando todas"

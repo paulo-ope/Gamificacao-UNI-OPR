@@ -367,6 +367,7 @@ def calculate_scores(
     }
     result_summary["health_by_regional"] = list(health_by_regional.values())
     result_summary["penalty_distribution"] = calculate_penalty_distribution(db, orders, details=order_details)
+    financial_context = {int(collaborator_id): summary for collaborator_id, summary in cached_score_summaries.items()}
     result_summary.update(
         scoring_detail.financial_breakdowns(
             db,
@@ -374,7 +375,7 @@ def calculate_scores(
             float(value_per_point),
             details=order_details,
             health_by_regional=health_by_regional,
-            collaborator_context=cached_score_summaries,
+            collaborator_context=financial_context,
         )
     )
 

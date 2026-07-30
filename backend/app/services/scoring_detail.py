@@ -171,19 +171,12 @@ def active_scoring_rules(db: Session) -> list[ScoringSubjectRule]:
 
 def build_scoring_rule_lookup(rules: Iterable[ScoringSubjectRule]) -> dict[str, dict]:
     exact: dict[tuple[str, str], ScoringSubjectRule] = {}
-    subject_matches: dict[str, list[ScoringSubjectRule]] = defaultdict(list)
     for rule in rules:
         if not rule.group or not rule.group.active:
             continue
         exact.setdefault((normalize(rule.os_type), normalize(rule.os_subject)), rule)
-        subject_matches[normalize(rule.os_subject)].append(rule)
 
-    subject_unique = {
-        subject: matched_rules[0]
-        for subject, matched_rules in subject_matches.items()
-        if len(matched_rules) == 1
-    }
-    return {"exact": exact, "subject_unique": subject_unique}
+    return {"exact": exact}
 
 
 def matching_scoring_rule(order: ServiceOrder, rules: Iterable[ScoringSubjectRule] | dict[str, dict]) -> ScoringSubjectRule | None:
@@ -803,18 +796,32 @@ def recurrence_penalties(
     return penalties
 
 
-def sla_inside(order: ServiceOrder) -> bool:
+def sla_measurement(order: ServiceOrder) -> bool | None:
+    """Régua única de SLA, alinhada 1:1 com a Operação Analítica (decisão do usuário):
+
+    - True = no prazo; False = fora do prazo; None = NÃO MENSURÁVEL (assunto sem meta de horas
+      configurada no IXC e sem status textual conclusivo). O.S. não mensurável fica FORA do
+      cálculo de SLA da regional (nem numerador nem denominador) e não sofre penalidade de SLA -
+      antes ela contava como "fora do prazo", derrubando SLA/pagamento por uma O.S. que nunca
+      teve prazo definido, e divergindo da Analítica (que sempre a excluiu).
+    - Comparação de horas EXATA, sem arredondar: 24,4h contra meta de 24h é fora do prazo, o
+      mesmo número que o painel analítico mostra (antes: round(24,4)=24 → "no prazo" só aqui).
+    """
     normalized_status = normalize_sla_status(order.sla_status)
     if normalized_status == SLA_FORA_DO_PRAZO:
         return False
     if normalized_status == SLA_NO_PRAZO:
         return True
     if order.sla_hours is None or order.closing_time_hours is None:
-        return False
-    # Arredonda pra hora cheia antes de comparar - o mesmo criterio do relatorio de BI usado pela
-    # operacao, que nao considera "fora do prazo" quando o fechamento estourou por poucos minutos
-    # (ex.: 72,34h contra um SLA de 72h).
-    return round(order.closing_time_hours) <= order.sla_hours
+        return None
+    return order.closing_time_hours <= order.sla_hours
+
+
+def sla_inside(order: ServiceOrder) -> bool:
+    """Compatibilidade booleana: "esta O.S. está marcada como fora do prazo?" -> not sla_inside.
+    Não mensurável NÃO é fora do prazo (ver sla_measurement) - retorna True aqui para que nenhum
+    fluxo (penalidade, filtro, badge) trate uma O.S. sem prazo definido como atrasada."""
+    return sla_measurement(order) is not False
 
 
 def sla_display_label(order: ServiceOrder) -> str:
@@ -836,7 +843,8 @@ def sla_rule_applies(order: ServiceOrder, rule: SlaPenaltyRule) -> bool:
     if rule.condition_type == "sla_hours_greater_than":
         if order.sla_hours is None or order.closing_time_hours is None:
             return False
-        return round(order.closing_time_hours) > order.sla_hours
+        # Comparacao exata, sem arredondar - mesma regua de sla_measurement/Analitica.
+        return order.closing_time_hours > order.sla_hours
     if rule.condition_type == "closed_after_deadline":
         return not sla_inside(order)
     return False
@@ -890,11 +898,18 @@ def calculate_regional_health(db: Session, orders: list[ServiceOrder]) -> dict[s
     health: dict[str, dict[str, float | int | str]] = {}
     for regional, regional_orders in grouped.items():
         total = len(regional_orders)
-        sla_ok = sum(1 for order in regional_orders if sla_inside(order))
+        # SLA usa so as O.S MENSURAVEIS (com meta de horas ou status conclusivo) no numerador E no
+        # denominador - igual a Operacao Analitica ('unidentified' fica fora da conta). Antes, uma
+        # O.S sem meta contava como fora do prazo e derrubava o SLA/pagamento da regional inteira.
+        # `total` (todas as O.S) continua sendo o denominador da reincidencia, que nao depende de
+        # meta de horas.
+        measurements = [sla_measurement(order) for order in regional_orders]
+        sla_measurable = sum(1 for measurement in measurements if measurement is not None)
+        sla_ok = sum(1 for measurement in measurements if measurement is True)
         recurrences = sum(1 for order in regional_orders if order.is_warranty or order.is_recurrence)
         pending = sum(1 for order in regional_orders if order.has_pending)
         rescheduled = sum(1 for order in regional_orders if order.has_reschedule)
-        sla_rate = round((sla_ok / total) * 100, 2) if total else 0
+        sla_rate = round((sla_ok / sla_measurable) * 100, 2) if sla_measurable else 0
         recurrence_rate = round((recurrences / total) * 100, 2) if total else 0
         rule = select_health_rule(rules, sla_rate, recurrence_rate)
 
@@ -1923,8 +1938,22 @@ def financial_breakdowns(
     estimated_unmapped_points = average_group_default_points(db)
     below_minimum_multiplier = get_health_below_minimum_multiplier(db)
 
+    # Pre-passo: soma o valor BRUTO (sem arredondar nada ainda) de cada colaborador nesta mesma
+    # populacao de O.S - usado no passo seguinte pra escalar proporcionalmente ao valor EXATO que
+    # ele de fato recebe (context.estimated_payment, ja liquido de garantia). Sem isso, arredondar
+    # o valor de cada O.S individualmente (como este codigo fazia antes) acumula um residuo de
+    # poucos centavos ao longo de milhares de O.S - achado real: um fechamento de producao real
+    # (07/2026) fechava com R$0,21 de diferenca entre "Total a pagar" e a soma de "por regional",
+    # sempre um numero diferente a cada recalculo, porque a rota oficial (summarize_details)
+    # arredonda UMA VEZ por colaborador (soma net_points primeiro, arredonda depois), enquanto este
+    # codigo arredondava a cada O.S - dois regimes de arredondamento diferentes que nunca batem
+    # exatamente por coincidencia.
+    eligible_details: list[dict[str, Any]] = []
+    raw_gross_by_collaborator: dict[int, float] = {}
     for detail in details:
         if not is_identified_collaborator_detail(detail):
+            continue
+        if not detail.get("collaborator_is_registered"):
             continue
         collaborator_id = int(detail["collaborator_id"])
         context = collaborator_context.get(collaborator_id) if collaborator_context is not None else None
@@ -1933,19 +1962,44 @@ def financial_breakdowns(
         regional = normalize_regional(str((context or {}).get("regional") or detail["regional"]))
         multiplier = float((context or {}).get("health_multiplier", health_by_regional.get(regional, {}).get("multiplier", below_minimum_multiplier)))
         detail_point_value = float(detail.get("point_value", point_value))
-        estimated = round(float(detail["net_points"]) * multiplier * detail_point_value, 2)
-        penalty_impact = round(float(detail["penalty_points"]) * multiplier * detail_point_value, 2)
-        gross_impact = round(float(detail["base_points"]) * multiplier * detail_point_value, 2)
+        raw_gross = float(detail["net_points"]) * multiplier * detail_point_value
+        raw_gross_by_collaborator[collaborator_id] = raw_gross_by_collaborator.get(collaborator_id, 0.0) + raw_gross
+        eligible_details.append(
+            {"detail": detail, "collaborator_id": collaborator_id, "context": context, "regional": regional,
+             "multiplier": multiplier, "detail_point_value": detail_point_value, "raw_gross": raw_gross}
+        )
+
+    for entry in eligible_details:
+        detail = entry["detail"]
+        collaborator_id = entry["collaborator_id"]
+        context = entry["context"]
+        regional = entry["regional"]
+        multiplier = entry["multiplier"]
+        detail_point_value = entry["detail_point_value"]
+        raw_gross = entry["raw_gross"]
+
+        net_collaborator_payment = (context or {}).get("estimated_payment")
+        collaborator_raw_total = raw_gross_by_collaborator.get(collaborator_id, 0.0)
+        if context is not None and net_collaborator_payment is not None and collaborator_raw_total:
+            # Escala este detail pela fatia exata que ele representa do bruto do colaborador,
+            # aplicada sobre o valor EXATO que ele recebe (ja liquido) - a soma de todas as O.S
+            # deste colaborador (em qualquer bucket) sempre bate exatamente com
+            # net_collaborator_payment, sem depender de arredondamento por O.S.
+            estimated = float(net_collaborator_payment) * (raw_gross / collaborator_raw_total)
+        else:
+            estimated = raw_gross
+        penalty_impact = float(detail["penalty_points"]) * multiplier * detail_point_value
+        gross_impact = float(detail["base_points"]) * multiplier * detail_point_value
 
         regional_item = regional_totals.setdefault(regional, {"regional": regional, "orders": 0, "estimated_payment": 0.0})
         regional_item["orders"] = int(regional_item["orders"]) + 1
-        regional_item["estimated_payment"] = round(float(regional_item["estimated_payment"]) + estimated, 2)
+        regional_item["estimated_payment"] = float(regional_item["estimated_payment"]) + estimated
 
         group = str(detail["group_name"] or "Sem regra")
         group_item = group_totals.setdefault(group, {"group": group, "orders": 0, "net_points": 0.0, "estimated_payment": 0.0})
         group_item["orders"] = int(group_item["orders"]) + 1
-        group_item["net_points"] = round(float(group_item["net_points"]) + float(detail["net_points"]), 2)
-        group_item["estimated_payment"] = round(float(group_item["estimated_payment"]) + estimated, 2)
+        group_item["net_points"] = float(group_item["net_points"]) + float(detail["net_points"])
+        group_item["estimated_payment"] = float(group_item["estimated_payment"]) + estimated
 
         subject_key = f"{detail['os_type']} | {detail['os_subject']}"
         subject_item = subject_totals.setdefault(
@@ -1960,8 +2014,8 @@ def financial_breakdowns(
             },
         )
         subject_item["orders"] = int(subject_item["orders"]) + 1
-        subject_item["net_points"] = round(float(subject_item["net_points"]) + float(detail["net_points"]), 2)
-        subject_item["estimated_payment"] = round(float(subject_item["estimated_payment"]) + estimated, 2)
+        subject_item["net_points"] = float(subject_item["net_points"]) + float(detail["net_points"])
+        subject_item["estimated_payment"] = float(subject_item["estimated_payment"]) + estimated
 
         collaborator_item = collaborator_totals.setdefault(
             collaborator_id,
@@ -1975,8 +2029,8 @@ def financial_breakdowns(
             },
         )
         collaborator_item["orders"] = int(collaborator_item["orders"]) + 1
-        collaborator_item["net_points"] = round(float(collaborator_item["net_points"]) + float(detail["net_points"]), 2)
-        collaborator_item["estimated_payment"] = round(float(collaborator_item["estimated_payment"]) + estimated, 2)
+        collaborator_item["net_points"] = float(collaborator_item["net_points"]) + float(detail["net_points"])
+        collaborator_item["estimated_payment"] = float(collaborator_item["estimated_payment"]) + estimated
 
         scoring_item = scoring_subject_totals.setdefault(
             subject_key,
@@ -1990,8 +2044,8 @@ def financial_breakdowns(
             },
         )
         scoring_item["orders"] = int(scoring_item["orders"]) + 1
-        scoring_item["gross_points"] = round(float(scoring_item["gross_points"]) + float(detail["base_points"]), 2)
-        scoring_item["estimated_payment"] = round(float(scoring_item["estimated_payment"]) + gross_impact, 2)
+        scoring_item["gross_points"] = float(scoring_item["gross_points"]) + float(detail["base_points"])
+        scoring_item["estimated_payment"] = float(scoring_item["estimated_payment"]) + gross_impact
 
         if float(detail["penalty_points"]) > 0:
             penalty_item = penalized_subject_totals.setdefault(
@@ -2006,8 +2060,8 @@ def financial_breakdowns(
                 },
             )
             penalty_item["orders"] = int(penalty_item["orders"]) + 1
-            penalty_item["penalty_points"] = round(float(penalty_item["penalty_points"]) + float(detail["penalty_points"]), 2)
-            penalty_item["estimated_payment"] = round(float(penalty_item["estimated_payment"]) + penalty_impact, 2)
+            penalty_item["penalty_points"] = float(penalty_item["penalty_points"]) + float(detail["penalty_points"])
+            penalty_item["estimated_payment"] = float(penalty_item["estimated_payment"]) + penalty_impact
 
         if detail["is_unscored"]:
             unmapped_item = unmapped_subject_totals.setdefault(
@@ -2020,26 +2074,41 @@ def financial_breakdowns(
                 },
             )
             unmapped_item["orders"] = int(unmapped_item["orders"]) + 1
-            unmapped_item["estimated_payment"] = round(
-                float(unmapped_item["estimated_payment"]) + estimated_unmapped_points * point_value,
-                2,
-            )
+            unmapped_item["estimated_payment"] = float(unmapped_item["estimated_payment"]) + estimated_unmapped_points * point_value
+
+    # Arredonda so agora, uma vez por bucket final - nunca durante o acumulo. Arredondar a cada
+    # O.S. individual (feito ate aqui) e a causa raiz do residuo de poucos centavos: a soma de N
+    # numeros ja arredondados diverge da soma exata arredondada uma vez so.
+    def _rounded(mapping: dict[str, Any], field: str = "estimated_payment") -> dict[str, Any]:
+        item = dict(mapping)
+        for key in ("estimated_payment", "net_points", "gross_points", "penalty_points"):
+            if key in item:
+                item[key] = round(float(item[key]), 2)
+        return item
+
+    regional_rounded = [_rounded(item) for item in regional_totals.values()]
+    group_rounded = [_rounded(item) for item in group_totals.values()]
+    subject_rounded = [_rounded(item) for item in subject_totals.values()]
+    collaborator_rounded = [_rounded(item) for item in collaborator_totals.values()]
+    penalized_rounded = [_rounded(item) for item in penalized_subject_totals.values()]
+    scoring_rounded = [_rounded(item) for item in scoring_subject_totals.values()]
+    unmapped_rounded = [_rounded(item) for item in unmapped_subject_totals.values()]
 
     return {
-        "cost_by_regional": sorted(regional_totals.values(), key=lambda item: float(item["estimated_payment"]), reverse=True),
-        "cost_by_group": sorted(group_totals.values(), key=lambda item: float(item["estimated_payment"]), reverse=True),
-        "cost_by_subject": sorted(subject_totals.values(), key=lambda item: float(item["estimated_payment"]), reverse=True)[:30],
+        "cost_by_regional": sorted(regional_rounded, key=lambda item: float(item["estimated_payment"]), reverse=True),
+        "cost_by_group": sorted(group_rounded, key=lambda item: float(item["estimated_payment"]), reverse=True),
+        "cost_by_subject": sorted(subject_rounded, key=lambda item: float(item["estimated_payment"]), reverse=True)[:30],
         "cost_by_collaborator": sorted(
-            collaborator_totals.values(), key=lambda item: float(item["estimated_payment"]), reverse=True
+            collaborator_rounded, key=lambda item: float(item["estimated_payment"]), reverse=True
         )[:30],
         "top_penalized_subjects": sorted(
-            penalized_subject_totals.values(), key=lambda item: float(item["estimated_payment"]), reverse=True
+            penalized_rounded, key=lambda item: float(item["estimated_payment"]), reverse=True
         )[:30],
         "top_scoring_subjects": sorted(
-            scoring_subject_totals.values(), key=lambda item: float(item["gross_points"]), reverse=True
+            scoring_rounded, key=lambda item: float(item["gross_points"]), reverse=True
         )[:30],
         "top_unmapped_subjects": sorted(
-            unmapped_subject_totals.values(), key=lambda item: int(item["orders"]), reverse=True
+            unmapped_rounded, key=lambda item: int(item["orders"]), reverse=True
         )[:30],
     }
 

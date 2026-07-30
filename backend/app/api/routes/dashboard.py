@@ -19,7 +19,11 @@ from app.services.calculation import (
     latest_run,
     serialize_run,
 )
-from app.services.leadership_bonus import leadership_bonus_from_ranking, pending_unregistered_for_run
+from app.services.leadership_bonus import (
+    apply_leadership_bonus_to_cost_by_regional,
+    leadership_bonus_from_ranking,
+    pending_unregistered_for_run,
+)
 from app.services.regional import same_regional_grouped as same_regional
 from app.services.scoring_matrix import real_service_orders
 from app.services.scoring_detail import (
@@ -98,6 +102,11 @@ def _collaborator_financial_context(db: Session, run: CalculationRun) -> dict[in
         context[int(collaborator_id)] = {
             "regional": summary.get("regional"),
             "health_multiplier": summary.get("health_multiplier", 0),
+            # Usado por financial_breakdowns pra proporcionalizar o desconto de garantia (lancado
+            # uma vez no total do colaborador) em cada O.S dele - sem isso, "por regional/grupo"
+            # mostra o valor bruto, sem o desconto que "Total a pagar" ja aplica.
+            "gross_estimated_payment": summary.get("gross_estimated_payment", summary.get("estimated_payment", 0)),
+            "estimated_payment": summary.get("estimated_payment", 0),
         }
     return context
 
@@ -289,12 +298,16 @@ def dashboard_summary(
         health_by_regional=health_by_regional,
         collaborator_context=_collaborator_financial_context(db, run),
     )
+    leadership_bonus_summary = _stored_leadership_bonus_summary(db, run)
+    breakdowns["cost_by_regional"] = apply_leadership_bonus_to_cost_by_regional(
+        breakdowns["cost_by_regional"], leadership_bonus_summary
+    )
 
     return {
         "run": serialized_run,
         "cards": summary_cache.get("cards", {}),
         "ranking": serialized_run["scores"] if serialized_run else [],
-        "leadership_bonus": _stored_leadership_bonus_summary(db, run),
+        "leadership_bonus": leadership_bonus_summary,
         "penalty_distribution": calculate_penalty_distribution(db, orders, details=details),
         "health_by_regional": list(health_by_regional.values()),
         "point_value": point_value,

@@ -363,6 +363,60 @@ def leadership_bonus_from_ranking(db: Session, calculation_run_id: int, ranking:
     }
 
 
+def _distribute_cents_exactly(total: float, count: int) -> list[float]:
+    """Divide `total` (em reais) em `count` fatias que somam EXATAMENTE `round(total, 2)` - nunca
+    perde nem sobra 1 centavo por arredondamento independente de cada fatia (ex.: R$10,00 / 3 =
+    R$3,33+R$3,33+R$3,33 = R$9,99 se cada fatia fosse arredondada isoladamente; aqui vira
+    R$3,34+R$3,33+R$3,33 = R$10,00). Metodo do maior resto: distribui os centavos restantes,
+    um a um, para as primeiras fatias."""
+    total_cents = round(total * 100)
+    base_cents = total_cents // count
+    remainder = total_cents - base_cents * count
+    shares_cents = [base_cents + (1 if index < remainder else 0) for index in range(count)]
+    return [cents / 100 for cents in shares_cents]
+
+
+def apply_leadership_bonus_to_cost_by_regional(
+    cost_by_regional: list[dict[str, float | int | str]],
+    leadership_summary: dict,
+) -> list[dict[str, float | int | str]]:
+    """Soma o bonus de cada lider na(s) regional(is) vinculada(s) ao perfil dele, pra
+    "Valor a ser pago por regional" bater com o Total a pagar (que ja soma tecnicos + lideranca).
+    Quando um perfil cobre mais de uma filial, DIVIDE o bonus igualmente entre elas (decisao do
+    usuario, depois de confirmar que somar o valor cheio em cada uma inflava a soma total sempre
+    que houvesse lider multi-regional) - assim a soma de "por regional" sempre bate com o Total a
+    pagar, sem excecao. Gerente de pasta cobre todas as regionais ao mesmo tempo por definicao
+    (nao tem uma regional propria) - vira uma linha separada "Liderança sem regional" em vez de
+    silenciosamente sumir do total quando comparado com o card do topo."""
+    by_regional: dict[str, dict[str, float | int | str]] = {
+        str(item["regional"]): dict(item) for item in cost_by_regional
+    }
+    unassigned_total = 0.0
+    for result in leadership_summary.get("results", []):
+        bonus = float(result.get("bonus_amount") or 0)
+        if not bonus:
+            continue
+        if result.get("role_type") == "portfolio_manager":
+            unassigned_total += bonus
+            continue
+        regionals = result.get("regionals") or []
+        if not regionals:
+            unassigned_total += bonus
+            continue
+        shares = _distribute_cents_exactly(bonus, len(regionals))
+        for regional, share in zip(regionals, shares):
+            regional_key = str(regional)
+            item = by_regional.setdefault(
+                regional_key, {"regional": regional_key, "orders": 0, "estimated_payment": 0.0}
+            )
+            item["estimated_payment"] = round(float(item.get("estimated_payment", 0.0)) + share, 2)
+
+    merged = list(by_regional.values())
+    if unassigned_total:
+        merged.append({"regional": "Liderança sem regional", "orders": 0, "estimated_payment": round(unassigned_total, 2)})
+    return sorted(merged, key=lambda item: float(item["estimated_payment"]), reverse=True)
+
+
 def calculate_and_store_leadership_bonus(db: Session, run: CalculationRun) -> dict:
     db.execute(delete(LeadershipBonusResult).where(LeadershipBonusResult.calculation_run_id == run.id))
     scores = list(run.scores)
@@ -400,6 +454,18 @@ def calculate_and_store_leadership_bonus(db: Session, run: CalculationRun) -> di
     db.flush()
     for item, result in zip(summary["results"], result_rows):
         item["id"] = result.id
+
+    # Atualiza o cost_by_regional ja cacheado em result_summary com o bonus de lideranca - sem
+    # isso, "Valor a ser pago por regional" nunca bate com o Total a pagar (que ja soma tecnicos +
+    # lideranca). Reatribui o dict inteiro (nao muta em lugar) porque colunas JSON do SQLAlchemy so
+    # detectam mudanca por reatribuicao, nao por mutacao profunda de um dict ja carregado.
+    if isinstance(run.result_summary, dict) and run.result_summary.get("cost_by_regional"):
+        updated_result_summary = dict(run.result_summary)
+        updated_result_summary["cost_by_regional"] = apply_leadership_bonus_to_cost_by_regional(
+            updated_result_summary["cost_by_regional"], summary
+        )
+        run.result_summary = updated_result_summary
+
     return summary
 
 
