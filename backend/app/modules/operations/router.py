@@ -60,6 +60,7 @@ from .schemas import (
     OperationSlaItem,
     OperationSubjectVolumeAlerts,
     OperationTrendSeries,
+    OperationWarrantyAnalytics,
     OperationResponsibleAssignmentUpdate,
     OperationResponsibleDirectoryUpdate,
     OperationTeamConfiguration,
@@ -736,6 +737,32 @@ def sla_collaborators(
 ):
     _validated_period(date_from, date_to)
     return queries.collaborator_sla(db, date_from, date_to, user, **selected_filters)
+
+
+@router.get(
+    "/warranty",
+    response_model=OperationWarrantyAnalytics,
+    dependencies=[Depends(require_permission("operations:view_warranty"))],
+)
+def warranty(
+    date_from: date,
+    date_to: date,
+    period_basis: Literal["opened", "closed"] = "opened",
+    denominator: Literal["closed_origins", "active_origins", "maintenance_total", "activation_closed"] = "active_origins",
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validated_period(date_from, date_to)
+    return queries.warranty_analytics(
+        db,
+        date_from,
+        date_to,
+        user,
+        period_basis=period_basis,
+        denominator=denominator,
+        **selected_filters,
+    )
 
 
 @router.get("/calendar", response_model=OperationCalendar, dependencies=[Depends(require_permission("operations:view_calendar"))])

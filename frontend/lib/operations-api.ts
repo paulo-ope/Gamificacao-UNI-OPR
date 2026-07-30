@@ -399,6 +399,48 @@ export type OperationBreakdownItem = {
   percentage: number;
 };
 
+export type OperationWarrantyPeriodBasis = "opened" | "closed";
+
+export type OperationWarrantyDenominator =
+  | "closed_origins"
+  | "active_origins"
+  | "maintenance_total"
+  | "activation_closed";
+
+export type OperationWarrantyItem = {
+  contract_id: string | null;
+  customer_name: string | null;
+  regional: string | null;
+  diagnosis: string | null;
+  origin_order_code: string;
+  origin_os_type: string | null;
+  origin_closed_at: string;
+  return_order_code: string;
+  return_opened_at: string;
+  return_closed_at: string | null;
+};
+
+export type OperationWarrantyRegionalRankingItem = {
+  label: string;
+  quantity: number;
+  denominator_count: number;
+  percentage: number | null;
+};
+
+export type OperationWarrantyAnalytics = {
+  period_basis: OperationWarrantyPeriodBasis;
+  denominator: OperationWarrantyDenominator;
+  numerator: number;
+  denominator_count: number;
+  percentage: number | null;
+  contracts_with_warranty: number;
+  customers_with_warranty: number;
+  breakdown: OperationBreakdownItem[];
+  by_regional: OperationWarrantyRegionalRankingItem[];
+  items: OperationWarrantyItem[];
+  items_truncated: boolean;
+};
+
 export type OperationSlaRiskItem = {
   bucket: "breached" | "critical" | "attention" | "on_track" | "no_target";
   label: string;
@@ -835,6 +877,17 @@ export const operationsApi = {
   collaboratorSla: (filters: OperationFilterState) =>
     request<OperationCollaboratorSla>(
       `/operations/sla/collaborators?${query(filters)}`,
+    ),
+  warranty: (
+    filters: OperationFilterState,
+    periodBasis: OperationWarrantyPeriodBasis,
+    denominator: OperationWarrantyDenominator,
+  ) =>
+    request<OperationWarrantyAnalytics>(
+      `/operations/warranty?${query(filters, {
+        period_basis: periodBasis,
+        denominator,
+      })}`,
     ),
   calendar: (
     filters: OperationFilterState,

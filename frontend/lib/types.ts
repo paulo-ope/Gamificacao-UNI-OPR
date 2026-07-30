@@ -29,6 +29,7 @@ export type Permission =
   | "operations:view_order_details"
   | "operations:view_openings"
   | "operations:view_sla"
+  | "operations:view_warranty"
   | "operations:view_calendar"
   | "operations:view_backlog"
   | "operations:export"

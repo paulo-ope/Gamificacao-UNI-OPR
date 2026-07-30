@@ -429,6 +429,10 @@ export default function AgendamentoPage() {
       if (job.status === "failed") throw new Error(job.error || "Falha ao sincronizar com o IXC.");
       setMessage("Sincronização concluída - dados atualizados.");
       await loadDashboard(appliedFilters);
+      // Um sync pode trazer operadores/técnicos novos (nunca vistos antes) - resolver o nome deles
+      // no IXC ANTES de recarregar os filtros, senão a lista mostra "Operador IXC {id}" até a
+      // próxima carga de página (achado real, 2026-07-30: aconteceu logo após um sync).
+      await Promise.allSettled([schedulingApi.team(), schedulingApi.resolveTechnicians()]);
       void schedulingApi.filters().then(setOptions).catch(() => undefined);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Falha ao sincronizar com o IXC.");

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import math
+import unicodedata
 from collections import defaultdict
 from datetime import date, datetime, time, timezone, timedelta
 
@@ -139,6 +140,18 @@ def _backlog_filters(filters: dict) -> dict:
     a condição vira NULL/falsa pro SQL e zera o backlog inteiro à toa. Sem sentido aplicar esses dois
     filtros aqui, então eles são ignorados só para as contagens de backlog."""
     return {**_opening_filters(filters), "closed_weekdays": [], "closed_time_from": None, "closed_time_to": None}
+
+
+WARRANTY_ORIGIN_SHARED_FILTERS = ("regionals", "companies", "states", "cities")
+
+
+def _warranty_origin_filters(filters: dict) -> dict:
+    """A O.S. de origem (Ativação/Mud. Endereço/Mud. Tecnologia) não é o evento analisado - ela só
+    serve para achar a garantia do mesmo contrato. Por isso só os filtros de localização/empresa
+    (que descrevem o contrato, não a O.S. específica) se aplicam aqui - senão filtrar por
+    diagnóstico, responsável etc. (que descrevem a manutenção) não teria efeito nenhum sobre o
+    denominador, mesmo quando ele conta origens."""
+    return {key: filters.get(key, []) for key in WARRANTY_ORIGIN_SHARED_FILTERS}
 
 
 def _dimension_conditions(
@@ -731,6 +744,240 @@ def sla_hierarchy(
         "parent_subject": parent_subject,
         "items": sorted(items, key=lambda item: (-item["completed"], item["label"])),
         "total": total,
+    }
+
+
+WARRANTY_WINDOW_DAYS = 30
+WARRANTY_ORIGIN_TYPE_ROOTS = ("ativa", "endere", "tecnolog")
+WARRANTY_MAINTENANCE_TYPE_ROOT = "manuten"
+WARRANTY_ORIGIN_LABELS = {
+    "activation": "Ativação",
+    "address_change": "Mudança de Endereço",
+    "technology_change": "Mudança de Tecnologia",
+}
+WARRANTY_MAX_ITEMS = 500
+
+
+def _normalize_type_label(value: str | None) -> str:
+    if not value:
+        return ""
+    text = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    return " ".join(text.casefold().split())
+
+
+def _classify_warranty_os_type(value: str | None) -> str | None:
+    """Classifica o os_type normalizado (sem acento) em origem elegível de garantia (Ativação/
+    Mud. Endereço/Mud. Tecnologia) ou retorno (Manutenção), via substring - o IXC grava o mesmo tipo
+    com abreviações diferentes ("Mud. de Endereço" x "Mudança de Endereço"), então uma comparação
+    exata perderia parte dos casos."""
+    normalized = _normalize_type_label(value)
+    if not normalized:
+        return None
+    if "endere" in normalized:
+        return "address_change"
+    if "tecnolog" in normalized:
+        return "technology_change"
+    if "ativa" in normalized:
+        return "activation"
+    if "manuten" in normalized:
+        return "maintenance"
+    return None
+
+
+def warranty_analytics(
+    db: Session,
+    date_from: date,
+    date_to: date,
+    user: User,
+    *,
+    period_basis: str = "opened",
+    denominator: str = "active_origins",
+    **filters,
+) -> dict:
+    """Garantia de ativação: uma Manutenção é garantia quando abre no mesmo contrato até 30 dias
+    após o fechamento de uma O.S. de origem elegível (Ativação/Mud. Endereço/Mud. Tecnologia).
+    Quando várias origens do contrato são elegíveis, prevalece a mais recente (ver
+    docs/estudo de garantias) - por isso as origens de cada contrato ficam ordenadas por
+    `closed_at` decrescente e o primeiro candidato que caber na janela de 30 dias já é o certo."""
+    start, end = local_period_utc_bounds(date_from, date_to)
+    window = timedelta(days=WARRANTY_WINDOW_DAYS)
+
+    origin_scope_conditions = _dimension_conditions(db, user, _warranty_origin_filters(filters))
+    origin_rows = db.execute(
+        select(
+            OperationOrder.contract_id,
+            OperationOrder.order_code,
+            OperationOrder.os_type,
+            OperationOrder.closed_at,
+            OperationOrder.regional,
+        ).where(
+            *origin_scope_conditions,
+            OperationOrder.contract_id.is_not(None),
+            OperationOrder.contract_id != "",
+            OperationOrder.order_code.is_not(None),
+            OperationOrder.order_code != "",
+            OperationOrder.closed_at.is_not(None),
+            OperationOrder.closed_at.between(start - window, end),
+            or_(*(OperationOrder.os_type.ilike(f"%{root}%") for root in WARRANTY_ORIGIN_TYPE_ROOTS)),
+        )
+    ).all()
+
+    origins_by_contract: dict[str, list[dict]] = defaultdict(list)
+    for contract_id, order_code, os_type, closed_at, regional in origin_rows:
+        kind = _classify_warranty_os_type(os_type)
+        if kind not in WARRANTY_ORIGIN_LABELS:
+            continue
+        origins_by_contract[contract_id].append(
+            {
+                "order_code": order_code,
+                "os_type": os_type,
+                "os_type_kind": kind,
+                "closed_at": _as_utc(closed_at),
+                "regional": regional or UNIDENTIFIED_LABEL,
+            }
+        )
+    all_origins: list[dict] = []
+    for items in origins_by_contract.values():
+        items.sort(key=lambda item: item["closed_at"], reverse=True)
+        all_origins.extend(items)
+
+    # "active_origins" (opção recomendada: exposição real à garantia) é exatamente o conjunto acima
+    # (closed_at entre início do período menos 30 dias e fim do período) - as outras opções recortam
+    # esse mesmo conjunto.
+    origins_closed_in_period = [item for item in all_origins if start <= item["closed_at"] <= end]
+    origins_activation_closed = [item for item in origins_closed_in_period if item["os_type_kind"] == "activation"]
+
+    period_column = OperationOrder.closed_at if period_basis == "closed" else OperationOrder.opened_at
+    retorno_conditions = _dimension_conditions(db, user, {**filters, "os_types": []})
+    maintenance_orders = list(
+        db.scalars(
+            select(OperationOrder).where(
+                *retorno_conditions,
+                OperationOrder.contract_id.is_not(None),
+                OperationOrder.contract_id != "",
+                OperationOrder.order_code.is_not(None),
+                OperationOrder.order_code != "",
+                OperationOrder.opened_at.is_not(None),
+                period_column.is_not(None),
+                period_column.between(start, end),
+                OperationOrder.os_type.ilike(f"%{WARRANTY_MAINTENANCE_TYPE_ROOT}%"),
+            )
+        )
+    )
+    maintenance_orders = [
+        order for order in maintenance_orders if _classify_warranty_os_type(order.os_type) == "maintenance"
+    ]
+
+    garantias: list[dict] = []
+    for order in maintenance_orders:
+        candidates = origins_by_contract.get(order.contract_id, [])
+        retorno_opened_at = _as_utc(order.opened_at)
+        for origin in candidates:
+            if origin["order_code"] == order.order_code:
+                continue
+            if origin["closed_at"] <= retorno_opened_at <= origin["closed_at"] + window:
+                garantias.append({"order": order, "origin": origin})
+                break
+
+    numerator = len(garantias)
+    contracts_with_warranty = len({item["order"].contract_id for item in garantias})
+    customers_with_warranty = len(
+        {
+            item["order"].customer_id or item["order"].customer_name
+            for item in garantias
+            if item["order"].customer_id or item["order"].customer_name
+        }
+    )
+
+    denominator_populations = {
+        "closed_origins": origins_closed_in_period,
+        "active_origins": all_origins,
+        "maintenance_total": maintenance_orders,
+        "activation_closed": origins_activation_closed,
+    }
+    denominator_population = denominator_populations.get(denominator, all_origins)
+    denominator_count = len(denominator_population)
+    percentage = round((numerator / denominator_count) * 100, 1) if denominator_count else None
+
+    if denominator == "maintenance_total":
+        breakdown = [{"label": "Manutenção", "quantity": denominator_count, "percentage": 100.0 if denominator_count else 0.0}]
+    else:
+        breakdown_counts: dict[str, int] = defaultdict(int)
+        for item in denominator_population:
+            breakdown_counts[item["os_type_kind"]] += 1
+        breakdown = [
+            {
+                "label": WARRANTY_ORIGIN_LABELS[kind],
+                "quantity": quantity,
+                "percentage": round((quantity / denominator_count) * 100, 1) if denominator_count else 0.0,
+            }
+            for kind, quantity in sorted(breakdown_counts.items(), key=lambda pair: -pair[1])
+        ]
+
+    # Ranking por filial: % de cada regional é sobre o denominador daquela própria regional (não
+    # sobre o total de garantias) - senão a filial com mais volume sempre apareceria "pior" mesmo
+    # tendo a mesma taxa de retorno que as outras.
+    def _regional_label(entry) -> str:
+        return entry["regional"] if isinstance(entry, dict) else (entry.regional or UNIDENTIFIED_LABEL)
+
+    denominator_by_regional: dict[str, int] = defaultdict(int)
+    for entry in denominator_population:
+        denominator_by_regional[_regional_label(entry)] += 1
+    garantias_by_regional: dict[str, int] = defaultdict(int)
+    for item in garantias:
+        garantias_by_regional[item["order"].regional or UNIDENTIFIED_LABEL] += 1
+
+    by_regional = [
+        {
+            "label": label,
+            "quantity": garantias_by_regional.get(label, 0),
+            "denominator_count": denominator_by_regional.get(label, 0),
+            "percentage": (
+                round((garantias_by_regional.get(label, 0) / denominator_by_regional[label]) * 100, 1)
+                if denominator_by_regional.get(label)
+                else None
+            ),
+        }
+        for label in sorted(set(denominator_by_regional) | set(garantias_by_regional))
+    ]
+    by_regional.sort(
+        key=lambda item: (
+            -(item["percentage"] if item["percentage"] is not None else -1),
+            -item["quantity"],
+            item["label"].casefold(),
+        )
+    )
+
+    garantias.sort(key=lambda item: item["order"].opened_at, reverse=True)
+    items_truncated = len(garantias) > WARRANTY_MAX_ITEMS
+    items = [
+        {
+            "contract_id": item["order"].contract_id,
+            "customer_name": item["order"].customer_name,
+            "regional": item["order"].regional,
+            "diagnosis": item["order"].diagnosis,
+            "origin_order_code": item["origin"]["order_code"],
+            "origin_os_type": item["origin"]["os_type"],
+            "origin_closed_at": item["origin"]["closed_at"],
+            "return_order_code": item["order"].order_code,
+            "return_opened_at": item["order"].opened_at,
+            "return_closed_at": item["order"].closed_at,
+        }
+        for item in garantias[:WARRANTY_MAX_ITEMS]
+    ]
+
+    return {
+        "period_basis": period_basis,
+        "denominator": denominator,
+        "numerator": numerator,
+        "denominator_count": denominator_count,
+        "percentage": percentage,
+        "contracts_with_warranty": contracts_with_warranty,
+        "customers_with_warranty": customers_with_warranty,
+        "breakdown": breakdown,
+        "by_regional": by_regional,
+        "items": items,
+        "items_truncated": items_truncated,
     }
 
 

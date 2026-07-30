@@ -17,6 +17,7 @@ import { OperationsOrderDetailDialog } from "@/components/operations/operations-
 import { OperationsOverviewCharts } from "@/components/operations/operations-overview-charts";
 import { OperationsSlaHierarchyTable } from "@/components/operations/operations-sla-hierarchy-table";
 import { OperationsTeamConfiguration } from "@/components/operations/operations-team-configuration";
+import { OperationsWarrantyAnalytics } from "@/components/operations/operations-warranty-analytics";
 import { OperationsWorkScheduleOverview } from "@/components/operations/operations-work-schedule-overview";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +58,9 @@ import {
   type OperationSlaRiskItem,
   type OperationTrendGranularity,
   type OperationTrendSeries,
+  type OperationWarrantyAnalytics,
+  type OperationWarrantyDenominator,
+  type OperationWarrantyPeriodBasis,
   type OperationWorkScheduleOverview,
 } from "@/lib/operations-api";
 
@@ -192,6 +196,19 @@ const EMPTY_PAGE: OperationOrderPage = {
 const EMPTY_COLLABORATOR_SLA: OperationCollaboratorSla = {
   type_columns: [],
   items: [],
+};
+const EMPTY_WARRANTY_ANALYTICS: OperationWarrantyAnalytics = {
+  period_basis: "opened",
+  denominator: "active_origins",
+  numerator: 0,
+  denominator_count: 0,
+  percentage: null,
+  contracts_with_warranty: 0,
+  customers_with_warranty: 0,
+  breakdown: [],
+  by_regional: [],
+  items: [],
+  items_truncated: false,
 };
 const EMPTY_CALENDAR: OperationCalendar = {
   competence: "",
@@ -590,6 +607,13 @@ export default function OperacaoPage() {
     useState<OperationSlaHierarchy>(EMPTY_SLA_HIERARCHY);
   const [collaboratorSla, setCollaboratorSla] =
     useState<OperationCollaboratorSla>(EMPTY_COLLABORATOR_SLA);
+  const [warrantyAnalytics, setWarrantyAnalytics] = useState<OperationWarrantyAnalytics>(
+    EMPTY_WARRANTY_ANALYTICS,
+  );
+  const [warrantyPeriodBasis, setWarrantyPeriodBasis] =
+    useState<OperationWarrantyPeriodBasis>("opened");
+  const [warrantyDenominator, setWarrantyDenominator] =
+    useState<OperationWarrantyDenominator>("active_origins");
   const [calendar, setCalendar] = useState<OperationCalendar>(EMPTY_CALENDAR);
   const [calendarGroupBy, setCalendarGroupBy] = useState<
     "regional" | "collaborator"
@@ -658,6 +682,7 @@ export default function OperacaoPage() {
   const canSyncIxc = Boolean(user?.permissions.includes("operations:sync_ixc"));
   const canViewOpenings = Boolean(user?.permissions.includes("operations:view_openings"));
   const canViewSla = Boolean(user?.permissions.includes("operations:view_sla"));
+  const canViewWarranty = Boolean(user?.permissions.includes("operations:view_warranty"));
   const canViewCalendar = Boolean(user?.permissions.includes("operations:view_calendar"));
   const canViewBacklog = Boolean(user?.permissions.includes("operations:view_backlog"));
   const canViewOrderDetails = Boolean(user?.permissions.includes("operations:view_order_details"));
@@ -670,12 +695,13 @@ export default function OperacaoPage() {
       "overview",
       ...(canViewOpenings ? ["openings" as const] : []),
       ...(canViewSla ? ["sla" as const] : []),
+      ...(canViewWarranty ? ["garantias" as const] : []),
       ...(canViewCalendar ? ["calendar" as const] : []),
       ...(canViewBacklog ? ["progress" as const] : []),
       ...(canViewOrderDetails ? ["details" as const] : []),
       ...(canManageTeamModels || canManageSubjects || canSyncIxc ? ["teams" as const] : []),
     ],
-    [canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla],
+    [canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
   );
 
   const loadDashboard = useCallback(
@@ -684,6 +710,8 @@ export default function OperacaoPage() {
       page = 1,
       requestedTab: OperationTab = activeTab,
       calendarGrouping = calendarGroupBy,
+      warrantyPeriodBasisOverride = warrantyPeriodBasis,
+      warrantyDenominatorOverride = warrantyDenominator,
     ) => {
       const requestId = dashboardRequest.current + 1;
       dashboardRequest.current = requestId;
@@ -771,6 +799,17 @@ export default function OperacaoPage() {
           return;
         }
 
+        if (requestedTab === "garantias") {
+          const nextWarranty = await operationsApi.warranty(
+            effectiveFilters,
+            warrantyPeriodBasisOverride,
+            warrantyDenominatorOverride,
+          );
+          if (dashboardRequest.current !== requestId) return;
+          setWarrantyAnalytics(nextWarranty);
+          return;
+        }
+
         if (requestedTab === "calendar") {
           const nextCalendar = await operationsApi.calendar(
             effectiveFilters,
@@ -828,6 +867,8 @@ export default function OperacaoPage() {
       detailSort,
       openingsGranularity,
       trendGranularity,
+      warrantyDenominator,
+      warrantyPeriodBasis,
       workScheduleModelIds,
     ],
   );
@@ -1701,6 +1742,41 @@ export default function OperacaoPage() {
               <div className="h-80 animate-pulse rounded-2xl border bg-white" />
             )}
             <OperationsCollaboratorSlaTable data={collaboratorSla} />
+          </TabsContent>
+
+          <TabsContent value="garantias">
+            {appliedFilters ? (
+              <OperationsWarrantyAnalytics
+                data={warrantyAnalytics}
+                isLoading={loading}
+                periodBasis={warrantyPeriodBasis}
+                denominator={warrantyDenominator}
+                onPeriodBasisChange={(basis) => {
+                  setWarrantyPeriodBasis(basis);
+                  void loadDashboard(
+                    filters || appliedFilters,
+                    1,
+                    "garantias",
+                    calendarGroupBy,
+                    basis,
+                    warrantyDenominator,
+                  );
+                }}
+                onDenominatorChange={(nextDenominator) => {
+                  setWarrantyDenominator(nextDenominator);
+                  void loadDashboard(
+                    filters || appliedFilters,
+                    1,
+                    "garantias",
+                    calendarGroupBy,
+                    warrantyPeriodBasis,
+                    nextDenominator,
+                  );
+                }}
+              />
+            ) : (
+              <div className="h-80 animate-pulse rounded-2xl border bg-white" />
+            )}
           </TabsContent>
 
           <TabsContent value="calendar">
