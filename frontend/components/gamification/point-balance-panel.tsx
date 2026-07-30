@@ -216,7 +216,7 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
             type="button"
             onClick={() => setStatusFilter("all")}
             className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-              statusFilter === "all" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
+              statusFilter === "all" ? "bg-uni-royal text-white" : "text-slate-600 hover:bg-slate-100"
             }`}
           >
             Todos
@@ -225,13 +225,13 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
             type="button"
             onClick={() => setStatusFilter("review")}
             className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-              statusFilter === "review" ? "bg-violet-700 text-white" : "text-slate-600 hover:bg-slate-100"
+              statusFilter === "review" ? "bg-uni-royal text-white" : "text-slate-600 hover:bg-slate-100"
             }`}
           >
             <ShieldAlert className="h-3 w-3" />
             Em revisão
             {totals.requiresReviewCount > 0 ? (
-              <span className={`ml-0.5 rounded-full px-1.5 text-[10px] ${statusFilter === "review" ? "bg-white/25" : "bg-violet-100 text-violet-700"}`}>
+              <span className={`ml-0.5 rounded-full px-1.5 text-[10px] ${statusFilter === "review" ? "bg-white/25" : "bg-blue-50 text-uni-royal"}`}>
                 {totals.requiresReviewCount}
               </span>
             ) : null}
