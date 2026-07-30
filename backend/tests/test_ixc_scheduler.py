@@ -51,7 +51,7 @@ def test_ixc_loop_sleeps_before_first_automatic_sync_when_interval_remains(monke
     with pytest.raises(StopLoop):
         asyncio.run(ixc_scheduler.run_ixc_sync_loop(20, initial_enabled=True))
 
-    assert calls == [("sleep", 1200.0)]
+    assert calls == [("sleep", 15.0)]
 
 
 def test_ixc_loop_runs_sync_when_configured_interval_has_passed(monkeypatch):
@@ -70,7 +70,9 @@ def test_ixc_loop_runs_sync_when_configured_interval_has_passed(monkeypatch):
         return {"summary": {}}
 
     monkeypatch.setattr(ixc_scheduler, "_current_sync_enabled", lambda default: True)
-    monkeypatch.setattr(ixc_scheduler, "_seconds_until_next_sync", lambda default_interval_minutes: 0.0)
+    wait_times = iter([0.0, 1200.0])
+
+    monkeypatch.setattr(ixc_scheduler, "_seconds_until_next_sync", lambda default_interval_minutes: next(wait_times))
     monkeypatch.setattr(ixc_scheduler, "_current_interval_minutes", lambda default: 20)
     monkeypatch.setattr(ixc_scheduler, "run_ixc_sync_once", fake_sync)
     monkeypatch.setattr(ixc_scheduler.asyncio, "sleep", fake_sleep)
@@ -79,4 +81,4 @@ def test_ixc_loop_runs_sync_when_configured_interval_has_passed(monkeypatch):
     with pytest.raises(StopLoop):
         asyncio.run(ixc_scheduler.run_ixc_sync_loop(20, initial_enabled=True))
 
-    assert calls == [("to_thread", None), ("sync", None), ("sleep", 1200)]
+    assert calls == [("to_thread", None), ("sync", None), ("sleep", 15.0)]
