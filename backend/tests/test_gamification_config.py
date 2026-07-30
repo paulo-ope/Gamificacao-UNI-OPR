@@ -287,6 +287,75 @@ def test_apply_config_leadership_profile_without_required_regional_is_skipped_wi
     assert db_session.query(LeadershipProfile).filter_by(name="Lider Sem Filial").first() is None
 
 
+def test_leadership_config_survives_a_full_export_wipe_reimport_round_trip(db_session):
+    """Garantia de ponta a ponta pedida pelo usuario: o JSON de config precisa trazer a
+    lideranca COMPLETA, nao so alguns campos. Em vez de checar campo por campo (o que sempre
+    corre o risco de esquecer um), este teste monta um cenario realista com os 3 tipos de
+    lideranca (supervisor com filial, gerente da unidade multi-filial, gerente de pasta sem
+    filial), multiplicador customizado e vinculo com colaborador via ixc_employee_id - exporta,
+    APAGA tudo (simulando reimportar num ambiente vazio, como da VM pro local), reimporta o
+    mesmo JSON e exporta de novo. Se a segunda exportacao for identica a primeira (exceto pelos
+    ids internos, que sao esperados mudar), a config e portavel de ponta a ponta de verdade."""
+    from app.models import LeadershipProfileRegional
+    from app.services.leadership_bonus import replace_profile_regionals
+
+    collaborator = Collaborator(name="Lider Multi", role="Gerente", regional="UNI SUL", ixc_employee_id=456)
+    db_session.add(collaborator)
+    db_session.flush()
+
+    role_profile = LeadershipRoleProfile(name="Gerente da Unidade Padrao", scope_type="regional_manager", default_multiplier=2.0, active=True)
+    db_session.add(role_profile)
+    db_session.flush()
+
+    supervisor = LeadershipProfile(
+        name="Supervisor Filial Unica", role_type="supervisor", percentage=0, multiplier=1.5, active=True
+    )
+    regional_manager = LeadershipProfile(
+        name="Lider Multi",
+        role_type="regional_manager",
+        percentage=0,
+        role_profile_id=role_profile.id,
+        multiplier=2.0,
+        collaborator_id=collaborator.id,
+        active=True,
+    )
+    portfolio_manager = LeadershipProfile(
+        name="Gerente De Pasta Custom",
+        role_type="portfolio_manager",
+        percentage=0,
+        use_custom_multiplier=True,
+        custom_multiplier=4.25,
+        multiplier=4.25,
+        average_source="collaborators_and_leaders",
+        active=True,
+    )
+    db_session.add_all([supervisor, regional_manager, portfolio_manager])
+    db_session.flush()
+    replace_profile_regionals(db_session, supervisor, ["UNI SUL"])
+    replace_profile_regionals(db_session, regional_manager, ["UNI SUL", "UNI NORTE"])
+    db_session.flush()
+
+    before = gc.serialize_current_config(db_session)
+
+    db_session.query(LeadershipProfileRegional).delete()
+    db_session.query(LeadershipProfile).delete()
+    db_session.query(LeadershipRoleProfile).delete()
+    db_session.flush()
+    assert db_session.query(LeadershipProfile).count() == 0, "cenario precisa comecar zerado, como um ambiente novo"
+
+    result = gc.apply_config(db_session, before)
+    assert not result.get("warnings"), f"reimport nao deveria gerar avisos: {result.get('warnings')}"
+
+    after = gc.serialize_current_config(db_session)
+
+    def _without_id(items):
+        return sorted((({k: v for k, v in item.items() if k != "id"}) for item in items), key=lambda item: item["name"])
+
+    assert _without_id(after["leadership_role_profiles"]) == _without_id(before["leadership_role_profiles"])
+    assert _without_id(after["leadership_profiles"]) == _without_id(before["leadership_profiles"])
+    assert len(after["leadership_profiles"]) == 3, "os 3 tipos de lideranca (supervisor, gerente da unidade, gerente de pasta) precisam sobreviver ao round-trip"
+
+
 def test_serialize_current_config_includes_leadership(db_session):
     """O JSON exportado precisa trazer perfis de cargo e lideres com os vinculos resolvidos por
     nome/ixc_employee_id (portaveis entre ambientes), nao so pelos ids internos."""

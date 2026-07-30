@@ -532,11 +532,17 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
             warnings.append(f"Perfil de liderança '{name}' ignorado: {exc.detail}")
             continue
 
-        profile = db.get(LeadershipProfile, item.get("id")) if item.get("id") else None
-        if not profile:
-            profile = db.scalar(
-                select(LeadershipProfile).where(LeadershipProfile.name == name, LeadershipProfile.role_type == role_type)
-            )
+        # LeadershipProfile nao tem constraint unica de nome, ao contrario das outras entidades
+        # deste arquivo - confiar no id bruto (mesmo com _resolve_by_id_or_name) e inseguro
+        # mesmo dentro do MESMO reimport: apos apagar a tabela, o autoincrement pode reatribuir
+        # o id antigo de um perfil a um OUTRO perfil recem-criado nesta mesma passada, e sem
+        # constraint unica isso sobrescreve silenciosamente os dados errados (achado real: um
+        # round-trip export->wipe->reimport trocava os dados de dois perfis). Mesmo criterio
+        # usado para collaborators acima - nunca confiar no id interno cru, so em chave de
+        # negocio (aqui, nome + tipo de lideranca).
+        profile = db.scalar(
+            select(LeadershipProfile).where(LeadershipProfile.name == name, LeadershipProfile.role_type == role_type)
+        )
 
         try:
             validate_no_scope_overlap(db, role_type, regionals, profile_id=profile.id if profile else None)
