@@ -399,3 +399,35 @@ def test_debit_survives_deleting_and_reimporting_the_related_service_order(db_se
 
     assert duplicate_check == [], "re-importing the same O.S must not create a second debit for the same warranty pair"
     assert len(point_balance.pending_entries_for_collaborator(db_session, collaborator.id)) == 1
+
+
+def test_snapshot_points_do_not_fallback_to_subject_only_for_wrong_os_type(make_collaborator):
+    """Regression: post-payment warranty debits must use the same exact (os_type, os_subject)
+    matching rule as the main scorer. Falling back to a unique subject from a different type
+    creates a debit for an O.S that originally should have been unscored."""
+    collaborator = make_collaborator()
+    order = _os(
+        collaborator,
+        "OS-WRONG-TYPE",
+        datetime(2026, 6, 25, tzinfo=timezone.utc),
+        os_type="Manutencao",
+        os_subject="Reparo Fibra",
+    )
+    snapshot = {
+        "config": {
+            "scoring_groups": [{"id": 1, "default_points": 12.0, "active": True}],
+            "scoring_subject_rules": [
+                {
+                    "id": 1,
+                    "group_id": 1,
+                    "os_type": "Instalacao",
+                    "os_subject": "Reparo Fibra",
+                    "use_group_default": True,
+                    "custom_points": None,
+                    "active": True,
+                }
+            ],
+        }
+    }
+
+    assert point_balance._order_points_from_snapshot(order, snapshot) == 0.0

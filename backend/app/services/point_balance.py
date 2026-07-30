@@ -62,11 +62,6 @@ def _order_points_from_snapshot(order: ServiceOrder, config_snapshot: dict[str, 
         None,
     )
     if matched_rule is None:
-        subject_matches = [rule for rule in active_rules if scoring_detail.normalize(rule.get("os_subject")) == os_subject]
-        if len(subject_matches) == 1:
-            matched_rule = subject_matches[0]
-
-    if matched_rule is None:
         return 0.0
 
     group = groups_by_id.get(matched_rule.get("group_id"))
