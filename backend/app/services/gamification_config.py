@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     AppSetting,
+    Collaborator,
     DiagnosisPenaltyRule,
     GamificationConfigVersion,
     HealthRule,
@@ -169,6 +170,20 @@ def serialize_current_config(db: Session) -> dict[str, Any]:
                 "active": rule.active,
             }
             for rule in db.scalars(select(HealthRule).order_by(HealthRule.id.asc()))
+        ],
+        "collaborators": [
+            {
+                "id": collaborator.id,
+                "name": collaborator.name,
+                "role": collaborator.role,
+                "regional": collaborator.regional,
+                "active": collaborator.active,
+                "is_registered": collaborator.is_registered,
+                "ixc_employee_id": collaborator.ixc_employee_id,
+                "phone": collaborator.phone,
+                "email": collaborator.email,
+            }
+            for collaborator in db.scalars(select(Collaborator).order_by(Collaborator.name.asc()))
         ],
     }
 
@@ -337,6 +352,39 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         rule.max_recurrence_rate = float(item.get("max_recurrence_rate") or 100)
         rule.multiplier = float(item.get("multiplier") or 1)
         rule.active = _bool(item.get("active"), True)
+
+    for item in config.get("collaborators") or []:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+
+        # Casamento por ixc_employee_id primeiro (vale entre ambientes, nao depende do nome
+        # bater exato) - so cai pra nome quando o colaborador ainda nao tem esse vinculo.
+        ixc_employee_id_raw = item.get("ixc_employee_id")
+        ixc_employee_id = int(ixc_employee_id_raw) if ixc_employee_id_raw not in (None, "") else None
+
+        collaborator = None
+        if ixc_employee_id is not None:
+            collaborator = db.scalar(select(Collaborator).where(Collaborator.ixc_employee_id == ixc_employee_id))
+        if not collaborator:
+            collaborator = db.scalar(select(Collaborator).where(func.lower(Collaborator.name) == name.lower()))
+        if not collaborator:
+            collaborator = Collaborator(name=name, role=str(item.get("role") or "Importado"), regional=str(item.get("regional") or ""))
+            db.add(collaborator)
+            db.flush()
+
+        collaborator.name = name
+        collaborator.role = str(item.get("role") or collaborator.role)
+        collaborator.regional = str(item.get("regional") or collaborator.regional)
+        collaborator.active = _bool(item.get("active"), True)
+        collaborator.is_registered = _bool(item.get("is_registered"), True)
+        collaborator.phone = item.get("phone") or collaborator.phone
+        collaborator.email = item.get("email") or collaborator.email
+        # Seguro sempre atribuir aqui: se esse ixc_employee_id ja pertencesse a OUTRO
+        # colaborador, a busca por id no topo do loop ja teria encontrado e casado com ELE (nao
+        # com o resultado da busca por nome) - nunca chegamos aqui com um id de outro dono.
+        if ixc_employee_id is not None:
+            collaborator.ixc_employee_id = ixc_employee_id
 
     db.flush()
     current_config = serialize_current_config(db)

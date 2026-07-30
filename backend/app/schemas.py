@@ -426,6 +426,7 @@ class GamificationConfigOut(BaseModel):
     sla_penalty_rules: list[dict] = []
     recurrence_classification_rules: list[dict] = []
     health_rules: list[dict] = []
+    collaborators: list[dict] = []
     warnings: list[str] = []
 
 
@@ -454,6 +455,7 @@ class GamificationConfigImport(BaseModel):
     sla_penalty_rules: list[dict] = []
     recurrence_classification_rules: list[dict] = []
     health_rules: list[dict] = []
+    collaborators: list[dict] = []
 
 
 class SubjectLinkToGroupRequest(BaseModel):
