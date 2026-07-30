@@ -1,5 +1,5 @@
 """Regression tests for backend/app/services/gamification_config.py."""
-from app.models import Collaborator
+from app.models import Collaborator, DiagnosisPenaltyRule
 from app.services import gamification_config as gc
 
 
@@ -165,6 +165,43 @@ def test_apply_config_matches_by_ixc_employee_id_even_when_a_different_collabora
     assert owner.ixc_employee_id == 42
     assert other.ixc_employee_id is None, "o colaborador so-por-nome nao deveria ganhar o vinculo de outro dono"
     assert db_session.query(Collaborator).count() == 2, "nao deveria ter criado um terceiro registro"
+
+
+def test_apply_config_diagnosis_rule_prefers_name_match_over_a_stale_id(db_session):
+    """Regression (incidente real em producao, 2026-07-30): um JSON reimportado de outro momento
+    trazia um item com id=6 e diagnosis_name='Resolvido', mas nesse banco o id=6 ja pertencia a
+    OUTRO diagnostico ('Apps: Max + Canais em funcionamento') e uma linha diferente (id=80) ja
+    era a dona legitima do nome 'Resolvido'. Casar por id primeiro fazia o apply_config tentar
+    renomear a linha errada para 'Resolvido', colidindo com a constraint unica de
+    diagnosis_name e derrubando o import com IntegrityError. O nome (chave unica de negocio)
+    deve vencer quando id e nome apontam para linhas diferentes."""
+    stale_id_owner = DiagnosisPenaltyRule(diagnosis_name="Apps: Max + Canais em funcionamento", action_type="no_penalty")
+    name_owner = DiagnosisPenaltyRule(diagnosis_name="Resolvido", action_type="no_penalty")
+    db_session.add_all([stale_id_owner, name_owner])
+    db_session.flush()
+    stale_id = stale_id_owner.id
+
+    config = _base_config(
+        diagnosis_penalty_rules=[
+            {
+                "id": stale_id,
+                "diagnosis_name": "Resolvido",
+                "action_type": "no_penalty",
+                "description": "Diagnostico conclusivo sem penalidade.",
+                "active": True,
+            }
+        ]
+    )
+
+    gc.apply_config(db_session, config)
+    db_session.flush()
+
+    db_session.refresh(stale_id_owner)
+    db_session.refresh(name_owner)
+    assert stale_id_owner.diagnosis_name == "Apps: Max + Canais em funcionamento", "a linha do id desatualizado nao deveria ser renomeada"
+    assert name_owner.diagnosis_name == "Resolvido"
+    assert name_owner.description == "Diagnostico conclusivo sem penalidade.", "a atualizacao deveria ter sido aplicada na linha dona do nome"
+    assert db_session.query(DiagnosisPenaltyRule).count() == 2, "nao deveria ter criado uma terceira linha"
 
 
 def test_serialize_current_config_includes_collaborators(db_session):

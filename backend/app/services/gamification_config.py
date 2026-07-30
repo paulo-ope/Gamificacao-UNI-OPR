@@ -21,6 +21,21 @@ from app.services.calculation import upsert_setting
 from app.seed import deleted_default_groups
 
 
+def _resolve_by_id_or_name(db: Session, model: type, id_value: Any, name_stmt: Any | None) -> Any:
+    """Casa um item do JSON de config com sua linha no banco.
+
+    Prioriza o casamento pelo nome (chave unica de negocio) quando id e nome apontam para
+    linhas DIFERENTES - um JSON reimportado de outro momento/ambiente pode trazer um id que
+    hoje pertence a outra linha no banco, e renomea-la pro nome do item colide com a
+    constraint unica (achado real: reimport travou com IntegrityError em diagnosis_name).
+    """
+    by_id = db.get(model, id_value) if id_value else None
+    by_name = db.scalar(name_stmt) if name_stmt is not None else None
+    if by_id is not None and by_name is not None and by_id is not by_name:
+        return by_name
+    return by_id or by_name
+
+
 CONFIG_NAME = "gamification_rules_config"
 
 DEFAULT_SETTINGS = {
@@ -207,9 +222,12 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         upsert_setting(db, str(key), str(value))
 
     for item in config.get("scoring_groups") or []:
-        group = db.get(ScoringGroup, item.get("id")) if item.get("id") else None
-        if not group and item.get("name"):
-            group = db.scalar(select(ScoringGroup).where(ScoringGroup.name == str(item["name"])))
+        group = _resolve_by_id_or_name(
+            db,
+            ScoringGroup,
+            item.get("id"),
+            select(ScoringGroup).where(ScoringGroup.name == str(item["name"])) if item.get("name") else None,
+        )
         if not group:
             group = ScoringGroup(name=str(item.get("name") or "Novo grupo"), default_points=float(item.get("default_points") or 0))
             db.add(group)
@@ -238,13 +256,14 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
             )
             continue
 
-        rule = db.get(ScoringSubjectRule, item.get("id")) if item.get("id") else None
-        if not rule:
-            rule = db.scalar(
-                select(ScoringSubjectRule)
-                .where(ScoringSubjectRule.os_type == os_type)
-                .where(ScoringSubjectRule.os_subject == os_subject)
-            )
+        rule = _resolve_by_id_or_name(
+            db,
+            ScoringSubjectRule,
+            item.get("id"),
+            select(ScoringSubjectRule)
+            .where(ScoringSubjectRule.os_type == os_type)
+            .where(ScoringSubjectRule.os_subject == os_subject),
+        )
 
         group_id = group_id_map.get(int(item["group_id"])) if item.get("group_id") else None
         if not group_id and item.get("group_name"):
@@ -277,9 +296,12 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         diagnosis_name = str(item.get("diagnosis_name") or "").strip()
         if not diagnosis_name:
             continue
-        rule = db.get(DiagnosisPenaltyRule, item.get("id")) if item.get("id") else None
-        if not rule:
-            rule = db.scalar(select(DiagnosisPenaltyRule).where(DiagnosisPenaltyRule.diagnosis_name == diagnosis_name))
+        rule = _resolve_by_id_or_name(
+            db,
+            DiagnosisPenaltyRule,
+            item.get("id"),
+            select(DiagnosisPenaltyRule).where(DiagnosisPenaltyRule.diagnosis_name == diagnosis_name),
+        )
         if not rule:
             rule = DiagnosisPenaltyRule(diagnosis_name=diagnosis_name)
             db.add(rule)
@@ -293,9 +315,12 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
 
     for item in config.get("sla_penalty_rules") or []:
         name = str(item.get("name") or item.get("condition_type") or "Regra SLA").strip()
-        rule = db.get(SlaPenaltyRule, item.get("id")) if item.get("id") else None
-        if not rule:
-            rule = db.scalar(select(SlaPenaltyRule).where(SlaPenaltyRule.name == name))
+        rule = _resolve_by_id_or_name(
+            db,
+            SlaPenaltyRule,
+            item.get("id"),
+            select(SlaPenaltyRule).where(SlaPenaltyRule.name == name),
+        )
         if not rule:
             rule = SlaPenaltyRule(name=name)
             db.add(rule)
@@ -310,9 +335,12 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         name = str(item.get("name") or "").strip()
         if not name:
             continue
-        rule = db.get(RecurrenceClassificationRule, item.get("id")) if item.get("id") else None
-        if not rule:
-            rule = db.scalar(select(RecurrenceClassificationRule).where(RecurrenceClassificationRule.name == name))
+        rule = _resolve_by_id_or_name(
+            db,
+            RecurrenceClassificationRule,
+            item.get("id"),
+            select(RecurrenceClassificationRule).where(RecurrenceClassificationRule.name == name),
+        )
         if not rule:
             rule = RecurrenceClassificationRule(name=name)
             db.add(rule)
@@ -341,9 +369,12 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
         name = str(item.get("name") or "").strip()
         if not name:
             continue
-        rule = db.get(HealthRule, item.get("id")) if item.get("id") else None
-        if not rule:
-            rule = db.scalar(select(HealthRule).where(HealthRule.name == name))
+        rule = _resolve_by_id_or_name(
+            db,
+            HealthRule,
+            item.get("id"),
+            select(HealthRule).where(HealthRule.name == name),
+        )
         if not rule:
             rule = HealthRule(name=name)
             db.add(rule)
