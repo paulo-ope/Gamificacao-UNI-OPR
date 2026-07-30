@@ -11,6 +11,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models import Collaborator, ImportRun, ScoringSubjectRule, ServiceOrder
+from app.modules.operations.scope import PRIMARY_IXC_SECTOR_IDS
 from app.services.calculation_closure import find_paid_run_for_service_order_context
 from app.services.ixc_client import (
     IxcClient,
@@ -104,8 +105,9 @@ def _ixc_import_lock(db: Session):
 
 # Setores do IXC (su_oss_chamado.setor -> empresa_setor) que interessam à gamificação - decisão do dono
 # do produto: só trabalho técnico de campo (suporte externo/fibra/rádio), não administrativo/comercial.
-# "7"=Suporte Externo, "8"=Suporte Externo Rádio, "9"=Suporte Externo Fibra.
-IXC_TECHNICAL_SETOR_IDS = ["7", "8", "9"]
+# Fonte única: PRIMARY_IXC_SECTOR_IDS (app/modules/operations/scope.py) - antes esta lista era
+# redefinida aqui também (mesmos valores, "7"/"8"/"9", mas em dois lugares que podiam divergir
+# silenciosamente se um fosse editado sem o outro).
 
 # Marcador explícito de "ninguém classificou este assunto ainda" - usado quando nenhuma fonte (regra
 # cadastrada, mapa fixo, histórico aprendido) sabe o Tipo Geral de um assunto novo. Substitui o fallback
@@ -520,7 +522,7 @@ def _import_ixc_service_orders_body(
             closed_before=closed_before,
             updated_after=updated_after,
             updated_before=updated_before,
-            setor_ids=IXC_TECHNICAL_SETOR_IDS,
+            setor_ids=list(PRIMARY_IXC_SECTOR_IDS),
             only_finalized=True,
         )
     )

@@ -147,7 +147,8 @@ def sync_service_orders_from_operations(
     para analytics organizacional mais amplo - ver IXC_SECTORS em modules/operations/scope.py, e o
     backfill por CLI aceita --sector-ids arbitrario). A gamificacao so pontua trabalho tecnico de
     campo (decisao do dono do produto, a mesma que o importador antigo aplicava via
-    IXC_TECHNICAL_SETOR_IDS) - sem este filtro, O.S. de Comercial/Financeiro/Cobranca/etc. viram
+    PRIMARY_IXC_SECTOR_IDS/PRIMARY_SECTOR_NAMES, mesma fonte usada aqui) - sem este filtro,
+    O.S. de Comercial/Financeiro/Cobranca/etc. viram
     `ServiceOrder` e criam colaboradores fantasma (atendentes desses setores) no ranking.
     """
     cursor = func.coalesce(OperationOrder.source_updated_at, OperationOrder.first_imported_at)
