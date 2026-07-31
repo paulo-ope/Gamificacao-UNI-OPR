@@ -42,10 +42,12 @@ def test_sync_ignores_matriz_and_unmapped_regionals(db_session, monkeypatch):
     assert rows[0].cpk_realizado == 1.2
 
 
-def test_sync_marks_sem_base_when_month_is_still_open(db_session, monkeypatch):
-    """Regression: 'mes_fechado=false' significa numeros parciais - o guia da API explicitamente
-    diz 'nao usar para pagamento'. Mesmo que a regional tenha 'bateu' no meio do mes, isso nao
-    pode virar ajuste real ainda - status deve cair para 'sem_base' (= sem ajuste)."""
+def test_sync_applies_partial_status_even_when_month_is_still_open(db_session, monkeypatch):
+    """Decisao do usuario (2026-07-31): o bonus/penalidade de CPK deve refletir o momento atual
+    da apuracao, mesmo com o mes ainda em andamento (numeros parciais) - nao espera mais o mes
+    fechar oficialmente pra aplicar o ajuste real de pagamento. 'mes_fechado=false' continua
+    sendo gravado no snapshot, mas so como metadado de exibicao (ex.: tag "provisorio" na tela),
+    nao trava mais o status em 'sem_base'."""
     payload = _payload(mes_fechado=False, regionais=[
         {"regional": "Alvorada D'oeste", "agregado": {"status": "bateu", "cpk_realizado": 0.8, "cpk_meta": 0.9}},
     ])
@@ -55,8 +57,8 @@ def test_sync_marks_sem_base_when_month_is_still_open(db_session, monkeypatch):
     db_session.commit()
 
     row = db_session.scalar(select(CpkRegionalSnapshot))
-    assert row.status == "sem_base"
-    assert row.mes_fechado is False
+    assert row.status == "na_meta"
+    assert row.mes_fechado is False, "metadado de exibicao continua registrando que e um numero parcial"
 
 
 def test_sync_upserts_instead_of_duplicating(db_session, monkeypatch):

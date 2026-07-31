@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models import CpkRegionalSnapshot
 from app.services.cpk_client import get_cpk_client
-from app.services.regional import SAO_FRANCISCO_REGIONAL, normalize_key
+from app.services.regional import ROLIM_REGIONAL, SAO_FRANCISCO_REGIONAL, normalize_key
 from app.services.scoring_detail import _safe_float, get_setting
 
 CPK_BONUS_POINTS_SETTING = "cpk_bonus_points"
@@ -21,7 +21,7 @@ CPK_SYNC_ENABLED_SETTING = "cpk_sync_enabled"
 CPK_REGIONAL_NAME_MAP: dict[str, str] = {
     "JI-PARANA": "UNI - JI PARANA",
     "MACHADINHO D'OESTE": "UNI - MACHADINHO DOESTE",
-    "ROLIM DE MOURA": "UNI - ROLIM DE MOURA",
+    "ROLIM DE MOURA": ROLIM_REGIONAL,
     "JARU": "UNI - JARU",
     "OURO PRETO D'OESTE": "UNI - OURO PRETO DOESTE",
     "NOVA BRASILANDIA D'OESTE": "UNI - NOVA BRASILANDIA DOESTE",
@@ -32,13 +32,13 @@ CPK_REGIONAL_NAME_MAP: dict[str, str] = {
 }
 
 
-def _regional_status_from_agregado(agregado: dict[str, Any], mes_fechado: bool) -> str:
-    """"na_meta" / "fora_meta" / "sem_base". Um mes ainda em andamento (mes_fechado=false) ou uma
-    regional sem base suficiente (status="sem_base"/atingiu_meta=null) nunca gera ajuste - so o
-    "bateu"/"nao_bateu" de um mes JA FECHADO vira +/-cpk_bonus_points (ver guia de integracao:
-    "mes em andamento: numeros parciais, nao usar para pagamento")."""
-    if not mes_fechado:
-        return "sem_base"
+def _regional_status_from_agregado(agregado: dict[str, Any]) -> str:
+    """"na_meta" / "fora_meta" / "sem_base", a partir do status bruto da API de CPK (bateu/
+    nao_bateu/outro). Decisao do usuario: o bonus/penalidade de CPK reflete o momento atual da
+    apuracao (inclusive com o mes ainda em andamento, numeros parciais), em vez de esperar o mes
+    fechar oficialmente - `mes_fechado` continua sendo gravado no snapshot so como metadado de
+    exibicao (ver `row.mes_fechado` em `sync_cpk_snapshot`), nao controla mais se o ajuste e
+    aplicado."""
     status = agregado.get("status")
     if status == "bateu":
         return "na_meta"
@@ -66,7 +66,7 @@ def sync_cpk_snapshot(db: Session, ano: int, mes: int) -> dict[str, int]:
             continue
 
         agregado = regional_entry.get("agregado") or {}
-        status = _regional_status_from_agregado(agregado, mes_fechado)
+        status = _regional_status_from_agregado(agregado)
 
         row = db.scalar(
             select(CpkRegionalSnapshot).where(

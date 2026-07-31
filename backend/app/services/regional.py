@@ -4,16 +4,20 @@ import unicodedata
 
 
 SAO_FRANCISCO_REGIONAL = "UNI - SAO FRANCISCO DO GUAPORE"
+ROLIM_REGIONAL = "UNI - ROLIM DE MOURA"
 INVALID_REGIONAL_CODES = {"0", "1", "5"}  # "5" = filial "geral de cadastro" do IXC, não é uma regional operacional
 
 REGIONAL_CODE_MAP: dict[str, str] = {
     "6": "UNI - JI PARANA",
     "7": "UNI - MACHADINHO DOESTE",
-    "8": "UNI - ROLIM DE MOURA",
+    "8": ROLIM_REGIONAL,
     "9": "UNI - JARU",
     "10": "UNI - OURO PRETO DOESTE",
     "11": "UNI - NOVA BRASILANDIA DOESTE",
     "12": "UNI - PRESIDENTE MEDICI",
+    # id_filial 13 é a filial própria de São Felipe D'Oeste, identidade real usada pela Operação
+    # Analítica - a gamificação, por sua vez, apura e paga São Felipe junto com Rolim de Moura
+    # (mesma frota/CPK e sem base de CPK própria) - ver `normalize_regional_grouped` abaixo.
     "13": "UNI - SAO FELIPE DOESTE",
     "14": "UNI - ALVORADA DOESTE",
     "15": "UNI - ALTA FLORESTA DOESTE",
@@ -37,6 +41,10 @@ REGIONAL_GROUP_ALIASES: dict[str, str] = {
     "UNI - SAO FRANCISCO": SAO_FRANCISCO_REGIONAL,
     "SAO FRANCISCO DO GUAPORE": SAO_FRANCISCO_REGIONAL,
     "SAO FRANCISCO": SAO_FRANCISCO_REGIONAL,
+    "UNI - SAO FELIPE DOESTE": ROLIM_REGIONAL,
+    "UNI - SAO FELIPE": ROLIM_REGIONAL,
+    "SAO FELIPE DOESTE": ROLIM_REGIONAL,
+    "SAO FELIPE": ROLIM_REGIONAL,
 }
 
 
