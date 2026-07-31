@@ -125,6 +125,23 @@ def test_apply_cpk_adjustment_sums_into_multiplier_and_floors_at_zero(db_session
     assert result["UNI - MACHADINHO DOESTE"]["multiplier"] == 1.0, "sem snapshot -> sem ajuste"
 
 
+def test_apply_cpk_adjustment_does_not_revive_a_regional_zeroed_by_the_sla_floor(db_session):
+    """Regression (achado real 2026-07-31): uma regional que nao bateu nenhuma faixa ativa de
+    saude cai no multiplicador minimo (health_below_minimum_multiplier, default 0) - o bonus de
+    CPK (na_meta, +cpk_bonus_points) nao pode somar por cima desse piso e "ressuscitar" um
+    pagamento que o SLA zerou de proposito. Regional na meta de CPK mas com multiplicador ja
+    zerado pelo SLA deve continuar em 0, nao 0 + bonus."""
+    db_session.add(CpkRegionalSnapshot(reference_year=2026, reference_month=7, regional="UNI - JARU", status="na_meta"))
+    db_session.flush()
+
+    health_by_regional = {"UNI - JARU": {"multiplier": 0.0}}
+
+    result = calculation._apply_cpk_adjustment(db_session, health_by_regional, 7, 2026)
+
+    assert result["UNI - JARU"]["multiplier"] == 0.0, "SLA zerou a regional - o bonus de CPK nao pode reviver o pagamento"
+    assert result["UNI - JARU"]["cpk_adjustment"] == 0.0, "bonus nao aplicado deve ser reportado como 0, nao +0.2 fantasma"
+
+
 def test_apply_cpk_adjustment_does_not_sync_when_disabled(db_session, monkeypatch):
     """Por padrao (cpk_sync_enabled ausente/false), _apply_cpk_adjustment nunca chama a API ao
     vivo - so le o que ja estiver no snapshot local."""

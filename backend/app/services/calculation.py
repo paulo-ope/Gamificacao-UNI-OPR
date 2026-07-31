@@ -101,12 +101,22 @@ def _apply_cpk_adjustment(
             logger.warning("Falha ao sincronizar CPK automaticamente (ano=%s mes=%s): %s", year, month, exc)
     adjustments = cpk_health.get_cpk_adjustment_by_regional(db, year, month)
     statuses = cpk_health.get_cpk_status_by_regional(db, year, month)
+    # Uma regional que nao bateu NENHUMA faixa ativa de saude cai no multiplicador minimo
+    # configurado (health_below_minimum_multiplier, default 0) - achado real: o bonus de CPK
+    # (na_meta) somava por cima desse piso e "ressuscitava" um pagamento que o SLA tinha zerado
+    # de proposito. O bonus de CPK so faz sentido complementar um multiplicador que a regional
+    # ja conquistou por SLA/saude - nao pode ele mesmo tirar a regional do piso.
+    below_minimum_multiplier = scoring_detail.get_health_below_minimum_multiplier(db)
     for regional, entry in health_by_regional.items():
         entry["cpk_status"] = statuses.get(regional)
         adjustment = adjustments.get(regional, 0.0)
+        current_multiplier = float(entry.get("multiplier", 0.0))
+        if current_multiplier <= below_minimum_multiplier:
+            entry["cpk_adjustment"] = 0.0
+            continue
         entry["cpk_adjustment"] = adjustment
         if adjustment:
-            entry["multiplier"] = max(0.0, float(entry.get("multiplier", 0.0)) + adjustment)
+            entry["multiplier"] = max(0.0, current_multiplier + adjustment)
     return health_by_regional
 
 
