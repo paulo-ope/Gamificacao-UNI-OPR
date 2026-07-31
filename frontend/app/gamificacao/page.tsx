@@ -1,6 +1,23 @@
 ﻿"use client";
 
-import { ClipboardList, HelpCircle, Loader2, LockKeyhole, Mail, RefreshCw, Settings2, ShieldAlert } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarDays,
+  ClipboardList,
+  History,
+  HelpCircle,
+  Home,
+  Loader2,
+  LockKeyhole,
+  LogOut,
+  Mail,
+  RefreshCw,
+  Settings2,
+  ShieldAlert,
+  Trophy,
+  Wallet
+} from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuditPanel } from "@/components/gamification/audit-panel";
@@ -13,7 +30,7 @@ import { AppDrawer } from "@/components/gamification/config-ui";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { LogicConfigurationPanel } from "@/components/gamification/logic-configuration-panel";
 import { LeadershipBonusPanel } from "@/components/gamification/leadership-bonus-panel";
-import { ModuleSidebar } from "@/components/gamification/module-sidebar";
+import { ModuleNavigationSidebar, type ModuleNavigationItem } from "@/components/workspace/module-navigation-sidebar";
 import { PointBalancePanel } from "@/components/gamification/point-balance-panel";
 import { RankingTab } from "@/components/gamification/ranking-tab";
 import { UnmappedDiagnosesPanel } from "@/components/gamification/unmapped-diagnoses-panel";
@@ -68,6 +85,28 @@ const TAB_HELP: Record<string, string> = {
   history: "Mostra o acompanhamento de períodos anteriores e a evolução dos resultados.",
   import: "Permite definir ou consultar o mês de referência usado nas análises da competência."
 };
+
+const TAB_BADGE: Record<string, string> = {
+  closure: "Visão executiva",
+  ranking: "Ranking operacional",
+  pending: "Pendências de regra",
+  config: "Governança",
+  audit: "Rastreabilidade",
+  balance: "Saldo de garantias",
+  history: "Histórico",
+  import: "Período analisado"
+};
+
+const GAMIFICATION_NAV_ITEMS: Array<ModuleNavigationItem<string>> = [
+  { value: "closure", label: "Fechamento", description: "Resumo financeiro do período", icon: ClipboardList },
+  { value: "ranking", label: "Ranking", description: "Comparação de desempenho", icon: Trophy },
+  { value: "pending", label: "Pendências", description: "Itens que exigem revisão", icon: AlertTriangle },
+  { value: "config", label: "Configuração", description: "Regras e parâmetros", icon: Settings2 },
+  { value: "audit", label: "Auditoria", description: "Registros e rastreabilidade", icon: ShieldAlert },
+  { value: "balance", label: "Saldo de pontos", description: "Débitos de garantia pendentes", icon: Wallet },
+  { value: "history", label: "Histórico", description: "Períodos anteriores", icon: History },
+  { value: "import", label: "Período", description: "Mês de referência da análise", icon: CalendarDays }
+];
 
 function leadershipAuditSourceLabel(value: string | undefined) {
   if (value === "leader") return "Líder";
@@ -1019,31 +1058,69 @@ export default function GamificacaoPage() {
   const visibleTabs = new Set<string>(["closure", "ranking", "audit", "balance", "history", "import"]);
   if (can("orders:import") || can("scoring:write")) visibleTabs.add("pending");
   if (can("scoring:write")) visibleTabs.add("config");
+  const isPaidPeriod = summary?.run?.status === "paid";
+  const activeNavItem = GAMIFICATION_NAV_ITEMS.find((item) => item.value === activeTab) ?? GAMIFICATION_NAV_ITEMS[0];
 
   return (
-    <main className="h-dvh overflow-hidden bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_24%),radial-gradient(circle_at_top_right,rgba(37,99,235,0.08),transparent_20%),linear-gradient(180deg,#f8fbff_0%,#f8fafc_42%,#f8fafc_100%)]">
-      <div className="flex h-full w-full">
-        <ModuleSidebar
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          visibleTabs={visibleTabs}
-          user={currentUser}
-          onLogout={logout}
-          canRecalculate={can("calculation:run")}
-          onRecalculate={recalculate}
-          recalculating={busy || loading}
-          isPaidPeriod={summary?.run?.status === "paid"}
-        />
-        <div className="min-w-0 flex-1 overflow-y-auto">
-          <StatusToast
-            error={error}
-            message={message}
-            busy={busy}
-            busyLabel="Salvando alterações..."
-            onDismissError={() => setError(null)}
-            onDismissMessage={() => setMessage(null)}
-          />
-          <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4 px-2 py-3 sm:px-4">
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_24%),radial-gradient(circle_at_top_right,rgba(37,99,235,0.08),transparent_20%),linear-gradient(180deg,#f8fbff_0%,#f8fafc_42%,#f8fafc_100%)]">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
+          <div className="flex items-center gap-3">
+            <ModuleNavigationSidebar
+              title="Gamificação"
+              description="Navegação modular do UNI Workspace"
+              items={GAMIFICATION_NAV_ITEMS.filter((item) => visibleTabs.has(item.value))}
+              activeItem={activeTab}
+              onChange={setActiveTab}
+              footer="Novas áreas de gamificação devem ser adicionadas a este menu sem alterar a navegação principal."
+            />
+            <Link
+              href="/"
+              aria-label="Voltar ao ecossistema"
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700"
+            >
+              <Home className="h-5 w-5" />
+            </Link>
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-600">UNI Workspace</p>
+              <h1 className="text-base font-semibold text-slate-950">Gamificação Operacional</h1>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {can("calculation:run") ? (
+              <Button
+                type="button"
+                onClick={recalculate}
+                disabled={busy || loading}
+                title={isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
+                className="h-10 rounded-xl"
+              >
+                <RefreshCw className={busy || loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+                {isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
+              </Button>
+            ) : null}
+            {currentUser ? (
+              <div className="hidden text-right sm:block">
+                <div className="text-sm font-semibold text-slate-950">{currentUser.name}</div>
+                <div className="text-[11px] uppercase tracking-wide text-slate-500">{currentUser.role}</div>
+              </div>
+            ) : null}
+            <Button type="button" variant="ghost" size="sm" onClick={logout}>
+              <LogOut className="h-4 w-4" /> Sair
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <StatusToast
+        error={error}
+        message={message}
+        busy={busy}
+        busyLabel="Salvando alterações..."
+        onDismissError={() => setError(null)}
+        onDismissMessage={() => setMessage(null)}
+      />
+      <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4 px-2 py-3 sm:px-4">
 
         {loading && !bootstrap ? (
           <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -1087,30 +1164,16 @@ export default function GamificacaoPage() {
                 <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Navegação do módulo</div>
                   <div className="mt-1 flex items-center gap-2 text-sm text-slate-600">
-                    <span>{activeTab === "closure" ? "Fechamento" : activeTab === "ranking" ? "Ranking" : activeTab === "pending" ? "Pendências" : activeTab === "config" ? "Configuração" : activeTab === "audit" ? "Auditoria" : activeTab === "balance" ? "Saldo de pontos" : activeTab === "history" ? "Histórico" : "Período"}</span>
+                    <span>{activeNavItem.label}</span>
                     <InfoHint
-                      ariaLabel={`Ajuda sobre a aba ${activeTab === "closure" ? "Fechamento" : activeTab === "ranking" ? "Ranking" : activeTab === "pending" ? "Pendências" : activeTab === "config" ? "Configuração" : activeTab === "audit" ? "Auditoria" : activeTab === "balance" ? "Saldo de pontos" : activeTab === "history" ? "Histórico" : "Período"}`}
+                      ariaLabel={`Ajuda sobre a aba ${activeNavItem.label}`}
                       description={TAB_HELP[activeTab] ?? TAB_HELP.closure}
                       side="bottom"
                     />
                   </div>
                 </div>
                 <Badge className="w-fit border-slate-200 bg-slate-50 text-slate-700">
-                  {activeTab === "closure"
-                    ? "Visão executiva"
-                    : activeTab === "ranking"
-                      ? "Ranking operacional"
-                      : activeTab === "pending"
-                        ? "Pendências de regra"
-                        : activeTab === "config"
-                          ? "Governança"
-                          : activeTab === "audit"
-                            ? "Rastreabilidade"
-                            : activeTab === "balance"
-                              ? "Saldo de garantias"
-                              : activeTab === "history"
-                                ? "Histórico"
-                                : "Período analisado"}
+                  {TAB_BADGE[activeTab] ?? TAB_BADGE.closure}
                 </Badge>
               </div>
             </section>
@@ -1881,8 +1944,6 @@ export default function GamificacaoPage() {
             </TabsContent>
           </Tabs>
         )}
-          </div>
-        </div>
       </div>
 
       <CollaboratorOrdersSheet
