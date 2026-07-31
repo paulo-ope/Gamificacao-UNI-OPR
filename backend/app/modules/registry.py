@@ -44,6 +44,33 @@ MODULES: tuple[ModuleDefinition, ...] = (
         required_permission="operations:read",
         status="active",
     ),
+    ModuleDefinition(
+        key="scheduling",
+        name="Agendamento",
+        description="Tempo de resposta, produtividade e fila do setor de agendamento.",
+        web_path="/agendamento",
+        api_prefix="/api/scheduling",
+        required_permission="scheduling:read",
+        status="active",
+    ),
+    ModuleDefinition(
+        key="management",
+        name="Gestão Integrada",
+        description="Estrutura operacional, casos de gestão, justificativas e tomada de decisão da matriz.",
+        web_path="/gestao",
+        api_prefix="/api/management",
+        required_permission="management:read",
+        status="active",
+    ),
+    ModuleDefinition(
+        key="admin",
+        name="Administração",
+        description="Usuários, perfis de acesso, permissões e escopos do ecossistema.",
+        web_path="/admin",
+        api_prefix="/api/admin",
+        required_permission="admin:users:read",
+        status="active",
+    ),
 )
 
 

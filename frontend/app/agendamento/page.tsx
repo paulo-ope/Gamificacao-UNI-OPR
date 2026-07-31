@@ -1033,6 +1033,7 @@ function SchedulingSavedViewsPopover({
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmUpdate, setConfirmUpdate] = useState(false);
   const active = savedFilters.find((item) => item.id === selectedSavedFilterId);
   const visible = savedFilters.filter((item) =>
     item.name.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR")),
@@ -1042,6 +1043,7 @@ function SchedulingSavedViewsPopover({
     setCreating(false);
     setRenaming(false);
     setConfirmDelete(false);
+    setConfirmUpdate(false);
     setOpen(false);
   };
   const saveNew = () => {
@@ -1081,8 +1083,20 @@ function SchedulingSavedViewsPopover({
                     <button
                       type="button"
                       onClick={() => {
+                        setConfirmUpdate(true);
+                        setRenaming(false);
+                        setConfirmDelete(false);
+                      }}
+                      className="flex w-full rounded-md px-2 py-2 text-left text-xs text-slate-700 hover:bg-slate-100"
+                    >
+                      Atualizar visão
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
                         setRenaming(true);
                         setCreating(false);
+                        setConfirmUpdate(false);
                       }}
                       className="flex w-full rounded-md px-2 py-2 text-left text-xs text-slate-700 hover:bg-slate-100"
                     >
@@ -1090,7 +1104,10 @@ function SchedulingSavedViewsPopover({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setConfirmDelete(true)}
+                      onClick={() => {
+                        setConfirmDelete(true);
+                        setConfirmUpdate(false);
+                      }}
                       className="flex w-full rounded-md px-2 py-2 text-left text-xs text-red-700 hover:bg-red-50"
                     >
                       Excluir visão
@@ -1109,6 +1126,7 @@ function SchedulingSavedViewsPopover({
                 setCreating(false);
                 setRenaming(false);
                 setConfirmDelete(false);
+                setConfirmUpdate(false);
               }}
               className="mb-2 text-[11px] font-medium text-blue-700 hover:text-blue-900"
             >
@@ -1214,6 +1232,27 @@ function SchedulingSavedViewsPopover({
                     </Button>
                   </div>
                 </div>
+              ) : confirmUpdate ? (
+                <div className="flex items-center justify-between gap-2 rounded-lg bg-blue-50 p-2">
+                  <span className="text-[11px] text-blue-800">Atualizar "{active?.name}" com os filtros atuais?</span>
+                  <div className="flex gap-1">
+                    <Button type="button" size="sm" variant="ghost" className="h-7 text-[10px]" onClick={() => setConfirmUpdate(false)}>
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-7 text-[10px]"
+                      onClick={() => {
+                        onUpdate();
+                        setConfirmUpdate(false);
+                        setOpen(false);
+                      }}
+                    >
+                      Atualizar
+                    </Button>
+                  </div>
+                </div>
               ) : (
                 <div className="flex gap-2">
                   <Button
@@ -1230,11 +1269,6 @@ function SchedulingSavedViewsPopover({
                   >
                     Salvar como nova visão
                   </Button>
-                  {active ? (
-                    <Button type="button" size="sm" className="h-8 text-xs" onClick={update}>
-                      Atualizar esta visão
-                    </Button>
-                  ) : null}
                 </div>
               )}
             </div>

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -40,6 +40,13 @@ class Collaborator(Base):
     is_registered: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
     email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    cpf: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    employee_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    team_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    supervisor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    regional_manager_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    structure_status: Mapped[str] = mapped_column(String(40), default="pending_review", nullable=False, index=True)
+    structure_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Vincula o colaborador ao id do funcionario/tecnico no IXC (su_rh_funcionarios / campo
     # id_tecnico nas O.S.). Usado para casar o mesmo colaborador entre a gamificacao e o modulo
     # de operacoes analiticas sem depender de comparacao de nome (nome pode divergir/ter typo).
@@ -53,7 +60,13 @@ class Collaborator(Base):
 
     service_orders: Mapped[list["ServiceOrder"]] = relationship(back_populates="collaborator")
     scores: Mapped[list["CollaboratorScore"]] = relationship(back_populates="collaborator")
-    portal_user: Mapped["User | None"] = relationship(back_populates="collaborator", uselist=False)
+    portal_user: Mapped["User | None"] = relationship(
+        back_populates="collaborator",
+        foreign_keys="User.collaborator_id",
+        uselist=False,
+    )
+    supervisor_user: Mapped["User | None"] = relationship(foreign_keys=[supervisor_user_id])
+    regional_manager_user: Mapped["User | None"] = relationship(foreign_keys=[regional_manager_user_id])
 
 
 class User(Base):
@@ -88,7 +101,10 @@ class User(Base):
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
     import_runs: Mapped[list["ImportRun"]] = relationship(back_populates="imported_by_user")
     import_service_order_audits: Mapped[list["ImportServiceOrderAudit"]] = relationship(back_populates="created_by_user")
-    collaborator: Mapped[Collaborator | None] = relationship(back_populates="portal_user")
+    collaborator: Mapped[Collaborator | None] = relationship(
+        back_populates="portal_user",
+        foreign_keys=[collaborator_id],
+    )
     access_profiles: Mapped[list["AccessProfile"]] = relationship(
         secondary="user_access_profiles",
         back_populates="users",
@@ -136,6 +152,37 @@ class UserAccessProfile(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class WorkspaceModuleVisibility(Base):
+    """Uma linha vale para um perfil (`profile_id`) OU um usuário específico (`user_id`), nunca os
+    dois - as constraints UNIQUE abaixo funcionam mesmo com NULL porque, em SQL padrão, NULL nunca
+    é igual a NULL, então várias linhas de usuário (profile_id NULL) para o mesmo módulo não colidem
+    entre si."""
+
+    __tablename__ = "workspace_module_visibility"
+    __table_args__ = (
+        UniqueConstraint("module_key", "profile_id", name="uq_workspace_module_visibility_profile"),
+        UniqueConstraint("module_key", "user_id", name="uq_workspace_module_visibility_user"),
+        CheckConstraint(
+            "(profile_id IS NOT NULL AND user_id IS NULL) OR (profile_id IS NULL AND user_id IS NOT NULL)",
+            name="ck_workspace_module_visibility_target",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    module_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    profile_id: Mapped[int | None] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    profile: Mapped[AccessProfile | None] = relationship(foreign_keys=[profile_id])
+    target_user: Mapped[User | None] = relationship(foreign_keys=[user_id])
+    updated_by_user: Mapped[User | None] = relationship(foreign_keys=[updated_by])
 
 
 class AuditLog(Base):

@@ -35,7 +35,7 @@ Use estado local para UI isolada. Use cache/refetch para dados de servidor quand
 Evite `window.location` quando recursos do Next.js resolverem o fluxo.
 
 ## 4. Estilos e responsividade
-- Preserve variaveis, cores e padroes do projeto.
+- Preserve variáveis, cores e padrões do projeto.
 - Breakpoints: `sm 640`, `md 768`, `lg 1024`, `xl 1280`.
 - Tabelas grandes devem ter scroll horizontal ou alternativa adequada no mobile.
 - Formularios devem funcionar em uma coluna no mobile.
@@ -57,12 +57,14 @@ Evite `window.location` quando recursos do Next.js resolverem o fluxo.
 
 ## 7. Erros e feedback
 - Mensagens devem ser amigaveis.
-- Nao mostrar `TypeError`, stack trace ou erro bruto ao usuario.
-- Acoes destrutivas exigem confirmacao.
-- Estados de vazio devem orientar a proxima acao.
+- Não mostrar `TypeError`, stack trace ou erro bruto ao usuário.
+- Ações destrutivas exigem confirmação.
+- Estados de vazio devem orientar a próxima ação.
+- Textos visiveis devem estar em portugues pt-BR correto, com acentuacao e ortografia revisadas.
+- Antes de concluir, verifique se nao existe mojibake em tela, como `Gestão`, `Usuários`, `Permissões` ou similares.
 
 ## 8. API e cache
-- Dados dinamicos devem tratar loading, erro e vazio.
+- Dados dinâmicos devem tratar loading, erro e vazio.
 - Mutations devem atualizar ou recarregar o dado afetado.
 - Nao confie em feature flag como seguranca.
 
@@ -81,3 +83,20 @@ Evite `window.location` quando recursos do Next.js resolverem o fluxo.
 - Props booleanas: `isLoading`, `hasError`, `isDisabled`.
 - Handlers: `onClick`, `onSubmit`, `onChange`.
 - Imports: React/Next, bibliotecas, componentes, hooks, tipos, constantes e CSS.
+- Labels, placeholders, botões, menus, estados de vazio, mensagens de erro e textos vindos de API devem manter ortografia correta e acentos em pt-BR.
+
+## 11. Sidebar modular
+
+O padrão oficial de sidebar para módulos do UNI Workspace é o visual usado na Operação Analítica:
+
+- título do módulo no topo;
+- subtítulo "Navegação modular do UNI Workspace";
+- botão para recolher e expandir, preservando a preferência no navegador quando aplicável;
+- lista vertical de itens;
+- cada item com ícone dentro de bloco quadrado;
+- item ativo com fundo azul claro e ícone em azul sólido;
+- label em destaque e descrição curta abaixo;
+- quando recolhida, deve mostrar apenas os ícones com tooltip/título acessível;
+- rodapé discreto quando houver orientação de extensão.
+
+Para novas sidebars ou ajustes futuros, use `frontend/components/workspace/module-navigation-sidebar.tsx` como base visual, salvo pedido explícito para trocar o padrão.

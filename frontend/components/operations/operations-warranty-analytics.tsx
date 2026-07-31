@@ -1,8 +1,10 @@
 "use client";
 
-import { Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
+import { Download, Loader2, Settings2, ShieldAlert, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AppRadio } from "@/components/ui/radio";
 import {
@@ -14,8 +16,10 @@ import {
 } from "@/components/ui/table";
 import { formatDateTime, formatInteger, formatPercent } from "@/lib/format";
 import type {
+  OperationBreakdownItem,
   OperationWarrantyAnalytics as OperationWarrantyAnalyticsData,
   OperationWarrantyDenominator,
+  OperationWarrantyItem,
   OperationWarrantyPeriodBasis,
 } from "@/lib/operations-api";
 
@@ -71,6 +75,171 @@ function rateBadgeClass(tone: ReturnType<typeof rateTone>) {
   }
 }
 
+function csvEscape(value: unknown) {
+  const text = value === null || value === undefined ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function exportWarrantyCsv(items: OperationWarrantyItem[]) {
+  const headers = [
+    "Contrato",
+    "Cliente",
+    "Regional",
+    "O.S. origem",
+    "Tipo de origem",
+    "Fechamento origem",
+    "O.S. retorno",
+    "Assunto retorno",
+    "Diagnóstico",
+    "Abertura retorno",
+    "Fechamento retorno",
+  ];
+  const rows = items.map((item) => [
+    item.contract_id ?? "",
+    item.customer_name ?? "",
+    item.regional ?? "",
+    item.origin_order_code,
+    item.origin_os_type ?? "",
+    formatDateTime(item.origin_closed_at),
+    item.return_order_code,
+    item.return_os_subject ?? "",
+    item.diagnosis ?? "",
+    formatDateTime(item.return_opened_at),
+    formatDateTime(item.return_closed_at),
+  ]);
+  const csv = [headers, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "garantias-de-ativacao.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function RankingTable({
+  title,
+  items,
+  emptyLabel,
+}: {
+  title: string;
+  items: OperationBreakdownItem[];
+  emptyLabel: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {items.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-6 text-center text-sm text-slate-400">
+            {emptyLabel}
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border">
+            <table className="w-full text-sm">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>#</TableHead>
+                  <TableHead>{title.includes("assunto") ? "Assunto" : "Diagnóstico"}</TableHead>
+                  <TableHead className="text-center">Garantias</TableHead>
+                  <TableHead className="text-center">% do total</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((item, index) => (
+                  <TableRow key={item.label}>
+                    <TableCell className="tabular-nums text-slate-400">{index + 1}</TableCell>
+                    <TableCell>{item.label}</TableCell>
+                    <TableCell className="text-center tabular-nums font-semibold">
+                      {formatInteger(item.quantity)}
+                    </TableCell>
+                    <TableCell className="text-center tabular-nums">{formatPercent(item.percentage)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function WarrantyConfigPopover({
+  isLoading,
+  periodBasis,
+  denominator,
+  onPeriodBasisChange,
+  onDenominatorChange,
+}: {
+  isLoading: boolean;
+  periodBasis: OperationWarrantyPeriodBasis;
+  denominator: OperationWarrantyDenominator;
+  onPeriodBasisChange: (basis: OperationWarrantyPeriodBasis) => void;
+  onDenominatorChange: (denominator: OperationWarrantyDenominator) => void;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+          <Settings2 className="h-3.5 w-3.5" />
+          Configurar cálculo
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="end"
+          sideOffset={8}
+          className="z-50 w-[min(24rem,calc(100vw-2rem))] space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+        >
+          <div className="space-y-1.5">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Contar a manutenção pela
+            </span>
+            <div className="flex flex-col gap-1.5">
+              {PERIOD_BASIS_OPTIONS.map((option) => (
+                <label key={option.value} className="flex items-center gap-1.5 text-sm text-slate-700">
+                  <AppRadio
+                    checked={periodBasis === option.value}
+                    disabled={isLoading}
+                    onSelect={() => onPeriodBasisChange(option.value)}
+                    ariaLabel={option.label}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1.5 border-t border-slate-100 pt-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Denominador do percentual
+            </span>
+            <div className="flex flex-col gap-1.5">
+              {DENOMINATOR_OPTIONS.map((option) => (
+                <label key={option.value} className="flex items-start gap-1.5 text-sm text-slate-700">
+                  <AppRadio
+                    checked={denominator === option.value}
+                    disabled={isLoading}
+                    onSelect={() => onDenominatorChange(option.value)}
+                    ariaLabel={option.label}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    {option.label}
+                    <span className="block text-xs font-normal text-slate-400">{option.description}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 export function OperationsWarrantyAnalytics({
   data,
   isLoading,
@@ -91,57 +260,21 @@ export function OperationsWarrantyAnalytics({
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
           <CardTitle className="flex items-center gap-2 text-base">
             <ShieldCheck className="h-4 w-4 text-uni-royal" />
             Garantias de ativação
             {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" /> : null}
           </CardTitle>
+          <WarrantyConfigPopover
+            isLoading={isLoading}
+            periodBasis={periodBasis}
+            denominator={denominator}
+            onPeriodBasisChange={onPeriodBasisChange}
+            onDenominatorChange={onDenominatorChange}
+          />
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Contar a manutenção pela
-              </span>
-              <div className="flex flex-col gap-1.5">
-                {PERIOD_BASIS_OPTIONS.map((option) => (
-                  <label key={option.value} className="flex items-center gap-1.5 text-sm text-slate-700">
-                    <AppRadio
-                      checked={periodBasis === option.value}
-                      disabled={isLoading}
-                      onSelect={() => onPeriodBasisChange(option.value)}
-                      ariaLabel={option.label}
-                    />
-                    {option.label}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Denominador do percentual
-              </span>
-              <div className="flex flex-col gap-1.5">
-                {DENOMINATOR_OPTIONS.map((option) => (
-                  <label key={option.value} className="flex items-start gap-1.5 text-sm text-slate-700">
-                    <AppRadio
-                      checked={denominator === option.value}
-                      disabled={isLoading}
-                      onSelect={() => onDenominatorChange(option.value)}
-                      ariaLabel={option.label}
-                      className="mt-0.5"
-                    />
-                    <span>
-                      {option.label}
-                      <span className="block text-xs font-normal text-slate-400">{option.description}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-xl border bg-white p-3">
               <div className="text-xs text-slate-500">Garantias encontradas</div>
@@ -249,15 +382,39 @@ export function OperationsWarrantyAnalytics({
         </CardContent>
       </Card>
 
+      <div className="grid gap-4 lg:grid-cols-2">
+        <RankingTable
+          title="Ranking de diagnósticos"
+          items={data.by_diagnosis}
+          emptyLabel="Nenhuma garantia encontrada com os filtros atuais."
+        />
+        <RankingTable
+          title="Ranking de assuntos"
+          items={data.by_subject}
+          emptyLabel="Nenhuma garantia encontrada com os filtros atuais."
+        />
+      </div>
+
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
           <CardTitle className="text-base">Garantias encontradas no período</CardTitle>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            disabled={data.items.length === 0}
+            onClick={() => exportWarrantyCsv(data.items)}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Exportar CSV
+          </Button>
         </CardHeader>
         <CardContent>
           {data.items_truncated ? (
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Exibindo as {data.items.length} garantias mais recentes. Reduza o período ou aplique
-              mais filtros para ver a lista completa.
+              Exibindo (e exportando) as {data.items.length} garantias mais recentes. Reduza o
+              período ou aplique mais filtros para ver a lista completa.
             </div>
           ) : null}
           {data.items.length === 0 ? (
@@ -275,6 +432,7 @@ export function OperationsWarrantyAnalytics({
                     <TableHead>O.S. origem</TableHead>
                     <TableHead>Tipo de origem</TableHead>
                     <TableHead>O.S. retorno</TableHead>
+                    <TableHead>Assunto</TableHead>
                     <TableHead>Diagnóstico</TableHead>
                     <TableHead>Fechamento origem</TableHead>
                     <TableHead>Abertura retorno</TableHead>
@@ -289,6 +447,7 @@ export function OperationsWarrantyAnalytics({
                       <TableCell>{item.origin_order_code}</TableCell>
                       <TableCell>{item.origin_os_type || "—"}</TableCell>
                       <TableCell>{item.return_order_code}</TableCell>
+                      <TableCell>{item.return_os_subject || "—"}</TableCell>
                       <TableCell>{item.diagnosis || "—"}</TableCell>
                       <TableCell>{formatDateTime(item.origin_closed_at)}</TableCell>
                       <TableCell>{formatDateTime(item.return_opened_at)}</TableCell>

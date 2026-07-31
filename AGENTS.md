@@ -53,6 +53,7 @@ Toda tela deve preservar o padrao visual existente, com:
 - modais/drawers padronizados;
 - loading, empty state e error state;
 - responsividade desktop/tablet/mobile.
+- textos em portugues pt-BR com ortografia e acentuacao corretas.
 
 ## Seguranca minima
 - Validacao no servidor para entradas criticas.
@@ -69,6 +70,7 @@ Quando aplicavel, valide:
 - typecheck;
 - lint/build;
 - testes relevantes;
+- ortografia, acentuacao e ausencia de mojibake em textos visiveis e mensagens de API;
 - responsividade;
 - acessibilidade basica;
 - Docker/VM quando a alteracao afetar operacao.

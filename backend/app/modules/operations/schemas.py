@@ -685,6 +685,7 @@ class OperationWarrantyItem(BaseModel):
     customer_name: str | None
     regional: str | None
     diagnosis: str | None
+    return_os_subject: str | None
     origin_order_code: str
     origin_os_type: str | None
     origin_closed_at: datetime
@@ -710,6 +711,8 @@ class OperationWarrantyAnalytics(BaseModel):
     customers_with_warranty: int
     breakdown: list[OperationBreakdownItem]
     by_regional: list[OperationWarrantyRegionalRankingItem]
+    by_diagnosis: list[OperationBreakdownItem]
+    by_subject: list[OperationBreakdownItem]
     items: list[OperationWarrantyItem]
     items_truncated: bool
 

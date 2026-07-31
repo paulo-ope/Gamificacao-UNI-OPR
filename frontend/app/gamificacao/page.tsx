@@ -4,7 +4,7 @@ import { ClipboardList, HelpCircle, Loader2, LockKeyhole, Mail, RefreshCw, Setti
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuditPanel } from "@/components/gamification/audit-panel";
-import { AuditTrailPanel } from "@/components/gamification/audit-trail-panel";
+import { AuditTrailPanel } from "@/components/shared/audit-trail-panel";
 import { ClosureHistoryPanel } from "@/components/gamification/closure-history-panel";
 import { ClosureTab } from "@/components/gamification/closure-tab";
 import { CollaboratorRegistryPanel } from "@/components/gamification/collaborator-registry-panel";

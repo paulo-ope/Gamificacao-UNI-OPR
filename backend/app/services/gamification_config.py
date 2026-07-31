@@ -103,7 +103,15 @@ def serialize_current_config(db: Session) -> dict[str, Any]:
         .order_by(GamificationConfigVersion.updated_at.desc(), GamificationConfigVersion.id.desc())
         .limit(1)
     )
-    settings = {setting.key: setting.value for setting in db.scalars(select(AppSetting).order_by(AppSetting.key.asc()))}
+    # `app_settings` e compartilhada com o Agendamento (chaves scheduling_*) - filtrar pelas
+    # chaves proprias da Gamificacao evita que o export/import de config vaze ou sobrescreva
+    # parametros de outro modulo (achado do mapeamento da Fase 5).
+    settings = {
+        setting.key: setting.value
+        for setting in db.scalars(
+            select(AppSetting).where(AppSetting.key.in_(DEFAULT_SETTINGS.keys())).order_by(AppSetting.key.asc())
+        )
+    }
     return {
         "name": CONFIG_NAME,
         "version_id": latest_version.id if latest_version else None,
@@ -278,6 +286,11 @@ def apply_config(db: Session, config: dict[str, Any], version_name: str | None =
     warnings: list[str] = []
 
     for key, value in (config.get("settings") or {}).items():
+        if str(key) not in DEFAULT_SETTINGS:
+            # Chave de outro modulo (ex: scheduling_*) dentro de um JSON de config da Gamificacao -
+            # ignorar em vez de sobrescrever silenciosamente o parametro de outro modulo.
+            warnings.append(f'Configuração "{key}" ignorada: não pertence à Gamificação.')
+            continue
         upsert_setting(db, str(key), str(value))
 
     for item in config.get("scoring_groups") or []:

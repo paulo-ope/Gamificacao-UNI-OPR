@@ -17,15 +17,28 @@ const ACTION_LABEL: Record<string, string> = {
   update: "Atualizou",
   create: "Criou",
   delete: "Excluiu",
+  delete_period: "Excluiu período inteiro",
   soft_delete: "Inativou",
+  deactivate: "Desativou",
   import: "Importou",
   reset_default: "Restaurou o padrão",
+  refresh: "Atualizou a partir da origem",
+  justify: "Justificou",
+  calculate: "Calculou",
+  configure: "Configurou",
+  link_to_group: "Vinculou ao grupo",
+  update_visibility: "Alterou visibilidade",
+  update_structure: "Alterou estrutura organizacional",
+  update_self_profile: "Atualizou o próprio perfil",
+  update_self_profile_photo: "Atualizou a própria foto",
+  delete_self_profile_photo: "Removeu a própria foto",
   point_balance_debit_created: "Gerou débito de garantia",
   point_balance_debit_applied: "Aplicou débito de garantia no pagamento",
   point_balance_carry_over: "Carregou saldo de garantia para o próximo mês",
   point_balance_debit_reverted: "Estornou débito de garantia",
   point_balance_manual_adjustment: "Lançou ajuste manual de saldo",
-  point_balance_bulk_cleanup: "Limpeza retroativa de backlog de garantia (lote)"
+  point_balance_bulk_cleanup: "Limpeza retroativa de backlog de garantia (lote)",
+  point_balance_review_resolved: "Resolveu revisão de saldo"
 };
 
 const ENTITY_LABEL: Record<string, string> = {
@@ -35,7 +48,26 @@ const ENTITY_LABEL: Record<string, string> = {
   gamification_config: "Regras da gamificação",
   collaborators: "Colaborador",
   point_balance_entry: "Saldo de pontos",
-  users: "Usuário"
+  users: "Usuário",
+  access_profiles: "Perfil de acesso",
+  workspace_module_visibility: "Visibilidade de módulo",
+  leadership_role_profiles: "Papel de liderança",
+  leadership_profiles: "Perfil de liderança",
+  leadership_bonus_results: "Bônus de liderança",
+  management_operational_members: "Estrutura operacional (Gestão)",
+  management_cases: "Caso de gestão",
+  operations_ixc_sync_settings: "Sincronização com o IXC",
+  operations_configuration_json: "Configuração da Operação (import)",
+  operations_team_models: "Modelo de equipe (Operação)",
+  operations_subject_type_mappings: "Mapeamento de assunto (Operação)",
+  operations_responsible_assignments: "Responsável (Operação)",
+  scoring_groups: "Grupo de pontuação",
+  scoring_subject_rules: "Regra de assunto (pontuação)",
+  diagnosis_penalty_rules: "Regra de penalidade por diagnóstico",
+  sla_penalty_rules: "Regra de penalidade por SLA",
+  recurrence_classification_rules: "Regra de classificação de reincidência",
+  health_rules: "Regra de saúde",
+  service_orders: "Ordem de serviço (lote)"
 };
 
 function actionLabel(action: string) {
@@ -43,10 +75,10 @@ function actionLabel(action: string) {
 }
 
 function actionBadgeClass(action: string) {
-  if (action.includes("revert") || action === "delete" || action === "soft_delete") return "border-rose-200 bg-rose-50 text-rose-700";
-  if (action.includes("applied") || action === "update_status") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (action.includes("revert") || action.includes("delete") || action === "soft_delete" || action === "deactivate") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (action.includes("applied") || action === "update_status" || action === "create") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (action.includes("debit") || action.includes("carry")) return "border-amber-200 bg-amber-50 text-amber-800";
-  if (action === "run") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (action === "run" || action === "calculate" || action === "refresh") return "border-sky-200 bg-sky-50 text-sky-700";
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
@@ -71,7 +103,7 @@ function statusNote(log: AuditLog) {
   return null;
 }
 
-export function AuditTrailPanel() {
+export function AuditTrailPanel({ title = "Trilha de ações (quem fez o quê, quando)" }: { title?: string } = {}) {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +139,7 @@ export function AuditTrailPanel() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-uni-royal" />
-          <h3 className="text-sm font-semibold text-slate-950">Trilha de ações (quem fez o quê, quando)</h3>
+          <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           <RefreshCw className={`mr-2 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />

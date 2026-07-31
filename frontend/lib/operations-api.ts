@@ -412,6 +412,7 @@ export type OperationWarrantyItem = {
   customer_name: string | null;
   regional: string | null;
   diagnosis: string | null;
+  return_os_subject: string | null;
   origin_order_code: string;
   origin_os_type: string | null;
   origin_closed_at: string;
@@ -437,6 +438,8 @@ export type OperationWarrantyAnalytics = {
   customers_with_warranty: number;
   breakdown: OperationBreakdownItem[];
   by_regional: OperationWarrantyRegionalRankingItem[];
+  by_diagnosis: OperationBreakdownItem[];
+  by_subject: OperationBreakdownItem[];
   items: OperationWarrantyItem[];
   items_truncated: boolean;
 };

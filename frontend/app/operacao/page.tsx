@@ -207,6 +207,8 @@ const EMPTY_WARRANTY_ANALYTICS: OperationWarrantyAnalytics = {
   customers_with_warranty: 0,
   breakdown: [],
   by_regional: [],
+  by_diagnosis: [],
+  by_subject: [],
   items: [],
   items_truncated: false,
 };

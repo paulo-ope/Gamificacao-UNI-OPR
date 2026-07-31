@@ -756,6 +756,7 @@ WARRANTY_ORIGIN_LABELS = {
     "technology_change": "Mudança de Tecnologia",
 }
 WARRANTY_MAX_ITEMS = 500
+WARRANTY_TOP_N = 10
 
 
 def _normalize_type_label(value: str | None) -> str:
@@ -948,6 +949,26 @@ def warranty_analytics(
         )
     )
 
+    def _warranty_top_ranking(getter) -> list[dict]:
+        """Ranking simples (quantidade e % sobre o total de garantias) - ao contrário do ranking por
+        filial, diagnóstico/assunto não têm um denominador próprio (a origem não carrega essa
+        informação), então a % aqui é a fatia de cada rótulo dentro das garantias encontradas."""
+        counts: dict[str, int] = defaultdict(int)
+        for item in garantias:
+            counts[getter(item["order"]) or UNIDENTIFIED_LABEL] += 1
+        ranked = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0].casefold()))
+        return [
+            {
+                "label": label,
+                "quantity": quantity,
+                "percentage": round((quantity / numerator) * 100, 1) if numerator else 0.0,
+            }
+            for label, quantity in ranked[:WARRANTY_TOP_N]
+        ]
+
+    by_diagnosis = _warranty_top_ranking(lambda order: order.diagnosis)
+    by_subject = _warranty_top_ranking(lambda order: order.os_subject)
+
     garantias.sort(key=lambda item: item["order"].opened_at, reverse=True)
     items_truncated = len(garantias) > WARRANTY_MAX_ITEMS
     items = [
@@ -956,6 +977,7 @@ def warranty_analytics(
             "customer_name": item["order"].customer_name,
             "regional": item["order"].regional,
             "diagnosis": item["order"].diagnosis,
+            "return_os_subject": item["order"].os_subject,
             "origin_order_code": item["origin"]["order_code"],
             "origin_os_type": item["origin"]["os_type"],
             "origin_closed_at": item["origin"]["closed_at"],
@@ -976,6 +998,8 @@ def warranty_analytics(
         "customers_with_warranty": customers_with_warranty,
         "breakdown": breakdown,
         "by_regional": by_regional,
+        "by_diagnosis": by_diagnosis,
+        "by_subject": by_subject,
         "items": items,
         "items_truncated": items_truncated,
     }

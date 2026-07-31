@@ -39,12 +39,19 @@ export type Permission =
   | "scheduling:manage_filters"
   | "scheduling:views:read_global"
   | "scheduling:views:manage_global"
+  | "management:read"
+  | "management:manage_structure"
+  | "management:write_justification"
+  | "management:review"
+  | "management:admin"
   | "admin:users:read"
   | "admin:users:write"
   | "admin:users:delete"
   | "admin:roles:read"
   | "admin:roles:write"
   | "admin:permissions:read"
+  | "admin:modules:read"
+  | "admin:modules:write"
   | "admin:audit:read";
 
 export type AuthUser = {
@@ -81,6 +88,181 @@ export type AccessProfile = {
   user_count: number;
   created_at: string;
   updated_at: string;
+};
+
+export type ManagementSummary = {
+  total_members: number;
+  active_members: number;
+  pending_validation: number;
+  without_supervisor: number;
+  without_team_model: number;
+  without_gamification: number;
+  conflicts: number;
+  open_cases: number;
+  overdue_cases: number;
+};
+
+export type ManagementOperationalMember = {
+  id: number;
+  collaborator_id: number | null;
+  collaborator_name: string | null;
+  collaborator_is_registered: boolean | null;
+  collaborator_employee_type: string | null;
+  collaborator_team_type: string | null;
+  collaborator_structure_status: string | null;
+  collaborator_supervisor_user_id: number | null;
+  collaborator_supervisor_name: string | null;
+  gamification_status: "registered" | "pending" | "missing" | "inactive" | string;
+  ixc_employee_id: number | null;
+  responsible_name: string;
+  regional: string;
+  supervisor_user_id: number | null;
+  supervisor_name: string | null;
+  team_model_id: number | null;
+  team_model_name: string | null;
+  status: string;
+  source: string;
+  is_active: boolean;
+  notes: string | null;
+  last_order_at: string | null;
+  alerts: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkspaceVisibleModule = {
+  key: "gamification" | "operations" | "scheduling" | "management" | "admin";
+  name: string;
+  description: string;
+  web_path: string;
+  api_prefix: string;
+  required_permission: Permission;
+  status: "active" | "planned" | "disabled" | string;
+};
+
+export type AdminModuleProfileVisibility = {
+  profile_id: number;
+  profile_name: string;
+  visible: boolean;
+  has_required_permission: boolean;
+};
+
+export type AdminModuleUserVisibility = {
+  user_id: number;
+  user_name: string;
+  user_email: string;
+  visible: boolean;
+  reason: string | null;
+};
+
+export type AdminWorkspaceModule = WorkspaceVisibleModule & {
+  profiles: AdminModuleProfileVisibility[];
+  user_overrides: AdminModuleUserVisibility[];
+};
+
+export type AdminStructureOption = {
+  id: number;
+  name: string;
+};
+
+export type AdminPeopleStructureSummary = {
+  total_people: number;
+  active_people: number;
+  without_supervisor: number;
+  without_team_type: number;
+  pending_review: number;
+  field_team: number;
+  scheduling_team: number;
+};
+
+export type AdminPersonStructure = {
+  id: number;
+  name: string;
+  role: string;
+  regional: string;
+  active: boolean;
+  is_registered: boolean;
+  cpf_masked: string | null;
+  employee_type: string | null;
+  team_type: string | null;
+  supervisor_user_id: number | null;
+  supervisor_name: string | null;
+  regional_manager_user_id: number | null;
+  regional_manager_name: string | null;
+  structure_status: string;
+  structure_notes: string | null;
+  ixc_employee_id: number | null;
+  portal_user_id: number | null;
+  portal_user_email: string | null;
+  has_photo: boolean;
+};
+
+export type AdminPeopleStructure = {
+  summary: AdminPeopleStructureSummary;
+  people: AdminPersonStructure[];
+  supervisors: AdminStructureOption[];
+  regional_managers: AdminStructureOption[];
+  employee_types: string[];
+  team_types: string[];
+  statuses: string[];
+};
+
+export type ManagementDashboard = {
+  summary: ManagementSummary;
+  members: ManagementOperationalMember[];
+};
+
+export type ManagementOption = {
+  id: number;
+  name: string;
+};
+
+export type ManagementOptions = {
+  supervisors: ManagementOption[];
+  team_models: ManagementOption[];
+};
+
+export type ManagementCaseReason = {
+  id: number;
+  name: string;
+  description: string | null;
+  active: boolean;
+  requires_description: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ManagementCase = {
+  id: number;
+  case_type: string;
+  source_module: string;
+  reference_date: string | null;
+  reference_month: number | null;
+  reference_year: number | null;
+  regional: string | null;
+  collaborator_id: number | null;
+  collaborator_name: string | null;
+  responsible_name: string | null;
+  supervisor_user_id: number | null;
+  supervisor_name: string | null;
+  team_model_id: number | null;
+  team_model_name: string | null;
+  metric_name: string;
+  expected_value: number | null;
+  actual_value: number | null;
+  deviation_value: number | null;
+  severity: string;
+  status: string;
+  reason_id: number | null;
+  reason_name: string | null;
+  justification_text: string | null;
+  action_plan: string | null;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+  justified_at: string | null;
+  reviewed_by: number | null;
+  reviewed_at: string | null;
 };
 
 export type LoginResult = {

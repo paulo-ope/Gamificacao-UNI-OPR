@@ -37,6 +37,7 @@ Organize por dominio sempre que possivel. Regra de negocio deve viver em service
 - Validacoes criticas precisam ocorrer no servidor.
 - Permissoes devem ser checadas antes de retornar ou alterar dados protegidos.
 - Respostas devem ser estruturadas e amigaveis para o frontend.
+- Mensagens de erro, labels e descricoes retornadas por API devem usar portugues pt-BR correto, com acentuacao e sem mojibake.
 
 ## 5. Banco de dados
 - Mudancas estruturais exigem migration.
@@ -90,6 +91,8 @@ Regras:
 - [ ] Layout padrao aplicado.
 - [ ] Responsivo em desktop/tablet/mobile.
 - [ ] Estados loading/empty/error.
+- [ ] Ortografia, acentuacao e portugues pt-BR revisados em textos visiveis e mensagens de API.
+- [ ] Sem mojibake em textos, como `GestÃ£o`, `PermissÃµes`, `UsuÃ¡rios` ou similares.
 - [ ] Acessibilidade basica verificada.
 - [ ] Testes definidos ou implementados.
 - [ ] Banco com migration quando necessario.

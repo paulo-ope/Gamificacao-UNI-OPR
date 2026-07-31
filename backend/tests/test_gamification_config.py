@@ -1,5 +1,5 @@
 """Regression tests for backend/app/services/gamification_config.py."""
-from app.models import Collaborator, DiagnosisPenaltyRule, LeadershipProfile, LeadershipRoleProfile
+from app.models import AppSetting, Collaborator, DiagnosisPenaltyRule, LeadershipProfile, LeadershipRoleProfile
 from app.services import gamification_config as gc
 
 
@@ -422,3 +422,34 @@ def test_serialize_current_config_includes_collaborators(db_session):
 
     assert "collaborators" in result
     assert any(item["name"] == "Fulano" and item["ixc_employee_id"] == 123 for item in result["collaborators"])
+
+
+def test_serialize_current_config_excludes_scheduling_settings(db_session):
+    """Regression (vazamento mapeado na Fase 5 do plano de administração): `app_settings` e
+    compartilhada com o Agendamento (chaves scheduling_*). O export da config da Gamificacao nao
+    pode carregar parametros de outro modulo."""
+    db_session.add(AppSetting(key="scheduling_business_start", value="07:30"))
+    db_session.add(AppSetting(key="point_value", value="3.00"))
+    db_session.flush()
+
+    result = gc.serialize_current_config(db_session)
+
+    assert "scheduling_business_start" not in result["settings"]
+    assert result["settings"]["point_value"] == "3.00"
+
+
+def test_apply_config_ignores_and_warns_about_foreign_settings_keys(db_session):
+    """Regression: importar um export antigo (ou de outro ambiente) da Gamificacao nao pode
+    sobrescrever silenciosamente um parametro do Agendamento - a chave estranha deve ser ignorada
+    e sinalizada como aviso, nao aplicada."""
+    db_session.add(AppSetting(key="scheduling_business_start", value="07:30"))
+    db_session.flush()
+
+    config = _base_config(settings={"scheduling_business_start": "23:00", "point_value": "5.00"})
+
+    result = gc.apply_config(db_session, config)
+
+    scheduling_setting = db_session.query(AppSetting).filter_by(key="scheduling_business_start").one()
+    assert scheduling_setting.value == "07:30", "valor do Agendamento nao pode ter sido sobrescrito"
+    assert result["settings"]["point_value"] == "5.00"
+    assert any("scheduling_business_start" in warning for warning in result["warnings"])

@@ -1,27 +1,47 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, CalendarClock, LogOut, ShieldCheck, Trophy } from "lucide-react";
+import { BarChart3, BriefcaseBusiness, CalendarClock, LogOut, ShieldCheck, Trophy } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import { api } from "@/lib/api";
 import { workspaceModules } from "@/lib/module-registry";
+import type { WorkspaceVisibleModule } from "@/lib/types";
 
 
-const icons = { gamification: Trophy, operations: BarChart3, scheduling: CalendarClock, admin: ShieldCheck };
+const icons = { gamification: Trophy, operations: BarChart3, scheduling: CalendarClock, management: BriefcaseBusiness, admin: ShieldCheck };
 
 export function WorkspaceHome() {
   const { user, checking, error, login, logout } = useWorkspaceAuth();
+  const [visibleModules, setVisibleModules] = useState<WorkspaceVisibleModule[] | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    api.workspaceModules()
+      .then(setVisibleModules)
+      .catch(() => setVisibleModules(null));
+  }, [user]);
 
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando UNI Workspace...</main>;
   }
   if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} />;
 
-  const modules = workspaceModules.filter(
-    (module) => module.status === "active" && user.permissions.includes(module.requiredPermission)
-  );
+  const fallbackModules = workspaceModules
+    .filter((module) => module.status === "active" && user.permissions.includes(module.requiredPermission))
+    .map((module) => ({
+      key: module.key,
+      name: module.name,
+      description: module.description,
+      web_path: module.webPath,
+      api_prefix: module.apiPrefix,
+      required_permission: module.requiredPermission,
+      status: module.status,
+    }));
+  const modules = visibleModules ?? fallbackModules;
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -44,7 +64,7 @@ export function WorkspaceHome() {
           {modules.map((module) => {
             const Icon = icons[module.key];
             return (
-              <Link key={module.key} href={module.webPath} className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg">
+              <Link key={module.key} href={module.web_path} className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
                   <Icon className="h-6 w-6" />
                 </div>

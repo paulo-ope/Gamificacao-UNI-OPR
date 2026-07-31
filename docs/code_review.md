@@ -27,6 +27,8 @@ Use este arquivo para revisao manual, revisao antes de merge ou quando o usuario
 - [ ] Acessibilidade basica foi validada?
 - [ ] Dados de servidor tratam carregamento, erro e atualizacao?
 - [ ] Estado global foi usado somente quando necessario?
+- [ ] Textos visiveis, labels, botoes, menus, mensagens e estados estao com ortografia, acentuacao e portugues pt-BR corretos?
+- [ ] Nao ha mojibake em textos exibidos ao usuario, como `GestÃ£o`, `PermissÃµes`, `UsuÃ¡rios` ou similares?
 
 ## 4. Banco de dados
 - [ ] Mudanca estrutural tem migration?
@@ -41,6 +43,7 @@ Use este arquivo para revisao manual, revisao antes de merge ou quando o usuario
 - [ ] Testes relevantes foram criados ou atualizados?
 - [ ] Docker/VM continuam funcionando quando afetados?
 - [ ] README ou `.env.example` foram atualizados quando necessario?
+- [ ] Foi feita varredura em textos alterados para evitar falta de acento, erro ortografico ou texto tecnico cru para usuario final?
 
 ## 6. Decisao final
 Resultado da revisao:

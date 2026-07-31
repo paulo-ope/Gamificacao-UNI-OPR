@@ -72,3 +72,133 @@ class AccessProfileOut(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AdminPersonStructureOut(BaseModel):
+    id: int
+    name: str
+    role: str
+    regional: str
+    active: bool
+    is_registered: bool
+    cpf_masked: str | None = None
+    employee_type: str | None = None
+    team_type: str | None = None
+    supervisor_user_id: int | None = None
+    supervisor_name: str | None = None
+    regional_manager_user_id: int | None = None
+    regional_manager_name: str | None = None
+    structure_status: str
+    structure_notes: str | None = None
+    ixc_employee_id: int | None = None
+    portal_user_id: int | None = None
+    portal_user_email: str | None = None
+    has_photo: bool = False
+
+
+class AdminStructureOption(BaseModel):
+    id: int
+    name: str
+
+
+class AdminPeopleStructureSummary(BaseModel):
+    total_people: int
+    active_people: int
+    without_supervisor: int
+    without_team_type: int
+    pending_review: int
+    field_team: int
+    scheduling_team: int
+
+
+class AdminPeopleStructureOut(BaseModel):
+    summary: AdminPeopleStructureSummary
+    people: list[AdminPersonStructureOut]
+    supervisors: list[AdminStructureOption]
+    regional_managers: list[AdminStructureOption]
+    employee_types: list[str]
+    team_types: list[str]
+    statuses: list[str]
+
+
+class AdminPersonStructureUpdate(BaseModel):
+    cpf: str | None = Field(default=None, max_length=20)
+    employee_type: str | None = Field(default=None, max_length=40)
+    team_type: str | None = Field(default=None, max_length=40)
+    supervisor_user_id: int | None = None
+    regional_manager_user_id: int | None = None
+    structure_status: str | None = Field(default=None, max_length=40)
+    structure_notes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("cpf", "employee_type", "team_type", "structure_status", "structure_notes")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        text = value.strip()
+        return text or None
+
+
+class AdminModuleProfileVisibilityOut(BaseModel):
+    profile_id: int
+    profile_name: str
+    visible: bool
+    has_required_permission: bool
+
+
+class AdminModuleUserVisibilityOut(BaseModel):
+    user_id: int
+    user_name: str
+    user_email: str
+    visible: bool
+    reason: str | None = None
+
+
+class AdminWorkspaceModuleOut(BaseModel):
+    key: str
+    name: str
+    description: str
+    web_path: str
+    api_prefix: str
+    required_permission: str
+    status: str
+    profiles: list[AdminModuleProfileVisibilityOut]
+    user_overrides: list[AdminModuleUserVisibilityOut] = Field(default_factory=list)
+
+
+class AdminModuleVisibilityUpdate(BaseModel):
+    profile_id: int
+    visible: bool
+    reason: str | None = Field(default=None, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        text = value.strip()
+        return text or None
+
+
+class AdminModuleUserVisibilityUpsert(BaseModel):
+    user_id: int
+    visible: bool
+    reason: str | None = Field(default=None, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        text = value.strip()
+        return text or None
+
+
+class WorkspaceVisibleModuleOut(BaseModel):
+    key: str
+    name: str
+    description: str
+    web_path: str
+    api_prefix: str
+    required_permission: str
+    status: str

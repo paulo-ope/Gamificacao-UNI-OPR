@@ -1,6 +1,9 @@
 import type {
   AppSetting,
   AccessProfile,
+  AdminWorkspaceModule,
+  AdminPeopleStructure,
+  AdminPersonStructure,
   AuthUser,
   AuditLog,
   AuditOrders,
@@ -31,6 +34,10 @@ import type {
   LeadershipProfile,
   LeadershipRoleProfile,
   LoginResult,
+  ManagementCase,
+  ManagementCaseReason,
+  ManagementDashboard,
+  ManagementOptions,
   EcosystemPermission,
   Permission,
   PenaltyRule,
@@ -53,7 +60,8 @@ import type {
   ServiceOrderPeriodSummary,
   ServiceOrderSubjectSummary,
   SlaPenaltyRule,
-  UnmappedSubject
+  UnmappedSubject,
+  WorkspaceVisibleModule
 } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
@@ -230,6 +238,67 @@ export const api = {
     request<AccessProfile>(`/admin/access-profiles/${id}`, {
       method: "DELETE"
     }),
+  workspaceModules: () => request<WorkspaceVisibleModule[]>("/workspace/modules"),
+  adminModules: () => request<AdminWorkspaceModule[]>("/admin/modules"),
+  updateAdminModuleVisibility: (moduleKey: string, payload: { profile_id: number; visible: boolean; reason?: string | null }) =>
+    request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/visibility`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  updateAdminModuleUserVisibility: (moduleKey: string, payload: { user_id: number; visible: boolean; reason?: string | null }) =>
+    request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/user-visibility`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  deleteAdminModuleUserVisibility: (moduleKey: string, userId: number) =>
+    request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/user-visibility/${userId}`, {
+      method: "DELETE"
+    }),
+  adminPeopleStructure: () => request<AdminPeopleStructure>("/admin/people-structure"),
+  updateAdminPersonStructure: (
+    id: number,
+    payload: {
+      cpf?: string | null;
+      employee_type?: string | null;
+      team_type?: string | null;
+      supervisor_user_id?: number | null;
+      regional_manager_user_id?: number | null;
+      structure_status?: string | null;
+      structure_notes?: string | null;
+    }
+  ) =>
+    request<AdminPersonStructure>(`/admin/people-structure/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  managementDashboard: (filters?: { regional?: string; supervisor_user_id?: number; status?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.regional) params.set("regional", filters.regional);
+    if (filters?.supervisor_user_id) params.set("supervisor_user_id", String(filters.supervisor_user_id));
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.search) params.set("search", filters.search);
+    const query = params.toString();
+    return request<ManagementDashboard>(`/management/dashboard${query ? `?${query}` : ""}`);
+  },
+  managementOptions: () => request<ManagementOptions>("/management/options"),
+  refreshManagementStructure: () =>
+    request<{ created_candidates: number }>("/management/structure/refresh", {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
+  updateManagementMember: (id: number, payload: { supervisor_user_id?: number | null; team_model_id?: number | null; status?: string; notes?: string | null }) =>
+    request<{ status: string }>(`/management/members/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  managementCases: (filters?: { status?: string; regional?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.regional) params.set("regional", filters.regional);
+    const query = params.toString();
+    return request<ManagementCase[]>(`/management/cases${query ? `?${query}` : ""}`);
+  },
+  managementCaseReasons: () => request<ManagementCaseReason[]>("/management/case-reasons"),
   leadershipProfiles: () => request<LeadershipProfile[]>("/leadership/profiles"),
   leadershipRoleProfiles: () => request<LeadershipRoleProfile[]>("/leadership/role-profiles"),
   createLeadershipRoleProfile: (payload: Partial<LeadershipRoleProfile>) =>

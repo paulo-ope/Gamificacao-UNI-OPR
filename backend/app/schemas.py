@@ -75,6 +75,13 @@ class CollaboratorBase(BaseModel):
     is_registered: bool = True
     phone: str | None = None
     email: str | None = None
+    cpf: str | None = None
+    employee_type: str | None = None
+    team_type: str | None = None
+    supervisor_user_id: int | None = None
+    regional_manager_user_id: int | None = None
+    structure_status: str = "pending_review"
+    structure_notes: str | None = None
 
     _validate_not_blank = field_validator("name", "role", "regional")(_reject_blank)
 
@@ -91,6 +98,13 @@ class CollaboratorUpdate(BaseModel):
     is_registered: bool | None = None
     phone: str | None = None
     email: str | None = None
+    cpf: str | None = None
+    employee_type: str | None = None
+    team_type: str | None = None
+    supervisor_user_id: int | None = None
+    regional_manager_user_id: int | None = None
+    structure_status: str | None = None
+    structure_notes: str | None = None
 
     _validate_not_blank = field_validator("name", "role", "regional")(_reject_blank)
 

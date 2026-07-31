@@ -388,3 +388,48 @@ def test_four_denominator_options(client, db_session):
 
     activation_closed = count_for("activation_closed")
     assert activation_closed["denominator_count"] == 1  # só ORIGIN-IN-PERIOD é Ativação fechada no período
+
+
+def test_by_diagnosis_and_by_subject_rankings(client, db_session):
+    date_from, date_to = current_month_bounds()
+    origin_closed = _utc_at(date_from)
+
+    def _pair(prefix, contract_id, diagnosis, subject):
+        return [
+            _order(
+                order_code=f"{prefix}-ORIGIN",
+                contract_id=contract_id,
+                os_type="Ativação",
+                opened_at=origin_closed - timedelta(days=2),
+                closed_at=origin_closed,
+            ),
+            _order(
+                order_code=f"{prefix}-RETURN",
+                contract_id=contract_id,
+                os_type="Manutenção",
+                opened_at=origin_closed + timedelta(days=1),
+                diagnosis=diagnosis,
+                os_subject=subject,
+            ),
+        ]
+
+    db_session.add_all(
+        [
+            *_pair("D1", "C20", "Sem sinal", "Fibra rompida"),
+            *_pair("D2", "C21", "Sem sinal", "Fibra rompida"),
+            *_pair("D3", "C22", "Lentidão", "Fibra rompida"),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        "/api/operations/warranty",
+        params={"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["numerator"] == 3
+    assert body["by_diagnosis"][0] == {"label": "Sem sinal", "quantity": 2, "percentage": 66.7}
+    assert body["by_diagnosis"][1] == {"label": "Lentidão", "quantity": 1, "percentage": 33.3}
+    assert body["by_subject"][0] == {"label": "Fibra rompida", "quantity": 3, "percentage": 100.0}

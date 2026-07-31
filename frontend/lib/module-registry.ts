@@ -3,7 +3,7 @@ import type { Permission } from "@/lib/types";
 export type WorkspaceModuleStatus = "active" | "planned" | "disabled";
 
 export type WorkspaceModule = {
-  key: "gamification" | "operations" | "scheduling" | "admin";
+  key: "gamification" | "operations" | "scheduling" | "management" | "admin";
   name: string;
   description: string;
   webPath: string;
@@ -43,6 +43,15 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/agendamento",
     apiPrefix: "/api/scheduling",
     requiredPermission: "scheduling:read",
+    status: "active"
+  },
+  {
+    key: "management",
+    name: "Gestão Integrada",
+    description: "Estrutura operacional, casos de gestão, justificativas e decisão da matriz.",
+    webPath: "/gestao",
+    apiPrefix: "/api/management",
+    requiredPermission: "management:read",
     status: "active"
   },
   {
