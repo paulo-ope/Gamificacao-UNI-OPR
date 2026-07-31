@@ -33,7 +33,15 @@ const REGIONAL_GROUP_ALIASES: Record<string, string> = {
   "UNI - SAO FELIPE DOESTE": "UNI - Rolim de Moura",
   "UNI - SAO FELIPE": "UNI - Rolim de Moura",
   "SAO FELIPE DOESTE": "UNI - Rolim de Moura",
-  "SAO FELIPE": "UNI - Rolim de Moura"
+  "SAO FELIPE": "UNI - Rolim de Moura",
+  // Auto-referencia necessaria: o backend grava o valor ja agrupado como "UNI - ROLIM DE MOURA"
+  // (maiusculo, ver ROLIM_REGIONAL em regional.py) - sem esta entrada, esse valor cru nunca
+  // passava pelo alias e ficava com uma grafia (maiuscula) diferente da que Sao Felipe produz
+  // ("UNI - Rolim de Moura", Title Case) - duas strings "iguais" pro usuario, mas distintas pro
+  // codigo, geravam duas abas ("Rolim" e "Rolim 2") na exportacao em vez de uma so. Sao Francisco
+  // ja tinha essa auto-referencia (linha 29) - Rolim nunca precisou, ate agora.
+  "UNI - ROLIM DE MOURA": "UNI - Rolim de Moura",
+  "ROLIM DE MOURA": "UNI - Rolim de Moura"
 };
 
 function regionalKey(value: string) {

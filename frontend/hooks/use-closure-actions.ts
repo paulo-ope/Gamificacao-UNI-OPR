@@ -157,6 +157,12 @@ export function useClosureActions({
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "UNI Workspace";
     const nextSheetName = sheetNameFactory();
+    // Um lider que cobre varias regionais (ex.: gerente de pasta, ou supervisor multi-filial)
+    // aparecia numa linha por regional coberta, repetindo o MESMO valor a pagar em cada aba - quem
+    // fosse pagar podia somar o valor por aba e pagar o mesmo bonus varias vezes por engano.
+    // Cada lideranca agora aparece uma unica vez no arquivo inteiro (na primeira regional dela em
+    // ordem alfabetica), com a coluna "Regionais" mostrando todas as areas que ela cobre.
+    const placedLeadershipIds = new Set<number>();
 
     for (const regional of sortedRegionals) {
       const sheet = workbook.addWorksheet(nextSheetName(regionalName(regional)));
@@ -188,7 +194,10 @@ export function useClosureActions({
         ["Total", "", "", "", "", "", "", "", formatMoney(regionalPaymentRows.reduce((sum, score) => sum + score.estimated_payment, 0))]
       );
 
-      const regionalLeadershipRows = leadershipRows.filter((item) => item.regionals.some((r) => normalizeRegional(r) === regional));
+      const regionalLeadershipRows = leadershipRows.filter(
+        (item) => !placedLeadershipIds.has(item.leadership_profile_id) && item.regionals.some((r) => normalizeRegional(r) === regional)
+      );
+      regionalLeadershipRows.forEach((item) => placedLeadershipIds.add(item.leadership_profile_id));
       addSectionTable(
         sheet,
         "Bonificação de liderança",
@@ -214,6 +223,37 @@ export function useClosureActions({
         regionalPendingRows.map((item) => [item.name, `${formatNumber(item.service_orders_count)} O.S`, formatMoney(item.estimated_payment), "Pendente de cadastro"])
       );
 
+      sheet.columns.forEach((column) => {
+        column.width = 22;
+      });
+    }
+
+    // Gerente de pasta (ou qualquer lideranca sem filial vinculada) nunca casa com um regional
+    // especifico - sem esta aba, o bonus dele simplesmente desapareceria do arquivo em vez de
+    // aparecer repetido.
+    const leftoverLeadershipRows = leadershipRows.filter((item) => !placedLeadershipIds.has(item.leadership_profile_id));
+    if (leftoverLeadershipRows.length > 0) {
+      const sheet = workbook.addWorksheet(nextSheetName("Liderança Geral"));
+      sheet.views = [{ state: "frozen", ySplit: 1 }];
+      const titleRow = sheet.addRow(["Liderança sem filial específica (cobre múltiplas regionais ou toda a operação)"]);
+      titleRow.font = { bold: true, size: 13 };
+      sheet.addRow([]);
+      addSectionTable(
+        sheet,
+        "Bonificação de liderança",
+        ["Liderança", "Regionais", "Tipo", "Origem da média", "Pessoas na média", "Soma dos pontos", "Média final", "Multiplicador", "Valor a ser pago"],
+        leftoverLeadershipRows.map((item) => [
+          item.name,
+          item.regionals.length > 0 ? item.regionals.map((r) => regionalName(r)).join(", ") : "Toda a operação",
+          leadershipRoleLabel(item.role_type),
+          leadershipAverageSourceLabel(item.average_source),
+          formatNumber(item.audit?.scoped_collaborators ?? item.scoped_collaborators),
+          `${formatNumber(item.audit?.total_final_points ?? item.average_final_points * item.scoped_collaborators)} pts`,
+          `${formatNumber(item.average_final_points)} pts`,
+          `${formatNumber(item.multiplier)}x`,
+          formatMoney(item.bonus_amount)
+        ])
+      );
       sheet.columns.forEach((column) => {
         column.width = 22;
       });
