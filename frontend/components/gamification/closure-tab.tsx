@@ -98,7 +98,7 @@ export type ClosureTabProps = {
   regionalOptions: string[];
   onSelectedRegionalsChange: (values: string[]) => void;
   leadershipCoveredRegionals: number;
-  onExportPaymentCsv: () => void;
+  onExportPaymentWorkbook: () => void;
   onAdvanceRunStatus: (nextStatus: "review" | "approved" | "paid" | "cancelled", successMessage: string) => void | Promise<void>;
   onActiveTabChange: (tab: string) => void;
   onConfigTabChange: (tab: string) => void;
@@ -124,7 +124,7 @@ export function ClosureTab({
   regionalOptions,
   onSelectedRegionalsChange,
   leadershipCoveredRegionals,
-  onExportPaymentCsv,
+  onExportPaymentWorkbook,
   onAdvanceRunStatus,
   onActiveTabChange,
   onConfigTabChange,
@@ -217,7 +217,7 @@ export function ClosureTab({
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
               {currentUser.role !== "viewer" ? (
-                <Button type="button" variant="outline" onClick={onExportPaymentCsv} className="w-full bg-white sm:w-auto">
+                <Button type="button" variant="outline" onClick={onExportPaymentWorkbook} className="w-full bg-white sm:w-auto">
                   <Download className="h-4 w-4" />
                   Exportar pagamento
                 </Button>

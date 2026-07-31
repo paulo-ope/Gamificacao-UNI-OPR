@@ -16,7 +16,9 @@ const REGIONAL_CODE_MAP: Record<string, string> = {
 
 // A gamificação apura e paga São Miguel do Guaporé, Seringueiras e São Francisco do Guaporé como
 // uma única regional (a Operação Analítica, que usa seu próprio código de exibição, mantém as 3
-// separadas - ela não importa deste arquivo).
+// separadas - ela não importa deste arquivo). São Felipe D'Oeste entra no grupo de Rolim de Moura
+// pelo mesmo motivo: não tem base de CPK própria (a frota é custeada pela garagem de Rolim) - ver
+// backend/app/services/regional.py, que este arquivo espelha.
 const REGIONAL_GROUP_ALIASES: Record<string, string> = {
   "UNI - SAO MIGUEL DO GUAPORE": "UNI - São Francisco do Guaporé",
   "UNI - SAO MIGUEL": "UNI - São Francisco do Guaporé",
@@ -27,7 +29,11 @@ const REGIONAL_GROUP_ALIASES: Record<string, string> = {
   "UNI - SAO FRANCISCO DO GUAPORE": "UNI - São Francisco do Guaporé",
   "UNI - SAO FRANCISCO": "UNI - São Francisco do Guaporé",
   "SAO FRANCISCO DO GUAPORE": "UNI - São Francisco do Guaporé",
-  "SAO FRANCISCO": "UNI - São Francisco do Guaporé"
+  "SAO FRANCISCO": "UNI - São Francisco do Guaporé",
+  "UNI - SAO FELIPE DOESTE": "UNI - Rolim de Moura",
+  "UNI - SAO FELIPE": "UNI - Rolim de Moura",
+  "SAO FELIPE DOESTE": "UNI - Rolim de Moura",
+  "SAO FELIPE": "UNI - Rolim de Moura"
 };
 
 function regionalKey(value: string) {

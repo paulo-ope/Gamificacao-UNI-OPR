@@ -800,7 +800,7 @@ export default function GamificacaoPage() {
     filteredRanking.length
   );
 
-  const { advanceRunStatus, exportPaymentCsv } = useClosureActions({
+  const { advanceRunStatus, exportPaymentWorkbook } = useClosureActions({
     summary,
     currentUser,
     selectedRegionals,
@@ -1139,7 +1139,7 @@ export default function GamificacaoPage() {
                     regionalOptions={regionalOptions}
                     onSelectedRegionalsChange={updateSelectedRegionals}
                     leadershipCoveredRegionals={leadershipCoveredRegionals}
-                    onExportPaymentCsv={exportPaymentCsv}
+                    onExportPaymentWorkbook={exportPaymentWorkbook}
                     onAdvanceRunStatus={advanceRunStatus}
                     onActiveTabChange={setActiveTab}
                     onConfigTabChange={setConfigTab}

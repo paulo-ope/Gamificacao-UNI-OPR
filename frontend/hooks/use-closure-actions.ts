@@ -1,9 +1,64 @@
+import ExcelJS from "exceljs";
 import { useCallback } from "react";
 
 import { formatMoney, formatNumber, formatPoints, leadershipAverageSourceLabel, leadershipRoleLabel } from "@/lib/gamificacao-helpers";
 import { api } from "@/lib/api";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type { AuthUser, DashboardSummary } from "@/lib/types";
+
+const SECTION_HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
+const TABLE_HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+
+function sheetNameFactory() {
+  const used = new Set<string>();
+  return (label: string) => {
+    // Excel proibe : \ / ? * [ ] no nome da aba e limita a 31 caracteres - "UNI - " e o hifen
+    // repetem em toda regional, sem valor nenhum dentro da aba (a aba ja e a regional).
+    const base = (label.replace(/^UNI\s*-\s*/i, "").trim() || "Regional").replace(/[:\\/?*\[\]]/g, "").slice(0, 31);
+    let name = base;
+    let attempt = 2;
+    while (used.has(name.toLowerCase())) {
+      const suffix = ` ${attempt}`;
+      name = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+      attempt += 1;
+    }
+    used.add(name.toLowerCase());
+    return name;
+  };
+}
+
+function addSectionTable(
+  sheet: ExcelJS.Worksheet,
+  title: string,
+  headers: string[],
+  rows: (string | number)[][],
+  totalsRow?: (string | number)[]
+) {
+  const titleRow = sheet.addRow([title]);
+  titleRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  titleRow.eachCell((cell) => {
+    cell.fill = SECTION_HEADER_FILL;
+  });
+
+  const headerRow = sheet.addRow(headers);
+  headerRow.font = { bold: true };
+  headerRow.eachCell((cell) => {
+    cell.fill = TABLE_HEADER_FILL;
+  });
+
+  if (rows.length === 0) {
+    sheet.addRow(["Nenhum registro nesta regional."]);
+  } else {
+    rows.forEach((row) => sheet.addRow(row));
+  }
+
+  if (totalsRow && rows.length > 0) {
+    const row = sheet.addRow(totalsRow);
+    row.font = { bold: true };
+  }
+
+  sheet.addRow([]);
+}
 
 type ClosurePeriod = { reference_month?: number; reference_year?: number; regional?: string | null };
 
@@ -77,7 +132,7 @@ export function useClosureActions({
     [confirm, loadAll, setError, setHistoryLoaded, summary?.run?.id, summary?.run?.reference_month, summary?.run?.reference_year, summary?.run?.regional, withFeedback]
   );
 
-  const exportPaymentCsv = useCallback(() => {
+  const exportPaymentWorkbook = useCallback(async () => {
     if (!summary || currentUser?.role === "viewer") return;
     const healthByRegional = new Map(summary.health_by_regional.map((item) => [normalizeRegional(item.regional), item]));
     const paymentRows = summary.ranking.filter((score) => {
@@ -90,83 +145,91 @@ export function useClosureActions({
     const pendingRows = (summary.leadership_bonus?.pending_collaborators ?? []).filter((item) => {
       return selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(item.suggested_regional || item.regional));
     });
-    const rows = [
-      ["Pagamento de técnicos"],
-      [
-        "Colaborador",
-        "Regional",
-        "Tipo",
-        "O.S",
-        "Pontos brutos",
-        "Pontos anulados",
-        "Pontos líquidos",
-        "SLA da base (%)",
-        "Multiplicador saúde",
-        "Pontos finais",
-        "Valor a ser pago"
-      ],
-      ...paymentRows.map((score) => {
-        const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
-        return [
-          score.collaborator_name,
-          regionalName(score.regional),
-          "Técnico",
-          formatNumber(score.service_orders_count),
-          formatPoints(score.gross_points),
-          formatPoints(score.penalty_points),
-          formatPoints(score.net_points),
-          regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
-          `${formatNumber(score.health_multiplier)}x`,
-          formatPoints(score.final_points),
-          formatMoney(score.estimated_payment)
-        ];
-      }),
-      [],
-      ["Bonificação de liderança"],
-      [
-        "Liderança",
-        "Regionais",
-        "Tipo",
-        "Origem da média",
-        "Pessoas na média",
-        "Soma dos pontos",
-        "Média final",
-        "Multiplicador",
-        "Valor a ser pago"
-      ],
-      ...leadershipRows.map((item) => [
-        item.name,
-        item.regionals.map((regional) => regionalName(regional)).join(", "),
-        leadershipRoleLabel(item.role_type),
-        leadershipAverageSourceLabel(item.average_source),
-        formatNumber(item.audit?.scoped_collaborators ?? item.scoped_collaborators),
-        `${formatNumber(item.audit?.total_final_points ?? item.average_final_points * item.scoped_collaborators)} pts`,
-        `${formatNumber(item.average_final_points)} pts`,
-        `${formatNumber(item.multiplier)}x`,
-        formatMoney(item.bonus_amount)
-      ]),
-      [],
-      ["Pendentes de cadastro"],
-      ["Nome identificado", "Regional sugerida", "O.S", "Valor potencial", "Status"],
-      ...pendingRows.map((item) => [
-        item.name,
-        regionalName(item.suggested_regional || item.regional),
-        `${formatNumber(item.service_orders_count)} O.S`,
-        formatMoney(item.estimated_payment),
-        "Pendente de cadastro"
-      ])
-    ];
-    const csv = rows.map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(";")).join("\r\n");
-    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+
+    // Uma aba por regional (o motivo de existir esta funcao) - reune toda regional que aparece em
+    // qualquer uma das 3 tabelas, mesmo que so tenha lideranca ou so tenha pendente de cadastro.
+    const regionals = new Set<string>();
+    paymentRows.forEach((score) => regionals.add(normalizeRegional(score.regional)));
+    leadershipRows.forEach((item) => item.regionals.forEach((regional) => regionals.add(normalizeRegional(regional))));
+    pendingRows.forEach((item) => regionals.add(normalizeRegional(item.suggested_regional || item.regional)));
+    const sortedRegionals = Array.from(regionals).sort((a, b) => regionalName(a).localeCompare(regionalName(b), "pt-BR"));
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "UNI Workspace";
+    const nextSheetName = sheetNameFactory();
+
+    for (const regional of sortedRegionals) {
+      const sheet = workbook.addWorksheet(nextSheetName(regionalName(regional)));
+      sheet.views = [{ state: "frozen", ySplit: 1 }];
+
+      const titleRow = sheet.addRow([`Pagamento - ${regionalName(regional)}`]);
+      titleRow.font = { bold: true, size: 13 };
+      sheet.addRow([]);
+
+      const regionalPaymentRows = paymentRows.filter((score) => normalizeRegional(score.regional) === regional);
+      addSectionTable(
+        sheet,
+        "Pagamento de técnicos",
+        ["Colaborador", "O.S", "Pontos brutos", "Pontos anulados", "Pontos líquidos", "SLA da base (%)", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"],
+        regionalPaymentRows.map((score) => {
+          const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
+          return [
+            score.collaborator_name,
+            formatNumber(score.service_orders_count),
+            formatPoints(score.gross_points),
+            formatPoints(score.penalty_points),
+            formatPoints(score.net_points),
+            regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
+            `${formatNumber(score.health_multiplier)}x`,
+            formatPoints(score.final_points),
+            formatMoney(score.estimated_payment)
+          ];
+        }),
+        ["Total", "", "", "", "", "", "", "", formatMoney(regionalPaymentRows.reduce((sum, score) => sum + score.estimated_payment, 0))]
+      );
+
+      const regionalLeadershipRows = leadershipRows.filter((item) => item.regionals.some((r) => normalizeRegional(r) === regional));
+      addSectionTable(
+        sheet,
+        "Bonificação de liderança",
+        ["Liderança", "Regionais", "Tipo", "Origem da média", "Pessoas na média", "Soma dos pontos", "Média final", "Multiplicador", "Valor a ser pago"],
+        regionalLeadershipRows.map((item) => [
+          item.name,
+          item.regionals.map((r) => regionalName(r)).join(", "),
+          leadershipRoleLabel(item.role_type),
+          leadershipAverageSourceLabel(item.average_source),
+          formatNumber(item.audit?.scoped_collaborators ?? item.scoped_collaborators),
+          `${formatNumber(item.audit?.total_final_points ?? item.average_final_points * item.scoped_collaborators)} pts`,
+          `${formatNumber(item.average_final_points)} pts`,
+          `${formatNumber(item.multiplier)}x`,
+          formatMoney(item.bonus_amount)
+        ])
+      );
+
+      const regionalPendingRows = pendingRows.filter((item) => normalizeRegional(item.suggested_regional || item.regional) === regional);
+      addSectionTable(
+        sheet,
+        "Pendentes de cadastro",
+        ["Nome identificado", "O.S", "Valor potencial", "Status"],
+        regionalPendingRows.map((item) => [item.name, `${formatNumber(item.service_orders_count)} O.S`, formatMoney(item.estimated_payment), "Pendente de cadastro"])
+      );
+
+      sheet.columns.forEach((column) => {
+        column.width = 22;
+      });
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `pagamentos-gamificação-${summary.run?.reference_month ?? "período"}-${summary.run?.reference_year ?? "atual"}.csv`;
+    link.download = `pagamentos-gamificação-${summary.run?.reference_month ?? "período"}-${summary.run?.reference_year ?? "atual"}.xlsx`;
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
   }, [currentUser?.role, selectedRegionals, summary]);
 
-  return { advanceRunStatus, exportPaymentCsv };
+  return { advanceRunStatus, exportPaymentWorkbook };
 }
