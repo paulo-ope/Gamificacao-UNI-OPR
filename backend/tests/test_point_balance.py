@@ -19,7 +19,12 @@ from app.services.calculation_closure import now_porto_velho
 
 
 @pytest.fixture()
-def paid_june_run(db_session, scoring_setup):
+def paid_june_run(db_session, scoring_setup, monkeypatch):
+    # Estes testes fixam maio/junho/julho de 2026 como "o mes corrente" e o mes imediatamente anterior -
+    # como o mecanismo sob teste (current_reference_period) le a hora real do relogio, o fixture precisa
+    # congelar isso em julho/2026 para que as datas fixas nos testes continuem fazendo sentido independente
+    # de quando a suite realmente roda.
+    monkeypatch.setattr(point_balance, "current_reference_period", lambda: (7, 2026))
     run = CalculationRun(reference_month=6, reference_year=2026, regional=None, point_value=2.5, status="paid")
     db_session.add(run)
     db_session.flush()
@@ -328,6 +333,14 @@ def test_post_payment_debit_allowed_for_immediately_previous_month(db_session, m
     one must keep generating the debit normally - the calendar-month rule must not weaken the
     real, intended case.
 
+    later.created_at is explicitly set AFTER the run's created_at (real scenario: the return
+    visit was only imported into our system after that period's own calculation already ran,
+    so the normal in-period recurrence_penalties mechanism never had a chance to see it - see
+    test_post_payment_debit_skips_when_return_order_predates_last_calculation below for the
+    opposite, duplicate-preventing case). Without pinning this explicitly, both rows get their
+    created_at default from the same flush() and the test's outcome would depend on
+    microsecond-level ordering.
+
     Uses now_porto_velho() for the same reason as the test above - see its docstring."""
     collaborator = make_collaborator()
     now = now_porto_velho()
@@ -335,15 +348,55 @@ def test_post_payment_debit_allowed_for_immediately_previous_month(db_session, m
     recent_closed = datetime(last_year, last_month, 15, tzinfo=timezone.utc)
     run = CalculationRun(reference_month=last_month, reference_year=last_year, regional=None, point_value=2.5, status="paid")
     db_session.add(run)
+    db_session.flush()
     original = _os(collaborator, "OS-LASTMONTH-ORIG", recent_closed)
     later = _os(collaborator, "OS-LASTMONTH-RET", recent_closed + timedelta(days=5))
     db_session.add_all([original, later])
+    db_session.flush()
+    later.created_at = run.created_at + timedelta(minutes=1)
     db_session.flush()
 
     created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
     db_session.commit()
 
     assert len(created) == 1, "original do mes imediatamente anterior deveria gerar debito normalmente"
+
+
+def test_post_payment_debit_skips_when_return_order_predates_last_calculation(
+    db_session, make_collaborator, recurrence_setup
+):
+    """Regression (achado real, 2026-08-01): quando o mes corrente vira, uma passada de
+    detect_post_payment_warranty_debits encontrou 522 pares (original E retorno no MESMO mes,
+    julho) que ja existiam no banco semanas antes do ultimo calculo normal de julho - ou seja, o
+    mecanismo normal (recurrence_penalties, que roda toda vez que aquele periodo e calculado) ja
+    tinha anulado esses pontos direto no total do mes. Criar TAMBEM um lancamento de saldo aqui
+    descontaria a MESMA garantia duas vezes: uma no total ja fechado, outra num pagamento futuro.
+    Se a O.S de retorno ja existia (created_at) ANTES do ultimo calculo daquele periodo, nao deve
+    gerar nenhum debito novo."""
+    collaborator = make_collaborator()
+    now = now_porto_velho()
+    last_month, last_year = _months_before(now, 1)
+    recent_closed = datetime(last_year, last_month, 15, tzinfo=timezone.utc)
+    original = _os(collaborator, "OS-DUPCHECK-ORIG", recent_closed)
+    later = _os(collaborator, "OS-DUPCHECK-RET", recent_closed + timedelta(days=5))
+    db_session.add_all([original, later])
+    db_session.flush()
+    # As duas O.S ja existiam no banco (created_at) antes do fechamento daquele periodo ser
+    # calculado - o calculo normal ja teve chance de ver e anular esse par.
+    run = CalculationRun(
+        reference_month=last_month, reference_year=last_year, regional=None, point_value=2.5, status="paid"
+    )
+    db_session.add(run)
+    db_session.flush()
+    assert later.created_at < run.created_at, "pre-condicao do teste: retorno precisa existir ANTES do calculo"
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
+    db_session.commit()
+
+    assert created == [], (
+        "retorno ja existia quando aquele periodo foi calculado - o mecanismo normal ja anulou "
+        "esses pontos, gerar um debito aqui duplicaria o desconto"
+    )
 
 
 def test_post_payment_debit_skips_unregistered_or_inactive_original_collaborator(

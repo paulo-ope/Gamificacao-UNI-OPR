@@ -292,6 +292,19 @@ def detect_post_payment_warranty_debits(
         # regua atual, igual ja acontecia para fechamentos pagos sem config_snapshot.
         reference_run = paid_run or find_run_for_service_order_context(db, original_date, original.regional)
 
+        if reference_run is not None and later.created_at is not None and later.created_at <= reference_run.created_at:
+            # A O.S de retorno ja existia no banco QUANDO o ultimo calculo daquele periodo rodou -
+            # o mecanismo normal (recurrence_penalties, que roda toda vez que o periodo e calculado,
+            # inclusive em rascunho) ja tinha essa O.S disponivel e ja anulou os pontos direto no
+            # total do mes. Gerar TAMBEM um lancamento de saldo aqui duplicaria o desconto (uma vez
+            # no total do mes, outra vez no saldo pendente de um pagamento futuro). So prossegue
+            # quando a O.S de retorno chegou no banco DEPOIS do ultimo calculo - a razao de existir
+            # deste mecanismo (ver docstring da funcao) e cobrir exatamente esse caso: retorno que a
+            # apuracao do periodo original nunca teve chance de ver. Achado real: apos o mes corrente
+            # virar, 522 de 587 garantias detectadas numa unica passada tinham origem E retorno no
+            # mesmo mes (julho), ambas ja importadas semanas antes do ultimo calculo de julho.
+            continue
+
         requires_review = False
         points = 0.0
         reason_note = ""
