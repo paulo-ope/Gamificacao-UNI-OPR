@@ -7,6 +7,16 @@ from time import perf_counter
 from app.core.config import get_settings
 
 logger = logging.getLogger("app.performance")
+# Uvicorn so configura os loggers dele mesmo (uvicorn/uvicorn.access/uvicorn.error), nunca a
+# raiz - sem handler proprio nem raiz configurada, o registro caia no logging.lastResort
+# (nivel WARNING), engolindo todo logger.info(...) abaixo mesmo com setLevel(INFO) e
+# performance_debug_enabled()=True, tornando essa instrumentacao inutil na pratica.
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_handler)
+    logger.propagate = False
 
 
 def performance_debug_enabled() -> bool:

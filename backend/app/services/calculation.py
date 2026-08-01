@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.performance import performance_step
 from app.models import (
     AppSetting,
     CalculationRun,
@@ -173,7 +174,8 @@ def calculate_scores(
     if point_value is not None:
         upsert_setting(db, "point_value", f"{point_value:.2f}", "Valor monetário pago por ponto final.")
 
-    orders = _period_orders(db, month, year, selected_regional)
+    with performance_step("calculate_scores", "period_orders"):
+        orders = _period_orders(db, month, year, selected_regional)
     if not orders:
         period_label = f"{month:02d}/{year}"
         scope_label = f" na regional {selected_regional}" if selected_regional else ""
@@ -182,12 +184,17 @@ def calculate_scores(
             detail=f"Nenhuma O.S encontrada para {period_label}{scope_label}. Nenhuma apuração foi salva.",
         )
     completed_orders = [order for order in orders if scoring_detail.completed(order)]
-    point_balance.detect_post_payment_warranty_debits(db, completed_orders, triggered_by=executed_by)
+    with performance_step("calculate_scores", f"detect_post_payment_warranty_debits[{len(completed_orders)} orders]"):
+        point_balance.detect_post_payment_warranty_debits(db, completed_orders, triggered_by=executed_by)
     health_eligible_orders = [order for order in orders if scoring_detail.counts_for_regional_health(order)]
-    health_by_regional = calculate_regional_health(db, health_eligible_orders)
-    order_details = scoring_detail.explain_orders(db, orders, default_point_value=float(value_per_point))
-    health_by_regional = scoring_detail.calculate_regional_health_from_details(db, order_details, health_by_regional)
-    health_by_regional = _apply_cpk_adjustment(db, health_by_regional, month, year)
+    with performance_step("calculate_scores", f"calculate_regional_health[{len(health_eligible_orders)} orders]"):
+        health_by_regional = calculate_regional_health(db, health_eligible_orders)
+    with performance_step("calculate_scores", f"explain_orders[{len(orders)} orders]"):
+        order_details = scoring_detail.explain_orders(db, orders, default_point_value=float(value_per_point))
+    with performance_step("calculate_scores", "calculate_regional_health_from_details"):
+        health_by_regional = scoring_detail.calculate_regional_health_from_details(db, order_details, health_by_regional)
+    with performance_step("calculate_scores", "apply_cpk_adjustment"):
+        health_by_regional = _apply_cpk_adjustment(db, health_by_regional, month, year)
     details_by_collaborator: dict[int, list[dict]] = defaultdict(list)
     for detail in order_details:
         if not scoring_detail.is_identified_collaborator_detail(detail):

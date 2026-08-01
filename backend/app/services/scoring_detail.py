@@ -3,12 +3,13 @@ from __future__ import annotations
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+from time import perf_counter as _perf_counter
 from typing import Any, Iterable
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.performance import performance_step
+from app.core.performance import logger as performance_logger, performance_debug_enabled, performance_step
 from app.models import (
     AppSetting,
     Collaborator,
@@ -673,28 +674,25 @@ def recurrence_penalties(
         return penalties
     search_start = min(base_dates)
     search_end = max(base_dates) + timedelta(days=search_window_days)
-    all_orders = sorted(
-        [
-            order
-            for order in real_service_orders(
-                list(
-                    db.scalars(
-                        select(ServiceOrder).where(
-                            or_(
-                                ServiceOrder.opened_at.between(search_start, search_end),
-                                ServiceOrder.closed_at.between(search_start, search_end),
-                            )
-                        )
+    with performance_step("recurrence_penalties", f"candidates_query[{search_window_days}d window]"):
+        candidate_rows = list(
+            db.scalars(
+                select(ServiceOrder).where(
+                    or_(
+                        ServiceOrder.opened_at.between(search_start, search_end),
+                        ServiceOrder.closed_at.between(search_start, search_end),
                     )
                 )
             )
-            if completed(order)
-        ],
-        # Ordenar pelo MESMO campo usado no delta do loop abaixo (opened_at-vs-opened_at).
-        # Ordenar por outro criterio quebraria a monotonicidade e o `break` poderia pular uma
-        # reincidencia valida (O.S que abriu cedo mas fechou tarde).
-        key=lambda item: item.opened_at or item.closed_at,
-    )
+        )
+    with performance_step("recurrence_penalties", f"candidates_filter_sort[{len(candidate_rows)} rows]"):
+        all_orders = sorted(
+            [order for order in real_service_orders(candidate_rows) if completed(order)],
+            # Ordenar pelo MESMO campo usado no delta do loop abaixo (opened_at-vs-opened_at).
+            # Ordenar por outro criterio quebraria a monotonicidade e o `break` poderia pular uma
+            # reincidencia valida (O.S que abriu cedo mas fechou tarde).
+            key=lambda item: item.opened_at or item.closed_at,
+        )
 
     orders_by_login: dict[str, list[ServiceOrder]] = defaultdict(list)
     for order in all_orders:
@@ -705,6 +703,7 @@ def recurrence_penalties(
 
     normalized_action = normalize(action)
 
+    pairing_started_at = _perf_counter()
     for original in base_orders:
         if original.opened_at is None:
             continue
@@ -801,6 +800,13 @@ def recurrence_penalties(
             current["reasons"].extend([f"Evidência: {evidence}" for evidence in selected["evidence"]])
         current["requires_review"] = bool(current["requires_review"] or requires_review)
         current["discount_applied"] = bool(current["discount_applied"] or points > 0)
+
+    if performance_debug_enabled():
+        performance_logger.info(
+            "performance endpoint=recurrence_penalties step=pairing_loop[%d base_orders] elapsed_ms=%.2f",
+            len(base_orders),
+            (_perf_counter() - pairing_started_at) * 1000,
+        )
 
     return penalties
 
@@ -1307,35 +1313,38 @@ def explain_orders(
     default_point_value: float | None = None,
     include_explanations: bool = True,
 ) -> list[dict[str, Any]]:
-    scoring_rules = active_scoring_rules(db)
-    scoring_lookup = build_scoring_rule_lookup(scoring_rules)
-    diagnosis_rules = active_diagnosis_rules(db)
-    sla_rules = active_sla_penalty_rules(db)
-    recurrence_by_original_id = recurrence_penalties(
-        db,
-        orders,
-        scoring_lookup,
-        include_explanations=include_explanations,
-    )
+    with performance_step("explain_orders", "load_rules"):
+        scoring_rules = active_scoring_rules(db)
+        scoring_lookup = build_scoring_rule_lookup(scoring_rules)
+        diagnosis_rules = active_diagnosis_rules(db)
+        sla_rules = active_sla_penalty_rules(db)
+    with performance_step("explain_orders", f"recurrence_penalties[{len(orders)} orders]"):
+        recurrence_by_original_id = recurrence_penalties(
+            db,
+            orders,
+            scoring_lookup,
+            include_explanations=include_explanations,
+        )
     legacy_warranty_scores = normalize(get_setting(db, "warranty_scores", "true")) in {"true", "1", "sim", "yes"}
     warranty_mode = get_setting(db, "warranty_mode", "score_full" if legacy_warranty_scores else "no_points")
     warranty_reduction_percentage = float(get_setting(db, "warranty_reduction_percentage", "0"))
     default_point_value = default_point_value if default_point_value is not None else get_point_value(db)
 
-    return [
-        explain_order(
-            order,
-            scoring_lookup,
-            diagnosis_rules,
-            sla_rules,
-            recurrence_by_original_id,
-            warranty_mode,
-            warranty_reduction_percentage,
-            default_point_value,
-            include_explanations=include_explanations,
-        )
-        for order in orders
-    ]
+    with performance_step("explain_orders", f"explain_order_loop[{len(orders)} orders]"):
+        return [
+            explain_order(
+                order,
+                scoring_lookup,
+                diagnosis_rules,
+                sla_rules,
+                recurrence_by_original_id,
+                warranty_mode,
+                warranty_reduction_percentage,
+                default_point_value,
+                include_explanations=include_explanations,
+            )
+            for order in orders
+        ]
 
 
 def summarize_details(
