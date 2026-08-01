@@ -23,6 +23,47 @@ export function AppInput({ className, ...props }: InputProps) {
   return <Input className={cn("h-11 rounded-xl", className)} {...props} />;
 }
 
+// Mesmo padrao de card de metrica usado na Operacao Analitica (OverviewMetricCard em
+// app/operacao/page.tsx): sem borda, barra de destaque no topo em vez de icone, valor grande.
+// Substitui os StatCard locais (com icone em quadrado colorido) que existiam antes so na
+// gamificacao - decisao do usuario de padronizar visual entre os dois modulos.
+export function MetricCard({
+  title,
+  value,
+  helper,
+  note,
+  tone = "neutral"
+}: {
+  title: string;
+  value: string | number;
+  helper?: string;
+  note?: string;
+  tone?: "neutral" | "success" | "warning" | "danger";
+}) {
+  const toneClass = {
+    neutral: "bg-white text-slate-950",
+    success: "bg-emerald-50 text-emerald-950",
+    warning: "bg-amber-50 text-amber-950",
+    danger: "bg-red-50 text-red-950"
+  }[tone];
+  const accentClass = {
+    neutral: "bg-uni-royal",
+    success: "bg-emerald-600",
+    warning: "bg-amber-500",
+    danger: "bg-red-600"
+  }[tone];
+
+  return (
+    <div className={cn("relative overflow-hidden rounded-xl p-4 shadow-sm", toneClass)}>
+      <span className={cn("absolute inset-x-0 top-0 h-1", accentClass)} />
+      <p className="text-xs font-medium text-slate-500">{title}</p>
+      <p className="mt-2 text-3xl font-semibold tabular-nums">{value}</p>
+      {helper ? <p className="mt-2 text-xs text-slate-600">{helper}</p> : null}
+      {note ? <p className="mt-1 text-[11px] text-slate-500">{note}</p> : null}
+    </div>
+  );
+}
+
 export function AppSwitch({
   checked,
   onCheckedChange,

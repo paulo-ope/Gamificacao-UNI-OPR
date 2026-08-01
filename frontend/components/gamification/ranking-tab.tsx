@@ -245,12 +245,7 @@ export function RankingTab({
                           <TableCell>
                             <div className="grid gap-2">
                               <span className="font-medium text-slate-950">{formatPoints(item.average_final_points)}</span>
-                              <Button
-                                type="button"
-                                size="sm"
-                                className="h-8 w-fit rounded-full border border-[var(--uni-royal)] bg-[var(--uni-royal)] px-3 text-[11px] font-semibold text-white shadow-sm hover:bg-[var(--uni-electric)]"
-                                onClick={() => onAuditLeadership(item)}
-                              >
+                              <Button type="button" size="sm" variant="outline" className="w-fit" onClick={() => onAuditLeadership(item)}>
                                 <Search className="h-3.5 w-3.5" />
                                 Auditar média
                               </Button>

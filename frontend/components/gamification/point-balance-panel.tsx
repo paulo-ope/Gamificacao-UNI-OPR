@@ -1,10 +1,10 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, ScrollText, Search, ShieldAlert, Wallet } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, Search, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Avatar } from "@/components/gamification/config-ui";
+import { Avatar, MetricCard } from "@/components/gamification/config-ui";
 import { CollaboratorBalanceHistorySheet } from "@/components/gamification/collaborator-balance-history-sheet";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Input } from "@/components/ui/input";
@@ -33,49 +33,6 @@ type CollaboratorGroup = {
 
 type StatusFilter = "all" | "review";
 type SortMode = "severity" | "name" | "recent";
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  tone = "neutral"
-}: {
-  icon: typeof Wallet;
-  label: string;
-  value: string | number;
-  tone?: "neutral" | "danger" | "warning" | "good";
-}) {
-  const toneClasses =
-    tone === "danger"
-      ? "border-red-200 bg-red-50/60"
-      : tone === "warning"
-        ? "border-amber-300 bg-amber-50 ring-1 ring-amber-200"
-        : tone === "good"
-          ? "border-emerald-200 bg-emerald-50/60"
-          : "border-slate-200 bg-white";
-  const iconToneClasses =
-    tone === "danger"
-      ? "bg-red-100 text-red-700"
-      : tone === "warning"
-        ? "bg-amber-100 text-amber-700"
-        : tone === "good"
-          ? "bg-emerald-100 text-emerald-700"
-          : "bg-slate-100 text-slate-600";
-  const valueToneClasses =
-    tone === "danger" ? "text-red-700" : tone === "warning" ? "text-amber-800" : tone === "good" ? "text-emerald-700" : "text-slate-950";
-
-  return (
-    <div className={`flex items-center gap-3 rounded-2xl border px-3 py-3 transition-shadow ${toneClasses}`}>
-      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${iconToneClasses}`}>
-        <Icon className="h-4.5 w-4.5" />
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</div>
-        <div className={`mt-0.5 text-lg font-semibold leading-tight ${valueToneClasses}`}>{value}</div>
-      </div>
-    </div>
-  );
-}
 
 export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, referenceYear, runStatus }: Props) {
   const isPaidPeriod = runStatus === "paid";
@@ -186,23 +143,20 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard
-          icon={Wallet}
-          label={isPaidPeriod ? "Colaboradores com débito descontado" : "Colaboradores com débito pendente"}
+        <MetricCard
+          title={isPaidPeriod ? "Colaboradores com débito descontado" : "Colaboradores com débito pendente"}
           value={totals.collaboratorsCount}
         />
-        <StatCard icon={ScrollText} label={isPaidPeriod ? "Garantias descontadas" : "Garantias pendentes"} value={totals.warrantyCount} />
-        <StatCard
-          icon={AlertTriangle}
-          label={isPaidPeriod ? "Pontos descontados" : "Pontos pendentes de abatimento"}
+        <MetricCard title={isPaidPeriod ? "Garantias descontadas" : "Garantias pendentes"} value={totals.warrantyCount} />
+        <MetricCard
+          title={isPaidPeriod ? "Pontos descontados" : "Pontos pendentes de abatimento"}
           value={formatSignedPoints(totals.totalPoints)}
           tone="danger"
         />
-        <StatCard
-          icon={ShieldAlert}
-          label="Aguardando revisão manual"
+        <MetricCard
+          title="Aguardando revisão manual"
           value={totals.requiresReviewCount}
-          tone={totals.requiresReviewCount > 0 ? "warning" : "good"}
+          tone={totals.requiresReviewCount > 0 ? "warning" : "success"}
         />
       </div>
 

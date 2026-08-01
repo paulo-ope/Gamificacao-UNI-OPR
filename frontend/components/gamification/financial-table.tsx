@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/gamification/info-hint";
+import { MetricCard } from "@/components/gamification/config-ui";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatMoney, formatNumber } from "@/lib/gamificacao-helpers";
 import { regionalName } from "@/lib/regional";
@@ -46,14 +47,8 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-3">
-          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">O.S</div>
-            <div className="mt-1 text-lg font-semibold text-slate-950">{formatNumber(totalOrders)} O.S</div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">Valor a ser pago</div>
-            <div className="mt-1 text-lg font-semibold text-uni-royal">{formatMoney(totalPayment)}</div>
-          </div>
+          <MetricCard title="O.S" value={`${formatNumber(totalOrders)} O.S`} />
+          <MetricCard title="Valor a ser pago" value={formatMoney(totalPayment)} />
         </div>
       </div>
       {!collapsed ? (

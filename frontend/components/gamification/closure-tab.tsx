@@ -197,14 +197,17 @@ export function ClosureTab({
                   </Badge>
                 ) : null}
               </div>
-              <div className="mt-3 flex items-center gap-2">
-                <h2 className="text-2xl font-semibold leading-tight text-slate-950">
-                  {closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}
-                </h2>
-                <InfoHint
-                  ariaLabel={`Ajuda sobre ${closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}`}
-                  description={SECTION_HELP.summary}
-                />
+              <div className="mt-3">
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-uni-royal">Fechamento</p>
+                <div className="mt-1 flex items-center gap-2">
+                  <h2 className="text-2xl font-semibold leading-tight text-slate-950">
+                    {closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}
+                  </h2>
+                  <InfoHint
+                    ariaLabel={`Ajuda sobre ${closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}`}
+                    description={SECTION_HELP.summary}
+                  />
+                </div>
               </div>
               {closure.isClosed && closure.pendingCount > 0 ? (
                 <p className="mt-2 text-sm text-amber-700">
@@ -229,7 +232,7 @@ export function ClosureTab({
                       type="button"
                       onClick={() => onAdvanceRunStatus("review", "Fechamento enviado para conferência.")}
                       disabled={busy}
-                      className="w-full bg-amber-600 text-white hover:bg-amber-700 sm:w-auto"
+                      className="w-full sm:w-auto"
                     >
                       <Send className="h-4 w-4" />
                       Enviar para conferência
@@ -240,7 +243,7 @@ export function ClosureTab({
                       type="button"
                       onClick={() => onAdvanceRunStatus("approved", "Fechamento aprovado.")}
                       disabled={busy}
-                      className="w-full bg-sky-600 text-white hover:bg-sky-700 sm:w-auto"
+                      className="w-full sm:w-auto"
                     >
                       <CheckCircle2 className="h-4 w-4" />
                       Aprovar fechamento
@@ -251,7 +254,7 @@ export function ClosureTab({
                       type="button"
                       onClick={() => onAdvanceRunStatus("paid", "Fechamento marcado como pago.")}
                       disabled={busy}
-                      className="w-full bg-emerald-600 text-white hover:bg-emerald-700 sm:w-auto"
+                      className="w-full sm:w-auto"
                     >
                       <Wallet className="h-4 w-4" />
                       Marcar como pago
@@ -260,10 +263,10 @@ export function ClosureTab({
                   {["draft", "review", "approved"].includes(summary.run.status) ? (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="destructive"
                       onClick={() => onAdvanceRunStatus("cancelled", "Fechamento cancelado.")}
                       disabled={busy}
-                      className="w-full bg-white text-rose-600 hover:bg-rose-50 sm:w-auto"
+                      className="w-full sm:w-auto"
                     >
                       <XCircle className="h-4 w-4" />
                       Cancelar
@@ -344,7 +347,8 @@ export function ClosureTab({
 
       <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-5 py-4">
-          <div className="flex items-center gap-2">
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-uni-royal">Conferência</p>
+          <div className="mt-1 flex items-center gap-2">
             <h2 className="text-[16px] font-semibold leading-tight text-slate-950">Detalhamento do fechamento</h2>
             <InfoHint ariaLabel="Ajuda sobre Detalhamento do fechamento" description={SECTION_HELP.details} />
           </div>
