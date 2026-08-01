@@ -538,6 +538,27 @@ def classify_recurrence_pair(
         f"O.S posterior aberta {days_between} dia(s) depois",
     ]
 
+    # Checado ANTES do loop de regras configuradas (nao depois) - achado real: toda regra
+    # configurada ativa hoje (Reincidencia de Manutencao/Ativacao/Alteracao de Endereco) tem os
+    # campos de tipo/assunto/diagnostico em branco, entao casam com QUALQUER par dentro da janela
+    # de dias (ver _contains_pattern: padrao vazio = sempre casa). Com a exclusao checada so
+    # depois do loop, essas regras "catch-all" ganhavam antes dela rodar e classificavam fluxo
+    # operacional/comercial (remocao de equipamentos, alteracao de endereco, etc.) como
+    # reincidencia tecnica - ex.: uma O.S de "Remoção de Equipamentos" virava "Reincidência de
+    # Manutenção" so por coincidir com a mesma identidade dentro do prazo, sem nenhuma falha
+    # tecnica de verdade por tras.
+    if _is_non_technical(original) or _is_non_technical(later):
+        evidence.append("Tipo/assunto indica fluxo operacional ou demanda diferente, não falha técnica")
+        return {
+            "classification": "os_nao_reincidente",
+            "discount_points": False,
+            "evidence": evidence,
+            "related_order": later,
+            "days_between": days_between,
+            "rule_id": None,
+            "rule_name": None,
+        }
+
     for rule in rules:
         if _meaningful(rule.ignore_diagnosis_pattern) and _contains_pattern(later.diagnosis, rule.ignore_diagnosis_pattern):
             evidence.append(f"Regra configurada: {rule.name}")
@@ -581,18 +602,6 @@ def classify_recurrence_pair(
             "days_between": days_between,
             "rule_id": rule.id,
             "rule_name": rule.name,
-        }
-
-    if _is_non_technical(original) or _is_non_technical(later):
-        evidence.append("Tipo/assunto indica fluxo operacional ou demanda diferente, não falha técnica")
-        return {
-            "classification": "os_nao_reincidente",
-            "discount_points": False,
-            "evidence": evidence,
-            "related_order": later,
-            "days_between": days_between,
-            "rule_id": None,
-            "rule_name": None,
         }
 
     if same_diagnosis:

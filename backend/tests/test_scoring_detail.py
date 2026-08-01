@@ -380,6 +380,87 @@ def test_recurrence_pairing_survives_a_gap_of_exactly_the_window_plus_hours(
     assert penalties[original.id]["days_between"] == 30
 
 
+def test_non_technical_subject_is_never_classified_as_recurrence_even_with_a_catch_all_rule(
+    db_session, make_collaborator, scoring_setup, recurrence_setup
+):
+    """Regression (achado real, 2026-07-31): toda RecurrenceClassificationRule ativa no ambiente
+    real tinha os campos de tipo/assunto/diagnostico em branco (inclusive a 'Garantia' criada por
+    recurrence_setup) - um padrao vazio casa com QUALQUER O.S (_contains_pattern retorna True pra
+    padrao vazio), entao essas regras "catch-all" ganhavam mesmo pra tipos que sao fluxo
+    operacional/comercial, nao falha tecnica (ex.: uma O.S de 'Remoção de Equipamentos' virava
+    'Reincidência de Manutenção' so por coincidir com a mesma identidade dentro do prazo). A
+    exclusao de tipos nao-tecnicos (_is_non_technical) precisa vencer QUALQUER regra configurada,
+    nao so o fallback sem regra nenhuma."""
+    collaborator = make_collaborator()
+    original = ServiceOrder(
+        os_code="OS-REMOCAO-ORIG", contract_id="C20", customer_login="cliente20", customer_name="Cliente Vinte",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Recolhimento", os_subject="Remoção de Equipamentos",
+        diagnosis="Desistência da Solicitação", status="Concluida",
+        opened_at=datetime(2026, 6, 23, 9, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 23, 10, 0, tzinfo=timezone.utc),
+    )
+    later_removal = ServiceOrder(
+        os_code="OS-REMOCAO-RET", contract_id="C20", customer_login="cliente20", customer_name="Cliente Vinte",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Recolhimento", os_subject="Remoção de Equipamentos",
+        diagnosis="Desistência da Solicitação", status="Concluida",
+        opened_at=datetime(2026, 6, 26, 9, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 26, 9, 30, tzinfo=timezone.utc),
+        is_warranty=True,
+    )
+    db_session.add_all([original, later_removal])
+    db_session.flush()
+
+    lookup = sd.build_scoring_rule_lookup(sd.active_scoring_rules(db_session))
+    penalties = sd.recurrence_penalties(db_session, [original, later_removal], lookup)
+
+    assert original.id not in penalties or not penalties[original.id]["discount_applied"], (
+        "Remoção de Equipamentos é fluxo operacional (desistência), não falha técnica - "
+        "não pode virar reincidência/garantia só por coincidir com a mesma identidade dentro do prazo"
+    )
+    if original.id in penalties:
+        assert penalties[original.id]["classification"] == "os_nao_reincidente"
+
+
+def test_address_change_is_never_classified_as_recurrence_even_with_a_catch_all_rule(
+    db_session, make_collaborator, scoring_setup, recurrence_setup
+):
+    """Regression: mesmo achado do teste acima, aplicado especificamente a 'Alteração de
+    Endereço' (também listado em NON_TECHNICAL_TERMS) - confirmado com o usuário que mudança de
+    endereço repetida não deveria gerar desconto de garantia, igual remoção de equipamentos."""
+    collaborator = make_collaborator()
+    original = ServiceOrder(
+        os_code="OS-ENDERECO-ORIG", contract_id="C21", customer_login="cliente21", customer_name="Cliente Vinte e Um",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Mud. de Endereço", os_subject="Alteração de Endereço Fibra Urbana",
+        diagnosis="Endereço divergente", status="Concluida",
+        opened_at=datetime(2026, 6, 10, 9, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 10, 10, 0, tzinfo=timezone.utc),
+    )
+    later_change = ServiceOrder(
+        os_code="OS-ENDERECO-RET", contract_id="C21", customer_login="cliente21", customer_name="Cliente Vinte e Um",
+        collaborator_id=collaborator.id, regional=collaborator.regional,
+        os_type="Mud. de Endereço", os_subject="Alteração de Endereço Fibra Urbana",
+        diagnosis="Endereço divergente", status="Concluida",
+        opened_at=datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 15, 9, 30, tzinfo=timezone.utc),
+        is_warranty=True,
+    )
+    db_session.add_all([original, later_change])
+    db_session.flush()
+
+    lookup = sd.build_scoring_rule_lookup(sd.active_scoring_rules(db_session))
+    penalties = sd.recurrence_penalties(db_session, [original, later_change], lookup)
+
+    assert original.id not in penalties or not penalties[original.id]["discount_applied"], (
+        "alteração de endereço é fluxo comercial, não falha técnica - "
+        "não pode virar reincidência/garantia só por coincidir com a mesma identidade dentro do prazo"
+    )
+    if original.id in penalties:
+        assert penalties[original.id]["classification"] == "os_nao_reincidente"
+
+
 def test_recurrence_pairing_is_not_lost_when_original_takes_long_to_close(
     db_session, make_collaborator, scoring_setup, recurrence_setup
 ):
