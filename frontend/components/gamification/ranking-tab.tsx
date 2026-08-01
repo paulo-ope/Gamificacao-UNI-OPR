@@ -208,7 +208,9 @@ export function RankingTab({
                   </TableHeader>
                   <TableBody>
                     {filteredLeadershipResults.map((item) => {
-                      const normalizedRegionals = item.regionals.map((regional) => regionalName(regional));
+                      const normalizedRegionals = Array.from(
+                        new Set(item.regionals.map((regional) => regionalName(regional))),
+                      );
                       const regionalSummary = summarizeLabels(normalizedRegionals);
                       const roleLabel = leadershipRoleLabel(item.role_type);
                       const profileLabel =
