@@ -15,6 +15,7 @@ from app.models import (
     ServiceOrder,
 )
 from app.services import point_balance
+from app.services.calculation_closure import now_porto_velho
 
 
 @pytest.fixture()
@@ -297,9 +298,16 @@ def test_post_payment_debit_skips_originals_two_or_more_months_old(db_session, m
     mechanism. A rolling day-count window (the previous approach) could reach 2 calendar months
     back depending on which day of the month the detection ran on - a real incident where a
     collaborator was debited for an O.S closed in May while July was being calculated, which
-    surprised the product owner. Anything 2+ months old must never generate a NEW debit."""
+    surprised the product owner. Anything 2+ months old must never generate a NEW debit.
+
+    Uses now_porto_velho() (not datetime.now(timezone.utc)) to compute "now": the mechanism
+    under test (current_reference_period) is Porto Velho-based, and UTC is ~4h ahead - during
+    the daily 00h-04h UTC window (still "yesterday" in Porto Velho, and potentially still last
+    month right at a month boundary), a plain UTC "now" disagreed with the code's own notion of
+    the current month and made this test flaky once a day for no real bug (achado real,
+    2026-07-31)."""
     collaborator = make_collaborator()
-    now = datetime.now(timezone.utc)
+    now = now_porto_velho()
     old_month, old_year = _months_before(now, 2)
     old_closed = datetime(old_year, old_month, 15, tzinfo=timezone.utc)
     run = CalculationRun(reference_month=old_month, reference_year=old_year, regional=None, point_value=2.5, status="paid")
@@ -318,9 +326,11 @@ def test_post_payment_debit_skips_originals_two_or_more_months_old(db_session, m
 def test_post_payment_debit_allowed_for_immediately_previous_month(db_session, make_collaborator, recurrence_setup):
     """Sanity check for the fix above: an original closed in the month right before the current
     one must keep generating the debit normally - the calendar-month rule must not weaken the
-    real, intended case."""
+    real, intended case.
+
+    Uses now_porto_velho() for the same reason as the test above - see its docstring."""
     collaborator = make_collaborator()
-    now = datetime.now(timezone.utc)
+    now = now_porto_velho()
     last_month, last_year = _months_before(now, 1)
     recent_closed = datetime(last_year, last_month, 15, tzinfo=timezone.utc)
     run = CalculationRun(reference_month=last_month, reference_year=last_year, regional=None, point_value=2.5, status="paid")
