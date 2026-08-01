@@ -11,6 +11,12 @@ const nextConfig = {
   reactStrictMode: true,
   devIndicators: false,
   allowedDevOrigins: ["127.0.0.1", "192.168.2.100", "192.168.137.1"],
+  // Recalcular um mes inteiro (10k+ O.S) passa de 30s - o proxy de /api/:path* (rewrites abaixo)
+  // usava o timeout padrao do Next (~30s) e derrubava a conexao com "socket hang up" antes do
+  // backend terminar, embora o calculo em si tivesse sucesso (commit ja tinha acontecido).
+  experimental: {
+    proxyTimeout: 120_000,
+  },
   ...(isDev
     ? {
         // Achado real (2026-07-29): o bind mount do OneDrive é ~1000x mais lento que filesystem
