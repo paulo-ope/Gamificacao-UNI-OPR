@@ -1483,6 +1483,63 @@ def test_ixc_analytics_import_queries_only_period_and_targeted_lookup_ids(db_ses
     assert all(call[2]["max_records"] == 200 for call in support_calls)
 
 
+def test_sla_target_change_bumps_source_updated_at_even_without_ixc_timestamp_change(db_session, admin_user):
+    """sla_status/sla_target_hours/elapsed_hours sao derivados da meta de horas do ASSUNTO atual,
+    nao de um campo proprio da O.S - se a meta muda na IXC, uma O.S ja fechada ha muito tempo pode
+    ser recalculada sem que seu proprio "ultima_atualizacao" mude. sync_service_orders_from_operations
+    usa source_updated_at como cursor incremental, entao sem este ajuste o ServiceOrder usado para
+    pontuar/pagar ficaria com o SLA desatualizado para sempre."""
+    date_from, _ = current_month_bounds()
+    opened = datetime.combine(date_from, time(hour=8)).strftime("%Y-%m-%d %H:%M:%S")
+    closed = datetime.combine(date_from, time(hour=10)).strftime("%Y-%m-%d %H:%M:%S")
+    record = {
+        "id": "999",
+        "protocolo": "PROTO-999",
+        "id_filial": "6",
+        "id_assunto": "10",
+        "id_su_diagnostico": "20",
+        "id_tecnico": "30",
+        "id_ticket": "70",
+        "setor": "9",
+        "id_cliente": "40",
+        "id_login": "50",
+        "status": "F",
+        "data_abertura": opened,
+        "data_hora_assumido": opened,
+        "data_hora_execucao": opened,
+        "data_inicio": opened,
+        "data_final": closed,
+        "data_fechamento": closed,
+        "ultima_atualizacao": closed,
+    }
+    fake_client = FakeIxcClient(dict(record))
+    import_current_month_period(
+        db_session, fake_client, date_from=date_from, date_to=date_from,
+        imported_by=admin_user.id, sector_ids=["7", "8", "9"],
+    )
+    imported = db_session.scalar(select(OperationOrder).where(OperationOrder.source_order_id == "999"))
+    assert imported.sla_target_hours == 24.0
+    assert imported.sla_status == "on_time"
+    original_cursor = imported.source_updated_at
+
+    class StaleMetaIxcClient(FakeIxcClient):
+        def list_all(self, table, *, grid_param=None, **kwargs):
+            self.calls.append((table, grid_param, kwargs))
+            if table == "su_oss_assunto":
+                return iter([{"id": "10", "assunto": "Suporte Externo Fibra Urbana", "meta_horas_abertura": "1"}])
+            return super().list_all(table, grid_param=grid_param, **kwargs)
+
+    stale_meta_client = StaleMetaIxcClient(dict(record))
+    import_current_month_period(
+        db_session, stale_meta_client, date_from=date_from, date_to=date_from,
+        imported_by=admin_user.id, sector_ids=["7", "8", "9"],
+    )
+    db_session.refresh(imported)
+    assert imported.sla_target_hours == 1.0
+    assert imported.sla_status == "out_of_time"
+    assert imported.source_updated_at > original_cursor
+
+
 def test_ixc_open_backlog_import_is_partitioned_by_sector_and_status(db_session, admin_user):
     date_from, _ = current_month_bounds()
     opened = datetime.combine(date_from, time(hour=8)).strftime("%Y-%m-%d %H:%M:%S")

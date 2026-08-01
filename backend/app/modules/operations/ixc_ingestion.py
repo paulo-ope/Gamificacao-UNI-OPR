@@ -30,6 +30,9 @@ MAX_IXC_RECORDS_PER_QUERY = 3_000
 # nunca deveria ser alcançado em uso normal (uma combinação setor+status real precisaria de mais
 # de 3000 * 2^12 O.S. para chegar até aqui).
 MAX_ID_PARTITION_DEPTH = 12
+# Campos calculados a partir da meta de horas do assunto (nao de um dado proprio da O.S) - ver uso
+# em _ingest_records abaixo.
+SLA_DERIVED_FIELDS = {"sla_status", "sla_target_hours", "elapsed_hours"}
 
 
 def _clean(value: object) -> str:
@@ -536,13 +539,29 @@ def import_current_month_period(
                     continue
 
                 changed = False
+                sla_derived_changed = False
                 for field_name, value in payload.items():
                     if field_name not in comparable_fields:
                         continue
                     if getattr(existing, field_name) != value:
                         setattr(existing, field_name, value)
                         changed = True
+                        if field_name in SLA_DERIVED_FIELDS:
+                            sla_derived_changed = True
                 existing.last_imported_at = now
+                if sla_derived_changed and (existing.source_updated_at is None or existing.source_updated_at < now):
+                    # sla_status/sla_target_hours/elapsed_hours sao derivados aqui (linha ~346) a
+                    # partir da meta de horas do ASSUNTO atual (su_oss_assunto.meta_horas_abertura),
+                    # nao de um campo proprio da O.S - uma mudanca de meta na IXC recalcula esses
+                    # valores para O.S ja fechadas ha muito tempo, sem que o "ultima_atualizacao"
+                    # daquela O.S especifica mude. sync_service_orders_from_operations usa
+                    # source_updated_at como cursor incremental (ver operations_sync.py) para nao
+                    # reprocessar o volume inteiro todo ciclo - sem este ajuste, a sincronizacao
+                    # nunca voltaria a selecionar essa O.S, e o ServiceOrder usado para pontuar/pagar
+                    # ficaria com o SLA desatualizado para sempre (achado real: meta de "Mud. de
+                    # Tecnologia" mudou de 72h para 168h e o ServiceOrder de O.S antigas ficou preso
+                    # em 72h).
+                    existing.source_updated_at = now
                 if changed:
                     run.updated_count += 1
                 else:
