@@ -9,6 +9,12 @@ import type { AuthUser, DashboardSummary } from "@/lib/types";
 const SECTION_HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
 const TABLE_HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
 
+const CPK_STATUS_LABEL: Record<string, string> = {
+  na_meta: "Na meta",
+  fora_meta: "Fora da meta",
+  sem_base: "Sem base"
+};
+
 function sheetNameFactory() {
   const used = new Set<string>();
   return (label: string) => {
@@ -176,22 +182,34 @@ export function useClosureActions({
       addSectionTable(
         sheet,
         "Pagamento de técnicos",
-        ["Colaborador", "O.S", "Pontos brutos", "Pontos anulados", "Pontos líquidos", "SLA da base (%)", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"],
+        [
+          "Colaborador", "O.S", "Pontos brutos", "Pontos anulados", "Pontos líquidos", "Desconto de saldo",
+          "Saldo após", "SLA da base (%)", "CPK da base", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"
+        ],
         regionalPaymentRows.map((score) => {
           const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
+          const cpkLabel = regionalHealth?.cpk_status ? CPK_STATUS_LABEL[regionalHealth.cpk_status] ?? "-" : "-";
           return [
             score.collaborator_name,
             formatNumber(score.service_orders_count),
             formatPoints(score.gross_points),
             formatPoints(score.penalty_points),
             formatPoints(score.net_points),
+            formatPoints(score.balance_adjustment_points),
+            formatPoints(score.balance_after),
             regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
+            cpkLabel,
             `${formatNumber(score.health_multiplier)}x`,
             formatPoints(score.final_points),
             formatMoney(score.estimated_payment)
           ];
         }),
-        ["Total", "", "", "", "", "", "", "", formatMoney(regionalPaymentRows.reduce((sum, score) => sum + score.estimated_payment, 0))]
+        [
+          "Total", "", "", "",
+          "", formatPoints(regionalPaymentRows.reduce((sum, score) => sum + score.balance_adjustment_points, 0)),
+          "", "", "", "", "",
+          formatMoney(regionalPaymentRows.reduce((sum, score) => sum + score.estimated_payment, 0))
+        ]
       );
 
       const regionalLeadershipRows = leadershipRows.filter(
@@ -230,12 +248,14 @@ export function useClosureActions({
 
     // Gerente de pasta (ou qualquer lideranca sem filial vinculada) nunca casa com um regional
     // especifico - sem esta aba, o bonus dele simplesmente desapareceria do arquivo em vez de
-    // aparecer repetido.
+    // aparecer repetido. Nome "Matriz" (nao "Liderança Geral") para deixar explicito que nao e
+    // uma regional operacional - decisao do usuario para nao confundir quem esta fechando o
+    // pagamento por filial.
     const leftoverLeadershipRows = leadershipRows.filter((item) => !placedLeadershipIds.has(item.leadership_profile_id));
     if (leftoverLeadershipRows.length > 0) {
-      const sheet = workbook.addWorksheet(nextSheetName("Liderança Geral"));
+      const sheet = workbook.addWorksheet(nextSheetName("Matriz"));
       sheet.views = [{ state: "frozen", ySplit: 1 }];
-      const titleRow = sheet.addRow(["Liderança sem filial específica (cobre múltiplas regionais ou toda a operação)"]);
+      const titleRow = sheet.addRow(["Matriz - liderança sem filial específica (cobre múltiplas regionais ou toda a operação)"]);
       titleRow.font = { bold: true, size: 13 };
       sheet.addRow([]);
       addSectionTable(
