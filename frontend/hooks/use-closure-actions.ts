@@ -192,7 +192,7 @@ export function useClosureActions({
         "Pagamento de técnicos",
         [
           "Colaborador", "O.S", "Pontos brutos", "Pontos anulados", "Pontos líquidos", "Desconto de saldo",
-          "Saldo após", "SLA da base (%)", "CPK da base", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"
+          "SLA da base (%)", "CPK da base", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"
         ],
         regionalPaymentRows.map((score) => {
           const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
@@ -204,7 +204,6 @@ export function useClosureActions({
             formatPoints(score.penalty_points),
             formatPoints(score.net_points),
             formatPoints(score.balance_adjustment_points),
-            formatPoints(score.balance_after),
             regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
             cpkLabel,
             `${formatNumber(score.health_multiplier)}x`,
@@ -215,7 +214,7 @@ export function useClosureActions({
         [
           "Total", "", "", "",
           "", formatPoints(regionalPaymentRows.reduce((sum, score) => sum + score.balance_adjustment_points, 0)),
-          "", "", "", "", "",
+          "", "", "", "",
           formatMoney(regionalPaymentRows.reduce((sum, score) => sum + score.estimated_payment, 0))
         ]
       );
