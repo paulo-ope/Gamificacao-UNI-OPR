@@ -11,6 +11,7 @@ from app.models import (
     CalculationRun,
     Collaborator,
     CollaboratorScore,
+    CpkRegionalSnapshot,
     DiagnosisPenaltyRule,
     RecurrenceClassificationRule,
     ScoringGroup,
@@ -18,6 +19,7 @@ from app.models import (
     SlaPenaltyRule,
     User,
 )
+from app.services import cpk_health
 from app.services.calculation import serialize_run
 from app.services.regional import (
     effective_managed_regionals,
@@ -169,6 +171,103 @@ def _portal_score(row: dict[str, Any]) -> dict[str, Any]:
     return {key: row.get(key, 0 if key.endswith("_orders") or key.endswith("_points") else "") for key in keys}
 
 
+def _cpk_status_label(status: str | None) -> str:
+    if status == "na_meta":
+        return "CPK na meta"
+    if status == "fora_meta":
+        return "CPK fora da meta"
+    if status == "sem_base":
+        return "CPK sem base suficiente"
+    return "CPK não sincronizado"
+
+
+def _cpk_insight(db: Session, reference_year: int, reference_month: int, regional: str) -> dict[str, Any]:
+    normalized_regional = normalize_regional(regional)
+    snapshot = db.scalar(
+        select(CpkRegionalSnapshot).where(
+            CpkRegionalSnapshot.reference_year == reference_year,
+            CpkRegionalSnapshot.reference_month == reference_month,
+            CpkRegionalSnapshot.regional == normalized_regional,
+        )
+    )
+    adjustment = cpk_health.get_cpk_adjustment_by_regional(db, reference_year, reference_month).get(normalized_regional, 0.0)
+    status = snapshot.status if snapshot else None
+    status_label = _cpk_status_label(status)
+    if status == "na_meta":
+        description = "A regional bateu a meta de CPK e recebeu ajuste positivo no multiplicador de saúde."
+    elif status == "fora_meta":
+        description = "A regional ficou fora da meta de CPK e recebeu ajuste negativo no multiplicador de saúde."
+    elif status == "sem_base":
+        description = "A regional não teve base suficiente de CPK para aplicar ajuste no multiplicador."
+    else:
+        description = "Não há snapshot de CPK sincronizado para esta regional neste período."
+    return {
+        "status": status,
+        "status_label": status_label,
+        "cpk_realizado": snapshot.cpk_realizado if snapshot else None,
+        "cpk_meta": snapshot.cpk_meta if snapshot else None,
+        "adjustment": round(float(adjustment or 0), 4),
+        "mes_fechado": bool(snapshot.mes_fechado) if snapshot else False,
+        "synced_at": snapshot.synced_at if snapshot else None,
+        "description": description,
+    }
+
+
+def _score_steps(score: dict[str, Any], cpk: dict[str, Any]) -> list[dict[str, Any]]:
+    gross_points = float(score.get("gross_points") or 0)
+    penalty_points = float(score.get("penalty_points") or 0)
+    net_points = float(score.get("net_points") or 0)
+    health_multiplier = float(score.get("health_multiplier") or 1)
+    balance_adjustment_points = float(score.get("balance_adjustment_points") or 0)
+    final_points = float(score.get("final_points") or 0)
+    health_effect = round((net_points * health_multiplier) - net_points, 2)
+    cpk_status_label = cpk.get("status_label") or "CPK não sincronizado"
+    return [
+        {
+            "key": "gross_points",
+            "label": "Pontos das O.S.",
+            "value": round(gross_points, 2),
+            "kind": "positive",
+            "description": "Soma dos pontos configurados para as O.S. do período.",
+        },
+        {
+            "key": "penalty_points",
+            "label": "Regras e anulações",
+            "value": round(-abs(penalty_points), 2),
+            "kind": "negative" if penalty_points else "neutral",
+            "description": "Descontos por reincidência, garantia, diagnóstico, SLA ou regra operacional.",
+        },
+        {
+            "key": "net_points",
+            "label": "Pontos líquidos",
+            "value": round(net_points, 2),
+            "kind": "subtotal",
+            "description": "Resultado após aplicar as regras sobre as O.S.",
+        },
+        {
+            "key": "health_multiplier",
+            "label": f"Saúde operacional + CPK ({health_multiplier:.2f}x)",
+            "value": health_effect,
+            "kind": "positive" if health_effect > 0 else "negative" if health_effect < 0 else "neutral",
+            "description": f"Impacto do multiplicador da regional. CPK: {cpk_status_label}.",
+        },
+        {
+            "key": "balance_adjustment_points",
+            "label": "Saldo de garantia",
+            "value": round(balance_adjustment_points, 2),
+            "kind": "positive" if balance_adjustment_points > 0 else "negative" if balance_adjustment_points < 0 else "neutral",
+            "description": "Créditos ou débitos de garantia abatidos neste fechamento.",
+        },
+        {
+            "key": "final_points",
+            "label": "Resultado final",
+            "value": round(final_points, 2),
+            "kind": "total",
+            "description": "Pontuação final usada no ranking e no pagamento estimado.",
+        },
+    ]
+
+
 def _performance_band(final_points: float, average_points: float) -> str:
     if average_points <= 0:
         return "Sem faixa"
@@ -231,15 +330,11 @@ def build_portal_summary(
     ]
     regional_position = _score_position(regional_rows, current_id) if current_id else None
     general_position = _score_position(sorted_rows, current_id) if current_id else None
-    # O portal mostra o mesmo SLA do fechamento oficial, vindo do snapshot da execução.
-    # O ranking continua ocultando inativos, mas eles fazem parte do SLA regional calculado.
-    regional_sla_rows = [
-        row
-        for row in serialize_run(run, db).get("scores", [])
-        if current_regional and normalize_regional(str(row.get("regional") or "")) == current_regional
-    ]
-    regional_service_orders = sum(int(row.get("service_orders_count") or 0) for row in regional_sla_rows)
-    regional_sla_out_service_orders = sum(int(row.get("sla_out_service_orders") or 0) for row in regional_sla_rows)
+    # Mesma base exibida no ranking do portal: apenas colaboradores ativos e cadastrados.
+    # Isso evita que o colaborador veja um SLA regional "maior" ou "pior" causado por pessoas
+    # ainda pendentes/inativas que não aparecem na lista comparativa dele.
+    regional_service_orders = sum(int(row.get("service_orders_count") or 0) for row in regional_rows)
+    regional_sla_out_service_orders = sum(int(row.get("sla_out_service_orders") or 0) for row in regional_rows)
     regional_sla_rate = round(
         ((regional_service_orders - regional_sla_out_service_orders) / regional_service_orders) * 100,
         2,
@@ -276,7 +371,7 @@ def build_portal_summary(
         "general_total": len(sorted_rows),
         "next_position_gap": next_position_gap,
         "ranking": [_ranking_item(row, index, current_id) for index, row in enumerate(regional_rows, start=1)],
-        "message": None if current else "Nao foi encontrado um colaborador vinculado ao seu usuario.",
+        "message": None if current else "Não foi encontrado um colaborador vinculado ao seu usuário.",
     }
 
 
@@ -290,16 +385,16 @@ def _order_label(detail: dict[str, Any]) -> tuple[str, str | None]:
     ] if isinstance(reasons, list) else []
     reason = "; ".join(visible_reasons[:2]) or None
     if detail.get("is_unscored"):
-        return "Sem regra de pontuacao", reason
+        return "Sem regra de pontuação", reason
     if detail.get("is_annulled"):
         return str(detail.get("scoring_status") or "Pontos anulados"), reason
     if detail.get("is_penalized"):
         return "Pontuada com desconto", reason
     if detail.get("requires_manual_review"):
-        return "Revisao manual", reason
+        return "Revisão manual", reason
     if detail.get("is_scored"):
         return "Pontuada", reason
-    return str(detail.get("scoring_status") or "Nao pontuada"), reason
+    return str(detail.get("scoring_status") or "Não pontuada"), reason
 
 
 def build_portal_orders(
@@ -428,7 +523,7 @@ def build_portal_simulation(db: Session, user: User, extra_points: float) -> dic
             "simulated_position": None,
             "extra_points": extra_points,
             "points_to_next": None,
-            "disclaimer": "Simulacao indisponivel sem colaborador vinculado ao usuario.",
+            "disclaimer": "Simulação indisponível sem colaborador vinculado ao usuário.",
         }
     current_id = int(current["collaborator_id"])
     ranking = [dict(item) for item in summary.get("ranking", [])]
@@ -447,7 +542,7 @@ def build_portal_simulation(db: Session, user: User, extra_points: float) -> dic
         "simulated_position": simulated_position,
         "extra_points": extra_points,
         "points_to_next": points_to_next,
-        "disclaimer": "Simulacao simples: soma pontos extras ao fechamento atual e nao recalcula regras, descontos, saude ou pagamento.",
+        "disclaimer": "Simulação simples: soma pontos extras ao fechamento atual e não recalcula regras, descontos, saúde ou pagamento.",
     }
 
 
@@ -475,7 +570,7 @@ def build_portal_team_summary(db: Session, user: User) -> dict[str, Any]:
             },
             "regional": None,
             "regionals": [],
-            "message": "Nenhuma regional foi vinculada ao seu usuario.",
+            "message": "Nenhuma regional foi vinculada ao seu usuário.",
         }
 
     target_regional_set = set(target_regionals)
@@ -618,7 +713,7 @@ def build_portal_team_summary(db: Session, user: User) -> dict[str, Any]:
         "history": history,
         "bands": bands,
         "alerts": alerts,
-        "message": None if sorted_rows else "Nenhum colaborador com pontuacao encontrado nesta regional no periodo.",
+        "message": None if sorted_rows else "Nenhum colaborador com pontuação encontrado nesta regional no período.",
     }
 
 
@@ -655,11 +750,11 @@ def build_portal_overview(db: Session) -> dict[str, Any]:
     manual_review = sum(int(row.get("manual_review_service_orders") or 0) for row in rows)
     alerts: list[str] = []
     if unscored_orders:
-        alerts.append(f"{unscored_orders} O.S. sem regra de pontuacao.")
+        alerts.append(f"{unscored_orders} O.S. sem regra de pontuação.")
     if manual_review:
-        alerts.append(f"{manual_review} O.S. aguardando revisao manual.")
+        alerts.append(f"{manual_review} O.S. aguardando revisão manual.")
     if any(float(row.get("health_multiplier") or 1) < 1 for row in rows):
-        alerts.append("Ha colaboradores com multiplicador de saude abaixo de 1.")
+        alerts.append("Há colaboradores com multiplicador de saúde abaixo de 1.")
 
     return {
         "period": {"calculation_run_id": run.id, "reference_month": run.reference_month, "reference_year": run.reference_year, "status": run.status, "updated_at": run.executed_at or run.created_at},
@@ -682,7 +777,7 @@ def _audit_order(order: dict[str, Any]) -> dict[str, Any]:
         "base_points": float(order.get("base_points") or 0),
         "net_points": float(order.get("net_points") or 0),
         "penalty_points": float(order.get("penalty_points") or 0),
-        "status_label": str(order.get("status_label") or "Nao pontuada"),
+        "status_label": str(order.get("status_label") or "Não pontuada"),
         "sla_status_normalized": str(order.get("sla_status_normalized") or "NAO_IDENTIFICADO"),
         "reason": order.get("reason"),
         "diagnosis_action_type": order.get("diagnosis_action_type"),
@@ -702,7 +797,14 @@ def build_portal_audit(
     score = summary.get("score")
     collaborator = summary.get("collaborator")
     if not score or not collaborator:
-        return {"message": "Auditoria indisponivel sem colaborador vinculado ao usuario."}
+        return {"message": "Auditoria indisponível sem colaborador vinculado ao usuário."}
+    period = summary.get("period") or {}
+    cpk = _cpk_insight(
+        db,
+        int(period.get("reference_year") or reference_year or 0),
+        int(period.get("reference_month") or reference_month or 0),
+        str(collaborator.get("regional") or ""),
+    )
 
     orders = build_portal_orders(db, user, limit=200, reference_month=reference_month, reference_year=reference_year)
     sla_on_time_service_orders = sum(1 for order in orders if order.get("sla_status_normalized") == "NO_PRAZO")
@@ -720,7 +822,7 @@ def build_portal_audit(
             order
             for order in orders
             if float(order.get("penalty_points") or 0) > 0
-            or str(order.get("status_label") or "") in {"Sem regra de pontuacao", "Revisao manual"}
+            or str(order.get("status_label") or "") in {"Sem regra de pontuação", "Revisão manual"}
         ),
         key=lambda item: (float(item.get("penalty_points") or 0), -float(item.get("net_points") or 0)),
         reverse=True,
@@ -729,7 +831,7 @@ def build_portal_audit(
     def breakdown(label_key: str) -> list[dict[str, Any]]:
         items: dict[str, dict[str, Any]] = {}
         for order in orders:
-            label = str(order.get(label_key) or "Sem regra de pontuacao")
+            label = str(order.get(label_key) or "Sem regra de pontuação")
             item = items.setdefault(label, {"label": label, "service_orders": 0, "base_points": 0.0, "penalty_points": 0.0, "net_points": 0.0})
             item["service_orders"] += 1
             item["base_points"] += float(order.get("base_points") or 0)
@@ -783,5 +885,7 @@ def build_portal_audit(
         "subjects": breakdown("os_subject"),
         "orders": [_audit_order(order) for order in sorted(orders, key=lambda item: float(item.get("net_points") or 0), reverse=True)],
         "history": history,
+        "score_steps": _score_steps(score, cpk),
+        "cpk": cpk,
         "message": None,
     }

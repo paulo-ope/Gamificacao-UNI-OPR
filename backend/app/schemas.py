@@ -1302,6 +1302,7 @@ class PortalOrderOut(BaseModel):
     os_type: str
     os_subject: str
     customer_name: str | None = None
+    group_name: str | None = None
     diagnosis: str | None = None
     status: str
     sla_status: str
@@ -1440,6 +1441,25 @@ class PortalAuditBreakdownOut(BaseModel):
     net_points: float
 
 
+class PortalScoreStepOut(BaseModel):
+    key: str
+    label: str
+    value: float
+    kind: str = "neutral"
+    description: str | None = None
+
+
+class PortalCpkInsightOut(BaseModel):
+    status: str | None = None
+    status_label: str
+    cpk_realizado: float | None = None
+    cpk_meta: float | None = None
+    adjustment: float = 0
+    mes_fechado: bool = False
+    synced_at: datetime | None = None
+    description: str
+
+
 class PortalAuditOut(BaseModel):
     gross_points: float = 0
     penalty_points: float = 0
@@ -1448,7 +1468,7 @@ class PortalAuditOut(BaseModel):
     final_points: float = 0
     estimated_payment: float = 0
     balance_adjustment_points: float = 0
-    health_status: str = "Nao informado"
+    health_status: str = "Não informado"
     service_orders_count: int = 0
     scored_service_orders: int = 0
     unscored_service_orders: int = 0
@@ -1468,4 +1488,6 @@ class PortalAuditOut(BaseModel):
     subjects: list[PortalAuditBreakdownOut] = []
     orders: list[PortalAuditOrderOut] = []
     history: list[PortalAuditHistoryOut] = []
+    score_steps: list[PortalScoreStepOut] = []
+    cpk: PortalCpkInsightOut | None = None
     message: str | None = None

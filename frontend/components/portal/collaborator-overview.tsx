@@ -1,9 +1,10 @@
 "use client";
 
-import { ClipboardCheck, Medal, ShieldAlert, Sparkles, Target, TrendingUp } from "lucide-react";
+import { Medal, ShieldAlert, Target, TrendingUp } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ScoreTransparencyPanel } from "@/components/portal/score-transparency-panel";
 import type { PortalAudit, PortalSummary } from "@/lib/types";
 
 type Props = {
@@ -48,31 +49,7 @@ export function CollaboratorOverview({ audit, summary, onOpenOrders }: Props) {
         <Badge className="border-[#2d5fff]/25 bg-[#2d5fff]/10 px-3 py-1 text-[#0028f3]">Atualizado no fechamento</Badge>
       </div>
 
-      <section className="grid overflow-hidden rounded-lg border bg-white lg:grid-cols-[1.35fr_0.65fr]">
-        <div className="uni-gradient p-5 text-white sm:p-7">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm text-white/80">Sua pontuação neste período</p>
-              <p className="mt-2 break-words text-3xl font-semibold leading-tight tracking-normal sm:text-4xl">{points(audit.final_points)}</p>
-              <p className="mt-2 text-sm text-white/80">Resultado líquido com saúde operacional aplicada.</p>
-            </div>
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-white/30 bg-white/15 text-[#02fffa]"><Sparkles className="h-5 w-5" /></div>
-          </div>
-          <div className="mt-7 grid gap-3 sm:grid-cols-3">
-            <div className="border-t border-white/25 pt-3"><p className="text-xs text-white/70">Pontos base</p><p className="mt-1 text-lg font-semibold">{points(audit.gross_points)}</p></div>
-            <div className="border-t border-white/25 pt-3"><p className="text-xs text-white/70">Descontos</p><p className="mt-1 text-lg font-semibold">-{points(audit.penalty_points)}</p></div>
-            <div className="border-t border-white/25 pt-3"><p className="text-xs text-white/70">Pagamento estimado</p><p className="mt-1 text-lg font-semibold">{money(audit.estimated_payment)}</p></div>
-          </div>
-        </div>
-        <div className="flex flex-col justify-between p-5 sm:p-7">
-          <div>
-            <p className="text-sm text-slate-500">Sua posição regional</p>
-            <div className="mt-2 flex items-end gap-2"><p className="text-4xl font-semibold text-slate-950">{rankingLabel}</p><p className="pb-1 text-sm text-slate-500">de {summary.regional_total}</p></div>
-            <p className="mt-3 text-sm text-slate-600">{summary.next_position_gap ? `Faltam ${points(summary.next_position_gap)} para a posição acima.` : "Você está no topo da sua regional ou ainda não há referência acima."}</p>
-          </div>
-          <Button className="mt-5 w-full sm:w-fit" variant="outline" onClick={onOpenOrders}><ClipboardCheck className="h-4 w-4" />Ver minhas O.S.</Button>
-        </div>
-      </section>
+      <ScoreTransparencyPanel audit={audit} summary={summary} onOpenOrders={onOpenOrders} />
 
       <section className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border bg-white p-4 shadow-sm">
@@ -111,10 +88,10 @@ export function CollaboratorOverview({ audit, summary, onOpenOrders }: Props) {
           </div>
           <p className="mt-3 text-sm text-slate-600">
             {summary.regional_service_orders
-              ? `${regionalSlaOnTimeOrders} de ${summary.regional_service_orders} O.S. da sua regional ficaram no prazo.`
-              : "Ainda não há O.S. na regional para calcular este indicador."}
+              ? `${regionalSlaOnTimeOrders} de ${summary.regional_service_orders} O.S. de colaboradores cadastrados ficaram no prazo.`
+              : "Ainda não há O.S. de colaboradores cadastrados na regional para calcular este indicador."}
           </p>
-          {summary.regional_sla_out_service_orders ? <p className="mt-2 text-xs text-slate-500">{summary.regional_sla_out_service_orders} O.S. da regional ficaram fora do prazo.</p> : null}
+          {summary.regional_sla_out_service_orders ? <p className="mt-2 text-xs text-slate-500">{summary.regional_sla_out_service_orders} O.S. de colaboradores cadastrados ficaram fora do prazo.</p> : null}
         </div>
         <div className="rounded-lg border bg-white p-5 shadow-sm">
           <p className="text-xs font-medium uppercase text-slate-500">Saúde operacional</p>
@@ -128,7 +105,7 @@ export function CollaboratorOverview({ audit, summary, onOpenOrders }: Props) {
         </div>
       </section>
 
-      <section className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+      <section className="hidden gap-3 md:grid lg:grid-cols-[1.1fr_0.9fr]">
         <div className="overflow-hidden rounded-lg border bg-white">
           <div className="p-5">
           <div className="flex items-center gap-2"><Target className="h-4 w-4 text-[#0028f3]" /><h3 className="font-semibold">A viagem dos seus pontos</h3></div>
@@ -148,7 +125,7 @@ export function CollaboratorOverview({ audit, summary, onOpenOrders }: Props) {
         </div>
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+      <section className="hidden gap-5 md:grid lg:grid-cols-[1.1fr_0.9fr]">
         <div className="rounded-lg border bg-white p-5">
           <div className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-[#0028f3]" /><h3 className="font-semibold">Onde você mais pontuou</h3></div>
           <div className="mt-5 space-y-4">

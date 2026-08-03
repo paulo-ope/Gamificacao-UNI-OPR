@@ -208,7 +208,10 @@ export default function PortalPage() {
     const query = orderQuery.trim().toLowerCase();
     const byFilter = orders.filter((order) => {
       if (orderFilter === "scored") return order.net_points > 0;
-      if (orderFilter === "impact") return order.penalty_points > 0 || order.status_label.toLowerCase().includes("sem regra") || order.status_label.toLowerCase().includes("revisao");
+      if (orderFilter === "impact") {
+        const statusLabel = order.status_label.toLowerCase();
+        return order.penalty_points > 0 || statusLabel.includes("sem regra") || statusLabel.includes("revisao") || statusLabel.includes("revisão");
+      }
       if (orderFilter === "recurrence") return order.status_label.toLowerCase().includes("reincid");
       return true;
     });
@@ -322,7 +325,7 @@ export default function PortalPage() {
             <Image alt="UNI Internet" className="h-9 w-14 shrink-0 object-contain object-left" height={36} priority src="/brand/uni-logo.png" width={56} />
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase text-[#0028f3]">UNI OPR</p>
-              <h1 className="truncate text-lg font-semibold">Portal do ranking</h1>
+              <h1 className="truncate text-lg font-semibold"><span className="sm:hidden">Portal</span><span className="hidden sm:inline">Portal do ranking</span></h1>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -639,15 +642,15 @@ export default function PortalPage() {
         {activeTab === "profile" ? <ProfileSettings /> : null}
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 border-t bg-white px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-lg md:hidden">
-        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${availableTabs.length}, minmax(64px, 1fr))` }}>
+      <nav className="fixed inset-x-0 bottom-0 z-30 border-t bg-white/95 px-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 shadow-lg backdrop-blur md:hidden">
+        <div className="-mx-1 flex gap-1 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {availableTabs.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
           return (
             <button
               key={tab.id}
-              className={`flex min-w-0 flex-col items-center gap-1 rounded-md px-1 py-2 text-[11px] font-medium ${active ? "bg-[#2d5fff]/10 text-[#0028f3]" : "text-slate-500"}`}
+              className={`flex min-w-[76px] flex-col items-center gap-1 rounded-2xl px-2 py-2.5 text-[11px] font-medium transition ${active ? "bg-[#2d5fff]/10 text-[#0028f3] ring-1 ring-[#2d5fff]/15" : "text-slate-500"}`}
               type="button"
               onClick={() => setActiveTab(tab.id)}
             >

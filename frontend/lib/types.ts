@@ -421,6 +421,25 @@ export type PortalAuditHistory = {
   service_orders_count: number;
 };
 
+export type PortalScoreStep = {
+  key: string;
+  label: string;
+  value: number;
+  kind: "positive" | "negative" | "neutral" | "subtotal" | "total" | string;
+  description: string | null;
+};
+
+export type PortalCpkInsight = {
+  status: "na_meta" | "fora_meta" | "sem_base" | null;
+  status_label: string;
+  cpk_realizado: number | null;
+  cpk_meta: number | null;
+  adjustment: number;
+  mes_fechado: boolean;
+  synced_at: string | null;
+  description: string;
+};
+
 export type PortalAudit = {
   gross_points: number;
   penalty_points: number;
@@ -449,6 +468,8 @@ export type PortalAudit = {
   subjects: PortalAuditBreakdown[];
   orders: PortalAuditOrder[];
   history: PortalAuditHistory[];
+  score_steps: PortalScoreStep[];
+  cpk: PortalCpkInsight | null;
   message: string | null;
 };
 
