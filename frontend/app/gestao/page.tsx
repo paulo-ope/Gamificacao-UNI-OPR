@@ -8,6 +8,7 @@ import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
@@ -68,12 +69,13 @@ function metricCards(data: ManagementDashboard | null) {
 }
 
 export default function ManagementPage() {
-  const { user, checking, error, login, logout } = useWorkspaceAuth();
+  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
   const [data, setData] = useState<ManagementDashboard | null>(null);
   const [options, setOptions] = useState<ManagementOptions>({ supervisors: [], team_models: [] });
   const [loading, setLoading] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filters, setFilters] = useState({ search: "", regional: "", status: "", supervisor_user_id: "" });
 
@@ -110,13 +112,14 @@ export default function ManagementPage() {
 
   async function refreshStructure() {
     setMessage(null);
+    setError(null);
     setLoading(true);
     try {
       const result = await api.refreshManagementStructure();
       setMessage(`${result.created_candidates} novo(s) candidato(s) encontrados.`);
       await load();
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Falha ao atualizar estrutura.");
+      setError(reason instanceof Error ? reason.message : "Falha ao atualizar estrutura.");
     } finally {
       setLoading(false);
     }
@@ -125,12 +128,13 @@ export default function ManagementPage() {
   async function updateMember(id: number, payload: { supervisor_user_id?: number | null; team_model_id?: number | null; status?: string }) {
     setSavingId(id);
     setMessage(null);
+    setError(null);
     try {
       await api.updateManagementMember(id, payload);
       await load();
       setMessage("Vínculo atualizado.");
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível salvar o vínculo.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível salvar o vínculo.");
     } finally {
       setSavingId(null);
     }
@@ -139,7 +143,7 @@ export default function ManagementPage() {
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando Gestão...</main>;
   }
-  if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} />;
+  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
 
   if (!canRead) {
     return (
@@ -188,7 +192,7 @@ export default function ManagementPage() {
           ) : null}
         </div>
 
-        {message ? <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">{message}</div> : null}
+        <StatusToast error={error} message={message} onDismissError={() => setError(null)} onDismissMessage={() => setMessage(null)} />
         {loadError ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{loadError}</div> : null}
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">

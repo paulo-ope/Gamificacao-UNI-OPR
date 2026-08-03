@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { StatusToast } from "@/components/ui/status-toast";
 import { api } from "@/lib/api";
 import type { PortalProfile } from "@/lib/types";
 
@@ -164,8 +165,7 @@ export function ProfileSettings() {
         <Badge className="border-[#2d5fff]/25 bg-[#2d5fff]/10 text-[#0028f3]">Cadastro da Gamificação</Badge>
       </div>
 
-      {error ? <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
-      {notice ? <p className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p> : null}
+      <StatusToast error={error} message={notice} onDismissError={() => setError(null)} onDismissMessage={() => setNotice(null)} />
 
       <section className="grid overflow-hidden rounded-lg border bg-white md:grid-cols-[280px_1fr]">
         <div className="uni-gradient flex flex-col items-center justify-center p-6 text-center text-white">

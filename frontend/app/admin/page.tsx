@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ModuleNavigationSidebar, type ModuleNavigationItem } from "@/components/workspace/module-navigation-sidebar";
 import { ModuleUserVisibilityEditor } from "@/components/workspace/module-user-visibility-editor";
@@ -148,7 +149,7 @@ function permissionGroups(permissions: EcosystemPermission[]) {
 }
 
 export default function AdminPage() {
-  const { user, checking, error, login, logout } = useWorkspaceAuth();
+  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [profiles, setProfiles] = useState<AccessProfile[]>([]);
   const [permissions, setPermissions] = useState<EcosystemPermission[]>([]);
@@ -159,6 +160,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [userDraft, setUserDraft] = useState<UserDraft | null>(null);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
@@ -256,7 +258,7 @@ export default function AdminPage() {
       </main>
     );
   }
-  if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} />;
+  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
 
   if (!canAdmin) {
     return (
@@ -277,6 +279,7 @@ export default function AdminPage() {
     if (userDraft.id === "new" && !userDraft.password.trim()) return;
     setSaving(true);
     setMessage(null);
+    setError(null);
     try {
       const selectedProfiles = profiles.filter((profile) => userDraft.access_profile_ids.includes(profile.id));
       const legacyRole = selectedProfiles.find((profile) => profile.legacy_role)?.legacy_role;
@@ -299,7 +302,7 @@ export default function AdminPage() {
       setMessage("Usuário salvo.");
       await loadAdminData();
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível salvar o usuário.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível salvar o usuário.");
     } finally {
       setSaving(false);
     }
@@ -309,6 +312,7 @@ export default function AdminPage() {
     if (!profileDraft || !profileDraft.name.trim()) return;
     setSaving(true);
     setMessage(null);
+    setError(null);
     try {
       const payload = {
         name: profileDraft.name.trim(),
@@ -325,7 +329,7 @@ export default function AdminPage() {
       setMessage("Perfil salvo.");
       await loadAdminData();
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível salvar o perfil.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível salvar o perfil.");
     } finally {
       setSaving(false);
     }
@@ -362,6 +366,7 @@ export default function AdminPage() {
     if (!personDraft) return;
     setSaving(true);
     setMessage(null);
+    setError(null);
     try {
       await api.updateAdminPersonStructure(personDraft.id, {
         cpf: personDraft.cpf.trim() || undefined,
@@ -376,7 +381,7 @@ export default function AdminPage() {
       setMessage("Estrutura salva.");
       await loadAdminData();
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível salvar a estrutura.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível salvar a estrutura.");
     } finally {
       setSaving(false);
     }
@@ -385,12 +390,13 @@ export default function AdminPage() {
   async function updateModuleVisibility(moduleKey: string, profileId: number, visible: boolean) {
     setSaving(true);
     setMessage(null);
+    setError(null);
     try {
       const updated = await api.updateAdminModuleVisibility(moduleKey, { profile_id: profileId, visible });
       setAdminModules((current) => current.map((item) => (item.key === updated.key ? updated : item)));
       setMessage(visible ? "Módulo liberado para o perfil." : "Módulo ocultado para o perfil.");
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível alterar a visibilidade.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível alterar a visibilidade.");
     } finally {
       setSaving(false);
     }
@@ -399,12 +405,13 @@ export default function AdminPage() {
   async function addModuleUserOverride(moduleKey: string, userId: number, visible: boolean) {
     setSaving(true);
     setMessage(null);
+    setError(null);
     try {
       const updated = await api.updateAdminModuleUserVisibility(moduleKey, { user_id: userId, visible });
       setAdminModules((current) => current.map((item) => (item.key === updated.key ? updated : item)));
       setMessage(visible ? "Módulo liberado para o usuário." : "Módulo ocultado para o usuário.");
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível alterar a visibilidade individual.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível alterar a visibilidade individual.");
     } finally {
       setSaving(false);
     }
@@ -413,12 +420,13 @@ export default function AdminPage() {
   async function updateIxcSyncSettings(patch: Partial<Omit<OperationIxcSyncSettings, "available_sectors" | "sector_scope_label">>) {
     setSaving(true);
     setMessage(null);
+    setError(null);
     try {
       const updated = await operationsApi.updateIxcSyncSettings(patch);
       setIxcSyncSettings(updated);
       setMessage("Configuração de sincronização com o IXC atualizada.");
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível salvar a configuração do IXC.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível salvar a configuração do IXC.");
     } finally {
       setSaving(false);
     }
@@ -427,12 +435,13 @@ export default function AdminPage() {
   async function removeModuleUserOverride(moduleKey: string, userId: number) {
     setSaving(true);
     setMessage(null);
+    setError(null);
     try {
       const updated = await api.deleteAdminModuleUserVisibility(moduleKey, userId);
       setAdminModules((current) => current.map((item) => (item.key === updated.key ? updated : item)));
       setMessage("Exceção removida. O usuário volta a seguir a visibilidade do perfil.");
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Não foi possível remover a exceção.");
+      setError(reason instanceof Error ? reason.message : "Não foi possível remover a exceção.");
     } finally {
       setSaving(false);
     }
@@ -509,9 +518,14 @@ export default function AdminPage() {
         {loadError ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{loadError}</div>
         ) : null}
-        {message ? (
-          <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">{message}</div>
-        ) : null}
+        <StatusToast
+          error={error}
+          message={message}
+          busy={saving}
+          busyLabel="Salvando alterações..."
+          onDismissError={() => setError(null)}
+          onDismissMessage={() => setMessage(null)}
+        />
 
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AdminTab)} className="grid gap-5">
           <TabsContent value="users" className="mt-4">

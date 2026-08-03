@@ -21,6 +21,7 @@ import { OperationsWarrantyAnalytics } from "@/components/operations/operations-
 import { OperationsWorkScheduleOverview } from "@/components/operations/operations-work-schedule-overview";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
+import { StatusToast } from "@/components/ui/status-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -1592,19 +1593,12 @@ export default function OperacaoPage() {
       />
 
       <section className="px-4 py-6 lg:px-7">
-        {message ? (
-          <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-            {message}
-          </div>
-        ) : null}
-        {error ? (
-          <div
-            role="alert"
-            className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
-          >
-            {error}
-          </div>
-        ) : null}
+        <StatusToast
+          error={error}
+          message={message}
+          onDismissError={() => setError(null)}
+          onDismissMessage={() => setMessage(null)}
+        />
         <Tabs
           value={activeTab}
           onValueChange={(value) => navigateToTab(value as OperationTab)}

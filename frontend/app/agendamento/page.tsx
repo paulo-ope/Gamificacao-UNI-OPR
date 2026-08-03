@@ -35,6 +35,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Input } from "@/components/ui/input";
 import { AppRadio } from "@/components/ui/radio";
+import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
@@ -638,8 +639,12 @@ export default function AgendamentoPage() {
       </section>
 
       <section className="space-y-4 px-4 py-5 lg:px-7">
-        {message ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</div> : null}
-        {error ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div> : null}
+        <StatusToast
+          error={error}
+          message={message}
+          onDismissError={() => setError(null)}
+          onDismissMessage={() => setMessage(null)}
+        />
         {!syncStatus?.orders_count && !loading ? (
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             Nenhum dado sincronizado ainda. Use &quot;Sincronizar IXC&quot; (ou peça a um usuário com permissão) para fazer a primeira carga.

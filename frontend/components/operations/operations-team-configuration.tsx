@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { StatusToast } from "@/components/ui/status-toast";
 import {
   operationsApi,
   type OperationIxcSyncSettings,
@@ -542,19 +543,12 @@ export function OperationsTeamConfiguration({
 
   return (
     <div className="space-y-4">
-      {message ? (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          {message}
-        </div>
-      ) : null}
-      {error ? (
-        <div
-          role="alert"
-          className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
-        >
-          {error}
-        </div>
-      ) : null}
+      <StatusToast
+        error={error}
+        message={message}
+        onDismissError={() => setError(null)}
+        onDismissMessage={() => setMessage(null)}
+      />
       <Card className="rounded-2xl border-slate-200 bg-slate-50/70">
         <CardHeader>
           {canManageTeamModels ? (
