@@ -216,7 +216,13 @@ export function LeadershipBonusPanel({
   const branchCoverageRows = useMemo(
     () =>
       sortedRegionals.map((regional) => {
-        const owners = activeLeaders.filter((leader) => leader.regional_names.includes(regional));
+        // regional_names guarda o valor cru do banco (ex.: "UNI - SAO FRANCISCO DO GUAPORE"), sem
+        // acento e sem a grafia bonita que regionalName() produz para regionais agrupadas (ex.:
+        // "UNI - São Francisco do Guaporé") - comparar sem normalizar fazia essas filiais
+        // aparecerem como "sem líder" mesmo com lideranca de fato vinculada.
+        const owners = activeLeaders.filter((leader) =>
+          leader.regional_names.some((name) => normalizeRegional(name) === regional)
+        );
         return {
           regional,
           leaders: owners,
