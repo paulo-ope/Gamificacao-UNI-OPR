@@ -152,11 +152,19 @@ export function useClosureActions({
       return selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(item.suggested_regional || item.regional));
     });
 
+    // Gerente de pasta (portfolio_manager) sempre vai pra aba Matriz, mesmo quando tem regionais
+    // especificas vinculadas no cadastro (ex.: cobre 11 das 14 regionais) - misturar o bonus dele
+    // numa dessas abas confundia quem fechava o pagamento so daquela regional, que via um valor
+    // grande sem relacao com o time local. So supervisor/gerente de unidade entram nas abas por
+    // regional.
+    const regionalLeadershipPool = leadershipRows.filter((item) => item.role_type !== "portfolio_manager");
+    const matrizLeadershipRows = leadershipRows.filter((item) => item.role_type === "portfolio_manager");
+
     // Uma aba por regional (o motivo de existir esta funcao) - reune toda regional que aparece em
     // qualquer uma das 3 tabelas, mesmo que so tenha lideranca ou so tenha pendente de cadastro.
     const regionals = new Set<string>();
     paymentRows.forEach((score) => regionals.add(normalizeRegional(score.regional)));
-    leadershipRows.forEach((item) => item.regionals.forEach((regional) => regionals.add(normalizeRegional(regional))));
+    regionalLeadershipPool.forEach((item) => item.regionals.forEach((regional) => regionals.add(normalizeRegional(regional))));
     pendingRows.forEach((item) => regionals.add(normalizeRegional(item.suggested_regional || item.regional)));
     const sortedRegionals = Array.from(regionals).sort((a, b) => regionalName(a).localeCompare(regionalName(b), "pt-BR"));
 
@@ -212,7 +220,7 @@ export function useClosureActions({
         ]
       );
 
-      const regionalLeadershipRows = leadershipRows.filter(
+      const regionalLeadershipRows = regionalLeadershipPool.filter(
         (item) => !placedLeadershipIds.has(item.leadership_profile_id) && item.regionals.some((r) => normalizeRegional(r) === regional)
       );
       regionalLeadershipRows.forEach((item) => placedLeadershipIds.add(item.leadership_profile_id));
@@ -246,16 +254,19 @@ export function useClosureActions({
       });
     }
 
-    // Gerente de pasta (ou qualquer lideranca sem filial vinculada) nunca casa com um regional
-    // especifico - sem esta aba, o bonus dele simplesmente desapareceria do arquivo em vez de
-    // aparecer repetido. Nome "Matriz" (nao "Liderança Geral") para deixar explicito que nao e
-    // uma regional operacional - decisao do usuario para nao confundir quem esta fechando o
-    // pagamento por filial.
-    const leftoverLeadershipRows = leadershipRows.filter((item) => !placedLeadershipIds.has(item.leadership_profile_id));
+    // Gerente de pasta (portfolio_manager) sempre cai aqui (ver filtro de regionalLeadershipPool
+    // acima), mais qualquer outra lideranca sem filial vinculada no cadastro - sem esta aba, o
+    // bonus dela simplesmente desapareceria do arquivo em vez de aparecer repetido. Nome "Matriz"
+    // (nao "Liderança Geral") para deixar explicito que nao e uma regional operacional - decisao
+    // do usuario para nao confundir quem esta fechando o pagamento por filial.
+    const leftoverLeadershipRows = [
+      ...matrizLeadershipRows,
+      ...regionalLeadershipPool.filter((item) => !placedLeadershipIds.has(item.leadership_profile_id)),
+    ];
     if (leftoverLeadershipRows.length > 0) {
       const sheet = workbook.addWorksheet(nextSheetName("Matriz"));
       sheet.views = [{ state: "frozen", ySplit: 1 }];
-      const titleRow = sheet.addRow(["Matriz - liderança sem filial específica (cobre múltiplas regionais ou toda a operação)"]);
+      const titleRow = sheet.addRow(["Matriz - gerência de pasta e liderança sem filial específica"]);
       titleRow.font = { bold: true, size: 13 };
       sheet.addRow([]);
       addSectionTable(
