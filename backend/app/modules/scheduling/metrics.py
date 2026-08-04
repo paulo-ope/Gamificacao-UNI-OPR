@@ -183,6 +183,35 @@ def _resolve_technician_names(db: Session, technician_ids: set[int]) -> dict[int
     return {row.ixc_funcionario_id: row.name for row in rows}
 
 
+def _team_operator_ids(db: Session) -> set[int]:
+    rows = db.execute(select(SchedulingOperator).where(SchedulingOperator.is_team_member.is_(True))).scalars()
+    return {row.ixc_user_id for row in rows}
+
+
+def _classify_reschedule_origin(operator_id: int | None, team_ids: set[int]) -> str:
+    """Heurística (não há campo de canal no IXC): reagendamento feito por operador cadastrado como
+    membro da equipe do setor conta como Backoffice; qualquer outro caso (operador fora da equipe,
+    ou evento só com técnico de campo) conta como Campo."""
+    return "backoffice" if operator_id is not None and operator_id in team_ids else "campo"
+
+
+def _reschedule_origins_by_order(db: Session, os_ids: set[int], team_ids: set[int]) -> dict[int, list[str]]:
+    """Origem de cada evento de Reagendar (tipo 10) das O.S. informadas, agrupada por O.S. - uma
+    entrada por EVENTO (não deduplicada), para permitir tanto contagem de ações (dashboard) quanto
+    o conjunto de origens por O.S. (filtro/exibição no drill, via `set(...)`)."""
+    if not os_ids:
+        return {}
+    rows = db.execute(
+        select(SchedulingEvent.ixc_os_id, SchedulingEvent.operator_id).where(
+            SchedulingEvent.ixc_os_id.in_(os_ids), SchedulingEvent.event_type == "10",
+        )
+    )
+    origins_by_order: dict[int, list[str]] = {}
+    for os_id, operator_id in rows:
+        origins_by_order.setdefault(os_id, []).append(_classify_reschedule_origin(operator_id, team_ids))
+    return origins_by_order
+
+
 def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str = "all_events") -> dict:
     settings = load_settings(db)
     window_start, window_end, active_days = _parse_business_window(settings)
@@ -192,6 +221,7 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
     now_local = now_porto_velho().replace(tzinfo=None)
 
     orders = list(db.execute(_cohort_query(filters)).scalars())
+    team_ids = _team_operator_ids(db)
 
     # --- Grupo A: velocidade de resposta (coorte = O.S. ABERTAS no período) ---
     raw_minutes: list[float] = []
@@ -200,6 +230,7 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
     bucket_counts = {key: 0 for key, _, _ in TTFA_BUCKETS}
     lead_hours: list[float] = []  # antecedência da janela combinada (C2)
     rescheduled = 0
+    rescheduled_os_ids: set[int] = set()
     scheduled_count = 0
 
     # Volume + tempo útil por filial/assunto - base do ranking "quem mais atrasa" (grupo E).
@@ -230,6 +261,7 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
                 break
         if order.schedule_event_count > 1:
             rescheduled += 1
+            rescheduled_os_ids.add(order.ixc_os_id)
         if order.first_window_start is not None:
             lead = (_local(order.first_window_start) - scheduled).total_seconds() / 3600
             if lead >= 0:
@@ -241,6 +273,14 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
         by_assunto.setdefault(assunto_key, []).append(useful)
         by_assunto_late[assunto_key] = by_assunto_late.get(assunto_key, 0) + (1 if is_late else 0)
         assunto_names[assunto_key] = order.assunto_name or "Não informado"
+
+    # Origem do reagendamento (C1 estendido): heurística sobre o operador de cada evento "Reagendar"
+    # (tipo 10) - não existe campo de canal no IXC, ver `_classify_reschedule_origin`.
+    reschedule_origins_by_order = _reschedule_origins_by_order(db, rescheduled_os_ids, team_ids)
+    all_reschedule_origins = [origin for origins in reschedule_origins_by_order.values() for origin in origins]
+    reschedule_backoffice_count = sum(1 for origin in all_reschedule_origins if origin == "backoffice")
+    reschedule_campo_count = sum(1 for origin in all_reschedule_origins if origin == "campo")
+    reschedule_origin_total = reschedule_backoffice_count + reschedule_campo_count
 
     # --- Grupo D: backlog sem agendamento (só O.S. ainda abertas) ---
     backlog_counts = {key: 0 for key, _, _ in BACKLOG_BUCKETS}
@@ -312,8 +352,6 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
 
     all_operator_ids = set(operator_events) | set(first_by_operator)
     names = _resolve_operator_names(db, all_operator_ids)
-    team_rows = db.execute(select(SchedulingOperator).where(SchedulingOperator.is_team_member.is_(True))).scalars()
-    team_ids = {row.ixc_user_id for row in team_rows}
 
     operators = []
     for op_id in sorted(all_operator_ids, key=lambda i: -(operator_events.get(i, 0))):
@@ -384,6 +422,14 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
             "ttfa_raw": _stats(raw_minutes),
             "reschedule_rate": round(rescheduled / scheduled_count * 100, 1) if scheduled_count else None,
             "rescheduled_orders": rescheduled,
+            "reschedule_backoffice_count": reschedule_backoffice_count,
+            "reschedule_backoffice_pct": (
+                round(reschedule_backoffice_count / reschedule_origin_total * 100, 1) if reschedule_origin_total else None
+            ),
+            "reschedule_campo_count": reschedule_campo_count,
+            "reschedule_campo_pct": (
+                round(reschedule_campo_count / reschedule_origin_total * 100, 1) if reschedule_origin_total else None
+            ),
             "window_lead_hours": _stats(lead_hours),
             "total_schedule_events": sum(daily_counts.values()),
             "active_period_days": active_period_days,
@@ -451,6 +497,8 @@ def order_details(
     sla_status: str | None = None,
     ttfa_bucket: str | None = None,
     backlog_bucket: str | None = None,
+    only_rescheduled: bool = False,
+    reschedule_origin: str | None = None,
     page: int = 1,
     page_size: int = 50,
     sort_by: str = "opened_at",
@@ -473,6 +521,8 @@ def order_details(
         stmt = stmt.where(SchedulingOrder.first_scheduled_at.is_(None), SchedulingOrder.closed_at.is_(None))
     elif status == "scheduled":
         stmt = stmt.where(SchedulingOrder.first_scheduled_at.is_not(None))
+    if only_rescheduled or reschedule_origin:
+        stmt = stmt.where(SchedulingOrder.schedule_event_count > 1)
 
     filtered: list[tuple[SchedulingOrder, float | None, bool | None]] = []
     for order in db.execute(stmt).scalars():
@@ -506,6 +556,16 @@ def order_details(
 
         filtered.append((order, useful, is_late))
 
+    reschedule_origins_by_order: dict[int, list[str]] = {}
+    if reschedule_origin:
+        team_ids = _team_operator_ids(db)
+        candidate_ids = {o.ixc_os_id for o, _, _ in filtered if o.schedule_event_count > 1}
+        reschedule_origins_by_order = _reschedule_origins_by_order(db, candidate_ids, team_ids)
+        filtered = [
+            (o, u, l) for o, u, l in filtered
+            if reschedule_origin in set(reschedule_origins_by_order.get(o.ixc_os_id, []))
+        ]
+
     total = len(filtered)
     key_fn = ORDER_SORT_KEYS.get(sort_by, ORDER_SORT_KEYS["opened_at"])
     filtered.sort(key=lambda item: key_fn(*item), reverse=(sort_dir != "asc"))
@@ -515,6 +575,13 @@ def order_details(
     technician_ids = {o.first_technician_id for o, _, _ in page_items if o.first_technician_id}
     operator_names = _resolve_operator_names(db, operator_ids)
     technician_names = _resolve_technician_names(db, technician_ids)
+
+    # Reaproveita o que já foi buscado para o filtro de origem; só busca o que falta para a página.
+    page_rescheduled_ids = {o.ixc_os_id for o, _, _ in page_items if o.schedule_event_count > 1}
+    missing_ids = page_rescheduled_ids - set(reschedule_origins_by_order)
+    if missing_ids:
+        team_ids = _team_operator_ids(db)
+        reschedule_origins_by_order.update(_reschedule_origins_by_order(db, missing_ids, team_ids))
 
     items = []
     for order, useful, is_late in page_items:
@@ -529,6 +596,7 @@ def order_details(
             "ttfa_business_minutes": round(useful, 1) if useful is not None else None,
             "sla_late": is_late,
             "reschedule_count": max(0, order.schedule_event_count - 1) if order.schedule_event_count else 0,
+            "reschedule_origins": sorted(set(reschedule_origins_by_order.get(order.ixc_os_id, []))),
             "operator_name": operator_names.get(order.first_operator_id) if order.first_operator_id else None,
             "technician_name": technician_names.get(order.first_technician_id) if order.first_technician_id else None,
             "age_hours": (

@@ -23,6 +23,10 @@ class SchedulingSummary(BaseModel):
     ttfa_raw: SchedulingStats
     reschedule_rate: float | None = None
     rescheduled_orders: int
+    reschedule_backoffice_count: int = 0
+    reschedule_backoffice_pct: float | None = None
+    reschedule_campo_count: int = 0
+    reschedule_campo_pct: float | None = None
     window_lead_hours: SchedulingStats
     total_schedule_events: int
     active_period_days: int
@@ -148,6 +152,7 @@ class SchedulingOrderDetailItem(BaseModel):
     ttfa_business_minutes: float | None = None
     sla_late: bool | None = None
     reschedule_count: int
+    reschedule_origins: list[str] = Field(default_factory=list)
     operator_name: str | None = None
     technician_name: str | None = None
     age_hours: float | None = None

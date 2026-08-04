@@ -18,6 +18,10 @@ export type SchedulingSummary = {
   ttfa_raw: SchedulingStats;
   reschedule_rate: number | null;
   rescheduled_orders: number;
+  reschedule_backoffice_count: number;
+  reschedule_backoffice_pct: number | null;
+  reschedule_campo_count: number;
+  reschedule_campo_pct: number | null;
   window_lead_hours: SchedulingStats;
   total_schedule_events: number;
   active_period_days: number;
@@ -94,6 +98,7 @@ export type SchedulingOrderDetailItem = {
   ttfa_business_minutes: number | null;
   sla_late: boolean | null;
   reschedule_count: number;
+  reschedule_origins: ("backoffice" | "campo")[];
   operator_name: string | null;
   technician_name: string | null;
   age_hours: number | null;
@@ -152,6 +157,8 @@ export type SchedulingOrderDrillParams = {
   sla_status?: "late" | "on_time";
   ttfa_bucket?: string;
   backlog_bucket?: string;
+  only_rescheduled?: boolean;
+  reschedule_origin?: "backoffice" | "campo";
   operator_ids?: number[];
   filial_ids?: string[];
   assunto_ids?: string[];
@@ -280,6 +287,8 @@ export const schedulingApi = {
     if (drill.sla_status) params.set("sla_status", drill.sla_status);
     if (drill.ttfa_bucket) params.set("ttfa_bucket", drill.ttfa_bucket);
     if (drill.backlog_bucket) params.set("backlog_bucket", drill.backlog_bucket);
+    if (drill.only_rescheduled) params.set("only_rescheduled", "true");
+    if (drill.reschedule_origin) params.set("reschedule_origin", drill.reschedule_origin);
     params.set("page", String(page));
     params.set("page_size", String(pageSize));
     if (sort) {
