@@ -452,6 +452,15 @@ class PointBalanceEntry(Base):
     related_os_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     origin_calculation_run_id: Mapped[int | None] = mapped_column(ForeignKey("calculation_runs.id"), nullable=True)
 
+    # So preenchido para post_payment_warranty_debit: mes/ano do RETORNO (a O.S de garantia), nao
+    # da origem - achado real: sem isso, o lancamento era consumido no PROXIMO fechamento que
+    # fosse marcado como pago, independente do mes (ex.: origem em julho, retorno detectado em
+    # agosto, mas julho e marcado pago um dia depois - o desconto saia do pagamento de julho,
+    # confundindo quem conferia o fechamento). Com o alvo, apply_pending_entries_for_paid_run so
+    # consome o lancamento quando o fechamento do mes/ano do RETORNO (ou posterior) for pago.
+    target_reference_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_reference_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     applied_calculation_run_id: Mapped[int | None] = mapped_column(
         ForeignKey("calculation_runs.id"), nullable=True, index=True
     )

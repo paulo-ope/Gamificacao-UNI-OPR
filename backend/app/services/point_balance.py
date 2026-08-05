@@ -90,6 +90,8 @@ def serialize_entry(entry: PointBalanceEntry, collaborator_name: str | None = No
         "origin_run_month": origin_run.reference_month if origin_run else None,
         "origin_run_year": origin_run.reference_year if origin_run else None,
         "origin_run_status": origin_run.status if origin_run else None,
+        "target_reference_month": entry.target_reference_month,
+        "target_reference_year": entry.target_reference_year,
         "applied_calculation_run_id": entry.applied_calculation_run_id,
         "applied_run_status": applied_run.status if applied_run else None,
         "applied_reference_month": entry.applied_reference_month,
@@ -344,6 +346,11 @@ def detect_post_payment_warranty_debits(
             original_os_code=original.os_code,
             related_os_code=later.os_code,
             origin_calculation_run_id=reference_run.id if reference_run else None,
+            # Alvo = mes/ano do RETORNO (later), nao da origem - o desconto so pode ser consumido
+            # quando o fechamento desse mes (ou de um mes posterior) for pago, mesmo que o mes da
+            # origem seja pago antes (ver comentario no model PointBalanceEntry).
+            target_reference_month=later_date.month,
+            target_reference_year=later_date.year,
             status="pending",
             requires_review=requires_review,
             recurrence_classification=selected["classification"],
@@ -448,8 +455,22 @@ def apply_pending_entries_for_paid_run(
 ) -> dict[str, Any]:
     """Consome os lancamentos pendentes do colaborador. So deve ser chamada quando `calculation_run`
     efetivamente transiciona para status="paid" - nunca durante um calculo em rascunho, para nao
-    consumir o lancamento num draft descartavel que nunca chega a ser aprovado."""
-    pending = [entry for entry in pending_entries_for_collaborator(db, collaborator.id) if not entry.requires_review]
+    consumir o lancamento num draft descartavel que nunca chega a ser aprovado.
+
+    Um lancamento com `target_reference_month/year` (post_payment_warranty_debit, alvo = mes do
+    RETORNO) so e consumido quando este fechamento e do mes/ano alvo OU de um mes posterior -
+    sem isso, o desconto saia do proximo fechamento pago do colaborador em QUALQUER mes, o que
+    podia puxar um desconto de garantia de agosto para dentro de um pagamento de julho ainda em
+    aberto (achado real). Lancamentos sem alvo (ajuste manual, saldo remanescente) continuam
+    sendo consumidos no primeiro pagamento disponivel, como sempre."""
+    all_pending = [entry for entry in pending_entries_for_collaborator(db, collaborator.id) if not entry.requires_review]
+    pending = [
+        entry
+        for entry in all_pending
+        if entry.target_reference_month is None
+        or entry.target_reference_year is None
+        or (entry.target_reference_year, entry.target_reference_month) <= (reference_year, reference_month)
+    ]
     if not pending:
         return {"applied_points": 0.0, "balance_after": round(float(available_points), 2), "entry_ids": []}
 

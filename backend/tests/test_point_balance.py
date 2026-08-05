@@ -261,6 +261,55 @@ def test_requires_review_entry_can_be_resolved_with_a_negative_value(db_session,
         assert getattr(excinfo.value, "status_code", None) == 422, "resolving with a positive (credit) value must be rejected"
 
 
+def test_warranty_debit_targets_the_return_month_not_whichever_run_is_paid_first(
+    db_session, make_collaborator, scoring_setup, recurrence_setup, monkeypatch
+):
+    """Regression: origem em julho, retorno detectado em agosto. Antes desta correcao, o debito
+    era consumido pelo PROXIMO fechamento marcado como pago (mesmo que fosse julho, ja em
+    andamento) - confundindo quem conferia aquele pagamento com um desconto sem relacao com as
+    O.S do proprio mes. Agora o debito so pode ser consumido pelo fechamento do mes do RETORNO
+    (agosto) ou de um mes posterior."""
+    monkeypatch.setattr(point_balance, "current_reference_period", lambda: (8, 2026))
+    collaborator = make_collaborator()
+    original = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 20, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 5, tzinfo=timezone.utc))
+    db_session.add_all([original, later])
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
+    db_session.commit()
+    assert len(created) == 1
+    entry = created[0]
+    assert entry.target_reference_month == 8
+    assert entry.target_reference_year == 2026
+
+    july_run = CalculationRun(reference_month=7, reference_year=2026, regional=None, point_value=2.5, status="approved")
+    db_session.add(july_run)
+    db_session.flush()
+
+    result = point_balance.apply_pending_entries_for_paid_run(
+        db_session, collaborator=collaborator, calculation_run=july_run,
+        reference_month=7, reference_year=2026, available_points=10.0,
+    )
+    db_session.commit()
+    assert result["applied_points"] == 0.0, "julho ainda nao e o mes do retorno - nao deve consumir o debito"
+    assert result["entry_ids"] == []
+    assert db_session.get(PointBalanceEntry, entry.id).status == "pending"
+
+    august_run = CalculationRun(reference_month=8, reference_year=2026, regional=None, point_value=2.5, status="approved")
+    db_session.add(august_run)
+    db_session.flush()
+
+    result = point_balance.apply_pending_entries_for_paid_run(
+        db_session, collaborator=collaborator, calculation_run=august_run,
+        reference_month=8, reference_year=2026, available_points=10.0,
+    )
+    db_session.commit()
+    assert result["applied_points"] == -15.0, "agosto e o mes do retorno - deve consumir o debito agora"
+    assert result["entry_ids"] == [entry.id]
+    assert db_session.get(PointBalanceEntry, entry.id).status == "applied"
+
+
 def test_only_one_debit_per_original_even_with_many_near_simultaneous_later_returns(
     db_session, make_collaborator, paid_june_run, recurrence_setup
 ):

@@ -975,6 +975,8 @@ class PointBalanceEntryOut(BaseModel):
     origin_run_month: int | None = None
     origin_run_year: int | None = None
     origin_run_status: str | None = None
+    target_reference_month: int | None = None
+    target_reference_year: int | None = None
     applied_calculation_run_id: int | None = None
     applied_run_status: str | None = None
     applied_reference_month: int | None = None

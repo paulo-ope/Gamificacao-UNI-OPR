@@ -1271,6 +1271,8 @@ export type PointBalanceEntry = {
   origin_run_month: number | null;
   origin_run_year: number | null;
   origin_run_status: string | null;
+  target_reference_month: number | null;
+  target_reference_year: number | null;
   applied_calculation_run_id: number | null;
   applied_run_status: string | null;
   applied_reference_month: number | null;

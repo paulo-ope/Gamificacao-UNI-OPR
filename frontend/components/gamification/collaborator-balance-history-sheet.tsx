@@ -46,7 +46,10 @@ export function entryTrace(entry: PointBalanceEntry) {
     return entry.reason ?? "-";
   }
   const originPeriod = formatPeriod(entry.origin_run_month, entry.origin_run_year);
-  let tail = "aguardando o próximo fechamento pago do colaborador";
+  const targetPeriod = formatPeriod(entry.target_reference_month, entry.target_reference_year);
+  let tail = targetPeriod
+    ? `aguardando o fechamento de ${targetPeriod} (mês do retorno) ser pago`
+    : "aguardando o próximo fechamento pago do colaborador";
   if (entry.status === "applied") {
     const appliedPeriod = formatPeriod(entry.applied_reference_month, entry.applied_reference_year);
     tail = appliedPeriod ? `aplicado no fechamento de ${appliedPeriod}` : "aplicado";
@@ -71,12 +74,13 @@ function WarrantyTraceTimeline({
 }) {
   const originPeriod = formatPeriod(entry.origin_run_month, entry.origin_run_year);
   const appliedPeriod = formatPeriod(entry.applied_reference_month, entry.applied_reference_year);
+  const targetPeriod = formatPeriod(entry.target_reference_month, entry.target_reference_year);
   const statusNode =
     entry.status === "applied"
       ? { label: appliedPeriod ? `Aplicado ${appliedPeriod}` : "Aplicado", tone: "emerald" }
       : entry.status === "reverted"
         ? { label: "Estornado", tone: "slate" }
-        : { label: "Aguardando pagamento", tone: "amber" };
+        : { label: targetPeriod ? `Aguardando ${targetPeriod}` : "Aguardando pagamento", tone: "amber" };
 
   return (
     <div className="flex items-center gap-1 text-xs">
