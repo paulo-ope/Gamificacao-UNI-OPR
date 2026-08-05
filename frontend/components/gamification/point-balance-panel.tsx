@@ -41,6 +41,11 @@ type BucketConfig = {
   emptyLabel: string;
   countLabel: string;
   pointsLabel: string;
+  // Quando a soma do grupo e positiva, o rotulo/tom padrao (pensado pra divida) fica ao contrario
+  // do que esta acontecendo - isso e real, nao um bug: um estorno de debito invalido (ex.: saude
+  // ja zerava o pagamento na origem) pode deixar so o credito de compensacao de pe, sem duvida
+  // nenhuma pareada. Ver correcao de 2026-08-05.
+  positivePointsLabel: string;
   tone: "danger" | "warning" | "neutral";
 };
 
@@ -52,6 +57,7 @@ const BUCKET_CONFIG: BucketConfig[] = [
     emptyLabel: "Nenhum débito vai ser descontado neste fechamento.",
     countLabel: "Colaboradores a descontar",
     pointsLabel: "Pontos a descontar",
+    positivePointsLabel: "Pontos a favor do colaborador",
     tone: "danger"
   },
   {
@@ -61,6 +67,7 @@ const BUCKET_CONFIG: BucketConfig[] = [
     emptyLabel: "Nenhum débito foi descontado deste fechamento ainda.",
     countLabel: "Colaboradores descontados",
     pointsLabel: "Pontos descontados",
+    positivePointsLabel: "Pontos a favor do colaborador",
     tone: "neutral"
   },
   {
@@ -70,6 +77,7 @@ const BUCKET_CONFIG: BucketConfig[] = [
     emptyLabel: "Nenhum débito pendente para um mês futuro.",
     countLabel: "Colaboradores com pendência futura",
     pointsLabel: "Pontos pendentes (mês futuro)",
+    positivePointsLabel: "Crédito pendente (mês futuro)",
     tone: "warning"
   }
 ];
@@ -124,7 +132,11 @@ function BucketSection({
       {groups.length > 0 ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           <MetricCard title={config.countLabel} value={groups.length} />
-          <MetricCard title={config.pointsLabel} value={formatSignedPoints(totalPoints)} tone={config.tone} />
+          <MetricCard
+            title={totalPoints > 0 ? config.positivePointsLabel : config.pointsLabel}
+            value={formatSignedPoints(totalPoints)}
+            tone={totalPoints > 0 ? "success" : config.tone}
+          />
           {requiresReviewCount > 0 ? <MetricCard title="Aguardando revisão manual" value={requiresReviewCount} tone="warning" /> : null}
         </div>
       ) : null}
