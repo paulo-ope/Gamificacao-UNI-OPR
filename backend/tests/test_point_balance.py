@@ -62,6 +62,32 @@ def test_debit_is_attributed_to_original_collaborator_not_the_warranty_visit(db_
     assert entry.collaborator_id != tech_warranty_visit.id
 
 
+def test_no_debit_when_health_already_zeroed_the_original_months_payment(
+    db_session, make_collaborator, paid_june_run, recurrence_setup
+):
+    """Se a saude da regional ja zerou (ou deixou no piso) o multiplicador do colaborador naquele
+    mes, a O.S original nunca gerou pagamento de verdade (final_points = net_points * 0 = 0).
+    Cobrar um debito de garantia sobre pontos que a pessoa nunca recebeu nao tem sentido - so
+    faz sentido estornar o que ela de fato ganhou."""
+    collaborator = make_collaborator()
+    db_session.add(
+        CollaboratorScore(
+            calculation_run_id=paid_june_run.id, collaborator_id=collaborator.id, service_orders_count=1,
+            gross_points=15.0, penalty_points=0.0, net_points=15.0, health_multiplier=0.0, health_status="Critica",
+            final_points=0.0, estimated_payment=0.0,
+        )
+    )
+    original = _os(collaborator, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    db_session.add_all([original, later])
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
+    db_session.commit()
+
+    assert created == [], "saude zerou o pagamento de junho - nao ha nada de real pra estornar"
+
+
 def test_detection_is_idempotent_for_the_same_pair(db_session, make_collaborator, paid_june_run, recurrence_setup):
     collaborator = make_collaborator()
     original = _os(collaborator, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))

@@ -12,6 +12,7 @@ from app.models import (
     CalculationRun,
     Collaborator,
     CollaboratorPointBalance,
+    CollaboratorScore,
     PointBalanceEntry,
     ServiceOrder,
     User,
@@ -180,6 +181,12 @@ def detect_post_payment_warranty_debits(
         (12, current_year - 1) if current_month == 1 else (current_month - 1, current_year)
     )
     configured_points = scoring_detail._safe_float(scoring_detail.get_setting(db, "recurrence_penalty_points", "0"), 0)
+    # Mesmo criterio da correcao do bonus de CPK (calculation.py: _apply_cpk_adjustment) - se a
+    # saude da regional naquele mes ja zerou (ou deixou no piso) o multiplicador do colaborador,
+    # a O.S original nunca gerou pagamento de verdade (final_points = net_points * 0 = 0). Cobrar
+    # um debito de garantia sobre pontos que a pessoa nunca recebeu penaliza ela por um valor que
+    # so existe na regua bruta, nao no que ela de fato ganhou naquele fechamento.
+    below_minimum_multiplier = scoring_detail.get_health_below_minimum_multiplier(db)
     identity_fields = scoring_detail._configured_recurrence_identity_fields(db)
     rules = scoring_detail.active_recurrence_classification_rules(db)
     search_window_days = max([window_days, *[int(rule.max_days) for rule in rules if rule.max_days is not None]])
@@ -293,6 +300,18 @@ def detect_post_payment_warranty_debits(
         # lancamento. Pode nao existir nenhuma (mes nunca calculado) - nesse caso cai no fallback da
         # regua atual, igual ja acontecia para fechamentos pagos sem config_snapshot.
         reference_run = paid_run or find_run_for_service_order_context(db, original_date, original.regional)
+
+        if reference_run is not None:
+            original_score = db.scalar(
+                select(CollaboratorScore).where(
+                    CollaboratorScore.calculation_run_id == reference_run.id,
+                    CollaboratorScore.collaborator_id == original.collaborator_id,
+                )
+            )
+            if original_score is not None and float(original_score.health_multiplier) <= below_minimum_multiplier:
+                # Saude zerou o pagamento daquele mes para este colaborador - nao ha nada de real
+                # pra estornar (ver comentario na definicao de below_minimum_multiplier acima).
+                continue
 
         if reference_run is not None and later.created_at is not None and later.created_at <= reference_run.created_at:
             # A O.S de retorno ja existia no banco QUANDO o ultimo calculo daquele periodo rodou -
