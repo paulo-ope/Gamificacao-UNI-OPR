@@ -310,6 +310,49 @@ def test_warranty_debit_targets_the_return_month_not_whichever_run_is_paid_first
     assert db_session.get(PointBalanceEntry, entry.id).status == "applied"
 
 
+def test_pending_endpoint_splits_entries_into_applied_eligible_and_deferred_buckets(
+    db_session, client, make_collaborator, scoring_setup
+):
+    """Regression: a tela de saldo de pontos precisa distinguir tres coisas para o mesmo
+    fechamento - o que ja foi de fato descontado, o que ainda seria descontado se este
+    fechamento fosse pago agora, e o que esta pendente mas pertence a um mes futuro (nao tem
+    relacao com este fechamento). Antes desta mudanca a rota so devolvia uma lista achatada,
+    misturando pendencias elegiveis com pendencias que nao deveriam nem aparecer aqui."""
+    collaborator = make_collaborator()
+    run = CalculationRun(reference_month=8, reference_year=2026, regional=None, point_value=2.5, status="approved")
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(
+        CollaboratorScore(
+            calculation_run_id=run.id, collaborator_id=collaborator.id, service_orders_count=1,
+            gross_points=10.0, penalty_points=0.0, net_points=10.0, health_multiplier=1.0, health_status="Boa",
+            final_points=10.0, estimated_payment=25.0,
+        )
+    )
+    applied_entry = PointBalanceEntry(
+        collaborator_id=collaborator.id, entry_type="post_payment_warranty_debit", points=-6.0,
+        status="applied", applied_calculation_run_id=run.id, applied_reference_month=8, applied_reference_year=2026,
+    )
+    eligible_entry = PointBalanceEntry(
+        collaborator_id=collaborator.id, entry_type="post_payment_warranty_debit", points=-8.0,
+        status="pending", target_reference_month=8, target_reference_year=2026,
+    )
+    deferred_entry = PointBalanceEntry(
+        collaborator_id=collaborator.id, entry_type="post_payment_warranty_debit", points=-14.0,
+        status="pending", target_reference_month=9, target_reference_year=2026,
+    )
+    db_session.add_all([applied_entry, eligible_entry, deferred_entry])
+    db_session.commit()
+
+    response = client.get("/api/point-balance/pending", params={"calculation_run_id": run.id})
+    assert response.status_code == 200
+    by_id = {item["id"]: item for item in response.json()}
+
+    assert by_id[applied_entry.id]["bucket"] == "applied"
+    assert by_id[eligible_entry.id]["bucket"] == "eligible_pending"
+    assert by_id[deferred_entry.id]["bucket"] == "deferred_pending"
+
+
 def test_only_one_debit_per_original_even_with_many_near_simultaneous_later_returns(
     db_session, make_collaborator, paid_june_run, recurrence_setup
 ):
