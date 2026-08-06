@@ -28,6 +28,13 @@ from app.services.calculation_closure import (
 )
 from app.services.scoring_matrix import real_service_orders
 
+# A saude/CPK regional so passou a ser calculada de forma confiavel a partir deste periodo -
+# multiplicador de saude de uma O.S com origem ANTERIOR a isso nao e comparavel (ferramenta nao
+# existia ainda), entao debitos com origem antes disso continuam no valor cheio, sem nenhum
+# ajuste (nem escala, nem o piso que bloqueia a criacao do debito). Ver
+# HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF abaixo, em detect_post_payment_warranty_debits.
+HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF = (2026, 7)
+
 
 def _order_date(order: ServiceOrder):
     return order.closed_at or order.opened_at
@@ -307,10 +314,12 @@ def detect_post_payment_warranty_debits(
         # estornar o valor bruto cobraria mais do que ele realmente ganhou. Usar o multiplicador do
         # mes da COBRANCA em vez do da origem criaria uma inconsistencia: o mesmo valor recebido de
         # verdade "encolheria" so por coincidencia de quando o sistema conseguiu cobrar (se cair
-        # num mes de saude ruim), mesmo a origem tendo sido paga em cheio. Sem score encontrado,
-        # mantem o comportamento anterior (multiplicador 1x, sem ajuste).
+        # num mes de saude ruim), mesmo a origem tendo sido paga em cheio. Sem score encontrado, ou
+        # com origem anterior ao corte (ferramenta de saude/CPK ainda nao confiavel), mantem o
+        # comportamento anterior (multiplicador 1x, sem ajuste nem bloqueio pelo piso).
         origin_health_multiplier = 1.0
-        if reference_run is not None:
+        origin_period = (original_date.year, original_date.month)
+        if reference_run is not None and origin_period >= HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF:
             original_score = db.scalar(
                 select(CollaboratorScore).where(
                     CollaboratorScore.calculation_run_id == reference_run.id,

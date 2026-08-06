@@ -62,13 +62,81 @@ def test_debit_is_attributed_to_original_collaborator_not_the_warranty_visit(db_
     assert entry.collaborator_id != tech_warranty_visit.id
 
 
+@pytest.fixture()
+def paid_july_run(db_session, scoring_setup, monkeypatch):
+    # Mesma logica do paid_june_run, uma janela pra frente: congela o mes corrente em agosto/2026
+    # (eligible_month = julho) para testar o corte HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF
+    # (2026, 7) - a origem precisa estar DENTRO do corte pra esses testes fazerem sentido.
+    monkeypatch.setattr(point_balance, "current_reference_period", lambda: (8, 2026))
+    run = CalculationRun(reference_month=7, reference_year=2026, regional=None, point_value=2.5, status="paid")
+    db_session.add(run)
+    db_session.flush()
+    return run
+
+
 def test_no_debit_when_health_already_zeroed_the_original_months_payment(
-    db_session, make_collaborator, paid_june_run, recurrence_setup
+    db_session, make_collaborator, paid_july_run, recurrence_setup
 ):
     """Se a saude da regional ja zerou (ou deixou no piso) o multiplicador do colaborador naquele
     mes, a O.S original nunca gerou pagamento de verdade (final_points = net_points * 0 = 0).
     Cobrar um debito de garantia sobre pontos que a pessoa nunca recebeu nao tem sentido - so
-    faz sentido estornar o que ela de fato ganhou."""
+    faz sentido estornar o que ela de fato ganhou. Origem em julho/2026, dentro do corte."""
+    collaborator = make_collaborator()
+    db_session.add(
+        CollaboratorScore(
+            calculation_run_id=paid_july_run.id, collaborator_id=collaborator.id, service_orders_count=1,
+            gross_points=15.0, penalty_points=0.0, net_points=15.0, health_multiplier=0.0, health_status="Critica",
+            final_points=0.0, estimated_payment=0.0,
+        )
+    )
+    original = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
+    db_session.add_all([original, later])
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
+    db_session.commit()
+
+    assert created == [], "saude zerou o pagamento de julho - nao ha nada de real pra estornar"
+
+
+def test_debit_is_scaled_by_the_origin_months_health_multiplier(
+    db_session, make_collaborator, paid_july_run, recurrence_setup
+):
+    """O colaborador so recebeu de verdade pontos_brutos * multiplicador na origem - estornar o
+    valor bruto cobraria mais do que ele realmente ganhou. Usa o multiplicador da ORIGEM (julho),
+    nao do mes em que o debito acaba sendo cobrado, para o valor recebido de verdade nao mudar so
+    por coincidencia de quando o sistema conseguiu cobrar. Origem em julho/2026, dentro do corte."""
+    collaborator = make_collaborator()
+    db_session.add(
+        CollaboratorScore(
+            calculation_run_id=paid_july_run.id, collaborator_id=collaborator.id, service_orders_count=1,
+            gross_points=15.0, penalty_points=0.0, net_points=15.0, health_multiplier=0.5, health_status="Regular",
+            final_points=7.5, estimated_payment=18.75,
+        )
+    )
+    original = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
+    db_session.add_all([original, later])
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
+    db_session.commit()
+
+    assert len(created) == 1
+    entry = created[0]
+    # scoring_setup's Manutencao/Reparo default is 15 pts; 0.5x da origem -> -7.5, nao -15.
+    assert entry.points == -7.5
+    assert "0.5x" in entry.reason
+
+
+def test_health_multiplier_adjustment_is_never_applied_before_the_cutoff(
+    db_session, make_collaborator, paid_june_run, recurrence_setup
+):
+    """A ferramenta de saude/CPK so passou a ser confiavel a partir de julho/2026
+    (HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF) - uma O.S com origem ANTES disso usa o comportamento
+    antigo (valor cheio, sem escala nem bloqueio pelo piso), mesmo que exista um
+    CollaboratorScore com multiplicador zerado gravado pra ela."""
     collaborator = make_collaborator()
     db_session.add(
         CollaboratorScore(
@@ -85,37 +153,8 @@ def test_no_debit_when_health_already_zeroed_the_original_months_payment(
     created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
     db_session.commit()
 
-    assert created == [], "saude zerou o pagamento de junho - nao ha nada de real pra estornar"
-
-
-def test_debit_is_scaled_by_the_origin_months_health_multiplier(
-    db_session, make_collaborator, paid_june_run, recurrence_setup
-):
-    """O colaborador so recebeu de verdade pontos_brutos * multiplicador na origem - estornar o
-    valor bruto cobraria mais do que ele realmente ganhou. Usa o multiplicador da ORIGEM (junho),
-    nao do mes em que o debito acaba sendo cobrado, para o valor recebido de verdade nao mudar so
-    por coincidencia de quando o sistema conseguiu cobrar."""
-    collaborator = make_collaborator()
-    db_session.add(
-        CollaboratorScore(
-            calculation_run_id=paid_june_run.id, collaborator_id=collaborator.id, service_orders_count=1,
-            gross_points=15.0, penalty_points=0.0, net_points=15.0, health_multiplier=0.5, health_status="Regular",
-            final_points=7.5, estimated_payment=18.75,
-        )
-    )
-    original = _os(collaborator, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))
-    later = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
-    db_session.add_all([original, later])
-    db_session.flush()
-
-    created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
-    db_session.commit()
-
-    assert len(created) == 1
-    entry = created[0]
-    # scoring_setup's Manutencao/Reparo default is 15 pts; 0.5x da origem -> -7.5, nao -15.
-    assert entry.points == -7.5
-    assert "0.5x" in entry.reason
+    assert len(created) == 1, "origem antes do corte - o multiplicador zerado nao deve bloquear a criacao do debito"
+    assert created[0].points == -15.0, "origem antes do corte - o valor deve permanecer cheio, sem escala"
 
 
 def test_detection_is_idempotent_for_the_same_pair(db_session, make_collaborator, paid_june_run, recurrence_setup):
