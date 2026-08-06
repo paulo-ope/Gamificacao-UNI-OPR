@@ -301,6 +301,15 @@ def detect_post_payment_warranty_debits(
         # regua atual, igual ja acontecia para fechamentos pagos sem config_snapshot.
         reference_run = paid_run or find_run_for_service_order_context(db, original_date, original.regional)
 
+        # Multiplicador de saude do colaborador NA ORIGEM (nao no mes em que o debito acaba sendo
+        # cobrado) - e o que decide quanto do valor anulado foi de fato recebido de verdade. Uma
+        # O.S anulada valia X pontos brutos, mas o colaborador so recebeu X*multiplicador na epoca;
+        # estornar o valor bruto cobraria mais do que ele realmente ganhou. Usar o multiplicador do
+        # mes da COBRANCA em vez do da origem criaria uma inconsistencia: o mesmo valor recebido de
+        # verdade "encolheria" so por coincidencia de quando o sistema conseguiu cobrar (se cair
+        # num mes de saude ruim), mesmo a origem tendo sido paga em cheio. Sem score encontrado,
+        # mantem o comportamento anterior (multiplicador 1x, sem ajuste).
+        origin_health_multiplier = 1.0
         if reference_run is not None:
             original_score = db.scalar(
                 select(CollaboratorScore).where(
@@ -308,10 +317,13 @@ def detect_post_payment_warranty_debits(
                     CollaboratorScore.collaborator_id == original.collaborator_id,
                 )
             )
-            if original_score is not None and float(original_score.health_multiplier) <= below_minimum_multiplier:
-                # Saude zerou o pagamento daquele mes para este colaborador - nao ha nada de real
-                # pra estornar (ver comentario na definicao de below_minimum_multiplier acima).
-                continue
+            if original_score is not None:
+                origin_health_multiplier = float(original_score.health_multiplier)
+                if origin_health_multiplier <= below_minimum_multiplier:
+                    # Saude zerou o pagamento daquele mes para este colaborador - nao ha nada de
+                    # real pra estornar (ver comentario na definicao de below_minimum_multiplier
+                    # acima).
+                    continue
 
         if reference_run is not None and later.created_at is not None and later.created_at <= reference_run.created_at:
             # A O.S de retorno ja existia no banco QUANDO o ultimo calculo daquele periodo rodou -
@@ -333,8 +345,12 @@ def detect_post_payment_warranty_debits(
             requires_review = True
             reason_note = "exige revisão manual antes de aplicar qualquer desconto"
         elif normalized_action == scoring_detail.normalize("subtract_original"):
-            points = -abs(float(configured_points))
-            reason_note = f"desconto configurado de {abs(float(configured_points)):g} pontos"
+            raw_points = abs(float(configured_points))
+            adjusted_points = round(raw_points * origin_health_multiplier, 2)
+            points = -adjusted_points
+            reason_note = f"desconto configurado de {raw_points:g} pontos"
+            if origin_health_multiplier != 1.0:
+                reason_note += f", ajustado pelo multiplicador de saúde da origem ({origin_health_multiplier:g}x) para {adjusted_points:g} pontos"
         else:
             snapshot_points = _order_points_from_snapshot(original, reference_run.config_snapshot if reference_run else None)
             if snapshot_points is None:
@@ -343,7 +359,11 @@ def detect_post_payment_warranty_debits(
                 reason_note = f"anulação de {snapshot_points:g} pontos (régua atual, {run_descriptor} sem config_snapshot)"
             else:
                 reason_note = f"anulação de {snapshot_points:g} pontos (régua vigente no fechamento #{reference_run.id})"
-            points = -abs(float(snapshot_points))
+            raw_points = abs(float(snapshot_points))
+            adjusted_points = round(raw_points * origin_health_multiplier, 2)
+            if origin_health_multiplier != 1.0:
+                reason_note += f", ajustado pelo multiplicador de saúde da origem ({origin_health_multiplier:g}x) para {adjusted_points:g} pontos"
+            points = -adjusted_points
 
         period_label = f"{original_date.month:02d}/{original_date.year}"
         closure_descriptor = (
