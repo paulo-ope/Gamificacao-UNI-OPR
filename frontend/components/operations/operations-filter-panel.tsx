@@ -813,14 +813,15 @@ export function OperationsFilterPanel({
     <div className="col-span-full max-h-[min(62vh,32rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
       <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-5">
         {advancedGroups.map((group) => {
-          const fields = group.fields.filter(
-            (field) => options[field.options].length > 0,
-          );
+          // Os campos são fixos por grupo (não somem quando a combinação atual de filtros zera
+          // a contagem de O.S.) - filtrar por `options[...].length > 0` aqui escondia o campo (e
+          // o card inteiro, quando todos os campos do grupo zeravam) toda vez que o filtro
+          // aplicado não batia com nenhuma O.S., dando a impressão de painel quebrado.
+          const fields = group.fields;
           const isOperation = group.title === "Operação";
           const isSla = group.title === "SLA";
           const isCustomWindow = group.title === "Janela personalizada";
-          if (!fields.length && !isOperation && !isSla && !isCustomWindow)
-            return null;
+          if (!fields.length && !isCustomWindow) return null;
           return (
             <fieldset
               key={group.title}
