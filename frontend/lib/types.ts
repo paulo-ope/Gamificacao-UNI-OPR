@@ -253,16 +253,68 @@ export type ManagementCase = {
   deviation_value: number | null;
   severity: string;
   status: string;
+  is_overdue: boolean;
   reason_id: number | null;
   reason_name: string | null;
   justification_text: string | null;
   action_plan: string | null;
   due_date: string | null;
+  comment_count: number;
   created_at: string;
   updated_at: string;
   justified_at: string | null;
   reviewed_by: number | null;
   reviewed_at: string | null;
+};
+
+export type ManagementCaseSummary = {
+  total_cases: number;
+  open_cases: number;
+  pending_cases: number;
+  justified_cases: number;
+  resolved_cases: number;
+  overdue_cases: number;
+  high_severity_open: number;
+};
+
+export type ManagementCasePage = {
+  items: ManagementCase[];
+  summary: ManagementCaseSummary;
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type ManagementCaseComment = {
+  id: number;
+  case_id: number;
+  user_id: number | null;
+  user_name: string | null;
+  comment: string;
+  created_at: string;
+};
+
+export type ManagementCaseFilters = {
+  status?: string;
+  severity?: string;
+  regional?: string;
+  supervisor_user_id?: number;
+  reference_year?: number;
+  reference_month?: number;
+  only_overdue?: boolean;
+  only_open?: boolean;
+  search?: string;
+  page?: number;
+  page_size?: number;
+};
+
+export type ManagementCaseGenerateResult = {
+  created_cases: number;
+  evaluated_members: number;
+  skipped_existing: number;
+  skipped_insufficient_data: number;
+  reference_year: number;
+  reference_month: number;
 };
 
 export type LoginResult = {

@@ -32,6 +32,22 @@ MANAGEMENT_CASE_STATUSES = (
     "overdue",
 )
 
+# Estados em que o caso ainda cobra ação de alguém.
+OPEN_CASE_STATUSES = ("pending", "justified", "in_progress")
+
+# Encerramentos - só a matriz (`management:review`) chega neles.
+CLOSED_CASE_STATUSES = ("resolved", "rejected")
+
+# Para onde o supervisor pode mover o caso ao justificar.
+JUSTIFY_TARGET_STATUSES = ("justified", "in_progress")
+
+# Para onde a matriz pode mover o caso ao revisar. `in_progress` permite devolver o caso ao
+# supervisor pedindo complemento, sem ter que rejeitar de vez.
+REVIEW_TARGET_STATUSES = ("resolved", "rejected", "in_progress")
+
+# `overdue` nunca é gravado: é derivado de `due_date` na leitura (ver cases.is_overdue). Gravar
+# exigiria varredura periódica, que ficaria errada entre execuções.
+
 
 class ManagementOperationalMember(Base):
     __tablename__ = "management_operational_members"

@@ -4,12 +4,14 @@ import Link from "next/link";
 import { ArrowLeft, BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, LogOut, RefreshCw, Search, ShieldAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { ManagementCasesPanel } from "@/components/management/management-cases-panel";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
 import type { ManagementDashboard, ManagementOperationalMember, ManagementOptions } from "@/lib/types";
@@ -78,9 +80,12 @@ export default function ManagementPage() {
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filters, setFilters] = useState({ search: "", regional: "", status: "", supervisor_user_id: "" });
+  const [tab, setTab] = useState("structure");
 
   const canRead = Boolean(user?.permissions.includes("management:read"));
   const canManage = Boolean(user?.permissions.includes("management:manage_structure"));
+  const canReview = Boolean(user?.permissions.includes("management:review"));
+  const canJustify = Boolean(user?.permissions.includes("management:write_justification"));
   const regionals = useMemo(() => Array.from(new Set((data?.members ?? []).map((item) => item.regional))).sort(), [data]);
 
   async function load() {
@@ -181,10 +186,16 @@ export default function ManagementPage() {
               <BriefcaseBusiness className="h-5 w-5" />
               <p className="text-[10px] font-bold uppercase tracking-[0.22em]">Controle da matriz</p>
             </div>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-950">Estrutura operacional e pendências</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-500">Valide quem pertence à Operação, vincule supervisor e modelo de equipe, e acompanhe riscos antes de cobrar metas ou justificativas.</p>
+            <h2 className="mt-2 text-2xl font-semibold text-slate-950">
+              {tab === "structure" ? "Estrutura operacional e pendências" : "Casos de gestão e justificativas"}
+            </h2>
+            <p className="mt-1 max-w-3xl text-sm text-slate-500">
+              {tab === "structure"
+                ? "Valide quem pertence à Operação, vincule supervisor e modelo de equipe, e acompanhe riscos antes de cobrar metas ou justificativas."
+                : "Acompanhe os desvios de meta abertos como caso formal, cobre a justificativa do supervisor e registre a decisão da matriz."}
+            </p>
           </div>
-          {canManage ? (
+          {canManage && tab === "structure" ? (
             <Button type="button" onClick={() => void refreshStructure()} disabled={loading}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Atualizar estrutura
@@ -195,6 +206,24 @@ export default function ManagementPage() {
         <StatusToast error={error} message={message} onDismissError={() => setError(null)} onDismissMessage={() => setMessage(null)} />
         {loadError ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{loadError}</div> : null}
 
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="structure">Estrutura operacional</TabsTrigger>
+            <TabsTrigger value="cases">
+              Casos de gestão
+              {data?.summary.open_cases ? (
+                <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-700">
+                  {data.summary.open_cases}
+                </span>
+              ) : null}
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="cases">
+            <ManagementCasesPanel options={options} canReview={canReview} canJustify={canJustify} />
+          </TabsContent>
+
+          <TabsContent value="structure" className="grid gap-5">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           {metricCards(data).map(([label, value, hint]) => (
             <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -267,6 +296,8 @@ export default function ManagementPage() {
             </Table>
           </div>
         </div>
+          </TabsContent>
+        </Tabs>
       </section>
     </main>
   );

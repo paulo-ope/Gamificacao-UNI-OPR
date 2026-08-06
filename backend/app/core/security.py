@@ -35,6 +35,12 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "operations:read",
         "operations:view_openings",
         "operations:views:read_global",
+        # Gestão Integrada: o gestor regional é quem responde pelos casos das regionais que
+        # gerencia. Sem `write_justification` o fluxo de justificativa não tem quem o execute.
+        # A visibilidade é recortada no servidor (ver management/cases.case_scope_conditions):
+        # sem `management:review`, ele só enxerga os próprios casos e os das suas regionais.
+        "management:read",
+        "management:write_justification",
     },
     "viewer": {
         "dashboard:read",
@@ -71,6 +77,10 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "scheduling:sync",
         "scheduling:manage_filters",
         "scheduling:views:read_global",
+        # Mesmo racional do gestor regional: o operador supervisiona equipe e precisa justificar os
+        # casos dela. Revisar/encerrar continua exclusivo da matriz (`management:review`).
+        "management:read",
+        "management:write_justification",
     },
     "admin": {
         "dashboard:read",
