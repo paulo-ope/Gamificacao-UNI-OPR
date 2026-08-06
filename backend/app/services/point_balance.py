@@ -12,6 +12,7 @@ from app.models import (
     CalculationRun,
     Collaborator,
     CollaboratorPointBalance,
+    CollaboratorScore,
     PointBalanceEntry,
     ServiceOrder,
     User,
@@ -26,6 +27,13 @@ from app.services.calculation_closure import (
     now_utc,
 )
 from app.services.scoring_matrix import real_service_orders
+
+# A saude/CPK regional so passou a ser calculada de forma confiavel a partir deste periodo -
+# multiplicador de saude de uma O.S com origem ANTERIOR a isso nao e comparavel (ferramenta nao
+# existia ainda), entao debitos com origem antes disso continuam no valor cheio, sem nenhum
+# ajuste (nem escala, nem o piso que bloqueia a criacao do debito). Ver
+# HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF abaixo, em detect_post_payment_warranty_debits.
+HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF = (2026, 7)
 
 
 def _order_date(order: ServiceOrder):
@@ -90,6 +98,8 @@ def serialize_entry(entry: PointBalanceEntry, collaborator_name: str | None = No
         "origin_run_month": origin_run.reference_month if origin_run else None,
         "origin_run_year": origin_run.reference_year if origin_run else None,
         "origin_run_status": origin_run.status if origin_run else None,
+        "target_reference_month": entry.target_reference_month,
+        "target_reference_year": entry.target_reference_year,
         "applied_calculation_run_id": entry.applied_calculation_run_id,
         "applied_run_status": applied_run.status if applied_run else None,
         "applied_reference_month": entry.applied_reference_month,
@@ -178,6 +188,12 @@ def detect_post_payment_warranty_debits(
         (12, current_year - 1) if current_month == 1 else (current_month - 1, current_year)
     )
     configured_points = scoring_detail._safe_float(scoring_detail.get_setting(db, "recurrence_penalty_points", "0"), 0)
+    # Mesmo criterio da correcao do bonus de CPK (calculation.py: _apply_cpk_adjustment) - se a
+    # saude da regional naquele mes ja zerou (ou deixou no piso) o multiplicador do colaborador,
+    # a O.S original nunca gerou pagamento de verdade (final_points = net_points * 0 = 0). Cobrar
+    # um debito de garantia sobre pontos que a pessoa nunca recebeu penaliza ela por um valor que
+    # so existe na regua bruta, nao no que ela de fato ganhou naquele fechamento.
+    below_minimum_multiplier = scoring_detail.get_health_below_minimum_multiplier(db)
     identity_fields = scoring_detail._configured_recurrence_identity_fields(db)
     rules = scoring_detail.active_recurrence_classification_rules(db)
     search_window_days = max([window_days, *[int(rule.max_days) for rule in rules if rule.max_days is not None]])
@@ -292,6 +308,32 @@ def detect_post_payment_warranty_debits(
         # regua atual, igual ja acontecia para fechamentos pagos sem config_snapshot.
         reference_run = paid_run or find_run_for_service_order_context(db, original_date, original.regional)
 
+        # Multiplicador de saude do colaborador NA ORIGEM (nao no mes em que o debito acaba sendo
+        # cobrado) - e o que decide quanto do valor anulado foi de fato recebido de verdade. Uma
+        # O.S anulada valia X pontos brutos, mas o colaborador so recebeu X*multiplicador na epoca;
+        # estornar o valor bruto cobraria mais do que ele realmente ganhou. Usar o multiplicador do
+        # mes da COBRANCA em vez do da origem criaria uma inconsistencia: o mesmo valor recebido de
+        # verdade "encolheria" so por coincidencia de quando o sistema conseguiu cobrar (se cair
+        # num mes de saude ruim), mesmo a origem tendo sido paga em cheio. Sem score encontrado, ou
+        # com origem anterior ao corte (ferramenta de saude/CPK ainda nao confiavel), mantem o
+        # comportamento anterior (multiplicador 1x, sem ajuste nem bloqueio pelo piso).
+        origin_health_multiplier = 1.0
+        origin_period = (original_date.year, original_date.month)
+        if reference_run is not None and origin_period >= HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF:
+            original_score = db.scalar(
+                select(CollaboratorScore).where(
+                    CollaboratorScore.calculation_run_id == reference_run.id,
+                    CollaboratorScore.collaborator_id == original.collaborator_id,
+                )
+            )
+            if original_score is not None:
+                origin_health_multiplier = float(original_score.health_multiplier)
+                if origin_health_multiplier <= below_minimum_multiplier:
+                    # Saude zerou o pagamento daquele mes para este colaborador - nao ha nada de
+                    # real pra estornar (ver comentario na definicao de below_minimum_multiplier
+                    # acima).
+                    continue
+
         if reference_run is not None and later.created_at is not None and later.created_at <= reference_run.created_at:
             # A O.S de retorno ja existia no banco QUANDO o ultimo calculo daquele periodo rodou -
             # o mecanismo normal (recurrence_penalties, que roda toda vez que o periodo e calculado,
@@ -312,8 +354,12 @@ def detect_post_payment_warranty_debits(
             requires_review = True
             reason_note = "exige revisão manual antes de aplicar qualquer desconto"
         elif normalized_action == scoring_detail.normalize("subtract_original"):
-            points = -abs(float(configured_points))
-            reason_note = f"desconto configurado de {abs(float(configured_points)):g} pontos"
+            raw_points = abs(float(configured_points))
+            adjusted_points = round(raw_points * origin_health_multiplier, 2)
+            points = -adjusted_points
+            reason_note = f"desconto configurado de {raw_points:g} pontos"
+            if origin_health_multiplier != 1.0:
+                reason_note += f", ajustado pelo multiplicador de saúde da origem ({origin_health_multiplier:g}x) para {adjusted_points:g} pontos"
         else:
             snapshot_points = _order_points_from_snapshot(original, reference_run.config_snapshot if reference_run else None)
             if snapshot_points is None:
@@ -322,7 +368,11 @@ def detect_post_payment_warranty_debits(
                 reason_note = f"anulação de {snapshot_points:g} pontos (régua atual, {run_descriptor} sem config_snapshot)"
             else:
                 reason_note = f"anulação de {snapshot_points:g} pontos (régua vigente no fechamento #{reference_run.id})"
-            points = -abs(float(snapshot_points))
+            raw_points = abs(float(snapshot_points))
+            adjusted_points = round(raw_points * origin_health_multiplier, 2)
+            if origin_health_multiplier != 1.0:
+                reason_note += f", ajustado pelo multiplicador de saúde da origem ({origin_health_multiplier:g}x) para {adjusted_points:g} pontos"
+            points = -adjusted_points
 
         period_label = f"{original_date.month:02d}/{original_date.year}"
         closure_descriptor = (
@@ -344,6 +394,11 @@ def detect_post_payment_warranty_debits(
             original_os_code=original.os_code,
             related_os_code=later.os_code,
             origin_calculation_run_id=reference_run.id if reference_run else None,
+            # Alvo = mes/ano do RETORNO (later), nao da origem - o desconto so pode ser consumido
+            # quando o fechamento desse mes (ou de um mes posterior) for pago, mesmo que o mes da
+            # origem seja pago antes (ver comentario no model PointBalanceEntry).
+            target_reference_month=later_date.month,
+            target_reference_year=later_date.year,
             status="pending",
             requires_review=requires_review,
             recurrence_classification=selected["classification"],
@@ -448,8 +503,22 @@ def apply_pending_entries_for_paid_run(
 ) -> dict[str, Any]:
     """Consome os lancamentos pendentes do colaborador. So deve ser chamada quando `calculation_run`
     efetivamente transiciona para status="paid" - nunca durante um calculo em rascunho, para nao
-    consumir o lancamento num draft descartavel que nunca chega a ser aprovado."""
-    pending = [entry for entry in pending_entries_for_collaborator(db, collaborator.id) if not entry.requires_review]
+    consumir o lancamento num draft descartavel que nunca chega a ser aprovado.
+
+    Um lancamento com `target_reference_month/year` (post_payment_warranty_debit, alvo = mes do
+    RETORNO) so e consumido quando este fechamento e do mes/ano alvo OU de um mes posterior -
+    sem isso, o desconto saia do proximo fechamento pago do colaborador em QUALQUER mes, o que
+    podia puxar um desconto de garantia de agosto para dentro de um pagamento de julho ainda em
+    aberto (achado real). Lancamentos sem alvo (ajuste manual, saldo remanescente) continuam
+    sendo consumidos no primeiro pagamento disponivel, como sempre."""
+    all_pending = [entry for entry in pending_entries_for_collaborator(db, collaborator.id) if not entry.requires_review]
+    pending = [
+        entry
+        for entry in all_pending
+        if entry.target_reference_month is None
+        or entry.target_reference_year is None
+        or (entry.target_reference_year, entry.target_reference_month) <= (reference_year, reference_month)
+    ]
     if not pending:
         return {"applied_points": 0.0, "balance_after": round(float(available_points), 2), "entry_ids": []}
 

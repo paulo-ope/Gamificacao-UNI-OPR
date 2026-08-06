@@ -27,6 +27,7 @@ from app.services.calculation_closure import (
     ensure_period_not_closed,
     now_porto_velho,
     now_utc,
+    pick_run_by_status_priority,
     serialize_run_status,
 )
 from app.services.leadership_bonus import calculate_and_store_leadership_bonus
@@ -402,23 +403,20 @@ def calculate_scores(
 
 
 def latest_run(db: Session) -> CalculationRun | None:
-    run_with_orders = db.scalar(
+    with_orders_stmt = (
         select(CalculationRun)
         .join(CalculationRun.scores)
         .where(CollaboratorScore.service_orders_count > 0)
         .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
-        .order_by(desc(CalculationRun.created_at), desc(CalculationRun.id))
-        .limit(1)
     )
+    run_with_orders = pick_run_by_status_priority(db, with_orders_stmt)
     if run_with_orders:
         return run_with_orders
 
-    return db.scalar(
-        select(CalculationRun)
-        .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
-        .order_by(desc(CalculationRun.created_at), desc(CalculationRun.id))
-        .limit(1)
+    any_run_stmt = select(CalculationRun).options(
+        selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator)
     )
+    return pick_run_by_status_priority(db, any_run_stmt)
 
 
 def _run_extra_summaries(db: Session, run: CalculationRun) -> dict[int, dict[str, float | int | str]]:

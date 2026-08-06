@@ -962,6 +962,11 @@ class AuditLogOut(BaseModel):
 class PointBalanceEntryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    # Calculado por list_pending_point_balance_entries em relacao ao periodo consultado - nao e
+    # uma coluna do banco. "applied" = ja descontado deste fechamento; "eligible_pending" = ainda
+    # pendente, mas seria descontado se este fechamento fosse pago agora; "deferred_pending" =
+    # pendente com alvo num mes posterior, sem relacao com este fechamento.
+    bucket: str = "eligible_pending"
     id: int
     collaborator_id: int
     collaborator_name: str | None = None
@@ -975,6 +980,8 @@ class PointBalanceEntryOut(BaseModel):
     origin_run_month: int | None = None
     origin_run_year: int | None = None
     origin_run_status: str | None = None
+    target_reference_month: int | None = None
+    target_reference_year: int | None = None
     applied_calculation_run_id: int | None = None
     applied_run_status: str | None = None
     applied_reference_month: int | None = None

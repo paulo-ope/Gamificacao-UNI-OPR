@@ -46,7 +46,14 @@ export function entryTrace(entry: PointBalanceEntry) {
     return entry.reason ?? "-";
   }
   const originPeriod = formatPeriod(entry.origin_run_month, entry.origin_run_year);
-  let tail = "aguardando o próximo fechamento pago do colaborador";
+  const targetPeriod = formatPeriod(entry.target_reference_month, entry.target_reference_year);
+  // "Elegivel a partir de" (nao "aguardando X") porque X (mes do retorno) pode ja ter passado -
+  // criar o lancamento nao aciona retroativamente um pagamento que ja aconteceu antes dele existir,
+  // entao ele so e consumido na PROXIMA vez que algum fechamento deste colaborador for pago,
+  // mesmo que essa proxima vez seja bem depois do mes alvo.
+  let tail = targetPeriod
+    ? `elegível a partir de ${targetPeriod} (mês do retorno) - será descontado no próximo fechamento pago do colaborador`
+    : "aguardando o próximo fechamento pago do colaborador";
   if (entry.status === "applied") {
     const appliedPeriod = formatPeriod(entry.applied_reference_month, entry.applied_reference_year);
     tail = appliedPeriod ? `aplicado no fechamento de ${appliedPeriod}` : "aplicado";
@@ -71,12 +78,13 @@ function WarrantyTraceTimeline({
 }) {
   const originPeriod = formatPeriod(entry.origin_run_month, entry.origin_run_year);
   const appliedPeriod = formatPeriod(entry.applied_reference_month, entry.applied_reference_year);
+  const targetPeriod = formatPeriod(entry.target_reference_month, entry.target_reference_year);
   const statusNode =
     entry.status === "applied"
       ? { label: appliedPeriod ? `Aplicado ${appliedPeriod}` : "Aplicado", tone: "emerald" }
       : entry.status === "reverted"
         ? { label: "Estornado", tone: "slate" }
-        : { label: "Aguardando pagamento", tone: "amber" };
+        : { label: targetPeriod ? `Elegível ${targetPeriod}` : "Aguardando pagamento", tone: "amber" };
 
   return (
     <div className="flex items-center gap-1 text-xs">

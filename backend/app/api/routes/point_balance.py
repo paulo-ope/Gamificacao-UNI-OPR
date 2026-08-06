@@ -35,38 +35,54 @@ def list_pending_point_balance_entries(
             .order_by(CalculationRun.id.desc())
         )
 
+    def _load(query):
+        return list(
+            db.scalars(
+                query.options(
+                    selectinload(PointBalanceEntry.collaborator),
+                    selectinload(PointBalanceEntry.original_service_order),
+                    selectinload(PointBalanceEntry.related_service_order),
+                    selectinload(PointBalanceEntry.origin_calculation_run),
+                    selectinload(PointBalanceEntry.applied_calculation_run),
+                )
+                .order_by(PointBalanceEntry.created_at.asc(), PointBalanceEntry.id.asc())
+            )
+        )
+
     if run is None:
-        # Sem periodo selecionado: mantem o comportamento antigo (acumulado de todos os tempos).
-        query = select(PointBalanceEntry).where(PointBalanceEntry.status == "pending")
-    elif run.status == "paid":
-        # Fechamento ja pago: mostra o que REALMENTE foi descontado nesse pagamento (apply_pending_entries_for_paid_run
-        # grava applied_calculation_run_id = este run ao consumir os pendentes do colaborador).
-        query = select(PointBalanceEntry).where(PointBalanceEntry.applied_calculation_run_id == run.id)
-    else:
-        # Fechamento ainda em rascunho/revisao/aprovado: mostra o que SERIA descontado se este
-        # periodo fosse marcado como pago agora - todo pendente dos colaboradores deste fechamento,
-        # independente de quando a O.S original (origin_calculation_run_id) foi paga. Filtrar pela
-        # origem mostraria o debito no mes da O.S antiga, nao no mes em que ele de fato vai ser
-        # descontado - o que obrigaria o usuario a navegar ate o periodo errado para ver o pendente.
-        collaborator_ids = select(CollaboratorScore.collaborator_id).where(CollaboratorScore.calculation_run_id == run.id)
-        query = select(PointBalanceEntry).where(
+        # Sem periodo selecionado: mantem o comportamento antigo (acumulado de todos os tempos),
+        # tudo pendente entra como "eligible" - nao ha um periodo de referencia pra separar por alvo.
+        entries = _load(select(PointBalanceEntry).where(PointBalanceEntry.status == "pending"))
+        return [{**serialize_entry(entry), "bucket": "eligible_pending"} for entry in entries]
+
+    # Tres grupos sempre calculados juntos - o usuario precisa ver os tres num so lugar em vez de
+    # adivinhar qual consulta corresponde a qual: (1) ja foi de fato descontado deste fechamento
+    # pago (apply_pending_entries_for_paid_run grava applied_calculation_run_id = este run ao
+    # consumir os pendentes), (2) ainda pendente mas ELEGIVEL para este fechamento (seria
+    # descontado se ele fosse pago agora - alvo e deste mes ou anterior, ou sem alvo), (3)
+    # pendente com alvo num mes POSTERIOR a este (nao tem nada a ver com este fechamento, so
+    # aparece para dar visibilidade de que ainda existe e vai cair num pagamento futuro).
+    period = (run.reference_year, run.reference_month)
+    collaborator_ids = select(CollaboratorScore.collaborator_id).where(CollaboratorScore.calculation_run_id == run.id)
+
+    applied_entries = _load(select(PointBalanceEntry).where(PointBalanceEntry.applied_calculation_run_id == run.id))
+    pending_entries = _load(
+        select(PointBalanceEntry).where(
             PointBalanceEntry.status == "pending",
             PointBalanceEntry.collaborator_id.in_(collaborator_ids),
         )
-
-    entries = list(
-        db.scalars(
-            query.options(
-                selectinload(PointBalanceEntry.collaborator),
-                selectinload(PointBalanceEntry.original_service_order),
-                selectinload(PointBalanceEntry.related_service_order),
-                selectinload(PointBalanceEntry.origin_calculation_run),
-                selectinload(PointBalanceEntry.applied_calculation_run),
-            )
-            .order_by(PointBalanceEntry.created_at.asc(), PointBalanceEntry.id.asc())
-        )
     )
-    return [serialize_entry(entry) for entry in entries]
+
+    result = [{**serialize_entry(entry), "bucket": "applied"} for entry in applied_entries]
+    for entry in pending_entries:
+        target = (
+            (entry.target_reference_year, entry.target_reference_month)
+            if entry.target_reference_year is not None and entry.target_reference_month is not None
+            else None
+        )
+        bucket = "deferred_pending" if target is not None and target > period else "eligible_pending"
+        result.append({**serialize_entry(entry), "bucket": bucket})
+    return result
 
 
 @router.post("/entries", response_model=PointBalanceEntryOut)

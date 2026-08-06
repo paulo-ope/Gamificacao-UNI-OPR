@@ -1310,6 +1310,10 @@ export type AuditLog = {
 };
 
 export type PointBalanceEntry = {
+  // Calculado pelo backend em relacao ao periodo consultado (nao existe no banco): "applied" = ja
+  // descontado deste fechamento; "eligible_pending" = pendente, seria descontado se este
+  // fechamento fosse pago agora; "deferred_pending" = pendente com alvo num mes posterior.
+  bucket: "applied" | "eligible_pending" | "deferred_pending";
   id: number;
   collaborator_id: number;
   collaborator_name: string | null;
@@ -1323,6 +1327,8 @@ export type PointBalanceEntry = {
   origin_run_month: number | null;
   origin_run_year: number | null;
   origin_run_status: string | null;
+  target_reference_month: number | null;
+  target_reference_year: number | null;
   applied_calculation_run_id: number | null;
   applied_run_status: string | null;
   applied_reference_month: number | null;
