@@ -20,10 +20,11 @@ from app.services.calculation_closure import now_porto_velho
 
 @pytest.fixture()
 def paid_june_run(db_session, scoring_setup, monkeypatch):
-    # Estes testes fixam maio/junho/julho de 2026 como "o mes corrente" e o mes imediatamente anterior -
-    # como o mecanismo sob teste (current_reference_period) le a hora real do relogio, o fixture precisa
-    # congelar isso em julho/2026 para que as datas fixas nos testes continuem fazendo sentido independente
-    # de quando a suite realmente roda.
+    # Usado apenas pelo teste do corte (WARRANTY_DEBIT_TOOL_CUTOFF): junho/2026 e ANTES do
+    # corte de julho/2026, entao uma origem neste mes nunca deveria gerar debito. Fixa julho/2026
+    # como "o mes corrente" (mes imediatamente anterior = junho) - como o mecanismo sob teste
+    # (current_reference_period) le a hora real do relogio, o fixture precisa congelar isso para
+    # as datas fixas no teste continuarem fazendo sentido independente de quando a suite roda.
     monkeypatch.setattr(point_balance, "current_reference_period", lambda: (7, 2026))
     run = CalculationRun(reference_month=6, reference_year=2026, regional=None, point_value=2.5, status="paid")
     db_session.add(run)
@@ -42,14 +43,15 @@ def _os(collaborator, code, opened, closed=None, **overrides):
     return ServiceOrder(**defaults)
 
 
-def test_debit_is_attributed_to_original_collaborator_not_the_warranty_visit(db_session, make_collaborator, paid_june_run, recurrence_setup):
+def test_debit_is_attributed_to_original_collaborator_not_the_warranty_visit(db_session, make_collaborator, paid_july_run, recurrence_setup):
     """Regression: the debit must land on whoever earned the original points, not on
-    whichever technician happened to attend the warranty visit."""
+    whichever technician happened to attend the warranty visit. Origem em julho/2026, dentro
+    do corte (WARRANTY_DEBIT_TOOL_CUTOFF) - origem antes disso nao gera debito nenhum."""
     tech_original = make_collaborator(name="Tecnico A Original")
     tech_warranty_visit = make_collaborator(name="Tecnico B Garantia")
 
-    original = _os(tech_original, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))
-    later = _os(tech_warranty_visit, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    original = _os(tech_original, "OS-JUL-1", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later = _os(tech_warranty_visit, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
     db_session.add_all([original, later])
     db_session.flush()
 
@@ -65,8 +67,8 @@ def test_debit_is_attributed_to_original_collaborator_not_the_warranty_visit(db_
 @pytest.fixture()
 def paid_july_run(db_session, scoring_setup, monkeypatch):
     # Mesma logica do paid_june_run, uma janela pra frente: congela o mes corrente em agosto/2026
-    # (eligible_month = julho) para testar o corte HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF
-    # (2026, 7) - a origem precisa estar DENTRO do corte pra esses testes fazerem sentido.
+    # (eligible_month = julho) - a origem cai exatamente no corte WARRANTY_DEBIT_TOOL_CUTOFF
+    # (2026, 7), incluida (>=), entao esses testes cobrem o comportamento normal da ferramenta.
     monkeypatch.setattr(point_balance, "current_reference_period", lambda: (8, 2026))
     run = CalculationRun(reference_month=7, reference_year=2026, regional=None, point_value=2.5, status="paid")
     db_session.add(run)
@@ -130,13 +132,14 @@ def test_debit_is_scaled_by_the_origin_months_health_multiplier(
     assert "0.5x" in entry.reason
 
 
-def test_health_multiplier_adjustment_is_never_applied_before_the_cutoff(
+def test_no_debit_created_when_origin_is_before_the_warranty_tool_cutoff(
     db_session, make_collaborator, paid_june_run, recurrence_setup
 ):
-    """A ferramenta de saude/CPK so passou a ser confiavel a partir de julho/2026
-    (HEALTH_MULTIPLIER_ADJUSTMENT_CUTOFF) - uma O.S com origem ANTES disso usa o comportamento
-    antigo (valor cheio, sem escala nem bloqueio pelo piso), mesmo que exista um
-    CollaboratorScore com multiplicador zerado gravado pra ela."""
+    """A ferramenta de debito de garantia (post_payment_warranty_debit) so existe a partir de
+    julho/2026 (WARRANTY_DEBIT_TOOL_CUTOFF) - uma O.S original ANTES disso nunca deveria ter
+    entrado neste mecanismo pra comecar. Nao e so o multiplicador de saude que fica de fora:
+    nenhum debito e criado, nem no valor cheio, mesmo que exista um CollaboratorScore com
+    multiplicador zerado gravado pra ela."""
     collaborator = make_collaborator()
     db_session.add(
         CollaboratorScore(
@@ -153,14 +156,13 @@ def test_health_multiplier_adjustment_is_never_applied_before_the_cutoff(
     created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
     db_session.commit()
 
-    assert len(created) == 1, "origem antes do corte - o multiplicador zerado nao deve bloquear a criacao do debito"
-    assert created[0].points == -15.0, "origem antes do corte - o valor deve permanecer cheio, sem escala"
+    assert created == [], "origem antes do corte de julho/2026 - a ferramenta nao deve gerar nenhum debito"
 
 
-def test_detection_is_idempotent_for_the_same_pair(db_session, make_collaborator, paid_june_run, recurrence_setup):
+def test_detection_is_idempotent_for_the_same_pair(db_session, make_collaborator, paid_july_run, recurrence_setup):
     collaborator = make_collaborator()
-    original = _os(collaborator, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))
-    later = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    original = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
     db_session.add_all([original, later])
     db_session.flush()
 
@@ -173,10 +175,10 @@ def test_detection_is_idempotent_for_the_same_pair(db_session, make_collaborator
     assert len(second) == 0, "the same original/later pair must not create a duplicate debit"
 
 
-def test_full_ledger_cycle_preview_apply_carry_over_revert(db_session, make_collaborator, paid_june_run, recurrence_setup):
+def test_full_ledger_cycle_preview_apply_carry_over_revert(db_session, make_collaborator, paid_july_run, recurrence_setup):
     collaborator = make_collaborator()
-    original = _os(collaborator, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))
-    later = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    original = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
     db_session.add_all([original, later])
     db_session.flush()
 
@@ -186,26 +188,26 @@ def test_full_ledger_cycle_preview_apply_carry_over_revert(db_session, make_coll
     assert entry.points == -15.0  # scoring_setup's Manutencao/Reparo default is 15 pts, fully annulled
     assert entry.status == "pending"
 
-    # Draft preview must NOT mutate anything - it's shown before the July run is approved/paid.
+    # Draft preview must NOT mutate anything - it's shown before the August run is approved/paid.
     preview = point_balance.preview_pending_adjustment(db_session, collaborator.id, 10.0)
     assert preview["adjustment_points"] == -15.0
     assert preview["projected_balance"] == -5.0
     assert point_balance.pending_entries_for_collaborator(db_session, collaborator.id)[0].status == "pending"
 
-    july_run = CalculationRun(reference_month=7, reference_year=2026, regional=None, point_value=2.5, status="draft")
-    db_session.add(july_run)
+    august_run = CalculationRun(reference_month=8, reference_year=2026, regional=None, point_value=2.5, status="draft")
+    db_session.add(august_run)
     db_session.flush()
-    july_score = CollaboratorScore(
-        calculation_run_id=july_run.id, collaborator_id=collaborator.id, service_orders_count=1,
+    august_score = CollaboratorScore(
+        calculation_run_id=august_run.id, collaborator_id=collaborator.id, service_orders_count=1,
         gross_points=10.0, penalty_points=0.0, net_points=10.0, health_multiplier=1.0, health_status="Boa",
         final_points=10.0, estimated_payment=25.0,
     )
-    db_session.add(july_score)
+    db_session.add(august_score)
     db_session.flush()
 
     result = point_balance.apply_pending_entries_for_paid_run(
-        db_session, collaborator=collaborator, calculation_run=july_run,
-        reference_month=7, reference_year=2026, available_points=10.0,
+        db_session, collaborator=collaborator, calculation_run=august_run,
+        reference_month=8, reference_year=2026, available_points=10.0,
     )
     db_session.commit()
 
@@ -230,7 +232,7 @@ def test_full_ledger_cycle_preview_apply_carry_over_revert(db_session, make_coll
     assert reverted.status == "reverted"
 
 
-def test_reverting_before_payment_restores_gross_points_when_run_is_paid(db_session, make_collaborator, paid_june_run, recurrence_setup, admin_user):
+def test_reverting_before_payment_restores_gross_points_when_run_is_paid(db_session, make_collaborator, paid_july_run, recurrence_setup, admin_user):
     """Regression: if the pending debit was previewed in a draft and then reverted
     (false positive) BEFORE the run was marked paid, the paid-time apply logic used to
     only recompute when applied_points != 0 - so a reverted debit left the score stuck
@@ -238,8 +240,8 @@ def test_reverting_before_payment_restores_gross_points_when_run_is_paid(db_sess
     from app.api.routes.calculation_runs import _apply_point_balance_after_payment
 
     collaborator = make_collaborator()
-    original = _os(collaborator, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))
-    later = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    original = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
     db_session.add_all([original, later])
     db_session.flush()
 
@@ -247,8 +249,8 @@ def test_reverting_before_payment_restores_gross_points_when_run_is_paid(db_sess
     db_session.commit()
     entry = created[0]
 
-    july_run = CalculationRun(
-        reference_month=7, reference_year=2026, regional=None, point_value=2.5, status="approved",
+    august_run = CalculationRun(
+        reference_month=8, reference_year=2026, regional=None, point_value=2.5, status="approved",
         result_summary={
             "score_summaries": {
                 str(collaborator.id): {
@@ -259,10 +261,10 @@ def test_reverting_before_payment_restores_gross_points_when_run_is_paid(db_sess
             }
         },
     )
-    db_session.add(july_run)
+    db_session.add(august_run)
     db_session.flush()
     score = CollaboratorScore(
-        calculation_run_id=july_run.id, collaborator_id=collaborator.id, service_orders_count=2,
+        calculation_run_id=august_run.id, collaborator_id=collaborator.id, service_orders_count=2,
         gross_points=20.0, penalty_points=0.0, net_points=20.0, health_multiplier=1.0, health_status="Boa",
         final_points=5.0, estimated_payment=12.5, balance_adjustment_points=-15.0, balance_after=5.0,
     )
@@ -272,7 +274,7 @@ def test_reverting_before_payment_restores_gross_points_when_run_is_paid(db_sess
     point_balance.revert_entry(db_session, entry.id, reason="diagnostico de garantia incorreto")
     db_session.commit()
 
-    changed = _apply_point_balance_after_payment(db_session, july_run, admin_user)
+    changed = _apply_point_balance_after_payment(db_session, august_run, admin_user)
     db_session.commit()
     db_session.refresh(score)
 
@@ -307,9 +309,10 @@ def test_current_balance_reflects_revert_immediately_not_stale_column(db_session
     assert point_balance.current_balance(db_session, collaborator.id) == 0.0
 
 
-def test_requires_review_entry_can_be_resolved_with_a_negative_value(db_session, make_collaborator, paid_june_run, admin_user):
+def test_requires_review_entry_can_be_resolved_with_a_negative_value(db_session, make_collaborator, paid_july_run, admin_user):
     """When recurrence_action=requires_review, the debit is created with points=0 and
-    requires_review=True until an admin confirms the real value via resolve_review_entry."""
+    requires_review=True until an admin confirms the real value via resolve_review_entry.
+    Origem em julho/2026, dentro do corte da ferramenta."""
     collaborator = make_collaborator()
     db_session.add(
         RecurrenceClassificationRule(name="Garantia", classification="garantia", discount_points=True, active=True, priority=1, max_days=30)
@@ -318,8 +321,8 @@ def test_requires_review_entry_can_be_resolved_with_a_negative_value(db_session,
     db_session.add(AppSetting(key="recurrence_window_days", value="30"))
     db_session.flush()
 
-    original = _os(collaborator, "OS-A", datetime(2026, 6, 5, tzinfo=timezone.utc))
-    later = _os(collaborator, "OS-B", datetime(2026, 7, 5, tzinfo=timezone.utc))
+    original = _os(collaborator, "OS-A", datetime(2026, 7, 5, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-B", datetime(2026, 8, 4, tzinfo=timezone.utc))
     db_session.add_all([original, later])
     db_session.commit()
 
@@ -345,7 +348,7 @@ def test_requires_review_entry_can_be_resolved_with_a_negative_value(db_session,
         point_balance.resolve_review_entry(db_session, entry.id, points=-5.0, user=admin_user)
     assert getattr(excinfo.value, "status_code", None) == 409
 
-    other = _os(collaborator, "OS-C", datetime(2026, 7, 10, tzinfo=timezone.utc), customer_login="cli2")
+    other = _os(collaborator, "OS-C", datetime(2026, 8, 10, tzinfo=timezone.utc), customer_login="cli2")
     db_session.add(other)
     db_session.commit()
     other_created = point_balance.detect_post_payment_warranty_debits(db_session, [other])
@@ -449,18 +452,18 @@ def test_pending_endpoint_splits_entries_into_applied_eligible_and_deferred_buck
 
 
 def test_only_one_debit_per_original_even_with_many_near_simultaneous_later_returns(
-    db_session, make_collaborator, paid_june_run, recurrence_setup
+    db_session, make_collaborator, paid_july_run, recurrence_setup
 ):
     """Regression found in production: one original ticket (IXC-1081509) had 12 SEPARATE debit
     entries created against it, one per near-duplicate "return" ticket opened seconds apart on
     the same day. Because all those gaps round down to days_between=0, they tie on the "nearest
     candidate" sort, and each later ticket independently re-discovers the SAME original as its
     best match. A single original must only ever be debited once by this mechanism, no matter
-    how many later tickets tie back to it."""
+    how many later tickets tie back to it. Origem em julho/2026, dentro do corte da ferramenta."""
     collaborator = make_collaborator()
-    original = _os(collaborator, "OS-JUN-ORIG", datetime(2026, 6, 25, 10, 0, tzinfo=timezone.utc))
+    original = _os(collaborator, "OS-JUL-ORIG", datetime(2026, 7, 25, 10, 0, tzinfo=timezone.utc))
     laters = [
-        _os(collaborator, f"OS-JUN-DUP-{i}", datetime(2026, 6, 25, 10, i, tzinfo=timezone.utc))
+        _os(collaborator, f"OS-JUL-DUP-{i}", datetime(2026, 7, 25, 10, i, tzinfo=timezone.utc))
         for i in range(1, 6)
     ]
     db_session.add(original)
@@ -473,7 +476,7 @@ def test_only_one_debit_per_original_even_with_many_near_simultaneous_later_retu
         db_session.commit()
 
     assert len(created_total) == 1, "so o primeiro retorno deveria gerar debito - os demais batem na mesma original ja debitada"
-    assert created_total[0].original_os_code == "OS-JUN-ORIG"
+    assert created_total[0].original_os_code == "OS-JUL-ORIG"
 
 
 def _months_before(reference: datetime, months: int) -> tuple[int, int]:
@@ -587,21 +590,22 @@ def test_post_payment_debit_skips_when_return_order_predates_last_calculation(
 
 
 def test_post_payment_debit_skips_unregistered_or_inactive_original_collaborator(
-    db_session, make_collaborator, paid_june_run, recurrence_setup
+    db_session, make_collaborator, paid_july_run, recurrence_setup
 ):
     """A collaborator who is not registered (or not active) never enters a future payroll run,
     so a pending debit against them can NEVER be applied - it just accumulates forever with no
     effect, and becomes an unfair surprise backlog if they're registered later. This mechanism
-    must skip creating a debit for those collaborators entirely."""
+    must skip creating a debit for those collaborators entirely. Origem em julho/2026, dentro
+    do corte da ferramenta, para nao ser confundido com o corte."""
     unregistered = make_collaborator(name="Fantasma Nao Cadastrado", registered=False)
     inactive = make_collaborator(name="Ex Colaborador Inativo")
     inactive.active = False
     db_session.flush()
 
-    original_unregistered = _os(unregistered, "OS-JUN-UNREG", datetime(2026, 6, 25, tzinfo=timezone.utc))
-    later_unregistered = _os(unregistered, "OS-JUL-UNREG", datetime(2026, 7, 10, tzinfo=timezone.utc))
-    original_inactive = _os(inactive, "OS-JUN-INACTIVE", datetime(2026, 6, 25, tzinfo=timezone.utc), customer_login="cliente.inactive")
-    later_inactive = _os(inactive, "OS-JUL-INACTIVE", datetime(2026, 7, 10, tzinfo=timezone.utc), customer_login="cliente.inactive")
+    original_unregistered = _os(unregistered, "OS-JUL-UNREG", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later_unregistered = _os(unregistered, "OS-AUG-UNREG", datetime(2026, 8, 10, tzinfo=timezone.utc))
+    original_inactive = _os(inactive, "OS-JUL-INACTIVE", datetime(2026, 7, 25, tzinfo=timezone.utc), customer_login="cliente.inactive")
+    later_inactive = _os(inactive, "OS-AUG-INACTIVE", datetime(2026, 8, 10, tzinfo=timezone.utc), customer_login="cliente.inactive")
     db_session.add_all([original_unregistered, later_unregistered, original_inactive, later_inactive])
     db_session.flush()
 
@@ -613,34 +617,34 @@ def test_post_payment_debit_skips_unregistered_or_inactive_original_collaborator
     assert created == [], "colaborador nao cadastrado/inativo nao deveria acumular debito de garantia"
 
 
-def test_debit_survives_deleting_and_reimporting_the_related_service_order(db_session, make_collaborator, paid_june_run, recurrence_setup):
+def test_debit_survives_deleting_and_reimporting_the_related_service_order(db_session, make_collaborator, paid_july_run, recurrence_setup):
     """Regression: deleting a period's raw O.S rows (to re-import fresh data) used to be
     impossible without first reverting any garantia debit that referenced one of those O.S,
     because the ledger only tracked the internal ServiceOrder.id. Re-importing recreates the
     O.S under a NEW id, so identity must survive via os_code instead - both to unblock the
     delete and to avoid detecting the same warranty pair twice and double-charging it."""
     collaborator = make_collaborator()
-    original = _os(collaborator, "OS-JUN-1", datetime(2026, 6, 25, tzinfo=timezone.utc))
-    later = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    original = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 25, tzinfo=timezone.utc))
+    later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
     db_session.add_all([original, later])
     db_session.flush()
 
     created = point_balance.detect_post_payment_warranty_debits(db_session, [later])
     db_session.commit()
     entry = created[0]
-    assert entry.related_os_code == "OS-JUL-1"
-    assert entry.original_os_code == "OS-JUN-1"
+    assert entry.related_os_code == "OS-AUG-1"
+    assert entry.original_os_code == "OS-JUL-1"
 
-    # Simulate deleting July's raw O.S rows (the /service-orders/delete-period flow): the ledger
+    # Simulate deleting August's raw O.S rows (the /service-orders/delete-period flow): the ledger
     # entry's FK is nulled out, but the os_code stays - this is what unblocks the deletion.
     entry.related_service_order_id = None
     db_session.delete(later)
     db_session.commit()
 
-    assert point_balance.pending_entries_for_collaborator(db_session, collaborator.id)[0].related_os_code == "OS-JUL-1"
+    assert point_balance.pending_entries_for_collaborator(db_session, collaborator.id)[0].related_os_code == "OS-AUG-1"
 
-    # Re-importing the same file recreates OS-JUL-1 under a brand new ServiceOrder.id.
-    reimported_later = _os(collaborator, "OS-JUL-1", datetime(2026, 7, 10, tzinfo=timezone.utc))
+    # Re-importing the same file recreates OS-AUG-1 under a brand new ServiceOrder.id.
+    reimported_later = _os(collaborator, "OS-AUG-1", datetime(2026, 8, 10, tzinfo=timezone.utc))
     db_session.add(reimported_later)
     db_session.commit()
 
