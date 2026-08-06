@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, desc, or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.performance import performance_step
@@ -19,6 +19,7 @@ from app.services.calculation import (
     latest_run,
     serialize_run,
 )
+from app.services.calculation_closure import pick_run_by_status_priority
 from app.services.leadership_bonus import (
     apply_leadership_bonus_to_cost_by_regional,
     leadership_bonus_from_ranking,
@@ -82,7 +83,7 @@ def _load_saved_run(
         stmt = stmt.where(CalculationRun.regional.is_(None))
     else:
         stmt = stmt.where(CalculationRun.regional == regional)
-    return db.scalar(stmt.order_by(desc(CalculationRun.created_at), desc(CalculationRun.id)).limit(1))
+    return pick_run_by_status_priority(db, stmt)
 
 
 def _result_summary_cache(run: CalculationRun | None) -> dict:

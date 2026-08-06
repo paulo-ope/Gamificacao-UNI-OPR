@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 import pytest
 
 from app.models import AppSetting, CalculationRun, CollaboratorScore, HealthRule, ScoringGroup, ScoringSubjectRule, ServiceOrder
-from app.services.calculation_closure import ensure_status_transition_allowed, update_run_status
+from app.services.calculation_closure import ensure_status_transition_allowed, pick_run_by_status_priority, update_run_status
+from sqlalchemy import select
 
 
 def test_paid_and_cancelled_are_truly_terminal():
@@ -34,6 +35,45 @@ def test_normal_status_chain_still_works(db_session, admin_user):
     update_run_status(db_session, run, "paid", admin_user)
 
     assert run.status == "paid"
+
+
+def test_paid_run_wins_over_a_more_recent_cancelled_review(db_session):
+    """Regression: telas que buscam "o fechamento deste periodo" ordenavam so por
+    created_at desc, ignorando status - uma revisao explicita criada (e depois cancelada) DEPOIS
+    de um fechamento pago "vencia" so por ser mais nova, escondendo o pagamento real ja fechado.
+    Pago deve sempre vencer sobre qualquer outro status, independente de quando foi criado."""
+    paid_run = CalculationRun(reference_month=7, reference_year=2026, regional=None, point_value=2.5, status="paid")
+    db_session.add(paid_run)
+    db_session.flush()
+
+    later_cancelled_review = CalculationRun(
+        reference_month=7, reference_year=2026, regional=None, point_value=2.5, status="cancelled"
+    )
+    db_session.add(later_cancelled_review)
+    db_session.flush()
+    assert later_cancelled_review.created_at >= paid_run.created_at
+
+    stmt = select(CalculationRun).where(
+        CalculationRun.reference_month == 7, CalculationRun.reference_year == 2026, CalculationRun.regional.is_(None)
+    )
+    chosen = pick_run_by_status_priority(db_session, stmt)
+    assert chosen.id == paid_run.id
+
+
+def test_non_cancelled_wins_over_a_more_recent_cancelled_run_when_nothing_is_paid(db_session):
+    draft_run = CalculationRun(reference_month=9, reference_year=2026, regional=None, point_value=2.5, status="draft")
+    db_session.add(draft_run)
+    db_session.flush()
+
+    later_cancelled = CalculationRun(reference_month=9, reference_year=2026, regional=None, point_value=2.5, status="cancelled")
+    db_session.add(later_cancelled)
+    db_session.flush()
+
+    stmt = select(CalculationRun).where(
+        CalculationRun.reference_month == 9, CalculationRun.reference_year == 2026, CalculationRun.regional.is_(None)
+    )
+    chosen = pick_run_by_status_priority(db_session, stmt)
+    assert chosen.id == draft_run.id
 
 
 def test_same_collaborator_cannot_be_paid_twice_via_aggregate_and_regional_runs(client, db_session, make_collaborator):

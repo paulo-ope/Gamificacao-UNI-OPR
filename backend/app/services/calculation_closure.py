@@ -285,6 +285,21 @@ def find_run_for_service_order_context(
     return None
 
 
+def pick_run_by_status_priority(db: Session, base_stmt) -> CalculationRun | None:
+    """Escolhe entre os runs que casam com `base_stmt` priorizando (1) pago, (2) qualquer um nao
+    cancelado, (3) qualquer um - sempre o mais recente dentro de cada nivel. Sem essa prioridade,
+    quem busca "o fechamento deste periodo" so por `order_by(created_at desc)` acha o registro
+    mais recente independente do status - criar (e depois cancelar) uma revisao explicita DEPOIS
+    de um fechamento pago fazia essa revisao cancelada "vencer" so por ser mais nova, escondendo
+    o pagamento real ja fechado (achado real, ver reconciliacao de julho/2026)."""
+    for status_filter in (CalculationRun.status == "paid", CalculationRun.status != "cancelled", None):
+        stmt = base_stmt.where(status_filter) if status_filter is not None else base_stmt
+        run = db.scalar(stmt.order_by(desc(CalculationRun.created_at), desc(CalculationRun.id)).limit(1))
+        if run:
+            return run
+    return None
+
+
 def ensure_period_not_closed(
     db: Session,
     reference_month: int,
