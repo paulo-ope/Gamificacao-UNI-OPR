@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  FileSpreadsheet,
   Loader2,
   MapPin,
   Target,
@@ -36,6 +37,14 @@ import {
   type OperationOrderPage,
   type OperationPerformanceBand,
 } from "@/lib/operations-api";
+import {
+  customBackground,
+  dayTarget,
+  modelLegend,
+  performanceLabel,
+  ruleFor,
+} from "@/lib/operations-calendar-helpers";
+import { useCalendarExport } from "@/hooks/use-calendar-export";
 import { cn } from "@/lib/utils";
 
 const WEEKDAYS = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"];
@@ -171,75 +180,6 @@ function duration(value: number | null) {
   return minutes ? `${hours}h ${minutes}min` : `${hours}h`;
 }
 
-function customBackground(
-  performance: OperationPerformanceBand,
-  model: OperationCalendarTeamModel | null,
-) {
-  if (!model || performance === "neutral") return undefined;
-  if (performance === "below") return model.below_target_color;
-  if (performance === "median") return model.median_color;
-  if (performance === "good") return model.good_color;
-  return model.excellent_color;
-}
-
-function ruleFor(
-  model: OperationCalendarTeamModel,
-  period: "weekday" | "saturday" | "sunday" | "monthly",
-) {
-  return model.target_rules.find((rule) => rule.period_type === period);
-}
-
-function dayPeriod(weekday: number): "weekday" | "saturday" | "sunday" {
-  if (weekday === 5) return "saturday";
-  if (weekday === 6) return "sunday";
-  return "weekday";
-}
-
-function dayTarget(model: OperationCalendarTeamModel | null, weekday: number) {
-  if (!model) return null;
-  const rule = ruleFor(model, dayPeriod(weekday));
-  if (rule) return rule.enabled ? rule : null;
-  return weekday < 5 ? { target_quantity: model.daily_target } : null;
-}
-
-function modelLegend(model: OperationCalendarTeamModel) {
-  const rule = ruleFor(model, "weekday");
-  const median = rule?.median_from_quantity ?? model.median_from_quantity;
-  const good = rule?.good_from_quantity ?? model.good_from_quantity;
-  const target = rule?.target_quantity ?? model.daily_target;
-  return [
-    {
-      key: "below",
-      label: `Abaixo 1–${median - 1}`,
-      color: model.below_target_color,
-    },
-    {
-      key: "median",
-      label: `Mediano ${median}–${good - 1}`,
-      color: model.median_color,
-    },
-    {
-      key: "good",
-      label: `Bom ${good}–${target - 1}`,
-      color: model.good_color,
-    },
-    {
-      key: "excellent",
-      label: `Excelente ${target}+`,
-      color: model.excellent_color,
-    },
-  ];
-}
-
-function performanceLabel(
-  performance: OperationPerformanceBand,
-  quantity: number,
-  model: OperationCalendarTeamModel | null,
-) {
-  if (!model && quantity > 0) return "Sem meta configurada";
-  return PERFORMANCE[performance].label;
-}
-
 function performanceClass(
   performance: OperationPerformanceBand,
   quantity: number,
@@ -301,6 +241,21 @@ export function OperationsMonthlyCalendar({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [expandedRegional, setExpandedRegional] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportWorkbook = useCalendarExport();
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportWorkbook(data);
+    } catch (reason) {
+      setExportError(reason instanceof Error ? reason.message : "Não foi possível gerar a planilha.");
+    } finally {
+      setExporting(false);
+    }
+  }
   const monthlyPanelMetrics = useMemo<OperationCalendarDayMetrics>(
     () => ({
       ...EMPTY_METRICS,
@@ -476,9 +431,31 @@ export function OperationsMonthlyCalendar({
               </p>
             </div>
           </div>
-          <span className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-400">
-            Sem produção: 0
-          </span>
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <div className="flex items-center gap-2">
+              <span className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-400">
+                Sem produção: 0
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                disabled={exporting || isLoading || !data.regionals.length}
+                onClick={() => void handleExport()}
+              >
+                {exporting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                )}
+                Exportar planilha
+              </Button>
+            </div>
+            {exportError ? (
+              <p className="max-w-52 text-right text-[10px] text-red-600">{exportError}</p>
+            ) : null}
+          </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
           <div>
