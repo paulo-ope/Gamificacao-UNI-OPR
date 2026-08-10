@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.ai.queries import AGGREGATION_DIMENSIONS
 from app.modules.operations.schemas import OperationFilters
@@ -17,6 +17,19 @@ AggregationDimension = Literal[
     "team_model",
 ]
 assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS) | {"team_model"}
+
+
+# Só campos de texto livre (não status_code ou outros campos curtos/categóricos, onde "contém"
+# não faz sentido) - lista curada, não é qualquer coluna da O.S.
+TextFilterField = Literal["sector", "subject", "diagnosis", "responsible", "city", "department"]
+
+
+class AiTextFilter(BaseModel):
+    field: TextFilterField
+    operator: Literal["contains", "starts_with", "ends_with", "not_equals"]
+    value: str = Field(min_length=1, max_length=160)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # Mesmos nomes de OperationFilters (operations/schemas.py) - a IA já "conhece" esse vocabulário
@@ -43,6 +56,7 @@ class AiOrderFilters(BaseModel):
     sla_statuses: list[str] = Field(default_factory=list, max_length=100)
     projects: list[str] = Field(default_factory=list, max_length=100)
     pops: list[str] = Field(default_factory=list, max_length=100)
+    text_filters: list[AiTextFilter] = Field(default_factory=list, max_length=10)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -50,7 +64,10 @@ class AiOrderFilters(BaseModel):
 class AiAggregationRequest(BaseModel):
     date_from: date
     date_to: date
-    group_by: AggregationDimension
+    # Uma dimensão só (formato original, resposta com campo `label`) ou uma lista de até 3 pra
+    # agrupamento composto (resposta com uma chave por dimensão em vez de `label`) - ver
+    # aggregate_orders em ai/queries.py.
+    group_by: AggregationDimension | list[AggregationDimension]
     metric: Literal[
         "quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias",
         "quantidade_atrasada", "quantidade_backlog",
@@ -59,12 +76,12 @@ class AiAggregationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-
-class AiBreakdownItem(BaseModel):
-    label: str
-    quantity: int
-    metric_value: float
-    percentage: float
+    @field_validator("group_by")
+    @classmethod
+    def _validate_group_by_length(cls, value):
+        if isinstance(value, list) and not (1 <= len(value) <= 3):
+            raise ValueError("group_by deve ter entre 1 e 3 dimensões.")
+        return value
 
 
 class AiTimeseriesRequest(BaseModel):
@@ -72,6 +89,7 @@ class AiTimeseriesRequest(BaseModel):
     date_to: date
     metric: Literal["abertas", "fechadas", "saldo"]
     granularity: Literal["day", "week", "month"] = "day"
+    group_by: AggregationDimension | None = None
     filters: AiOrderFilters = Field(default_factory=AiOrderFilters)
 
     model_config = ConfigDict(extra="forbid")
@@ -80,6 +98,7 @@ class AiTimeseriesRequest(BaseModel):
 class AiTimeseriesPoint(BaseModel):
     period_start: date
     quantity: int
+    group: str | None = None
 
 
 class AiSearchRequest(BaseModel):
@@ -132,3 +151,25 @@ class AiFilterOptionsRequest(BaseModel):
     date_to: date
 
     model_config = ConfigDict(extra="forbid")
+
+
+class AiBacklogAgingRequest(BaseModel):
+    date_to: date
+    group_by: AggregationDimension = "regional"
+    filters: AiOrderFilters = Field(default_factory=AiOrderFilters)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiBacklogAgingItem(BaseModel):
+    label: str
+    quantity: int
+    avg_age_days: float
+    median_age_days: float
+    oldest_order_code: str
+    oldest_age_days: float
+    over_1d: int
+    over_3d: int
+    over_5d: int
+    over_7d: int
+    over_15d: int

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import statistics
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
@@ -41,6 +42,63 @@ TimeseriesMetric = Literal["abertas", "fechadas", "saldo"]
 Granularity = Literal["day", "week", "month"]
 
 AI_SEARCH_MAX_PAGE_SIZE = 200
+
+# Campos de texto livre onde "contém"/"começa com"/"termina com"/"diferente de" fazem sentido -
+# não inclui campos tipo status_code, que são códigos curtos, não texto pra buscar por trecho.
+TEXT_FILTER_COLUMNS = {
+    "sector": OperationOrder.sector,
+    "subject": OperationOrder.os_subject,
+    "diagnosis": OperationOrder.diagnosis,
+    "responsible": OperationOrder.responsible,
+    "city": OperationOrder.city,
+    "department": OperationOrder.department,
+}
+
+
+def _escape_like(value: str) -> str:
+    """Escapa os caracteres especiais do LIKE/ILIKE (`%`, `_`, e a própria barra de escape) antes
+    de embutir o valor do usuário no padrão - sem isso, um valor com "%" ou "_" se comportaria
+    como wildcard em vez de caractere literal."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _text_filter_conditions(text_filters: list[dict] | None) -> list:
+    conditions = []
+    for item in text_filters or []:
+        column = TEXT_FILTER_COLUMNS.get(item["field"])
+        if column is None:
+            continue
+        operator = item["operator"]
+        raw_value = item["value"]
+        if operator == "not_equals":
+            conditions.append(func.lower(column) != raw_value.lower())
+            continue
+        escaped = _escape_like(raw_value)
+        pattern = {
+            "contains": f"%{escaped}%",
+            "starts_with": f"{escaped}%",
+            "ends_with": f"%{escaped}",
+        }.get(operator)
+        if pattern is not None:
+            conditions.append(column.ilike(pattern, escape="\\"))
+    return conditions
+
+
+def _dimension_conditions_with_text(db: Session, user: User, filters: dict, *, opening: bool = False) -> list:
+    """Wrapper fino sobre `operations_queries._dimension_conditions` - aplica os filtros exatos
+    de sempre e, além deles, os filtros textuais novos (item 10), que não existem no motor de
+    filtro do resto do sistema."""
+    base_filters = operations_queries._opening_filters(filters) if opening else filters
+    conditions = operations_queries._dimension_conditions(db, user, base_filters)
+    conditions.extend(_text_filter_conditions(filters.get("text_filters")))
+    return conditions
+
+
+def _group_labels(group_by: str | list[str]) -> list[str]:
+    """Normaliza `group_by` (uma dimensão ou várias) numa lista de 1 a 3 - limite pra não deixar
+    o resultado explodir combinatorialmente (ex.: 20 regionais x 50 assuntos)."""
+    dims = [group_by] if isinstance(group_by, str) else list(group_by)
+    return dims[:3] or ["regional"]
 
 
 def _group_label(group_by: str):
@@ -105,104 +163,108 @@ def aggregate_orders(
     db: Session,
     user: User,
     *,
-    group_by: str,
+    group_by: str | list[str],
     metric: AggregationMetric,
     date_from: date,
     date_to: date,
     **filters,
 ) -> list[dict]:
-    """Agrupa O.S. por uma dimensão e devolve, por grupo: `quantity` (nº de O.S. por trás do
-    número), `metric_value` (o valor pedido - contagem, taxa de SLA ou horas médias) e
+    """Agrupa O.S. por uma ou mais dimensões (até 3) e devolve, por grupo: `quantity` (nº de O.S.
+    por trás do número), `metric_value` (o valor pedido - contagem, taxa de SLA ou horas médias) e
     `percentage` (fatia do grupo sobre o total de `quantity` entre todos os grupos). Os dois
     últimos têm significado diferente de propósito porque "taxa de SLA" e "horas médias" não são
-    frações de um total, então não caberiam sozinhos num único campo `percentage`."""
-    label = _group_label(group_by)
+    frações de um total, então não caberiam sozinhos num único campo `percentage`.
+
+    Com 1 dimensão só, cada item da resposta tem um campo `label` (formato já em uso pelos
+    conectores configurados). Com 2+ dimensões, `label` some e cada dimensão pedida aparece como
+    sua própria chave (ex.: `{"regional": "...", "subject": "...", "quantity": ...}`) - aditivo,
+    não quebra quem já chama com 1 dimensão só."""
+    dims = _group_labels(group_by)
+    labels = [_group_label(dim) for dim in dims]
     start, end = local_period_utc_bounds(date_from, date_to)
 
     if metric == "quantidade_aberta":
-        conditions = operations_queries._dimension_conditions(db, user, operations_queries._opening_filters(filters))
+        conditions = _dimension_conditions_with_text(db, user, filters, opening=True)
         rows = db.execute(
-            select(label, func.count(OperationOrder.id))
+            select(*labels, func.count(OperationOrder.id))
             .where(*conditions, OperationOrder.opened_at.between(start, end))
-            .group_by(label)
+            .group_by(*labels)
         ).all()
-        entries = [(str(row[0]), int(row[1]), float(row[1])) for row in rows]
+        entries = [(row[:-1], int(row[-1]), float(row[-1])) for row in rows]
 
     elif metric == "taxa_sla":
-        conditions = operations_queries._dimension_conditions(db, user, filters)
+        conditions = _dimension_conditions_with_text(db, user, filters)
         rows = db.execute(
             select(
-                label,
+                *labels,
                 func.count(OperationOrder.id),
                 func.sum(case((OperationOrder.sla_status == "on_time", 1), else_=0)),
             )
             .where(*conditions, OperationOrder.closed_at.between(start, end))
-            .group_by(label)
+            .group_by(*labels)
         ).all()
-        entries = [
-            (str(row[0]), int(row[1]), _percentage(int(row[2] or 0), int(row[1])))
-            for row in rows
-        ]
+        entries = [(row[:-2], int(row[-2]), _percentage(int(row[-1] or 0), int(row[-2]))) for row in rows]
 
     elif metric == "quantidade_atrasada":
         # Diferente de "quantidade_aberta" (que ignora de propósito equipe/responsável, porque
         # abertura é demanda), aqui o filtro de equipe faz sentido - queremos saber o atraso de
         # QUEM está com a O.S. hoje, então usa os filtros normais, não `_opening_filters`.
-        conditions = operations_queries._dimension_conditions(db, user, filters)
+        conditions = _dimension_conditions_with_text(db, user, filters)
         rows = db.execute(
-            select(label, func.count(OperationOrder.id))
+            select(*labels, func.count(OperationOrder.id))
             .where(
                 *conditions,
                 OperationOrder.is_closed.is_(False),
                 OperationOrder.opened_at.between(start, end),
                 OperationOrder.sla_status == "out_of_time",
             )
-            .group_by(label)
+            .group_by(*labels)
         ).all()
-        entries = [(str(row[0]), int(row[1]), float(row[1])) for row in rows]
+        entries = [(row[:-1], int(row[-1]), float(row[-1])) for row in rows]
 
     elif metric == "quantidade_backlog":
-        conditions = operations_queries._dimension_conditions(db, user, filters)
+        conditions = _dimension_conditions_with_text(db, user, filters)
         rows = db.execute(
-            select(label, func.count(OperationOrder.id))
+            select(*labels, func.count(OperationOrder.id))
             .where(
                 *conditions,
                 OperationOrder.is_closed.is_(False),
                 OperationOrder.opened_at.between(start, end),
             )
-            .group_by(label)
+            .group_by(*labels)
         ).all()
-        entries = [(str(row[0]), int(row[1]), float(row[1])) for row in rows]
+        entries = [(row[:-1], int(row[-1]), float(row[-1])) for row in rows]
 
     elif metric == "horas_medias":
-        conditions = operations_queries._dimension_conditions(db, user, filters)
+        conditions = _dimension_conditions_with_text(db, user, filters)
         elapsed = OperationOrder.elapsed_hours
         rows = db.execute(
-            select(label, func.count(OperationOrder.id), func.avg(elapsed))
+            select(*labels, func.count(OperationOrder.id), func.avg(elapsed))
             .where(*conditions, OperationOrder.closed_at.between(start, end), elapsed.is_not(None))
-            .group_by(label)
+            .group_by(*labels)
         ).all()
-        entries = [(str(row[0]), int(row[1]), round(float(row[2] or 0), 1)) for row in rows]
+        entries = [(row[:-2], int(row[-2]), round(float(row[-1] or 0), 1)) for row in rows]
 
     else:  # "quantidade_fechada"
-        conditions = operations_queries._dimension_conditions(db, user, filters)
+        conditions = _dimension_conditions_with_text(db, user, filters)
         rows = db.execute(
-            select(label, func.count(OperationOrder.id))
+            select(*labels, func.count(OperationOrder.id))
             .where(*conditions, OperationOrder.closed_at.between(start, end))
-            .group_by(label)
+            .group_by(*labels)
         ).all()
-        entries = [(str(row[0]), int(row[1]), float(row[1])) for row in rows]
+        entries = [(row[:-1], int(row[-1]), float(row[-1])) for row in rows]
 
     total = sum(count for _, count, _ in entries)
-    return [
-        {
-            "label": label_value,
-            "quantity": count,
-            "metric_value": metric_value,
-            "percentage": _percentage(count, total),
-        }
-        for label_value, count, metric_value in sorted(entries, key=lambda item: (-item[1], item[0]))
-    ]
+    results = []
+    for label_values, count, metric_value in sorted(entries, key=lambda item: (-item[1], [str(v) for v in item[0]])):
+        percentage = _percentage(count, total)
+        if len(dims) == 1:
+            item = {"label": str(label_values[0]), "quantity": count, "metric_value": metric_value, "percentage": percentage}
+        else:
+            item = {dim: str(value) for dim, value in zip(dims, label_values)}
+            item.update({"quantity": count, "metric_value": metric_value, "percentage": percentage})
+        results.append(item)
+    return results
 
 
 def orders_timeseries(
@@ -213,48 +275,64 @@ def orders_timeseries(
     granularity: Granularity,
     date_from: date,
     date_to: date,
+    group_by: str | None = None,
     **filters,
 ) -> list[dict]:
     """Série temporal (dia/semana/mês) de abertas, fechadas, ou saldo (abertas - fechadas) por
-    bucket - mesma lógica de bucketing de `operations_queries._period_group_start`."""
+    bucket - mesma lógica de bucketing de `operations_queries._period_group_start`.
+
+    `group_by` é opcional: sem ele, cada ponto é `{period_start, quantity}` (formato já em uso).
+    Com ele, cada ponto ganha `group` com o valor da dimensão naquele bucket (ex.: "quantidade
+    fechada por dia por modelo de equipe") - aditivo, não muda a chamada sem `group_by`."""
     start, end = local_period_utc_bounds(date_from, date_to)
     opened_day = operations_queries._local_date(db, OperationOrder.opened_at)
     closed_day = operations_queries._local_date(db, OperationOrder.closed_at)
+    label = _group_label(group_by) if group_by else None
 
-    opened_counts: dict[date, int] = {}
-    closed_counts: dict[date, int] = {}
+    def _counts(day_expr, conditions, date_column) -> dict[tuple[date, str | None], int]:
+        columns = (day_expr, label) if label is not None else (day_expr,)
+        rows = db.execute(
+            select(*columns, func.count(OperationOrder.id))
+            .where(*conditions, date_column.between(start, end))
+            .group_by(*columns)
+        ).all()
+        result: dict[tuple[date, str | None], int] = {}
+        for row in rows:
+            key = (row[0], str(row[1])) if label is not None else (row[0], None)
+            result[key] = result.get(key, 0) + int(row[-1])
+        return result
+
+    opened_counts: dict[tuple[date, str | None], int] = {}
+    closed_counts: dict[tuple[date, str | None], int] = {}
 
     if metric in ("abertas", "saldo"):
-        opening_conditions = operations_queries._dimension_conditions(db, user, operations_queries._opening_filters(filters))
-        rows = db.execute(
-            select(opened_day, func.count(OperationOrder.id))
-            .where(*opening_conditions, OperationOrder.opened_at.between(start, end))
-            .group_by(opened_day)
-        ).all()
-        opened_counts = {row[0]: int(row[1]) for row in rows}
+        opening_conditions = _dimension_conditions_with_text(db, user, filters, opening=True)
+        opened_counts = _counts(opened_day, opening_conditions, OperationOrder.opened_at)
 
     if metric in ("fechadas", "saldo"):
-        closed_conditions = operations_queries._dimension_conditions(db, user, filters)
-        rows = db.execute(
-            select(closed_day, func.count(OperationOrder.id))
-            .where(*closed_conditions, OperationOrder.closed_at.between(start, end))
-            .group_by(closed_day)
-        ).all()
-        closed_counts = {row[0]: int(row[1]) for row in rows}
+        closed_conditions = _dimension_conditions_with_text(db, user, filters)
+        closed_counts = _counts(closed_day, closed_conditions, OperationOrder.closed_at)
 
-    buckets: dict[date, int] = defaultdict(int)
+    buckets: dict[tuple[date, str | None], int] = defaultdict(int)
     if metric == "abertas":
-        for day, count in opened_counts.items():
-            buckets[operations_queries._period_group_start(day, granularity)] += count
+        for (day, group), count in opened_counts.items():
+            buckets[(operations_queries._period_group_start(day, granularity), group)] += count
     elif metric == "fechadas":
-        for day, count in closed_counts.items():
-            buckets[operations_queries._period_group_start(day, granularity)] += count
+        for (day, group), count in closed_counts.items():
+            buckets[(operations_queries._period_group_start(day, granularity), group)] += count
     else:
-        for day in set(opened_counts) | set(closed_counts):
-            bucket = operations_queries._period_group_start(day, granularity)
-            buckets[bucket] += opened_counts.get(day, 0) - closed_counts.get(day, 0)
+        for key in set(opened_counts) | set(closed_counts):
+            day, group = key
+            bucket = (operations_queries._period_group_start(day, granularity), group)
+            buckets[bucket] += opened_counts.get(key, 0) - closed_counts.get(key, 0)
 
-    return [{"period_start": bucket, "quantity": quantity} for bucket, quantity in sorted(buckets.items())]
+    results = []
+    for (period_start, group), quantity in sorted(buckets.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
+        item = {"period_start": period_start, "quantity": quantity}
+        if label is not None:
+            item["group"] = group
+        results.append(item)
+    return results
 
 
 def _build_search_item(order: OperationOrder, team_model: str | None) -> dict:
@@ -319,6 +397,7 @@ def search_orders(
         filters = {**filters, "search": keyword}
 
     conditions, _, _ = operations_queries._query_conditions(db, date_from, date_to, user, filters)
+    conditions.extend(_text_filter_conditions(filters.get("text_filters")))
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
     offset = (page - 1) * page_size
     orders = list(
@@ -342,6 +421,50 @@ def search_orders(
         "page_size": page_size,
         "has_more": total > page * page_size,
     }
+
+
+def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **filters) -> list[dict]:
+    """Idade do backlog (O.S. ainda abertas em `date_to`), por dimensão: quantidade, idade média
+    e mediana em dias, a O.S. mais antiga, e quantas passam de 1/3/5/7/15 dias. Calculado em
+    Python (não em SQL) porque o volume é do tamanho do backlog atual - milhares, não a base toda
+    - e mediana não é portável entre Postgres/SQLite sem depender de extensão específica."""
+    label = _group_label(group_by)
+    conditions = _dimension_conditions_with_text(db, user, filters)
+    _, reference_at = local_period_utc_bounds(date_to, date_to)
+    rows = db.execute(
+        select(label, OperationOrder.order_code, OperationOrder.opened_at).where(
+            *conditions,
+            OperationOrder.is_closed.is_(False),
+            OperationOrder.opened_at <= reference_at,
+        )
+    ).all()
+
+    by_group: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    for label_value, order_code, opened_at in rows:
+        age_days = (reference_at - opened_at).total_seconds() / 86400
+        by_group[str(label_value)].append((order_code, age_days))
+
+    results = []
+    for label_value, entries in by_group.items():
+        ages = [age for _, age in entries]
+        oldest_code, oldest_age = max(entries, key=lambda entry: entry[1])
+        results.append(
+            {
+                "label": label_value,
+                "quantity": len(entries),
+                "avg_age_days": round(sum(ages) / len(ages), 1),
+                "median_age_days": round(statistics.median(ages), 1),
+                "oldest_order_code": oldest_code,
+                "oldest_age_days": round(oldest_age, 1),
+                "over_1d": sum(1 for age in ages if age > 1),
+                "over_3d": sum(1 for age in ages if age > 3),
+                "over_5d": sum(1 for age in ages if age > 5),
+                "over_7d": sum(1 for age in ages if age > 7),
+                "over_15d": sum(1 for age in ages if age > 15),
+            }
+        )
+    results.sort(key=lambda item: -item["quantity"])
+    return results
 
 
 def filter_options_for_ai(db: Session, user: User, date_from: date, date_to: date) -> OperationFilters:

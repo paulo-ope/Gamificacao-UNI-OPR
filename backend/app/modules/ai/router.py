@@ -7,10 +7,11 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User
 from app.modules.ai.auth import require_api_key_user, require_ai_permission
-from app.modules.ai.queries import aggregate_orders, filter_options_for_ai, orders_timeseries, search_orders
+from app.modules.ai.queries import aggregate_orders, backlog_aging, filter_options_for_ai, orders_timeseries, search_orders
 from app.modules.ai.schemas import (
     AiAggregationRequest,
-    AiBreakdownItem,
+    AiBacklogAgingItem,
+    AiBacklogAgingRequest,
     AiFilterOptionsRequest,
     AiSearchRequest,
     AiSearchResponse,
@@ -27,7 +28,7 @@ router = APIRouter(prefix="/ai", tags=["ai-tools"], dependencies=[Depends(requir
 public_router = APIRouter(prefix="/ai", tags=["ai-tools-meta"])
 
 
-@router.post("/aggregate-orders", response_model=list[AiBreakdownItem])
+@router.post("/aggregate-orders")
 def aggregate_orders_route(
     payload: AiAggregationRequest,
     db: Session = Depends(get_db),
@@ -57,6 +58,7 @@ def orders_timeseries_route(
         granularity=payload.granularity,
         date_from=payload.date_from,
         date_to=payload.date_to,
+        group_by=payload.group_by,
         **payload.filters.model_dump(),
     )
 
@@ -77,6 +79,15 @@ def search_orders_route(
         keyword=payload.keyword,
         **payload.filters.model_dump(),
     )
+
+
+@router.post("/backlog-aging", response_model=list[AiBacklogAgingItem])
+def backlog_aging_route(
+    payload: AiBacklogAgingRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_api_key_user),
+) -> list[dict]:
+    return backlog_aging(db, user, group_by=payload.group_by, date_to=payload.date_to, **payload.filters.model_dump())
 
 
 @router.post("/filter-options", response_model=OperationFilters)
