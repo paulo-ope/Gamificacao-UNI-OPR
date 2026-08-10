@@ -19,6 +19,7 @@ assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS)
 # cobre o pedido original (localização/empresa, tipo/assunto/diagnóstico, responsável/status);
 # adicionar mais um filtro depois é acréscimo de um campo aqui, não redesenho.
 class AiOrderFilters(BaseModel):
+    team_models: list[str] = Field(default_factory=list, max_length=100)
     companies: list[str] = Field(default_factory=list, max_length=100)
     regionals: list[str] = Field(default_factory=list, max_length=100)
     states: list[str] = Field(default_factory=list, max_length=100)
