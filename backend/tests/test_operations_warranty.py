@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
 
-from app.modules.operations.models import OperationOrder
+from app.modules.operations.models import OperationOrder, OperationResponsibleAssignment, OperationTeamModel
 from app.modules.operations.period import OPERATIONS_TIMEZONE, current_month_bounds
 
 
@@ -263,6 +263,78 @@ def test_regional_filter_also_restricts_the_denominator_origins(client, db_sessi
     assert body["denominator_count"] == 1
     assert body["numerator"] == 1
     assert body["items"][0]["return_order_code"] == "RETURN-JARU"
+
+
+def test_team_models_filter_also_restricts_the_denominator_origins(client, db_session):
+    """Achado real: filtrar por team_models restringia o numerador (retornos) mas o denominador
+    (origens) continuava com o universo inteiro, inflando a "taxa de garantia do modelo" - o
+    denominador precisa ser só as origens executadas por esse mesmo modelo de equipe."""
+    date_from, date_to = current_month_bounds()
+    origin_closed = _utc_at(date_from)
+
+    team_model = OperationTeamModel(name="AUXILIAR")
+    db_session.add(team_model)
+    db_session.flush()
+    db_session.add(
+        OperationResponsibleAssignment(responsible_name="TECNICO AUXILIAR", regional="UNI - JARU", team_model_id=team_model.id)
+    )
+    db_session.add_all(
+        [
+            _order(
+                order_code="ORIGIN-AUX",
+                contract_id="C30",
+                os_type="Ativação",
+                regional="UNI - JARU",
+                responsible="TECNICO AUXILIAR",
+                opened_at=origin_closed - timedelta(days=2),
+                closed_at=origin_closed,
+            ),
+            _order(
+                order_code="RETURN-AUX",
+                contract_id="C30",
+                os_type="Manutenção",
+                regional="UNI - JARU",
+                responsible="TECNICO AUXILIAR",
+                opened_at=origin_closed + timedelta(days=1),
+            ),
+            # Mesmo contrato/regional, mas executada por outro técnico sem atribuição de modelo -
+            # não deveria compor nem o numerador nem o denominador ao filtrar por AUXILIAR.
+            _order(
+                order_code="ORIGIN-OUTRO",
+                contract_id="C31",
+                os_type="Ativação",
+                regional="UNI - JARU",
+                responsible="TECNICO SEM MODELO",
+                opened_at=origin_closed - timedelta(days=2),
+                closed_at=origin_closed,
+            ),
+            _order(
+                order_code="RETURN-OUTRO",
+                contract_id="C31",
+                os_type="Manutenção",
+                regional="UNI - JARU",
+                responsible="TECNICO SEM MODELO",
+                opened_at=origin_closed + timedelta(days=1),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        "/api/operations/warranty",
+        params={
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "denominator": "active_origins",
+            "team_models": "AUXILIAR",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["denominator_count"] == 1
+    assert body["numerator"] == 1
+    assert body["items"][0]["return_order_code"] == "RETURN-AUX"
 
 
 def test_by_regional_ranking_uses_each_branchs_own_denominator(client, db_session):

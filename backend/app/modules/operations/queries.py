@@ -142,7 +142,7 @@ def _backlog_filters(filters: dict) -> dict:
     return {**_opening_filters(filters), "closed_weekdays": [], "closed_time_from": None, "closed_time_to": None}
 
 
-WARRANTY_ORIGIN_SHARED_FILTERS = ("regionals", "companies", "states", "cities")
+WARRANTY_ORIGIN_SHARED_FILTERS = ("regionals", "companies", "states", "cities", "team_models")
 
 
 def _warranty_origin_filters(filters: dict) -> dict:
@@ -150,7 +150,14 @@ def _warranty_origin_filters(filters: dict) -> dict:
     serve para achar a garantia do mesmo contrato. Por isso só os filtros de localização/empresa
     (que descrevem o contrato, não a O.S. específica) se aplicam aqui - senão filtrar por
     diagnóstico, responsável etc. (que descrevem a manutenção) não teria efeito nenhum sobre o
-    denominador, mesmo quando ele conta origens."""
+    denominador, mesmo quando ele conta origens.
+
+    `team_models` é a exceção: ele descreve QUEM EXECUTOU a O.S. (origem ou retorno), não uma
+    característica exclusiva da manutenção - então "taxa de garantia do modelo X" só é uma conta
+    correta se o denominador também for só as origens executadas pelo modelo X. Achado real
+    corrigido aqui: antes, filtrar por team_models restringia o numerador (retornos) mas mantinha
+    o denominador (origens) com o universo inteiro, inflando o "universo" e gerando uma taxa que
+    não representava de fato o modelo filtrado."""
     return {key: filters.get(key, []) for key in WARRANTY_ORIGIN_SHARED_FILTERS}
 
 
