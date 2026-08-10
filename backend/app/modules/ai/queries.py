@@ -110,17 +110,24 @@ def _group_labels(group_by: str | list[str]) -> list[str]:
 
 
 def _group_label(group_by: str):
-    """"team_model" não é uma coluna de OperationOrder - é calculado casando o responsável (e a
-    regional, mesma chave de identidade de OperationResponsibleAssignment) contra a atribuição de
-    modelo de equipe, igual ao filtro `team_models` já faz em operations.queries."""
+    """"team_model" não é uma coluna de OperationOrder - é calculado casando o responsável contra
+    a atribuição de modelo de equipe, SÓ PELO NOME (case-insensitive) - igual ao filtro
+    `team_models` (`_dimension_conditions`, operations/queries.py:176-189) e ao resto do sistema
+    (`team_configuration`, `work_schedule_overview`).
+
+    Achado real corrigido aqui: uma versão anterior desta função também exigia que a regional da
+    atribuição batesse com a regional da O.S. - isso divergia do filtro (que casa só pelo nome),
+    então uma O.S. podia ENTRAR no resultado de `team_models=["X"]` mas aparecer como "Não
+    identificado" em `group_by="team_model"`, porque a atribuição de "X" para aquele responsável
+    existia numa regional diferente da regional daquela O.S. específica. Quando o mesmo
+    responsável tem atribuições em mais de uma regional, prevalece a mais recentemente atualizada
+    - mesmo critério de `team_configuration` (`operations/queries.py:2154-2156`)."""
     if group_by == "team_model":
         team_model_name = (
             select(OperationTeamModel.name)
             .join(OperationResponsibleAssignment, OperationResponsibleAssignment.team_model_id == OperationTeamModel.id)
-            .where(
-                func.lower(OperationResponsibleAssignment.responsible_name) == func.lower(OperationOrder.responsible),
-                OperationResponsibleAssignment.regional == OperationOrder.regional,
-            )
+            .where(func.lower(OperationResponsibleAssignment.responsible_name) == func.lower(OperationOrder.responsible))
+            .order_by(OperationResponsibleAssignment.updated_at.desc())
             .limit(1)
             .scalar_subquery()
         )
@@ -129,21 +136,25 @@ def _group_label(group_by: str):
     return func.coalesce(field, "Não identificado")
 
 
-def _team_model_lookup(db: Session, orders: list[OperationOrder]) -> dict[tuple[str, str], str]:
+def _team_model_lookup(db: Session, orders: list[OperationOrder]) -> dict[str, str]:
     """Resolve o modelo de equipe de uma página de O.S. já carregada, numa única query extra (em
-    vez de juntar essa tabela na query paginada principal) - o volume por página é pequeno (no
-    máximo AI_SEARCH_MAX_PAGE_SIZE), então uma segunda query simples é mais barata que um join a
-    mais em toda busca, inclusive quando ninguém pede o campo."""
-    pairs = {(order.responsible, order.regional) for order in orders if order.responsible and order.regional}
-    if not pairs:
+    vez de juntar essa tabela na query paginada principal). Casa só pelo nome do responsável
+    (case-insensitive) - mesma regra de `_group_label`/o filtro `team_models` - com a atribuição
+    mais recentemente atualizada prevalecendo quando o nome tem mais de uma (mesmo critério de
+    `team_configuration`)."""
+    names = {order.responsible.lower() for order in orders if order.responsible}
+    if not names:
         return {}
-    lowered_names = {name.lower() for name, _ in pairs}
     rows = db.execute(
-        select(OperationResponsibleAssignment.responsible_name, OperationResponsibleAssignment.regional, OperationTeamModel.name)
+        select(OperationResponsibleAssignment.responsible_name, OperationTeamModel.name)
         .join(OperationTeamModel, OperationTeamModel.id == OperationResponsibleAssignment.team_model_id)
-        .where(func.lower(OperationResponsibleAssignment.responsible_name).in_(lowered_names))
+        .where(func.lower(OperationResponsibleAssignment.responsible_name).in_(names))
+        .order_by(OperationResponsibleAssignment.updated_at.desc())
     ).all()
-    return {(responsible_name.lower(), regional): team_model_name for responsible_name, regional, team_model_name in rows}
+    result: dict[str, str] = {}
+    for responsible_name, team_model_name in rows:
+        result.setdefault(responsible_name.lower(), team_model_name)
+    return result
 
 
 def _percentage(count: int, total: int) -> float:
@@ -419,7 +430,7 @@ def search_orders(
     )
     team_model_by_responsible = _team_model_lookup(db, orders)
     items = [
-        _build_search_item(order, team_model_by_responsible.get(((order.responsible or "").lower(), order.regional)))
+        _build_search_item(order, team_model_by_responsible.get((order.responsible or "").lower()))
         for order in orders
     ]
     return {

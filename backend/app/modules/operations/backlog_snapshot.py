@@ -18,14 +18,16 @@ logger = logging.getLogger(__name__)
 def _team_model_label():
     # Mesma lógica de `ai/queries.py:_group_label` (caso "team_model") - não importada de lá de
     # propósito (operations não deve depender do módulo ai, é o contrário) - se aquela mudar,
-    # esta precisa mudar também.
+    # esta precisa mudar também. Casa só pelo nome do responsável (case-insensitive), igual ao
+    # filtro `team_models` (`_dimension_conditions`) - NUNCA pela regional da atribuição (achado
+    # real: exigir regional igual fazia esta função e o filtro discordarem sobre a mesma O.S.).
+    # Quando o nome tem mais de uma atribuição, prevalece a mais recentemente atualizada (mesmo
+    # critério de `team_configuration`).
     team_model_name = (
         select(OperationTeamModel.name)
         .join(OperationResponsibleAssignment, OperationResponsibleAssignment.team_model_id == OperationTeamModel.id)
-        .where(
-            func.lower(OperationResponsibleAssignment.responsible_name) == func.lower(OperationOrder.responsible),
-            OperationResponsibleAssignment.regional == OperationOrder.regional,
-        )
+        .where(func.lower(OperationResponsibleAssignment.responsible_name) == func.lower(OperationOrder.responsible))
+        .order_by(OperationResponsibleAssignment.updated_at.desc())
         .limit(1)
         .scalar_subquery()
     )
