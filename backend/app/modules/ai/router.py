@@ -98,5 +98,11 @@ def ai_openapi_schema(request: Request) -> dict:
     # router é incluído no app (main.py) - por isso o servidor é calculado a partir da própria
     # requisição, tirando o sufixo fixo desta rota, em vez de hardcoded.
     base_path = str(request.url.path).removesuffix("/ai/openapi.json")
-    schema["servers"] = [{"url": str(request.base_url).rstrip("/") + base_path}]
+    # O proxy reverso da VM termina o TLS e repassa a conexão em HTTP puro pro backend, sem
+    # `--proxy-headers` configurado no Uvicorn - sem isso, request.url.scheme sempre voltaria
+    # "http", mesmo quando o cliente de fato conectou por HTTPS. `X-Forwarded-Proto` é o header
+    # padrão que o proxy usa pra informar o protocolo original.
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    schema["servers"] = [{"url": f"{scheme}://{host}{base_path}"}]
     return schema
