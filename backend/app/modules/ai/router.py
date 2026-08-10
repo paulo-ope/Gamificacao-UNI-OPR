@@ -105,8 +105,9 @@ def backlog_aging_route(
     description=(
         "Série histórica diária de backlog/backlog atrasado. LIMITAÇÃO IMPORTANTE: só existe "
         "dado a partir do dia em que a captura diária entrou em produção - não há retroatividade "
-        "para datas anteriores a isso. Só quebra por 'regional' ou 'team_model' (não por "
-        "qualquer dimensão como as outras ferramentas)."
+        "para datas anteriores a isso. Só quebra/filtra por 'regional', 'team_model' ou 'sector' "
+        "(não por qualquer dimensão como as outras ferramentas); use sector_filter para restringir "
+        "por setor (ex.: operator='contains', value='Ex' para os setores de suporte externo)."
     ),
 )
 def backlog_history_route(
@@ -121,6 +122,7 @@ def backlog_history_route(
         date_from=payload.date_from,
         date_to=payload.date_to,
         group_by=payload.group_by,
+        sector_filter=payload.sector_filter.model_dump() if payload.sector_filter else None,
     )
 
 

@@ -251,15 +251,22 @@ class OperationResponsibleDirectorySetting(Base):
 
 
 class OperationBacklogSnapshot(Base):
-    """Fotografia diária do backlog (O.S. ainda abertas) por regional/modelo de equipe - não
+    """Fotografia diária do backlog (O.S. ainda abertas) por regional/modelo de equipe/setor - não
     existe nenhum histórico auditado de antes desta tabela existir (achado confirmado durante o
     desenho deste recurso: o sistema não guardava snapshot nem log de mudança de status de O.S.).
     Captura feita 1x por dia por `capture_backlog_snapshot` (backlog_snapshot.py), a partir da
-    data em que o job entrar em produção - sem retroatividade possível."""
+    data em que o job entrar em produção - sem retroatividade possível.
+
+    `sector` foi adicionado um dia depois da primeira versão desta tabela - achado real: sem ele,
+    a série histórica de backlog não conseguia ser filtrada por setor (ex.: "contém Ex"), porque
+    esse dado nunca tinha sido capturado. As poucas linhas gravadas no dia anterior a esta mudança
+    não têm granularidade de setor (ficam com o valor de fallback "Não identificado")."""
 
     __tablename__ = "operations_backlog_snapshots"
     __table_args__ = (
-        UniqueConstraint("snapshot_date", "regional", "team_model", name="uq_operations_backlog_snapshot_identity"),
+        UniqueConstraint(
+            "snapshot_date", "regional", "team_model", "sector", name="uq_operations_backlog_snapshot_identity"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -268,6 +275,7 @@ class OperationBacklogSnapshot(Base):
     # "Não identificado" quando a O.S. não tem responsável mapeado a um modelo de equipe - nunca
     # NULL, pro agrupamento não precisar tratar ausência como caso especial.
     team_model: Mapped[str] = mapped_column(String(120), nullable=False)
+    sector: Mapped[str] = mapped_column(String(160), nullable=False, server_default="Não identificado")
     backlog_count: Mapped[int] = mapped_column(Integer, nullable=False)
     backlog_atrasado_count: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

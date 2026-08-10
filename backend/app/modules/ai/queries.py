@@ -68,25 +68,27 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _text_operator_condition(column, operator: str, raw_value: str):
+    if operator == "not_equals":
+        return func.lower(column) != raw_value.lower()
+    escaped = _escape_like(raw_value)
+    pattern = {
+        "contains": f"%{escaped}%",
+        "starts_with": f"{escaped}%",
+        "ends_with": f"%{escaped}",
+    }.get(operator)
+    return column.ilike(pattern, escape="\\") if pattern is not None else None
+
+
 def _text_filter_conditions(text_filters: list[dict] | None) -> list:
     conditions = []
     for item in text_filters or []:
         column = TEXT_FILTER_COLUMNS.get(item["field"])
         if column is None:
             continue
-        operator = item["operator"]
-        raw_value = item["value"]
-        if operator == "not_equals":
-            conditions.append(func.lower(column) != raw_value.lower())
-            continue
-        escaped = _escape_like(raw_value)
-        pattern = {
-            "contains": f"%{escaped}%",
-            "starts_with": f"{escaped}%",
-            "ends_with": f"%{escaped}",
-        }.get(operator)
-        if pattern is not None:
-            conditions.append(column.ilike(pattern, escape="\\"))
+        condition = _text_operator_condition(column, item["operator"], item["value"])
+        if condition is not None:
+            conditions.append(condition)
     return conditions
 
 
@@ -482,7 +484,7 @@ def filter_options_for_ai(db: Session, user: User, date_from: date, date_to: dat
 
 
 BacklogHistoryMetric = Literal["backlog", "backlog_atrasado"]
-BacklogHistoryGroupBy = Literal["none", "regional", "team_model"]
+BacklogHistoryGroupBy = Literal["none", "regional", "team_model", "sector"]
 
 
 def backlog_history(
@@ -493,13 +495,18 @@ def backlog_history(
     date_from: date,
     date_to: date,
     group_by: BacklogHistoryGroupBy = "none",
+    sector_filter: dict | None = None,
 ) -> list[dict]:
     """Série histórica de backlog/backlog atrasado, lida do snapshot diário (ver
-    `operations/backlog_snapshot.py`). Duas limitações que a IA precisa saber (documentadas na
+    `operations/backlog_snapshot.py`). Limitações que a IA precisa saber (documentadas na
     descrição da ferramenta, ver schemas.py): (1) só tem dado a partir do dia em que o job de
-    captura entrou em produção, sem retroatividade nenhuma; (2) só quebra por "regional" ou
-    "team_model" - o snapshot já vem pré-agregado por essas duas dimensões, não por qualquer uma
-    como as outras ferramentas."""
+    captura entrou em produção, sem retroatividade nenhuma; (2) só quebra/filtra por "regional",
+    "team_model" ou "sector" - o snapshot já vem pré-agregado por essas três dimensões, não por
+    qualquer uma como as outras ferramentas.
+
+    `sector_filter` é `{"operator": "contains"|"starts_with"|"ends_with"|"not_equals", "value":
+    str}` - reaproveita `_text_filter_conditions` (mesma sintaxe/escape das outras ferramentas),
+    fixando o campo em "sector"."""
     # Snapshot não passa por `_dimension_conditions` (não é uma O.S. individual) - o escopo
     # regional do usuário precisa ser aplicado aqui manualmente, mesma regra de sempre.
     allowed_regionals = effective_managed_regionals(user.managed_regional, user.managed_regionals)
@@ -508,6 +515,10 @@ def backlog_history(
         conditions.append(OperationBacklogSnapshot.regional.in_(allowed_regionals))
     elif user.role == "regional_manager_viewer":
         conditions.append(OperationBacklogSnapshot.id == -1)
+    if sector_filter:
+        condition = _text_operator_condition(OperationBacklogSnapshot.sector, sector_filter["operator"], sector_filter["value"])
+        if condition is not None:
+            conditions.append(condition)
 
     count_column = (
         OperationBacklogSnapshot.backlog_atrasado_count
@@ -517,6 +528,7 @@ def backlog_history(
     group_column = {
         "regional": OperationBacklogSnapshot.regional,
         "team_model": OperationBacklogSnapshot.team_model,
+        "sector": OperationBacklogSnapshot.sector,
     }.get(group_by)
 
     columns = (OperationBacklogSnapshot.snapshot_date, group_column) if group_column is not None else (OperationBacklogSnapshot.snapshot_date,)

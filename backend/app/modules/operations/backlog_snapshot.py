@@ -33,11 +33,11 @@ def _team_model_label():
 
 
 def capture_backlog_snapshot(db: Session) -> int:
-    """Grava a fotografia de hoje do backlog (regional x modelo de equipe), se ainda não existir.
-    Idempotente: se já existe qualquer linha para a data de hoje, não faz nada - nunca duplica
-    nem sobrescreve (se o backlog mudar depois no mesmo dia, a fotografia reflete o momento em
-    que o job rodou primeiro, por desenho, já que o objetivo é "como estava hoje", não uma
-    amostragem contínua). Retorna quantas linhas foram gravadas (0 se já existia)."""
+    """Grava a fotografia de hoje do backlog (regional x modelo de equipe x setor), se ainda não
+    existir. Idempotente: se já existe qualquer linha para a data de hoje, não faz nada - nunca
+    duplica nem sobrescreve (se o backlog mudar depois no mesmo dia, a fotografia reflete o
+    momento em que o job rodou primeiro, por desenho, já que o objetivo é "como estava hoje", não
+    uma amostragem contínua). Retorna quantas linhas foram gravadas (0 se já existia)."""
     today = datetime.now(OPERATIONS_TIMEZONE).date()
     already_captured = db.scalar(
         select(func.count(OperationBacklogSnapshot.id)).where(OperationBacklogSnapshot.snapshot_date == today)
@@ -47,23 +47,26 @@ def capture_backlog_snapshot(db: Session) -> int:
 
     regional_label = func.coalesce(OperationOrder.regional, "Não identificado")
     team_model_label = _team_model_label()
+    sector_label = func.coalesce(OperationOrder.sector, "Não identificado")
     rows = db.execute(
         select(
             regional_label,
             team_model_label,
+            sector_label,
             func.count(OperationOrder.id),
             func.sum(case((OperationOrder.sla_status == "out_of_time", 1), else_=0)),
         )
         .where(OperationOrder.is_closed.is_(False))
-        .group_by(regional_label, team_model_label)
+        .group_by(regional_label, team_model_label, sector_label)
     ).all()
 
-    for regional, team_model, backlog_count, backlog_atrasado_count in rows:
+    for regional, team_model, sector, backlog_count, backlog_atrasado_count in rows:
         db.add(
             OperationBacklogSnapshot(
                 snapshot_date=today,
                 regional=regional,
                 team_model=team_model,
+                sector=sector,
                 backlog_count=int(backlog_count),
                 backlog_atrasado_count=int(backlog_atrasado_count or 0),
             )

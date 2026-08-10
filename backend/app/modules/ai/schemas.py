@@ -175,13 +175,21 @@ class AiBacklogAgingItem(BaseModel):
     over_15d: int
 
 
+class AiBacklogSectorFilter(BaseModel):
+    operator: Literal["contains", "starts_with", "ends_with", "not_equals"]
+    value: str = Field(min_length=1, max_length=160)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AiBacklogHistoryRequest(BaseModel):
     date_from: date
     date_to: date
     metric: Literal["backlog", "backlog_atrasado"]
-    # Diferente das outras ferramentas: só "regional"/"team_model" (o snapshot diário já vem
-    # pré-agregado só por essas duas - ver operations/backlog_snapshot.py).
-    group_by: Literal["none", "regional", "team_model"] = "none"
+    # Diferente das outras ferramentas: só "regional"/"team_model"/"sector" (o snapshot diário já
+    # vem pré-agregado só por essas três - ver operations/backlog_snapshot.py).
+    group_by: Literal["none", "regional", "team_model", "sector"] = "none"
+    sector_filter: AiBacklogSectorFilter | None = None
 
     model_config = ConfigDict(extra="forbid")
 
