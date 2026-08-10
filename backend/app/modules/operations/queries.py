@@ -977,6 +977,38 @@ def warranty_analytics(
     by_diagnosis = _warranty_top_ranking(lambda order: order.diagnosis)
     by_subject = _warranty_top_ranking(lambda order: order.os_subject)
 
+    # Achado real: `breakdown` (acima) só mostra a composição do DENOMINADOR por tipo de origem -
+    # não dá pra saber quantas garantias (numerador) vieram de cada tipo. Filtrar por tipo não
+    # segmenta esse vínculo corretamente porque o numerador é sobre a MANUTENÇÃO, não sobre a
+    # origem - por isso aqui cada linha cruza numerador e denominador do mesmo tipo explicitamente.
+    warranty_by_origin_kind: dict[str, int] = defaultdict(int)
+    for item in garantias:
+        warranty_by_origin_kind[item["origin"]["os_type_kind"]] += 1
+    # Em denominator="maintenance_total" o denominador é o total de manutenções, não population de
+    # origem - não tem como repartir por tipo de origem (mesma ressalva já feita em `breakdown`).
+    denominator_by_origin_kind: dict[str, int] = (
+        {} if denominator == "maintenance_total" else defaultdict(int)
+    )
+    if denominator != "maintenance_total":
+        for entry in denominator_population:
+            denominator_by_origin_kind[entry["os_type_kind"]] += 1
+    by_origin_type = [
+        {
+            "origin_type": WARRANTY_ORIGIN_LABELS[kind],
+            "warranty_count": warranty_by_origin_kind.get(kind, 0),
+            "denominator_count": denominator_by_origin_kind.get(kind) if denominator != "maintenance_total" else None,
+            "percentage": (
+                round((warranty_by_origin_kind.get(kind, 0) / denominator_by_origin_kind[kind]) * 100, 1)
+                if denominator != "maintenance_total" and denominator_by_origin_kind.get(kind)
+                else None
+            ),
+        }
+        for kind in sorted(
+            set(warranty_by_origin_kind) | set(denominator_by_origin_kind),
+            key=lambda k: -warranty_by_origin_kind.get(k, 0),
+        )
+    ]
+
     garantias.sort(key=lambda item: item["order"].opened_at, reverse=True)
     items_truncated = len(garantias) > WARRANTY_MAX_ITEMS
     items = [
@@ -1011,6 +1043,7 @@ def warranty_analytics(
         "by_regional": by_regional,
         "by_diagnosis": by_diagnosis,
         "by_subject": by_subject,
+        "by_origin_type": by_origin_type,
         "items": items,
         "items_truncated": items_truncated,
     }

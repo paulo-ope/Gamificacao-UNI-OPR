@@ -6,7 +6,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.ai.queries import AGGREGATION_DIMENSIONS
-from app.modules.operations.schemas import OperationBreakdownItem, OperationFilters, OperationWarrantyRegionalRankingItem
+from app.modules.operations.schemas import (
+    OperationBreakdownItem,
+    OperationFilters,
+    OperationWarrantyOriginTypeItem,
+    OperationWarrantyRegionalRankingItem,
+)
 
 AggregationDimension = Literal[
     "regional", "city", "os_type", "subject", "diagnosis",
@@ -240,5 +245,6 @@ class AiWarrantyAnalyticsResponse(BaseModel):
     by_regional: list[OperationWarrantyRegionalRankingItem]
     by_diagnosis: list[OperationBreakdownItem]
     by_subject: list[OperationBreakdownItem]
+    by_origin_type: list[OperationWarrantyOriginTypeItem]
     items: list[AiWarrantyItem]
     items_truncated: bool

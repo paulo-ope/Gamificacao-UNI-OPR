@@ -769,6 +769,15 @@ class OperationWarrantyRegionalRankingItem(BaseModel):
     percentage: float | None
 
 
+class OperationWarrantyOriginTypeItem(BaseModel):
+    origin_type: str
+    warranty_count: int
+    # None quando denominator="maintenance_total" - o denominador nesse modo é o total de
+    # manutenções, não uma população de origem, então não tem como repartir por tipo de origem.
+    denominator_count: int | None
+    percentage: float | None
+
+
 class OperationWarrantyAnalytics(BaseModel):
     period_basis: Literal["opened", "closed"]
     denominator: Literal["closed_origins", "active_origins", "maintenance_total", "activation_closed"]
@@ -782,6 +791,7 @@ class OperationWarrantyAnalytics(BaseModel):
     by_regional: list[OperationWarrantyRegionalRankingItem]
     by_diagnosis: list[OperationBreakdownItem]
     by_subject: list[OperationBreakdownItem]
+    by_origin_type: list[OperationWarrantyOriginTypeItem]
     items: list[OperationWarrantyItem]
     items_truncated: bool
 
