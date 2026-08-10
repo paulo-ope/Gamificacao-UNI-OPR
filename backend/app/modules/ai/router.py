@@ -7,15 +7,17 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User
 from app.modules.ai.auth import require_api_key_user, require_ai_permission
-from app.modules.ai.queries import aggregate_orders, orders_timeseries, search_orders
+from app.modules.ai.queries import aggregate_orders, filter_options_for_ai, orders_timeseries, search_orders
 from app.modules.ai.schemas import (
     AiAggregationRequest,
     AiBreakdownItem,
+    AiFilterOptionsRequest,
     AiSearchRequest,
     AiSearchResponse,
     AiTimeseriesPoint,
     AiTimeseriesRequest,
 )
+from app.modules.operations.schemas import OperationFilters
 
 router = APIRouter(prefix="/ai", tags=["ai-tools"], dependencies=[Depends(require_ai_permission("ai:query"))])
 
@@ -75,6 +77,15 @@ def search_orders_route(
         keyword=payload.keyword,
         **payload.filters.model_dump(),
     )
+
+
+@router.post("/filter-options", response_model=OperationFilters)
+def filter_options_route(
+    payload: AiFilterOptionsRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_api_key_user),
+) -> dict:
+    return filter_options_for_ai(db, user, payload.date_from, payload.date_to)
 
 
 @public_router.get("/openapi.json", include_in_schema=False)

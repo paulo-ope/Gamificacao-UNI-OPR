@@ -6,10 +6,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.ai.queries import AGGREGATION_DIMENSIONS
+from app.modules.operations.schemas import OperationFilters
 
 AggregationDimension = Literal[
     "regional", "city", "os_type", "subject", "diagnosis",
-    "department", "sector", "priority", "responsible", "status",
+    "department", "sector", "priority", "responsible", "status", "sla_status",
     # "team_model" não é uma coluna de OperationOrder (é calculado casando responsável+regional
     # contra a atribuição de modelo de equipe, ver ai/queries.py:_group_label) - por isso não
     # aparece em AGGREGATION_DIMENSIONS, só aqui na lista de valores aceitos pela API.
@@ -50,7 +51,10 @@ class AiAggregationRequest(BaseModel):
     date_from: date
     date_to: date
     group_by: AggregationDimension
-    metric: Literal["quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias"]
+    metric: Literal[
+        "quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias",
+        "quantidade_atrasada", "quantidade_backlog",
+    ]
     filters: AiOrderFilters = Field(default_factory=AiOrderFilters)
 
     model_config = ConfigDict(extra="forbid")
@@ -100,7 +104,19 @@ class AiOrderSearchItem(BaseModel):
     team_model: str | None
     status: str | None
     opened_at: datetime
+    scheduled_at: datetime | None
+    assumed_at: datetime | None
+    execution_started_at: datetime | None
+    finished_at: datetime | None
     closed_at: datetime | None
+    sla_status: str
+    sla_risk: str | None
+    sla_target_hours: float | None
+    sla_deadline_at: datetime | None
+    horas_para_vencer: float | None
+    horas_atrasada: float | None
+    dias_em_aberto: float | None
+    sla_estourado: bool
 
 
 class AiSearchResponse(BaseModel):
@@ -109,3 +125,10 @@ class AiSearchResponse(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+class AiFilterOptionsRequest(BaseModel):
+    date_from: date
+    date_to: date
+
+    model_config = ConfigDict(extra="forbid")

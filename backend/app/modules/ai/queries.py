@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from sqlalchemy import case, func, select
@@ -11,7 +11,7 @@ from app.models import User
 from app.modules.operations import queries as operations_queries
 from app.modules.operations.models import OperationOrder, OperationResponsibleAssignment, OperationTeamModel
 from app.modules.operations.period import local_period_utc_bounds
-from app.modules.operations.schemas import _text_from_payload
+from app.modules.operations.schemas import OperationFilters, _text_from_payload
 
 # As mesmas 9 dimensões que a tela de Operação já deixa filtrar/agrupar hoje (regional, cidade,
 # tipo de O.S., assunto, diagnóstico, setor, prioridade, responsável, status) - deliberadamente um
@@ -30,9 +30,13 @@ AGGREGATION_DIMENSIONS = {
     "priority": OperationOrder.priority,
     "responsible": OperationOrder.responsible,
     "status": OperationOrder.status,
+    "sla_status": OperationOrder.sla_status,
 }
 
-AggregationMetric = Literal["quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias"]
+AggregationMetric = Literal[
+    "quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias",
+    "quantidade_atrasada", "quantidade_backlog",
+]
 TimeseriesMetric = Literal["abertas", "fechadas", "saldo"]
 Granularity = Literal["day", "week", "month"]
 
@@ -80,6 +84,23 @@ def _percentage(count: int, total: int) -> float:
     return round((count / total) * 100, 2) if total else 0.0
 
 
+def _sla_risk_bucket(elapsed_hours: float | None, sla_target_hours: float | None) -> str:
+    """Mesmos limiares de `operations_queries._sla_risk_bucket_case()` (queries.py:2228-2240),
+    replicados em Python porque `search_orders` já carrega o objeto `OperationOrder` inteiro (não
+    um select de colunas) - calcular aqui evita misturar ORM completo com expressão SQL bruta na
+    mesma query. Se aqueles limiares mudarem lá, precisam mudar aqui também."""
+    if not sla_target_hours or sla_target_hours <= 0:
+        return "no_target"
+    ratio = (elapsed_hours or 0) / sla_target_hours * 100
+    if ratio >= 100:
+        return "breached"
+    if ratio >= 80:
+        return "critical"
+    if ratio >= 50:
+        return "attention"
+    return "on_track"
+
+
 def aggregate_orders(
     db: Session,
     user: User,
@@ -122,6 +143,36 @@ def aggregate_orders(
             (str(row[0]), int(row[1]), _percentage(int(row[2] or 0), int(row[1])))
             for row in rows
         ]
+
+    elif metric == "quantidade_atrasada":
+        # Diferente de "quantidade_aberta" (que ignora de propósito equipe/responsável, porque
+        # abertura é demanda), aqui o filtro de equipe faz sentido - queremos saber o atraso de
+        # QUEM está com a O.S. hoje, então usa os filtros normais, não `_opening_filters`.
+        conditions = operations_queries._dimension_conditions(db, user, filters)
+        rows = db.execute(
+            select(label, func.count(OperationOrder.id))
+            .where(
+                *conditions,
+                OperationOrder.is_closed.is_(False),
+                OperationOrder.opened_at.between(start, end),
+                OperationOrder.sla_status == "out_of_time",
+            )
+            .group_by(label)
+        ).all()
+        entries = [(str(row[0]), int(row[1]), float(row[1])) for row in rows]
+
+    elif metric == "quantidade_backlog":
+        conditions = operations_queries._dimension_conditions(db, user, filters)
+        rows = db.execute(
+            select(label, func.count(OperationOrder.id))
+            .where(
+                *conditions,
+                OperationOrder.is_closed.is_(False),
+                OperationOrder.opened_at.between(start, end),
+            )
+            .group_by(label)
+        ).all()
+        entries = [(str(row[0]), int(row[1]), float(row[1])) for row in rows]
 
     elif metric == "horas_medias":
         conditions = operations_queries._dimension_conditions(db, user, filters)
@@ -206,6 +257,49 @@ def orders_timeseries(
     return [{"period_start": bucket, "quantity": quantity} for bucket, quantity in sorted(buckets.items())]
 
 
+def _build_search_item(order: OperationOrder, team_model: str | None) -> dict:
+    target = order.sla_target_hours
+    elapsed = order.elapsed_hours
+    is_open = order.closed_at is None
+
+    has_target = target is not None and elapsed is not None
+    horas_para_vencer = round(target - elapsed, 1) if has_target else None
+    horas_atrasada = round(max(0.0, elapsed - target), 1) if has_target else None
+    dias_em_aberto = round((datetime.now(timezone.utc) - order.opened_at).total_seconds() / 86400, 1) if is_open else None
+    sla_deadline_at = order.opened_at + timedelta(hours=target) if target is not None else None
+
+    return {
+        "order_code": order.order_code,
+        "regional": order.regional,
+        "os_type": order.os_type,
+        "subject": order.os_subject,
+        "diagnosis": order.diagnosis,
+        "technical_report": _text_from_payload(order.raw_payload, "mensagem_resposta", "relato_tecnico", "relato"),
+        "responsible": order.responsible,
+        "team_model": team_model,
+        "status": order.status,
+        "opened_at": order.opened_at,
+        "scheduled_at": order.scheduled_at,
+        "assumed_at": order.assumed_at,
+        "execution_started_at": order.execution_started_at,
+        "finished_at": order.finished_at,
+        "closed_at": order.closed_at,
+        "sla_status": order.sla_status,
+        # Só se aplica a O.S. ainda aberta (ver _sla_risk_bucket_case em operations/queries.py) -
+        # numa O.S. já fechada o "risco" não tem mais sentido preditivo, fica None.
+        "sla_risk": _sla_risk_bucket(elapsed, target) if is_open else None,
+        "sla_target_hours": target,
+        # `deadline_at` bruto do IXC está majoritariamente vazio nesta instância (ver
+        # docs/plano-integracao-ixc.md) - este é o prazo EFETIVO, calculado a partir da meta de
+        # horas do assunto (o mesmo que o sistema já usa por baixo pra decidir sla_status).
+        "sla_deadline_at": sla_deadline_at,
+        "horas_para_vencer": horas_para_vencer,
+        "horas_atrasada": horas_atrasada,
+        "dias_em_aberto": dias_em_aberto,
+        "sla_estourado": order.sla_status == "out_of_time",
+    }
+
+
 def search_orders(
     db: Session,
     user: User,
@@ -238,19 +332,7 @@ def search_orders(
     )
     team_model_by_responsible = _team_model_lookup(db, orders)
     items = [
-        {
-            "order_code": order.order_code,
-            "regional": order.regional,
-            "os_type": order.os_type,
-            "subject": order.os_subject,
-            "diagnosis": order.diagnosis,
-            "technical_report": _text_from_payload(order.raw_payload, "mensagem_resposta", "relato_tecnico", "relato"),
-            "responsible": order.responsible,
-            "team_model": team_model_by_responsible.get(((order.responsible or "").lower(), order.regional)),
-            "status": order.status,
-            "opened_at": order.opened_at,
-            "closed_at": order.closed_at,
-        }
+        _build_search_item(order, team_model_by_responsible.get(((order.responsible or "").lower(), order.regional)))
         for order in orders
     ]
     return {
@@ -260,3 +342,11 @@ def search_orders(
         "page_size": page_size,
         "has_more": total > page * page_size,
     }
+
+
+def filter_options_for_ai(db: Session, user: User, date_from: date, date_to: date) -> OperationFilters:
+    """Repassa direto pra `operations_queries.filter_options` - a mesma função que alimenta os
+    dropdowns da tela de Operação (já cobre regionais, modelos de equipe, setores, assuntos,
+    diagnósticos, responsáveis, status, status de SLA, prioridades etc.). Nenhuma lógica nova:
+    resolve o problema de a IA não conseguir listar valores cadastrados sem reimplementar nada."""
+    return operations_queries.filter_options(db, date_from, date_to, user, scope="period")
