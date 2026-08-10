@@ -118,6 +118,8 @@ def get_order_details(
     sla_status: str | None = Query(default=None, description='"late" ou "on_time" (só entre agendadas)'),
     ttfa_bucket: str | None = None,
     backlog_bucket: str | None = None,
+    only_rescheduled: bool = Query(default=False),
+    reschedule_origin: str | None = Query(default=None, description='"backoffice" ou "campo"'),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, le=200),
     sort_by: str = Query(default="opened_at"),
@@ -131,6 +133,8 @@ def get_order_details(
         raise HTTPException(status_code=400, detail=f"status inválido: {status!r}")
     if sla_status not in (None, "late", "on_time"):
         raise HTTPException(status_code=400, detail=f"sla_status inválido: {sla_status!r}")
+    if reschedule_origin not in (None, "backoffice", "campo"):
+        raise HTTPException(status_code=400, detail=f"reschedule_origin inválido: {reschedule_origin!r}")
     if sort_by not in metrics_engine.ORDER_SORT_KEYS:
         raise HTTPException(status_code=400, detail=f"sort_by inválido: {sort_by!r}")
     if sort_dir not in ("asc", "desc"):
@@ -139,6 +143,7 @@ def get_order_details(
     return metrics_engine.order_details(
         db, filters,
         status=status, sla_status=sla_status, ttfa_bucket=ttfa_bucket, backlog_bucket=backlog_bucket,
+        only_rescheduled=only_rescheduled, reschedule_origin=reschedule_origin,
         page=page, page_size=page_size, sort_by=sort_by, sort_dir=sort_dir,
     )
 

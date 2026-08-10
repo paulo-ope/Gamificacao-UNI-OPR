@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
 from app.core.security import ensure_access_profiles, ensure_initial_admin
 from app.modules.admin.router import router as admin_router
+from app.modules.ai.router import public_router as ai_public_router, router as ai_router
 from app.modules.management.router import router as management_router
 from app.modules.operations.router import router as operations_router
 from app.modules.scheduling.router import router as scheduling_router
@@ -77,3 +78,5 @@ app.include_router(admin_router, prefix=settings_obj.api_prefix)
 app.include_router(management_router, prefix=settings_obj.api_prefix)
 app.include_router(operations_router, prefix=settings_obj.api_prefix)
 app.include_router(scheduling_router, prefix=settings_obj.api_prefix)
+app.include_router(ai_router, prefix=settings_obj.api_prefix)
+app.include_router(ai_public_router, prefix=settings_obj.api_prefix)

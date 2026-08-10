@@ -237,39 +237,46 @@ export function OperationsSlaHierarchyTable({
     }));
   }
 
-  async function changeRootLevel(level: "os_type" | "subject" | "diagnosis") {
+  function changeRootLevel(level: "os_type" | "subject" | "diagnosis") {
     setRootLevel(level);
-    setExpandedTypes(new Set());
-    setExpandedSubjects(new Set());
-    setSubjects({});
-    setDiagnoses({});
-    setError(null);
-    if (level === "os_type") {
-      setRootData(data);
-      return;
-    }
-    setRootLoading(true);
-    try {
-      setRootData(await operationsApi.slaHierarchy(filters, level));
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "Não foi possível carregar o agrupamento selecionado.",
-      );
-    } finally {
-      setRootLoading(false);
-    }
   }
 
   useEffect(() => {
-    if (rootLevel === "os_type") setRootData(data);
     setExpandedTypes(new Set());
     setExpandedSubjects(new Set());
     setSubjects({});
     setDiagnoses({});
     setError(null);
     setSelectedType(null);
+
+    if (rootLevel === "os_type") {
+      setRootData(data);
+      return;
+    }
+
+    let active = true;
+    setRootLoading(true);
+    operationsApi
+      .slaHierarchy(filters, rootLevel)
+      .then((result) => {
+        if (active) setRootData(result);
+      })
+      .catch((reason) => {
+        if (active) {
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Não foi possível carregar o agrupamento selecionado.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setRootLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, [data, filters, rootLevel]);
 
   useEffect(() => {
@@ -398,7 +405,7 @@ export function OperationsSlaHierarchyTable({
               <AppRadio
                 checked={rootLevel === level}
                 disabled={rootLoading}
-                onSelect={() => void changeRootLevel(level)}
+                onSelect={() => changeRootLevel(level)}
                 ariaLabel={label}
               />
               {label}

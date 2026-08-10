@@ -25,7 +25,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { InfoHint } from "@/components/gamification/info-hint";
@@ -93,6 +93,16 @@ function hoursLabel(value: number | null | undefined) {
   return `${(value / 24).toFixed(1).replace(".", ",")} dias`;
 }
 
+function rescheduleOriginLabel(origins: ("backoffice" | "campo")[] | undefined) {
+  if (!origins || !origins.length) return "—";
+  const hasBackoffice = origins.includes("backoffice");
+  const hasCampo = origins.includes("campo");
+  if (hasBackoffice && hasCampo) return "Backoffice e campo";
+  if (hasBackoffice) return "Backoffice";
+  if (hasCampo) return "Campo";
+  return "—";
+}
+
 // A operação inteira acontece em Rondônia - fixar o fuso na formatação garante que todo mundo vê o
 // mesmo horário, não importa onde o navegador de quem está olhando a tela está fisicamente. Sem
 // isso, `toLocaleString` usa o fuso do DISPOSITIVO de quem acessa, não o da operação (achado real,
@@ -119,6 +129,7 @@ function MetricCard({
   tone = "blue",
   icon: Icon,
   onClick,
+  footer,
 }: {
   title: string;
   value: string | number;
@@ -127,6 +138,7 @@ function MetricCard({
   tone?: "blue" | "cyan" | "emerald" | "amber" | "red" | "slate";
   icon?: ComponentType<{ className?: string }>;
   onClick?: () => void;
+  footer?: ReactNode;
 }) {
   const toneClasses = {
     blue: { accent: "from-blue-600 to-cyan-500", badge: "bg-blue-50 text-blue-700" },
@@ -170,6 +182,7 @@ function MetricCard({
       </div>
       <p className="mt-2 text-3xl font-semibold tabular-nums text-slate-950">{value}</p>
       <p className="mt-2 text-xs text-slate-600">{helper}</p>
+      {footer}
       {onClick ? <span className="mt-1 flex items-center gap-1 text-[11px] font-medium text-blue-600">Ver O.S. <ArrowRight className="h-3 w-3" /></span> : null}
     </div>
   );
@@ -708,11 +721,48 @@ export default function AgendamentoPage() {
             value={number(summary?.reschedule_rate, "%")}
             helper={`${number(summary?.rescheduled_orders)} O.S. reagendadas · antecedência mediana da janela: ${hoursLabel(summary?.window_lead_hours.median)}`}
             hint={{
-              title: "Reagendamento e antecedência",
-              description: "Reagendamento: O.S. com mais de um evento de agenda. Antecedência: distância entre o momento em que o operador agendou e a janela combinada - crescendo, indica agenda de campo lotada.",
+              title: "Reagendamento e origem",
+              description: "Reagendamento: O.S. com mais de um evento de agenda. Origem (Backoffice/Campo): aproximação, não um campo do IXC - conta como Backoffice quando quem registrou o reagendamento é membro cadastrado da equipe do setor; qualquer outro caso conta como Campo.",
             }}
             tone={summary?.reschedule_rate && summary.reschedule_rate > 30 ? "amber" : "cyan"}
             icon={RefreshCcw}
+            onClick={
+              summary?.rescheduled_orders
+                ? () => openDrill("O.S. reagendadas", "Todo reagendamento no recorte, mais recentes primeiro", { only_rescheduled: true })
+                : undefined
+            }
+            footer={
+              summary?.rescheduled_orders ? (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openDrill("Reagendamentos · Backoffice", "Reagendados por operador da equipe do setor", {
+                        only_rescheduled: true,
+                        reschedule_origin: "backoffice",
+                      });
+                    }}
+                    className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 hover:bg-blue-100"
+                  >
+                    Backoffice {number(summary?.reschedule_backoffice_pct, "%")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openDrill("Reagendamentos · Campo", "Reagendados sem operador da equipe do setor", {
+                        only_rescheduled: true,
+                        reschedule_origin: "campo",
+                      });
+                    }}
+                    className="rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[11px] font-medium text-teal-700 hover:bg-teal-100"
+                  >
+                    Campo {number(summary?.reschedule_campo_pct, "%")}
+                  </button>
+                </div>
+              ) : null
+            }
           />
         </section>
 
@@ -987,6 +1037,7 @@ export default function AgendamentoPage() {
       {teamOpen ? <TeamDialog onClose={() => setTeamOpen(false)} onSaved={() => void loadDashboard(appliedFilters)} /> : null}
       {drill ? (
         <OrderDrillPanel
+          key={drill.title}
           title={drill.title}
           subtitle={drill.subtitle}
           filters={appliedFilters}
@@ -1360,6 +1411,7 @@ function OrderDrillPanel({
   const [error, setError] = useState<string | null>(null);
   const [timelineOsId, setTimelineOsId] = useState<number | null>(null);
   const [sort, setSort] = useState<SchedulingOrderSort>({ key: "opened_at", direction: "desc" });
+  const [originFilter, setOriginFilter] = useState<"all" | "backoffice" | "campo">(params.reschedule_origin ?? "all");
 
   function changeSort(key: SchedulingOrderSortKey) {
     const direction: "asc" | "desc" = sort.key === key && sort.direction === "desc" ? "asc" : "desc";
@@ -1372,12 +1424,19 @@ function OrderDrillPanel({
     return sort.direction === "asc" ? " ↑" : " ↓";
   }
 
+  // Filtro de origem refina só dentro do painel (o card já abre o recorte "só reagendadas") - não
+  // faz sentido mostrá-lo fora de um drill de reagendamento.
+  const showOriginFilter = Boolean(params.only_rescheduled);
+  const effectiveParams: SchedulingOrderDrillParams = showOriginFilter
+    ? { ...params, reschedule_origin: originFilter === "all" ? undefined : originFilter }
+    : params;
+
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
     schedulingApi
-      .orders(filters, params, page, DRILL_PAGE_SIZE, sort, controller.signal)
+      .orders(filters, effectiveParams, page, DRILL_PAGE_SIZE, sort, controller.signal)
       .then(setData)
       .catch((reason) => {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
@@ -1386,7 +1445,7 @@ function OrderDrillPanel({
       .finally(() => setLoading(false));
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, sort.key, sort.direction, JSON.stringify(params), filters.date_from, filters.date_to]);
+  }, [page, sort.key, sort.direction, JSON.stringify(effectiveParams), filters.date_from, filters.date_to]);
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
 
@@ -1399,6 +1458,34 @@ function OrderDrillPanel({
           subtitle={`${subtitle}${data ? ` · ${new Intl.NumberFormat("pt-BR").format(data.total)} O.S. no total` : ""}`}
           onClose={onClose}
         />
+        {showOriginFilter ? (
+          <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-2">
+            <span className="text-[11px] font-medium text-slate-500">Origem</span>
+            <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+              {(
+                [
+                  ["all", "Todas"],
+                  ["backoffice", "Backoffice"],
+                  ["campo", "Campo"],
+                ] as const
+              ).map(([value, label]) => (
+                <Button
+                  key={value}
+                  type="button"
+                  size="sm"
+                  variant={originFilter === value ? "default" : "ghost"}
+                  className="h-7 px-2.5 text-xs"
+                  onClick={() => {
+                    setOriginFilter(value);
+                    setPage(1);
+                  }}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="flex-1 overflow-auto">
           {error ? <p className="m-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
           {loading ? (
@@ -1428,6 +1515,7 @@ function OrderDrillPanel({
                   <TableHead className="text-right">
                     <button type="button" onClick={() => changeSort("reschedule_count")}>Reagend.{sortMark("reschedule_count")}</button>
                   </TableHead>
+                  {showOriginFilter ? <TableHead>Reagendado por</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1456,11 +1544,14 @@ function OrderDrillPanel({
                     <TableCell className="max-w-44 truncate whitespace-nowrap" title={item.filial}>{item.filial}</TableCell>
                     <TableCell className="max-w-64 truncate whitespace-nowrap" title={item.assunto}>{item.assunto}</TableCell>
                     <TableCell className="text-right tabular-nums">{item.reschedule_count || "—"}</TableCell>
+                    {showOriginFilter ? (
+                      <TableCell>{rescheduleOriginLabel(item.reschedule_origins)}</TableCell>
+                    ) : null}
                   </TableRow>
                 ))}
                 {data && !data.items.length ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-10 text-center text-sm text-slate-500">Nenhuma O.S. encontrada para este recorte.</TableCell>
+                    <TableCell colSpan={showOriginFilter ? 10 : 9} className="py-10 text-center text-sm text-slate-500">Nenhuma O.S. encontrada para este recorte.</TableCell>
                   </TableRow>
                 ) : null}
               </TableBody>

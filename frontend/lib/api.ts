@@ -35,6 +35,10 @@ import type {
   LeadershipRoleProfile,
   LoginResult,
   ManagementCase,
+  ManagementCaseComment,
+  ManagementCaseFilters,
+  ManagementCaseGenerateResult,
+  ManagementCasePage,
   ManagementCaseReason,
   ManagementDashboard,
   ManagementOptions,
@@ -291,14 +295,54 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
-  managementCases: (filters?: { status?: string; regional?: string }) => {
+  managementCases: (filters?: ManagementCaseFilters) => {
     const params = new URLSearchParams();
-    if (filters?.status) params.set("status", filters.status);
-    if (filters?.regional) params.set("regional", filters.regional);
+    Object.entries(filters ?? {}).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "" || value === false) return;
+      params.set(key, String(value));
+    });
     const query = params.toString();
-    return request<ManagementCase[]>(`/management/cases${query ? `?${query}` : ""}`);
+    return request<ManagementCasePage>(`/management/cases${query ? `?${query}` : ""}`);
   },
+  managementCase: (id: number) => request<ManagementCase>(`/management/cases/${id}`),
+  createManagementCase: (payload: {
+    case_type: string;
+    metric_name: string;
+    regional?: string | null;
+    responsible_name?: string | null;
+    supervisor_user_id?: number | null;
+    team_model_id?: number | null;
+    reference_year?: number | null;
+    reference_month?: number | null;
+    expected_value?: number | null;
+    actual_value?: number | null;
+    deviation_value?: number | null;
+    severity?: string;
+    due_date?: string | null;
+  }) =>
+    request<ManagementCase>("/management/cases", { method: "POST", body: JSON.stringify(payload) }),
+  generateManagementCases: (reference_year: number, reference_month: number) =>
+    request<ManagementCaseGenerateResult>("/management/cases/generate", {
+      method: "POST",
+      body: JSON.stringify({ reference_year, reference_month })
+    }),
+  justifyManagementCase: (
+    id: number,
+    payload: { reason_id?: number | null; justification_text: string; action_plan?: string | null; status?: string }
+  ) =>
+    request<ManagementCase>(`/management/cases/${id}/justify`, { method: "POST", body: JSON.stringify(payload) }),
+  reviewManagementCase: (id: number, payload: { status: string; review_note?: string | null; due_date?: string | null }) =>
+    request<ManagementCase>(`/management/cases/${id}/review`, { method: "POST", body: JSON.stringify(payload) }),
+  managementCaseComments: (id: number) => request<ManagementCaseComment[]>(`/management/cases/${id}/comments`),
+  createManagementCaseComment: (id: number, comment: string) =>
+    request<ManagementCaseComment>(`/management/cases/${id}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ comment })
+    }),
   managementCaseReasons: () => request<ManagementCaseReason[]>("/management/case-reasons"),
+  managementSettings: () => request<Record<string, string>>("/management/settings"),
+  updateManagementSettings: (values: Record<string, string>) =>
+    request<Record<string, string>>("/management/settings", { method: "PUT", body: JSON.stringify(values) }),
   leadershipProfiles: () => request<LeadershipProfile[]>("/leadership/profiles"),
   leadershipRoleProfiles: () => request<LeadershipRoleProfile[]>("/leadership/role-profiles"),
   createLeadershipRoleProfile: (payload: Partial<LeadershipRoleProfile>) =>

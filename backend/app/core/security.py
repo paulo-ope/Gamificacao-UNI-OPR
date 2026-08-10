@@ -35,6 +35,12 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "operations:read",
         "operations:view_openings",
         "operations:views:read_global",
+        # Gestão Integrada: o gestor regional é quem responde pelos casos das regionais que
+        # gerencia. Sem `write_justification` o fluxo de justificativa não tem quem o execute.
+        # A visibilidade é recortada no servidor (ver management/cases.case_scope_conditions):
+        # sem `management:review`, ele só enxerga os próprios casos e os das suas regionais.
+        "management:read",
+        "management:write_justification",
     },
     "viewer": {
         "dashboard:read",
@@ -71,6 +77,10 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "scheduling:sync",
         "scheduling:manage_filters",
         "scheduling:views:read_global",
+        # Mesmo racional do gestor regional: o operador supervisiona equipe e precisa justificar os
+        # casos dela. Revisar/encerrar continua exclusivo da matriz (`management:review`).
+        "management:read",
+        "management:write_justification",
     },
     "admin": {
         "dashboard:read",
@@ -128,6 +138,12 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "admin:modules:read",
         "admin:modules:write",
         "admin:audit:read",
+    },
+    # Identidade de máquina (não uma pessoa logando) - usada pela chave de API que expõe dados
+    # analíticos de O.S. para consumo por IA (conector MCP/Actions). Só leitura, sem nenhuma
+    # permissão de escrita ou de outro módulo.
+    "ai_service": {
+        "ai:query",
     },
 }
 
@@ -187,6 +203,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "admin:modules:read": "Administração: listar módulos",
     "admin:modules:write": "Administração: alterar visibilidade de módulos",
     "admin:audit:read": "Administração: ver auditoria",
+    "ai:query": "IA: consultar dados analíticos de O.S.",
 }
 
 PROFILE_LABELS: dict[str, tuple[str, str]] = {
@@ -195,6 +212,7 @@ PROFILE_LABELS: dict[str, tuple[str, str]] = {
     "viewer": ("Leitor Operacional", "Consulta dashboards, auditoria e operação sem alterações críticas."),
     "operator": ("Operador Operacional", "Opera importações e rotinas da operação com acesso gerencial."),
     "admin": ("Admin Ecossistema", "Controle total de módulos, usuários, perfis e configurações."),
+    "ai_service": ("Serviço de IA", "Credencial de máquina para consulta analítica de O.S. por uma IA (MCP/Actions)."),
 }
 
 security = HTTPBearer(auto_error=False)
@@ -235,6 +253,16 @@ def verify_password(password: str, password_hash: str) -> bool:
         return hmac.compare_digest(actual, expected)
     except Exception:
         return False
+
+
+# Mesmo esquema pbkdf2 de hash_password/verify_password acima - chave de API é só outro segredo
+# que nunca deve ficar em texto puro no banco, não precisa de um algoritmo próprio.
+def hash_api_key(raw_key: str) -> str:
+    return hash_password(raw_key)
+
+
+def verify_api_key(raw_key: str, key_hash: str) -> bool:
+    return verify_password(raw_key, key_hash)
 
 
 def _b64url(data: bytes) -> str:

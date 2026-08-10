@@ -749,6 +749,7 @@ def warranty(
     date_to: date,
     period_basis: Literal["opened", "closed"] = "opened",
     denominator: Literal["closed_origins", "active_origins", "maintenance_total", "activation_closed"] = "active_origins",
+    origin_excluded_diagnoses: list[str] = Query(default_factory=list),
     selected_filters: dict = Depends(_filter_params),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -761,6 +762,7 @@ def warranty(
         user,
         period_basis=period_basis,
         denominator=denominator,
+        origin_excluded_diagnoses=origin_excluded_diagnoses,
         **selected_filters,
     )
 
