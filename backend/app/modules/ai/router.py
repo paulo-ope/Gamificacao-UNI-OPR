@@ -105,4 +105,13 @@ def ai_openapi_schema(request: Request) -> dict:
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     host = request.headers.get("x-forwarded-host", request.url.netloc)
     schema["servers"] = [{"url": f"{scheme}://{host}{base_path}"}]
+
+    # As 3 rotas são POST só por causa dos filtros compostos no corpo - nenhuma delas escreve
+    # nada. Sem isso, o ChatGPT assume que todo POST é "consequente" (pode ter efeito colateral)
+    # e força confirmação manual a cada chamada, sem nem oferecer a opção de "sempre permitir".
+    for operations in schema.get("paths", {}).values():
+        for operation in operations.values():
+            if isinstance(operation, dict):
+                operation["x-openai-isConsequential"] = False
+
     return schema
