@@ -10,8 +10,12 @@ from app.modules.ai.queries import AGGREGATION_DIMENSIONS
 AggregationDimension = Literal[
     "regional", "city", "os_type", "subject", "diagnosis",
     "department", "sector", "priority", "responsible", "status",
+    # "team_model" não é uma coluna de OperationOrder (é calculado casando responsável+regional
+    # contra a atribuição de modelo de equipe, ver ai/queries.py:_group_label) - por isso não
+    # aparece em AGGREGATION_DIMENSIONS, só aqui na lista de valores aceitos pela API.
+    "team_model",
 ]
-assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS)
+assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS) | {"team_model"}
 
 
 # Mesmos nomes de OperationFilters (operations/schemas.py) - a IA já "conhece" esse vocabulário
@@ -92,6 +96,8 @@ class AiOrderSearchItem(BaseModel):
     subject: str | None
     diagnosis: str | None
     technical_report: str | None
+    responsible: str | None
+    team_model: str | None
     status: str | None
     opened_at: datetime
     closed_at: datetime | None

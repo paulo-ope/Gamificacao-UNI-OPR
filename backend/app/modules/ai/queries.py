@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import User
 from app.modules.operations import queries as operations_queries
-from app.modules.operations.models import OperationOrder
+from app.modules.operations.models import OperationOrder, OperationResponsibleAssignment, OperationTeamModel
 from app.modules.operations.period import local_period_utc_bounds
 from app.modules.operations.schemas import _text_from_payload
 
@@ -39,6 +39,43 @@ Granularity = Literal["day", "week", "month"]
 AI_SEARCH_MAX_PAGE_SIZE = 200
 
 
+def _group_label(group_by: str):
+    """"team_model" não é uma coluna de OperationOrder - é calculado casando o responsável (e a
+    regional, mesma chave de identidade de OperationResponsibleAssignment) contra a atribuição de
+    modelo de equipe, igual ao filtro `team_models` já faz em operations.queries."""
+    if group_by == "team_model":
+        team_model_name = (
+            select(OperationTeamModel.name)
+            .join(OperationResponsibleAssignment, OperationResponsibleAssignment.team_model_id == OperationTeamModel.id)
+            .where(
+                func.lower(OperationResponsibleAssignment.responsible_name) == func.lower(OperationOrder.responsible),
+                OperationResponsibleAssignment.regional == OperationOrder.regional,
+            )
+            .limit(1)
+            .scalar_subquery()
+        )
+        return func.coalesce(team_model_name, "Não identificado")
+    field = AGGREGATION_DIMENSIONS.get(group_by, OperationOrder.regional)
+    return func.coalesce(field, "Não identificado")
+
+
+def _team_model_lookup(db: Session, orders: list[OperationOrder]) -> dict[tuple[str, str], str]:
+    """Resolve o modelo de equipe de uma página de O.S. já carregada, numa única query extra (em
+    vez de juntar essa tabela na query paginada principal) - o volume por página é pequeno (no
+    máximo AI_SEARCH_MAX_PAGE_SIZE), então uma segunda query simples é mais barata que um join a
+    mais em toda busca, inclusive quando ninguém pede o campo."""
+    pairs = {(order.responsible, order.regional) for order in orders if order.responsible and order.regional}
+    if not pairs:
+        return {}
+    lowered_names = {name.lower() for name, _ in pairs}
+    rows = db.execute(
+        select(OperationResponsibleAssignment.responsible_name, OperationResponsibleAssignment.regional, OperationTeamModel.name)
+        .join(OperationTeamModel, OperationTeamModel.id == OperationResponsibleAssignment.team_model_id)
+        .where(func.lower(OperationResponsibleAssignment.responsible_name).in_(lowered_names))
+    ).all()
+    return {(responsible_name.lower(), regional): team_model_name for responsible_name, regional, team_model_name in rows}
+
+
 def _percentage(count: int, total: int) -> float:
     return round((count / total) * 100, 2) if total else 0.0
 
@@ -58,8 +95,7 @@ def aggregate_orders(
     `percentage` (fatia do grupo sobre o total de `quantity` entre todos os grupos). Os dois
     últimos têm significado diferente de propósito porque "taxa de SLA" e "horas médias" não são
     frações de um total, então não caberiam sozinhos num único campo `percentage`."""
-    field = AGGREGATION_DIMENSIONS.get(group_by, OperationOrder.regional)
-    label = func.coalesce(field, "Não identificado")
+    label = _group_label(group_by)
     start, end = local_period_utc_bounds(date_from, date_to)
 
     if metric == "quantidade_aberta":
@@ -200,6 +236,7 @@ def search_orders(
             .limit(page_size)
         )
     )
+    team_model_by_responsible = _team_model_lookup(db, orders)
     items = [
         {
             "order_code": order.order_code,
@@ -208,6 +245,8 @@ def search_orders(
             "subject": order.os_subject,
             "diagnosis": order.diagnosis,
             "technical_report": _text_from_payload(order.raw_payload, "mensagem_resposta", "relato_tecnico", "relato"),
+            "responsible": order.responsible,
+            "team_model": team_model_by_responsible.get(((order.responsible or "").lower(), order.regional)),
             "status": order.status,
             "opened_at": order.opened_at,
             "closed_at": order.closed_at,
