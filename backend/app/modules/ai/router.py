@@ -7,11 +7,20 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import User
 from app.modules.ai.auth import require_api_key_user, require_ai_permission
-from app.modules.ai.queries import aggregate_orders, backlog_aging, filter_options_for_ai, orders_timeseries, search_orders
+from app.modules.ai.queries import (
+    aggregate_orders,
+    backlog_aging,
+    backlog_history,
+    filter_options_for_ai,
+    orders_timeseries,
+    search_orders,
+)
 from app.modules.ai.schemas import (
     AiAggregationRequest,
     AiBacklogAgingItem,
     AiBacklogAgingRequest,
+    AiBacklogHistoryPoint,
+    AiBacklogHistoryRequest,
     AiFilterOptionsRequest,
     AiSearchRequest,
     AiSearchResponse,
@@ -88,6 +97,31 @@ def backlog_aging_route(
     user: User = Depends(require_api_key_user),
 ) -> list[dict]:
     return backlog_aging(db, user, group_by=payload.group_by, date_to=payload.date_to, **payload.filters.model_dump())
+
+
+@router.post(
+    "/backlog-history",
+    response_model=list[AiBacklogHistoryPoint],
+    description=(
+        "Série histórica diária de backlog/backlog atrasado. LIMITAÇÃO IMPORTANTE: só existe "
+        "dado a partir do dia em que a captura diária entrou em produção - não há retroatividade "
+        "para datas anteriores a isso. Só quebra por 'regional' ou 'team_model' (não por "
+        "qualquer dimensão como as outras ferramentas)."
+    ),
+)
+def backlog_history_route(
+    payload: AiBacklogHistoryRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_api_key_user),
+) -> list[dict]:
+    return backlog_history(
+        db,
+        user,
+        metric=payload.metric,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        group_by=payload.group_by,
+    )
 
 
 @router.post("/filter-options", response_model=OperationFilters)

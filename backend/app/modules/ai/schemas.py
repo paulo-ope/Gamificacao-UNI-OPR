@@ -173,3 +173,20 @@ class AiBacklogAgingItem(BaseModel):
     over_5d: int
     over_7d: int
     over_15d: int
+
+
+class AiBacklogHistoryRequest(BaseModel):
+    date_from: date
+    date_to: date
+    metric: Literal["backlog", "backlog_atrasado"]
+    # Diferente das outras ferramentas: só "regional"/"team_model" (o snapshot diário já vem
+    # pré-agregado só por essas duas - ver operations/backlog_snapshot.py).
+    group_by: Literal["none", "regional", "team_model"] = "none"
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiBacklogHistoryPoint(BaseModel):
+    snapshot_date: date
+    quantity: int
+    group: str | None = None

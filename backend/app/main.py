@@ -13,6 +13,7 @@ from app.core.security import ensure_access_profiles, ensure_initial_admin
 from app.modules.admin.router import router as admin_router
 from app.modules.ai.router import public_router as ai_public_router, router as ai_router
 from app.modules.management.router import router as management_router
+from app.modules.operations.backlog_snapshot import run_backlog_snapshot_loop
 from app.modules.operations.router import router as operations_router
 from app.modules.scheduling.router import router as scheduling_router
 from app.modules.workspace.router import router as workspace_router
@@ -38,12 +39,20 @@ async def lifespan(app: FastAPI):
             run_ixc_sync_loop(settings_.ixc_sync_interval_minutes, initial_enabled=settings_.ixc_sync_enabled)
         )
 
+    # Sem dependência de configuração externa (ao contrário do IXC) - sempre roda, é só uma
+    # leitura do próprio banco de O.S. já sincronizado.
+    backlog_snapshot_task = asyncio.create_task(run_backlog_snapshot_loop())
+
     yield
 
     if ixc_sync_task:
         ixc_sync_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await ixc_sync_task
+
+    backlog_snapshot_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await backlog_snapshot_task
 
 
 settings_obj = get_settings()
