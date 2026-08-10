@@ -140,6 +140,21 @@ export function useClosureActions({
 
   const exportPaymentWorkbook = useCallback(async () => {
     if (!summary || currentUser?.role === "viewer") return;
+    // "Desconto de saldo" mistura todo tipo de ajuste aplicado (garantia + manual + saldo
+    // remanescente) - quem confere o pagamento (e a auditoria) precisa distinguir quanto disso
+    // e especificamente debito de garantia, ja que os outros tipos tem motivo/origem diferentes.
+    const garantiaDiscountByCollaborator = new Map<number, number>();
+    if (summary.run?.id) {
+      const balanceEntries = await api.pointBalancePending({ calculation_run_id: summary.run.id });
+      balanceEntries
+        .filter((entry) => entry.bucket === "applied" && entry.entry_type === "post_payment_warranty_debit")
+        .forEach((entry) => {
+          garantiaDiscountByCollaborator.set(
+            entry.collaborator_id,
+            (garantiaDiscountByCollaborator.get(entry.collaborator_id) ?? 0) + entry.points
+          );
+        });
+    }
     const healthByRegional = new Map(summary.health_by_regional.map((item) => [normalizeRegional(item.regional), item]));
     const paymentRows = summary.ranking.filter((score) => {
       const matchesRegional = selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(score.regional));
@@ -192,7 +207,7 @@ export function useClosureActions({
         "Pagamento de técnicos",
         [
           "Colaborador", "O.S", "Pontos brutos", "Pontos anulados", "Pontos líquidos", "Desconto de saldo",
-          "SLA da base (%)", "CPK da base", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"
+          "Desconto de garantia", "SLA da base (%)", "CPK da base", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"
         ],
         regionalPaymentRows.map((score) => {
           const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
@@ -204,6 +219,7 @@ export function useClosureActions({
             formatPoints(score.penalty_points),
             formatPoints(score.net_points),
             formatPoints(score.balance_adjustment_points),
+            formatPoints(garantiaDiscountByCollaborator.get(score.collaborator_id) ?? 0),
             regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
             cpkLabel,
             `${formatNumber(score.health_multiplier)}x`,
@@ -214,6 +230,7 @@ export function useClosureActions({
         [
           "Total", "", "", "",
           "", formatPoints(regionalPaymentRows.reduce((sum, score) => sum + score.balance_adjustment_points, 0)),
+          formatPoints(regionalPaymentRows.reduce((sum, score) => sum + (garantiaDiscountByCollaborator.get(score.collaborator_id) ?? 0), 0)),
           "", "", "", "",
           formatMoney(regionalPaymentRows.reduce((sum, score) => sum + score.estimated_payment, 0))
         ]
