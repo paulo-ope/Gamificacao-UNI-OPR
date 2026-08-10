@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.ai.queries import AGGREGATION_DIMENSIONS
-from app.modules.operations.schemas import OperationFilters
+from app.modules.operations.schemas import OperationBreakdownItem, OperationFilters, OperationWarrantyRegionalRankingItem
 
 AggregationDimension = Literal[
     "regional", "city", "os_type", "subject", "diagnosis",
@@ -198,3 +198,47 @@ class AiBacklogHistoryPoint(BaseModel):
     snapshot_date: date
     quantity: int
     group: str | None = None
+
+
+class AiWarrantyAnalyticsRequest(BaseModel):
+    date_from: date
+    date_to: date
+    period_basis: Literal["opened", "closed"] = "opened"
+    denominator: Literal["closed_origins", "active_origins", "maintenance_total", "activation_closed"] = "active_origins"
+    # Ativação/Mud. Endereço/Mud. Tecnologia com um desses diagnósticos deixa de contar como
+    # origem elegível (ex.: "Desistência da solicitação") - mesmo filtro que já existe na tela.
+    origin_excluded_diagnoses: list[str] = Field(default_factory=list, max_length=20)
+    filters: AiOrderFilters = Field(default_factory=AiOrderFilters)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiWarrantyItem(BaseModel):
+    contract_id: str | None
+    customer_name: str | None
+    regional: str | None
+    diagnosis: str | None
+    return_os_subject: str | None
+    origin_order_code: str
+    origin_os_type: str | None
+    origin_closed_at: datetime
+    return_order_code: str
+    return_opened_at: datetime
+    return_closed_at: datetime | None
+
+
+class AiWarrantyAnalyticsResponse(BaseModel):
+    period_basis: Literal["opened", "closed"]
+    denominator: Literal["closed_origins", "active_origins", "maintenance_total", "activation_closed"]
+    origin_excluded_diagnoses: list[str]
+    numerator: int
+    denominator_count: int
+    percentage: float | None
+    contracts_with_warranty: int
+    customers_with_warranty: int
+    breakdown: list[OperationBreakdownItem]
+    by_regional: list[OperationWarrantyRegionalRankingItem]
+    by_diagnosis: list[OperationBreakdownItem]
+    by_subject: list[OperationBreakdownItem]
+    items: list[AiWarrantyItem]
+    items_truncated: bool

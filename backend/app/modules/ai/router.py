@@ -14,6 +14,7 @@ from app.modules.ai.queries import (
     filter_options_for_ai,
     orders_timeseries,
     search_orders,
+    warranty_analytics_for_ai,
 )
 from app.modules.ai.schemas import (
     AiAggregationRequest,
@@ -26,6 +27,8 @@ from app.modules.ai.schemas import (
     AiSearchResponse,
     AiTimeseriesPoint,
     AiTimeseriesRequest,
+    AiWarrantyAnalyticsRequest,
+    AiWarrantyAnalyticsResponse,
 )
 from app.modules.operations.schemas import OperationFilters
 
@@ -131,6 +134,32 @@ def filter_options_route(
     user: User = Depends(require_api_key_user),
 ) -> dict:
     return filter_options_for_ai(db, user, payload.date_from, payload.date_to)
+
+
+@router.post(
+    "/warranty-analytics",
+    response_model=AiWarrantyAnalyticsResponse,
+    description=(
+        "Garantia de ativação: uma Manutenção é garantia quando abre no mesmo contrato até 30 "
+        "dias após o fechamento de uma Ativação/Mud. Endereço/Mud. Tecnologia elegível. Mesma "
+        "conta da aba Garantias da tela."
+    ),
+)
+def warranty_analytics_route(
+    payload: AiWarrantyAnalyticsRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_api_key_user),
+) -> dict:
+    return warranty_analytics_for_ai(
+        db,
+        user,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        period_basis=payload.period_basis,
+        denominator=payload.denominator,
+        origin_excluded_diagnoses=payload.origin_excluded_diagnoses,
+        **payload.filters.model_dump(),
+    )
 
 
 @public_router.get("/openapi.json", include_in_schema=False)

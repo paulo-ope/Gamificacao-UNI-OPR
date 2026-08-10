@@ -542,3 +542,36 @@ def backlog_history(
         results.append(item)
     results.sort(key=lambda item: (item["snapshot_date"], item.get("group") or ""))
     return results
+
+
+def warranty_analytics_for_ai(
+    db: Session,
+    user: User,
+    *,
+    date_from: date,
+    date_to: date,
+    period_basis: str = "opened",
+    denominator: str = "active_origins",
+    origin_excluded_diagnoses: list[str] | None = None,
+    **filters,
+) -> dict:
+    """Reaproveita `operations_queries.warranty_analytics` - a mesma função que alimenta a aba
+    Garantias da tela - sem nenhuma lógica nova. Só troca os itens individuais: a versão da tela
+    embute o objeto completo de 2 O.S. (origem e retorno) por item, pro drill clicável; aqui isso
+    seria pesado demais pra IA (mesmo motivo de `search_orders` ser paginado) - fica só os campos
+    planos de cada garantia encontrada."""
+    result = operations_queries.warranty_analytics(
+        db,
+        date_from,
+        date_to,
+        user,
+        period_basis=period_basis,
+        denominator=denominator,
+        origin_excluded_diagnoses=origin_excluded_diagnoses,
+        **filters,
+    )
+    result["items"] = [
+        {key: value for key, value in item.items() if key not in ("origin_order", "return_order")}
+        for item in result["items"]
+    ]
+    return result
