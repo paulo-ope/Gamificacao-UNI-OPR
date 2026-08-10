@@ -419,6 +419,8 @@ export type OperationWarrantyItem = {
   return_order_code: string;
   return_opened_at: string;
   return_closed_at: string | null;
+  origin_order: OperationOrder | null;
+  return_order: OperationOrder | null;
 };
 
 export type OperationWarrantyRegionalRankingItem = {
@@ -431,6 +433,7 @@ export type OperationWarrantyRegionalRankingItem = {
 export type OperationWarrantyAnalytics = {
   period_basis: OperationWarrantyPeriodBasis;
   denominator: OperationWarrantyDenominator;
+  origin_excluded_diagnoses: string[];
   numerator: number;
   denominator_count: number;
   percentage: number | null;
@@ -885,11 +888,13 @@ export const operationsApi = {
     filters: OperationFilterState,
     periodBasis: OperationWarrantyPeriodBasis,
     denominator: OperationWarrantyDenominator,
+    originExcludedDiagnoses: string[] = [],
   ) =>
     request<OperationWarrantyAnalytics>(
       `/operations/warranty?${query(filters, {
         period_basis: periodBasis,
         denominator,
+        origin_excluded_diagnoses: originExcludedDiagnoses,
       })}`,
     ),
   calendar: (

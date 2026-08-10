@@ -680,43 +680,6 @@ class OperationBreakdownItem(BaseModel):
     percentage: float
 
 
-class OperationWarrantyItem(BaseModel):
-    contract_id: str | None
-    customer_name: str | None
-    regional: str | None
-    diagnosis: str | None
-    return_os_subject: str | None
-    origin_order_code: str
-    origin_os_type: str | None
-    origin_closed_at: datetime
-    return_order_code: str
-    return_opened_at: datetime
-    return_closed_at: datetime | None
-
-
-class OperationWarrantyRegionalRankingItem(BaseModel):
-    label: str
-    quantity: int
-    denominator_count: int
-    percentage: float | None
-
-
-class OperationWarrantyAnalytics(BaseModel):
-    period_basis: Literal["opened", "closed"]
-    denominator: Literal["closed_origins", "active_origins", "maintenance_total", "activation_closed"]
-    numerator: int
-    denominator_count: int
-    percentage: float | None
-    contracts_with_warranty: int
-    customers_with_warranty: int
-    breakdown: list[OperationBreakdownItem]
-    by_regional: list[OperationWarrantyRegionalRankingItem]
-    by_diagnosis: list[OperationBreakdownItem]
-    by_subject: list[OperationBreakdownItem]
-    items: list[OperationWarrantyItem]
-    items_truncated: bool
-
-
 class OperationSlaRiskItem(BaseModel):
     bucket: Literal["breached", "critical", "attention", "on_track", "no_target"]
     label: str
@@ -781,6 +744,46 @@ class OperationOrderPage(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class OperationWarrantyItem(BaseModel):
+    contract_id: str | None
+    customer_name: str | None
+    regional: str | None
+    diagnosis: str | None
+    return_os_subject: str | None
+    origin_order_code: str
+    origin_os_type: str | None
+    origin_closed_at: datetime
+    return_order_code: str
+    return_opened_at: datetime
+    return_closed_at: datetime | None
+    origin_order: OperationOrderOut | None
+    return_order: OperationOrderOut | None
+
+
+class OperationWarrantyRegionalRankingItem(BaseModel):
+    label: str
+    quantity: int
+    denominator_count: int
+    percentage: float | None
+
+
+class OperationWarrantyAnalytics(BaseModel):
+    period_basis: Literal["opened", "closed"]
+    denominator: Literal["closed_origins", "active_origins", "maintenance_total", "activation_closed"]
+    origin_excluded_diagnoses: list[str] = Field(default_factory=list)
+    numerator: int
+    denominator_count: int
+    percentage: float | None
+    contracts_with_warranty: int
+    customers_with_warranty: int
+    breakdown: list[OperationBreakdownItem]
+    by_regional: list[OperationWarrantyRegionalRankingItem]
+    by_diagnosis: list[OperationBreakdownItem]
+    by_subject: list[OperationBreakdownItem]
+    items: list[OperationWarrantyItem]
+    items_truncated: bool
 
 
 class OperationCalendarDayMetrics(BaseModel):

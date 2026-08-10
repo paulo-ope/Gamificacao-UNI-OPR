@@ -201,6 +201,7 @@ const EMPTY_COLLABORATOR_SLA: OperationCollaboratorSla = {
 const EMPTY_WARRANTY_ANALYTICS: OperationWarrantyAnalytics = {
   period_basis: "opened",
   denominator: "active_origins",
+  origin_excluded_diagnoses: [],
   numerator: 0,
   denominator_count: 0,
   percentage: null,
@@ -617,6 +618,8 @@ export default function OperacaoPage() {
     useState<OperationWarrantyPeriodBasis>("opened");
   const [warrantyDenominator, setWarrantyDenominator] =
     useState<OperationWarrantyDenominator>("active_origins");
+  const [warrantyOriginExcludedDiagnoses, setWarrantyOriginExcludedDiagnoses] =
+    useState<string[]>([]);
   const [calendar, setCalendar] = useState<OperationCalendar>(EMPTY_CALENDAR);
   const [calendarGroupBy, setCalendarGroupBy] = useState<
     "regional" | "collaborator"
@@ -715,6 +718,7 @@ export default function OperacaoPage() {
       calendarGrouping = calendarGroupBy,
       warrantyPeriodBasisOverride = warrantyPeriodBasis,
       warrantyDenominatorOverride = warrantyDenominator,
+      warrantyOriginExcludedDiagnosesOverride = warrantyOriginExcludedDiagnoses,
     ) => {
       const requestId = dashboardRequest.current + 1;
       dashboardRequest.current = requestId;
@@ -807,6 +811,7 @@ export default function OperacaoPage() {
             effectiveFilters,
             warrantyPeriodBasisOverride,
             warrantyDenominatorOverride,
+            warrantyOriginExcludedDiagnosesOverride,
           );
           if (dashboardRequest.current !== requestId) return;
           setWarrantyAnalytics(nextWarranty);
@@ -872,6 +877,7 @@ export default function OperacaoPage() {
       trendGranularity,
       warrantyDenominator,
       warrantyPeriodBasis,
+      warrantyOriginExcludedDiagnoses,
       workScheduleModelIds,
     ],
   );
@@ -1756,6 +1762,7 @@ export default function OperacaoPage() {
                     calendarGroupBy,
                     basis,
                     warrantyDenominator,
+                    warrantyOriginExcludedDiagnoses,
                   );
                 }}
                 onDenominatorChange={(nextDenominator) => {
@@ -1767,6 +1774,21 @@ export default function OperacaoPage() {
                     calendarGroupBy,
                     warrantyPeriodBasis,
                     nextDenominator,
+                    warrantyOriginExcludedDiagnoses,
+                  );
+                }}
+                availableDiagnoses={filterOptions.diagnoses}
+                originExcludedDiagnoses={warrantyOriginExcludedDiagnoses}
+                onOriginExcludedDiagnosesChange={(nextDiagnoses) => {
+                  setWarrantyOriginExcludedDiagnoses(nextDiagnoses);
+                  void loadDashboard(
+                    filters || appliedFilters,
+                    1,
+                    "garantias",
+                    calendarGroupBy,
+                    warrantyPeriodBasis,
+                    warrantyDenominator,
+                    nextDiagnoses,
                   );
                 }}
               />

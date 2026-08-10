@@ -793,25 +793,27 @@ def warranty_analytics(
     *,
     period_basis: str = "opened",
     denominator: str = "active_origins",
+    origin_excluded_diagnoses: list[str] | None = None,
     **filters,
 ) -> dict:
     """Garantia de ativação: uma Manutenção é garantia quando abre no mesmo contrato até 30 dias
     após o fechamento de uma O.S. de origem elegível (Ativação/Mud. Endereço/Mud. Tecnologia).
     Quando várias origens do contrato são elegíveis, prevalece a mais recente (ver
     docs/estudo de garantias) - por isso as origens de cada contrato ficam ordenadas por
-    `closed_at` decrescente e o primeiro candidato que caber na janela de 30 dias já é o certo."""
+    `closed_at` decrescente e o primeiro candidato que caber na janela de 30 dias já é o certo.
+
+    `origin_excluded_diagnoses` é um filtro separado do `diagnoses` genérico: aquele descreve a
+    manutenção (o retorno), não a origem, então nunca se aplicou à Ativação/Mudança. Este aqui
+    existe para invalidar como origem uma Ativação/Mudança cujo diagnóstico indica que o serviço
+    não foi de fato entregue (ex.: desistência do cliente) - por isso é uma lista própria, não
+    reaproveita a seleção de diagnósticos da manutenção."""
     start, end = local_period_utc_bounds(date_from, date_to)
     window = timedelta(days=WARRANTY_WINDOW_DAYS)
+    excluded_diagnoses = sorted({value.strip() for value in (origin_excluded_diagnoses or []) if value.strip()})
 
     origin_scope_conditions = _dimension_conditions(db, user, _warranty_origin_filters(filters))
-    origin_rows = db.execute(
-        select(
-            OperationOrder.contract_id,
-            OperationOrder.order_code,
-            OperationOrder.os_type,
-            OperationOrder.closed_at,
-            OperationOrder.regional,
-        ).where(
+    origin_orders = db.scalars(
+        select(OperationOrder).where(
             *origin_scope_conditions,
             OperationOrder.contract_id.is_not(None),
             OperationOrder.contract_id != "",
@@ -820,21 +822,27 @@ def warranty_analytics(
             OperationOrder.closed_at.is_not(None),
             OperationOrder.closed_at.between(start - window, end),
             or_(*(OperationOrder.os_type.ilike(f"%{root}%") for root in WARRANTY_ORIGIN_TYPE_ROOTS)),
+            *(
+                [or_(OperationOrder.diagnosis.is_(None), OperationOrder.diagnosis.not_in(excluded_diagnoses))]
+                if excluded_diagnoses
+                else []
+            ),
         )
     ).all()
 
     origins_by_contract: dict[str, list[dict]] = defaultdict(list)
-    for contract_id, order_code, os_type, closed_at, regional in origin_rows:
-        kind = _classify_warranty_os_type(os_type)
+    for origin_order in origin_orders:
+        kind = _classify_warranty_os_type(origin_order.os_type)
         if kind not in WARRANTY_ORIGIN_LABELS:
             continue
-        origins_by_contract[contract_id].append(
+        origins_by_contract[origin_order.contract_id].append(
             {
-                "order_code": order_code,
-                "os_type": os_type,
+                "order": origin_order,
+                "order_code": origin_order.order_code,
+                "os_type": origin_order.os_type,
                 "os_type_kind": kind,
-                "closed_at": _as_utc(closed_at),
-                "regional": regional or UNIDENTIFIED_LABEL,
+                "closed_at": _as_utc(origin_order.closed_at),
+                "regional": origin_order.regional or UNIDENTIFIED_LABEL,
             }
         )
     all_origins: list[dict] = []
@@ -984,6 +992,8 @@ def warranty_analytics(
             "return_order_code": item["order"].order_code,
             "return_opened_at": item["order"].opened_at,
             "return_closed_at": item["order"].closed_at,
+            "origin_order": item["origin"]["order"],
+            "return_order": item["order"],
         }
         for item in garantias[:WARRANTY_MAX_ITEMS]
     ]
@@ -991,6 +1001,7 @@ def warranty_analytics(
     return {
         "period_basis": period_basis,
         "denominator": denominator,
+        "origin_excluded_diagnoses": excluded_diagnoses,
         "numerator": numerator,
         "denominator_count": denominator_count,
         "percentage": percentage,

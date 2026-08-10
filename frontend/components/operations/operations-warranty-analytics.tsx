@@ -2,10 +2,12 @@
 
 import * as Popover from "@radix-ui/react-popover";
 import { Download, Loader2, Settings2, ShieldAlert, ShieldCheck } from "lucide-react";
+import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCheckbox } from "@/components/ui/checkbox";
 import { AppRadio } from "@/components/ui/radio";
 import {
   TableBody,
@@ -15,13 +17,35 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatDateTime, formatInteger, formatPercent } from "@/lib/format";
+import { OperationsOrderDetailDialog } from "@/components/operations/operations-order-detail-dialog";
 import type {
   OperationBreakdownItem,
+  OperationOrder,
   OperationWarrantyAnalytics as OperationWarrantyAnalyticsData,
   OperationWarrantyDenominator,
   OperationWarrantyItem,
   OperationWarrantyPeriodBasis,
 } from "@/lib/operations-api";
+
+function WarrantyOrderLink({ order, code }: { order: OperationOrder | null; code: string }) {
+  const [open, setOpen] = useState(false);
+  if (!order) return <>{code}</>;
+  return (
+    <>
+      <button
+        type="button"
+        className="font-medium text-uni-royal underline-offset-2 hover:underline"
+        onClick={() => setOpen(true)}
+      >
+        {code}
+      </button>
+      <OperationsOrderDetailDialog
+        order={open ? order : null}
+        onOpenChange={(next) => setOpen(next)}
+      />
+    </>
+  );
+}
 
 const PERIOD_BASIS_OPTIONS: Array<{ value: OperationWarrantyPeriodBasis; label: string }> = [
   { value: "opened", label: "Data de abertura da manutenção" },
@@ -173,13 +197,26 @@ function WarrantyConfigPopover({
   denominator,
   onPeriodBasisChange,
   onDenominatorChange,
+  availableDiagnoses,
+  originExcludedDiagnoses,
+  onOriginExcludedDiagnosesChange,
 }: {
   isLoading: boolean;
   periodBasis: OperationWarrantyPeriodBasis;
   denominator: OperationWarrantyDenominator;
   onPeriodBasisChange: (basis: OperationWarrantyPeriodBasis) => void;
   onDenominatorChange: (denominator: OperationWarrantyDenominator) => void;
+  availableDiagnoses: string[];
+  originExcludedDiagnoses: string[];
+  onOriginExcludedDiagnosesChange: (diagnoses: string[]) => void;
 }) {
+  function toggleExcludedDiagnosis(diagnosis: string) {
+    onOriginExcludedDiagnosesChange(
+      originExcludedDiagnoses.includes(diagnosis)
+        ? originExcludedDiagnoses.filter((value) => value !== diagnosis)
+        : [...originExcludedDiagnoses, diagnosis],
+    );
+  }
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -192,7 +229,9 @@ function WarrantyConfigPopover({
         <Popover.Content
           align="end"
           sideOffset={8}
-          className="z-50 w-[min(24rem,calc(100vw-2rem))] space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+          collisionPadding={16}
+          className="z-50 w-[min(24rem,calc(100vw-2rem))] space-y-4 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-xl"
+          style={{ maxHeight: "var(--radix-popover-content-available-height)" }}
         >
           <div className="space-y-1.5">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -234,6 +273,32 @@ function WarrantyConfigPopover({
               ))}
             </div>
           </div>
+          <div className="space-y-1.5 border-t border-slate-100 pt-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Diagnósticos que invalidam a origem
+            </span>
+            <p className="text-xs font-normal text-slate-400">
+              Ativação/Mud. Endereço/Mud. Tecnologia com um destes diagnósticos deixa de contar como
+              origem elegível (ex.: desistência do cliente).
+            </p>
+            <div className="flex max-h-40 flex-col gap-1.5 overflow-y-auto">
+              {availableDiagnoses.length === 0 ? (
+                <span className="text-xs text-slate-400">Nenhum diagnóstico disponível no período.</span>
+              ) : (
+                availableDiagnoses.map((diagnosis) => (
+                  <label key={diagnosis} className="flex items-center gap-1.5 text-sm text-slate-700">
+                    <AppCheckbox
+                      checked={originExcludedDiagnoses.includes(diagnosis)}
+                      disabled={isLoading}
+                      onCheckedChange={() => toggleExcludedDiagnosis(diagnosis)}
+                      ariaLabel={diagnosis}
+                    />
+                    {diagnosis}
+                  </label>
+                ))
+              )}
+            </div>
+          </div>
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -247,6 +312,9 @@ export function OperationsWarrantyAnalytics({
   denominator,
   onPeriodBasisChange,
   onDenominatorChange,
+  availableDiagnoses,
+  originExcludedDiagnoses,
+  onOriginExcludedDiagnosesChange,
 }: {
   data: OperationWarrantyAnalyticsData;
   isLoading: boolean;
@@ -254,6 +322,9 @@ export function OperationsWarrantyAnalytics({
   denominator: OperationWarrantyDenominator;
   onPeriodBasisChange: (basis: OperationWarrantyPeriodBasis) => void;
   onDenominatorChange: (denominator: OperationWarrantyDenominator) => void;
+  availableDiagnoses: string[];
+  originExcludedDiagnoses: string[];
+  onOriginExcludedDiagnosesChange: (diagnoses: string[]) => void;
 }) {
   const tone = rateTone(data.percentage);
 
@@ -272,6 +343,9 @@ export function OperationsWarrantyAnalytics({
             denominator={denominator}
             onPeriodBasisChange={onPeriodBasisChange}
             onDenominatorChange={onDenominatorChange}
+            availableDiagnoses={availableDiagnoses}
+            originExcludedDiagnoses={originExcludedDiagnoses}
+            onOriginExcludedDiagnosesChange={onOriginExcludedDiagnosesChange}
           />
         </CardHeader>
         <CardContent className="space-y-4">
@@ -444,9 +518,13 @@ export function OperationsWarrantyAnalytics({
                       <TableCell>{item.contract_id || "—"}</TableCell>
                       <TableCell>{item.customer_name || "—"}</TableCell>
                       <TableCell>{item.regional || "—"}</TableCell>
-                      <TableCell>{item.origin_order_code}</TableCell>
+                      <TableCell>
+                        <WarrantyOrderLink order={item.origin_order} code={item.origin_order_code} />
+                      </TableCell>
                       <TableCell>{item.origin_os_type || "—"}</TableCell>
-                      <TableCell>{item.return_order_code}</TableCell>
+                      <TableCell>
+                        <WarrantyOrderLink order={item.return_order} code={item.return_order_code} />
+                      </TableCell>
                       <TableCell>{item.return_os_subject || "—"}</TableCell>
                       <TableCell>{item.diagnosis || "—"}</TableCell>
                       <TableCell>{formatDateTime(item.origin_closed_at)}</TableCell>
