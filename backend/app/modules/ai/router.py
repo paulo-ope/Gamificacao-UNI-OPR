@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.openapi.utils import get_openapi
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -78,28 +79,24 @@ def search_orders_route(
 
 @public_router.get("/openapi.json", include_in_schema=False)
 def ai_openapi_schema(request: Request) -> dict:
-    """Schema OpenAPI filtrado só com as rotas da tag `ai-tools` - pra importar no ChatGPT
-    Actions sem nunca vazar rotas administrativas/de login, mesmo que o resto do sistema cresça.
+    """Schema OpenAPI só com as 3 rotas deste módulo - pra importar no ChatGPT Actions sem
+    vazar nada do resto do sistema, mesmo que ele cresça.
 
-    Filtra o schema JÁ GERADO (`request.app.openapi()`) em vez de pré-filtrar `request.app.routes`
-    por tag: nesta versão do FastAPI, `app.routes` guarda um wrapper interno (`_IncludedRouter`)
-    sem `.tags` acessível diretamente - só o schema final tem essa informação resolvida."""
-    full_schema = request.app.openapi()
-    ai_paths = {
-        path: operations
-        for path, operations in full_schema.get("paths", {}).items()
-        if any(
-            "ai-tools" in (operation.get("tags") or [])
-            for operation in operations.values()
-            if isinstance(operation, dict)
-        )
-    }
-    return {
-        **full_schema,
-        "info": {
-            **full_schema.get("info", {}),
-            "title": "Operação Analítica — Ferramentas de IA",
-            "description": "Agregação, série temporal e busca de Ordens de Serviço para consulta por IA.",
-        },
-        "paths": ai_paths,
-    }
+    Gera o schema a partir de `router.routes` (o APIRouter isolado deste módulo, ANTES de ser
+    incluído no app) - não do app inteiro. Isso importa porque `get_openapi()` computa
+    `components.schemas` a partir de TODAS as rotas recebidas antes de filtrar `paths`: gerar a
+    partir do app inteiro e filtrar só os `paths` depois (como uma versão anterior deste código
+    fazia) deixava os modelos de dados de todo o resto do sistema (gamificação, pontuação,
+    penalidades...) expostos em `components`, mesmo sem nenhuma rota deles listada."""
+    schema = get_openapi(
+        title="Operação Analítica — Ferramentas de IA",
+        version="1.0.0",
+        description="Agregação, série temporal e busca de Ordens de Serviço para consulta por IA.",
+        routes=router.routes,
+    )
+    # `router.routes` não carrega o prefixo de API global (ex.: "/api"), aplicado só quando este
+    # router é incluído no app (main.py) - por isso o servidor é calculado a partir da própria
+    # requisição, tirando o sufixo fixo desta rota, em vez de hardcoded.
+    base_path = str(request.url.path).removesuffix("/ai/openapi.json")
+    schema["servers"] = [{"url": str(request.base_url).rstrip("/") + base_path}]
+    return schema
