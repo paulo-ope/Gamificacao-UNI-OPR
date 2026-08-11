@@ -9,6 +9,7 @@ from app.models import User
 from app.modules.ai.auth import require_api_key_user, require_ai_permission
 from app.modules.ai.queries import (
     aggregate_orders,
+    available_fields,
     backlog_aging,
     backlog_history,
     filter_options_for_ai,
@@ -24,6 +25,7 @@ from app.modules.ai.schemas import (
     AiBacklogAgingRequest,
     AiBacklogHistoryPoint,
     AiBacklogHistoryRequest,
+    AiFieldsResponse,
     AiFilterOptionsRequest,
     AiSearchRequest,
     AiSearchResponse,
@@ -131,6 +133,19 @@ def backlog_history_route(
         group_by=payload.group_by,
         sector_filter=payload.sector_filter.model_dump() if payload.sector_filter else None,
     )
+
+
+@router.get(
+    "/fields",
+    response_model=AiFieldsResponse,
+    description=(
+        "Lista todos os campos de OperationOrder e mostra quais já estão expostos à IA "
+        "(dimensões de agrupamento, filtros de texto livre e filtros exatos) e quais não estão."
+    ),
+)
+def ai_fields_route(user: User = Depends(require_api_key_user)) -> dict:
+    del user
+    return available_fields()
 
 
 @router.post("/filter-options", response_model=OperationFilters)

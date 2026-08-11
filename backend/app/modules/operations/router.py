@@ -49,6 +49,7 @@ from .schemas import (
     OperationIxcCollaboratorSyncResult,
     OperationOpeningsAnalytics,
     OperationOpenBacklogJobOut,
+    OperationOrderDetailOut,
     OperationOrderPage,
     OperationOverview,
     OperationWorkScheduleOverview,
@@ -1024,6 +1025,22 @@ def opening_orders(
         hour=hour,
         **selected_filters,
     )
+
+
+@router.get(
+    "/orders/{source_order_id}",
+    response_model=OperationOrderDetailOut,
+    dependencies=[Depends(require_permission("operations:view_order_details"))],
+)
+def order_detail(
+    source_order_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    order = queries.order_by_source_id(db, user, source_order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
+    return order
 
 
 def _saved_filter_or_404(db: Session, saved_filter_id: int, user_id: int) -> OperationSavedFilter:

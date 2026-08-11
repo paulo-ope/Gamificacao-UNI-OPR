@@ -2390,6 +2390,18 @@ def order_page(
     }
 
 
+def order_by_source_id(db: Session, user: User, source_order_id: str) -> OperationOrder | None:
+    """Detalhe de uma única O.S. por `source_order_id` (id/protocolo do IXC), sem recorte de
+    período - diferente de `order_page`, que sempre exige uma janela de datas. Ainda aplica o
+    mesmo escopo regional de `_dimension_conditions` (com filtros vazios) para que o detalhe de
+    uma O.S. de fora do escopo do usuário nunca vaze por aqui."""
+    conditions = [
+        *_dimension_conditions(db, user, {}),
+        OperationOrder.source_order_id == source_order_id,
+    ]
+    return db.scalar(select(OperationOrder).where(*conditions))
+
+
 AGING_BUCKET_BOUNDS = {
     "0_1": (0, 1),
     "2_3": (2, 3),

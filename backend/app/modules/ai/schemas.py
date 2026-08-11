@@ -155,6 +155,12 @@ class AiSearchResponse(BaseModel):
     has_more: bool
 
 
+class AiFieldsResponse(BaseModel):
+    all_fields: list[str]
+    exposed_to_ai: list[str]
+    not_exposed: list[str]
+
+
 class AiFilterOptionsRequest(BaseModel):
     date_from: date
     date_to: date

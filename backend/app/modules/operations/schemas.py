@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 
 def _text_from_payload(payload: dict | None, *keys: str) -> str | None:
@@ -36,6 +36,34 @@ def _service_address_from_payload(payload: dict | None) -> str | None:
         parts.append(f"Referência: {reference}")
 
     return "\n".join(parts) if parts else None
+
+
+# Marcadores de chave (case-insensitive, "contém") usados para redigir o raw_payload bruto do IXC
+# antes de expor no detalhe de O.S. (ver OperationOrderDetailOut) - lista defensiva, não uma
+# enumeração exaustiva de todo campo do IXC: como o payload é um dict livre vindo de terceiros,
+# preferimos redigir por padrão de nome a arriscar vazar documento/credencial/dado financeiro que
+# apareça em uma chave não prevista aqui.
+_SENSITIVE_RAW_PAYLOAD_KEY_MARKERS = (
+    "senha", "password", "token", "cartao", "card", "cvv", "cvc", "cpf", "cnpj", "rg",
+    "secret", "chave_api", "api_key", "apikey", "pix", "conta_banc", "agencia", "boleto",
+    "fatura", "saldo", "valor_receber", "salario",
+)
+
+
+def _is_sensitive_raw_payload_key(key: str) -> bool:
+    lowered = str(key).casefold()
+    return any(marker in lowered for marker in _SENSITIVE_RAW_PAYLOAD_KEY_MARKERS)
+
+
+def _sanitize_raw_payload(value):
+    if isinstance(value, dict):
+        return {
+            key: "***" if _is_sensitive_raw_payload_key(key) else _sanitize_raw_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_raw_payload(item) for item in value]
+    return value
 
 
 class OperationPeriod(BaseModel):
@@ -693,9 +721,14 @@ class OperationOrderOut(BaseModel):
     order_code: str
     protocol: str | None
     contract_id: str | None
+    customer_id: str | None
+    customer_login: str | None
     customer_name: str | None
+    company_id: str | None
     regional: str | None
     city: str | None
+    contract_type: str | None
+    person_type: str | None
     os_type: str | None
     os_subject: str | None
     diagnosis: str | None
@@ -736,6 +769,20 @@ class OperationOrderOut(BaseModel):
         return _text_from_payload(self.raw_payload, "mensagem_resposta", "relato_tecnico", "relato")
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class OperationOrderDetailOut(OperationOrderOut):
+    """Igual a `OperationOrderOut`, mas expõe o `raw_payload` (redigido - ver
+    `_sanitize_raw_payload`) para o detalhe de uma única O.S. Não usado em listagens
+    (`OperationOrderPage`) de propósito - devolver o payload bruto por item numa página de 50
+    O.S. seria custoso à toa quando só o detalhe individual precisa dele."""
+
+    raw_payload: dict = Field(exclude=False)
+
+    @field_validator("raw_payload", mode="before")
+    @classmethod
+    def _redact_raw_payload(cls, value: dict | None) -> dict:
+        return _sanitize_raw_payload(value or {})
 
 
 class OperationOrderPage(BaseModel):

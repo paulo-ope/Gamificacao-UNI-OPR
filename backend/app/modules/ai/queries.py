@@ -62,6 +62,29 @@ TEXT_FILTER_COLUMNS = {
 }
 
 
+# Nomes de `operations_queries.FILTER_COLUMNS` que `AiOrderFilters` (ai/schemas.py) também aceita
+# - o único que fica de fora é "responsible_ixc_ids" (id bruto do IXC, não exposto à IA). Definido
+# aqui (e não derivado de `AiOrderFilters` diretamente) para evitar import circular: ai/schemas.py
+# já importa `AGGREGATION_DIMENSIONS` deste módulo.
+AI_ORDER_FILTER_FIELDS = set(operations_queries.FILTER_COLUMNS) - {"responsible_ixc_ids"}
+
+
+def available_fields() -> dict:
+    """Introspecciona `OperationOrder.__table__` e compara com o que já está exposto à IA
+    (dimensões de agrupamento, filtros de texto livre e filtros exatos de `AiOrderFilters`) -
+    usado pelo endpoint `/ai/fields` para a própria IA (ou quem estiver configurando as
+    ferramentas) descobrir o que ainda não tem cobertura, sem precisar ler o código-fonte."""
+    all_fields = sorted(OperationOrder.__table__.columns.keys())
+    exposed_columns = {column.key for column in AGGREGATION_DIMENSIONS.values()}
+    exposed_columns |= {column.key for column in TEXT_FILTER_COLUMNS.values()}
+    exposed_columns |= {
+        operations_queries.FILTER_COLUMNS[field].key for field in AI_ORDER_FILTER_FIELDS
+    }
+    exposed_to_ai = sorted(exposed_columns)
+    not_exposed = sorted(set(all_fields) - exposed_columns)
+    return {"all_fields": all_fields, "exposed_to_ai": exposed_to_ai, "not_exposed": not_exposed}
+
+
 def _escape_like(value: str) -> str:
     """Escapa os caracteres especiais do LIKE/ILIKE (`%`, `_`, e a própria barra de escape) antes
     de embutir o valor do usuário no padrão - sem isso, um valor com "%" ou "_" se comportaria

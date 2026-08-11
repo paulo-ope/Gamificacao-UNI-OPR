@@ -487,6 +487,86 @@ def test_operations_overview_and_detail_are_limited_to_selected_current_period(c
     assert details.json()["items"][0]["order_code"] == "IXC-2"
 
 
+def test_order_detail_exposes_new_fields_and_sanitizes_raw_payload(client, db_session):
+    opened_at = _utc_at(current_month_bounds()[0], 8)
+    db_session.add(
+        OperationOrder(
+            source="ixc",
+            source_order_id="DETAIL-1",
+            order_code="IXC-DETAIL-1",
+            protocol="PROT-1",
+            contract_id="CONTRACT-1",
+            customer_id="CUST-1",
+            customer_login="cliente.login",
+            customer_name="Cliente Detalhe",
+            company_id="EMP-1",
+            regional="UNI - JI PARANA",
+            state="RO",
+            city="Ji-Paraná",
+            contract_type="Residencial",
+            person_type="PF",
+            sector="Suporte Externo Fibra",
+            os_type="Manutenção",
+            os_subject="Reparo",
+            responsible="Técnico Detalhe",
+            status="Finalizada",
+            status_code="F",
+            is_closed=True,
+            sla_status="on_time",
+            opened_at=opened_at,
+            closed_at=opened_at,
+            raw_payload={
+                "mensagem": "Relato normal do atendimento",
+                "senha_wifi": "segredo123",
+                "cliente_cpf": "000.000.000-00",
+                "aninhado": {"cartao_credito": "4111", "obs": "sem problema"},
+            },
+        )
+    )
+    db_session.flush()
+
+    response = client.get("/api/operations/orders/DETAIL-1")
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert payload["customer_id"] == "CUST-1"
+    assert payload["customer_login"] == "cliente.login"
+    assert payload["company_id"] == "EMP-1"
+    assert payload["contract_type"] == "Residencial"
+    assert payload["person_type"] == "PF"
+
+    raw_payload = payload["raw_payload"]
+    assert raw_payload["mensagem"] == "Relato normal do atendimento"
+    assert raw_payload["senha_wifi"] == "***"
+    assert raw_payload["cliente_cpf"] == "***"
+    assert raw_payload["aninhado"]["cartao_credito"] == "***"
+    assert raw_payload["aninhado"]["obs"] == "sem problema"
+
+
+def test_order_detail_is_not_found_outside_user_regional_scope(client, db_session, admin_user):
+    admin_user.managed_regionals = ["UNI - JARU"]
+    db_session.add(
+        OperationOrder(
+            source="ixc",
+            source_order_id="DETAIL-OUT-OF-SCOPE",
+            order_code="IXC-DETAIL-2",
+            regional="UNI - MACHADINHO DOESTE",
+            sector="Suporte Externo Fibra",
+            opened_at=_utc_at(current_month_bounds()[0], 8),
+            raw_payload={},
+        )
+    )
+    db_session.flush()
+
+    response = client.get("/api/operations/orders/DETAIL-OUT-OF-SCOPE")
+    assert response.status_code == 404
+
+
+def test_order_detail_returns_404_for_unknown_source_order_id(client):
+    response = client.get("/api/operations/orders/does-not-exist")
+    assert response.status_code == 404
+
+
 def test_overview_trends_keep_openings_operational_when_responsible_is_filtered(client, db_session):
     date_from, date_to = current_month_bounds()
     first_day = date_from
