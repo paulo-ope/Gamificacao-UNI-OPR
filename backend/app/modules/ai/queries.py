@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import math
 import statistics
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
-from sqlalchemy import and_, case, func, literal, select
+from sqlalchemy import Numeric, String, and_, case, cast, func, literal, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import User
@@ -60,6 +61,78 @@ _SLA_STAGE_DURATION_COLUMNS = {
     "horas_execucao_fechamento": (OperationOrder.execution_started_at, OperationOrder.closed_at),
     "horas_abertura_fechamento": (OperationOrder.opened_at, OperationOrder.closed_at),
 }
+
+
+EARTH_RADIUS_KM = 6371.0
+
+# Tamanho da célula do "cluster geográfico" (ver `_group_label`, caso "geo_cluster") - 3 casas
+# decimais de lat/long equivalem a ~111m na latitude (a longitude varia um pouco menos conforme se
+# afasta do equador, mas a escala pedida - "mesmo ponto"/cluster de LOS - não exige precisão
+# geodésica exata, só agrupar pontos praticamente coincidentes).
+GEO_CLUSTER_DECIMALS = 3
+
+
+def _haversine_km_expr(lat_column, lng_column, ref_latitude: float, ref_longitude: float):
+    """Distância aproximada (fórmula de Haversine, em km) entre cada O.S. e um ponto de
+    referência, em SQL puro - usa só funções trigonométricas padrão (sin/cos/acos/radians),
+    disponíveis tanto no Postgres quanto no SQLite usado nos testes (builds modernos do SQLite já
+    trazem essas funções de fábrica), sem precisar de extensão geoespacial (PostGIS) nem de
+    ramificação por dialeto."""
+    ref_lat_rad = func.radians(ref_latitude)
+    ref_lng_rad = func.radians(ref_longitude)
+    lat_rad = func.radians(lat_column)
+    lng_rad = func.radians(lng_column)
+    cos_angle = (
+        func.sin(lat_rad) * func.sin(ref_lat_rad)
+        + func.cos(lat_rad) * func.cos(ref_lat_rad) * func.cos(lng_rad - ref_lng_rad)
+    )
+    # CASE em vez de LEAST/GREATEST (que não existem no SQLite, só no Postgres) - imprecisão de
+    # ponto flutuante pode deixar o cosseno levemente fora de [-1, 1] quando o ponto de referência
+    # é (quase) o mesmo da O.S., o que travaria `acos()` com erro de domínio bem no caso de uso
+    # mais comum (buscar reincidência no mesmo ponto de uma O.S. já existente).
+    clamped_cos_angle = case(
+        (cos_angle > 1.0, 1.0),
+        (cos_angle < -1.0, -1.0),
+        else_=cos_angle,
+    )
+    return EARTH_RADIUS_KM * func.acos(clamped_cos_angle)
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Mesma fórmula de `_haversine_km_expr`, em Python - usada em `search_orders` (que já carrega
+    o objeto `OperationOrder` inteiro) para anexar a distância de cada item ao ponto de referência
+    sem precisar de mais uma query SQL."""
+    lat1_r, lng1_r, lat2_r, lng2_r = (math.radians(v) for v in (lat1, lng1, lat2, lng2))
+    cos_angle = math.sin(lat1_r) * math.sin(lat2_r) + math.cos(lat1_r) * math.cos(lat2_r) * math.cos(lng2_r - lng1_r)
+    cos_angle = max(-1.0, min(1.0, cos_angle))
+    return EARTH_RADIUS_KM * math.acos(cos_angle)
+
+
+def _geo_filter_conditions(filters: dict) -> list:
+    """Filtros geográficos de `AiOrderFilters`: `has_coordinates` (True/False) e a combinação
+    `near_latitude`+`near_longitude`+`radius_km` (raio de busca) - só aplica o raio quando os três
+    vêm juntos, mesmo critério de "só ativa quando todos os pedaços estão definidos" já usado em
+    `custom_window` (operations/queries.py)."""
+    conditions = []
+    has_coordinates = filters.get("has_coordinates")
+    if has_coordinates is True:
+        conditions.append(and_(OperationOrder.latitude.is_not(None), OperationOrder.longitude.is_not(None)))
+    elif has_coordinates is False:
+        conditions.append(or_(OperationOrder.latitude.is_(None), OperationOrder.longitude.is_(None)))
+
+    near_latitude = filters.get("near_latitude")
+    near_longitude = filters.get("near_longitude")
+    radius_km = filters.get("radius_km")
+    if near_latitude is not None and near_longitude is not None and radius_km is not None:
+        distance = _haversine_km_expr(OperationOrder.latitude, OperationOrder.longitude, near_latitude, near_longitude)
+        conditions.append(
+            and_(
+                OperationOrder.latitude.is_not(None),
+                OperationOrder.longitude.is_not(None),
+                distance <= radius_km,
+            )
+        )
+    return conditions
 
 
 def _hours_diff_expr(db: Session, end_column, start_column):
@@ -161,6 +234,15 @@ TEXT_FILTER_COLUMNS = {
 AI_ORDER_FILTER_FIELDS = set(operations_queries.FILTER_COLUMNS) - {"responsible_ixc_ids"}
 
 
+# Colunas expostas à IA por mecanismo próprio, não coberto pelos três dicionários abaixo
+# (AGGREGATION_DIMENSIONS/TEXT_FILTER_COLUMNS/FILTER_COLUMNS): latitude/longitude são valores
+# contínuos, não fazem sentido como dimensão de agrupamento exata nem filtro de texto - mas SÃO
+# usadas pelo filtro geográfico (`has_coordinates`/`near_latitude`/`near_longitude`/`radius_km`,
+# ver `_geo_filter_conditions`) e pela dimensão calculada "geo_cluster" (`_group_label`), além de
+# virem nos itens de `search_orders`.
+MANUALLY_EXPOSED_COLUMNS = {"latitude", "longitude"}
+
+
 def available_fields() -> dict:
     """Introspecciona `OperationOrder.__table__` e compara com o que já está exposto à IA
     (dimensões de agrupamento, filtros de texto livre e filtros exatos de `AiOrderFilters`) -
@@ -178,6 +260,7 @@ def available_fields() -> dict:
     exposed_columns |= {
         operations_queries.FILTER_COLUMNS[field].key for field in AI_ORDER_FILTER_FIELDS
     }
+    exposed_columns |= MANUALLY_EXPOSED_COLUMNS
     exposed_to_ai = sorted(exposed_columns)
     not_exposed = sorted(set(all_fields) - exposed_columns)
     return {"all_fields": all_fields, "exposed_to_ai": exposed_to_ai, "not_exposed": not_exposed}
@@ -222,6 +305,7 @@ def _dimension_conditions_with_text(db: Session, user: User, filters: dict, *, o
     conditions = operations_queries._dimension_conditions(db, user, base_filters)
     conditions.extend(_text_filter_conditions(filters.get("text_filters")))
     conditions.extend(_sla_stage_filter_conditions(db, filters))
+    conditions.extend(_geo_filter_conditions(filters))
     return conditions
 
 
@@ -261,6 +345,25 @@ def _group_label(db: Session, group_by: str):
     if group_by == "sla_expired_before_schedule":
         expr = _sla_expired_before_schedule_expr(db, datetime.now(timezone.utc))
         return case((expr.is_(True), "Sim"), (expr.is_(False), "Não"), else_="Sem meta de SLA")
+    if group_by == "geo_cluster":
+        # Agrupa O.S. por ponto (quase) coincidente - arredonda lat/long pra GEO_CLUSTER_DECIMALS
+        # casas (~111m) e concatena como rótulo "lat,long". `cast(..., Numeric)` antes do `round`
+        # porque o Postgres não tem round(double precision, int) - só round(numeric, int); o
+        # SQLite aceita os dois jeitos, então o cast não muda nada lá.
+        #
+        # Limitação conhecida (efeito de borda de qualquer clustering por grade): duas O.S. bem
+        # próximas fisicamente podem cair em células vizinhas se a coordenada de uma delas ficar
+        # do outro lado de um limite de arredondamento (ex.: -10.88349 vira -10.883, -10.88351 vira
+        # -10.884, mesmo a ~2m de distância). Para "no mesmo ponto ou bem próximo" com garantia de
+        # não perder vizinho de borda, prefira o filtro de raio (`near_latitude`/`near_longitude`/
+        # `radius_km`, ver `_geo_filter_conditions`), que não sofre desse efeito.
+        lat_rounded = func.round(cast(OperationOrder.latitude, Numeric), GEO_CLUSTER_DECIMALS)
+        lng_rounded = func.round(cast(OperationOrder.longitude, Numeric), GEO_CLUSTER_DECIMALS)
+        cluster_label = cast(lat_rounded, String).concat(",").concat(cast(lng_rounded, String))
+        return case(
+            (and_(OperationOrder.latitude.is_not(None), OperationOrder.longitude.is_not(None)), cluster_label),
+            else_="Sem coordenadas",
+        )
     field = AGGREGATION_DIMENSIONS.get(group_by, OperationOrder.regional)
     return func.coalesce(field, "Não identificado")
 
@@ -550,11 +653,22 @@ def _sla_stage_flags_for_order(order: OperationOrder, reference_at: datetime) ->
     return None, hours_elapsed_before_schedule > target
 
 
-def _build_search_item(order: OperationOrder, team_model: str | None, team_target: OperationTeamTargetVersion | None) -> dict:
+def _build_search_item(
+    order: OperationOrder,
+    team_model: str | None,
+    team_target: OperationTeamTargetVersion | None,
+    *,
+    reference_point: tuple[float, float] | None = None,
+) -> dict:
     target = order.sla_target_hours
     elapsed = order.elapsed_hours
     is_open = order.closed_at is None
     reference_at = datetime.now(timezone.utc)
+    distance_km = (
+        round(_haversine_km(order.latitude, order.longitude, *reference_point), 3)
+        if reference_point is not None and order.latitude is not None and order.longitude is not None
+        else None
+    )
 
     has_target = target is not None and elapsed is not None
     horas_para_vencer = round(target - elapsed, 1) if has_target else None
@@ -566,6 +680,7 @@ def _build_search_item(order: OperationOrder, team_model: str | None, team_targe
     return {
         "order_code": order.order_code,
         "regional": order.regional,
+        "city": order.city,
         "os_type": order.os_type,
         "subject": order.os_subject,
         "diagnosis": order.diagnosis,
@@ -579,6 +694,12 @@ def _build_search_item(order: OperationOrder, team_model: str | None, team_targe
         "neighborhood": order.neighborhood,
         "latitude": order.latitude,
         "longitude": order.longitude,
+        # Distância (km) até o ponto de referência do filtro geográfico (near_latitude/
+        # near_longitude) - None quando a busca não usou filtro de raio, ou quando esta O.S. não
+        # tem coordenadas. Existe pra apoiar "reincidência no mesmo ponto ou pontos próximos":
+        # ordenar/ler o quão perto cada resultado está do ponto buscado.
+        "distance_km": distance_km,
+        "pop": order.pop,
         "responsible": order.responsible,
         "team_model": team_model,
         "status": order.status,
@@ -644,13 +765,29 @@ def search_orders(
     conditions, _, _ = operations_queries._query_conditions(db, date_from, date_to, user, filters)
     conditions.extend(_text_filter_conditions(filters.get("text_filters")))
     conditions.extend(_sla_stage_filter_conditions(db, filters))
+    conditions.extend(_geo_filter_conditions(filters))
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
     offset = (page - 1) * page_size
+
+    near_latitude = filters.get("near_latitude")
+    near_longitude = filters.get("near_longitude")
+    reference_point = (near_latitude, near_longitude) if near_latitude is not None and near_longitude is not None else None
+    # Com um ponto de referência, o mais útil é ver primeiro quem está mais perto (apoia
+    # "reincidência no mesmo ponto ou pontos próximos") - sem ele, mantém a ordem de sempre
+    # (mais recente primeiro).
+    if reference_point is not None:
+        order_clauses = (
+            _haversine_km_expr(OperationOrder.latitude, OperationOrder.longitude, *reference_point).asc(),
+            OperationOrder.id.desc(),
+        )
+    else:
+        order_clauses = (OperationOrder.opened_at.desc(), OperationOrder.id.desc())
+
     orders = list(
         db.scalars(
             select(OperationOrder)
             .where(*conditions)
-            .order_by(OperationOrder.opened_at.desc(), OperationOrder.id.desc())
+            .order_by(*order_clauses)
             .offset(offset)
             .limit(page_size)
         )
@@ -668,7 +805,7 @@ def search_orders(
             local_closed = order.closed_at.astimezone(operations_queries.OPERATIONS_TIMEZONE)
             period_type = operations_queries.period_type_for_date(local_closed.date())
             team_target = _resolve_team_target(target_versions, team_model, period_type, order.closed_at)
-        items.append(_build_search_item(order, team_model, team_target))
+        items.append(_build_search_item(order, team_model, team_target, reference_point=reference_point))
     return {
         "items": items,
         "total_encontrado": total,

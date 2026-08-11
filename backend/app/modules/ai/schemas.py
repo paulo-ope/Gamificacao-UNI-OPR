@@ -16,15 +16,16 @@ from app.modules.operations.schemas import (
 AggregationDimension = Literal[
     "regional", "city", "neighborhood", "os_type", "subject", "diagnosis",
     "department", "sector", "priority", "responsible", "status", "sla_status",
-    # "team_model", "scheduled_after_sla" e "sla_expired_before_schedule" não são colunas de
-    # OperationOrder (são calculadas em ai/queries.py:_group_label - a primeira casando
-    # responsável+regional contra a atribuição de modelo de equipe, as outras duas comparando
-    # timestamps do ciclo de vida da O.S. contra a meta de SLA) - por isso não aparecem em
-    # AGGREGATION_DIMENSIONS, só aqui na lista de valores aceitos pela API.
-    "team_model", "scheduled_after_sla", "sla_expired_before_schedule",
+    # "team_model", "scheduled_after_sla", "sla_expired_before_schedule" e "geo_cluster" não são
+    # colunas de OperationOrder (são calculadas em ai/queries.py:_group_label - a primeira casando
+    # responsável+regional contra a atribuição de modelo de equipe, as duas seguintes comparando
+    # timestamps do ciclo de vida da O.S. contra a meta de SLA, e "geo_cluster" arredondando
+    # latitude/longitude pra agrupar pontos praticamente coincidentes - ver GEO_CLUSTER_DECIMALS)
+    # - por isso não aparecem em AGGREGATION_DIMENSIONS, só aqui na lista de valores aceitos.
+    "team_model", "scheduled_after_sla", "sla_expired_before_schedule", "geo_cluster",
 ]
 assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS) | {
-    "team_model", "scheduled_after_sla", "sla_expired_before_schedule",
+    "team_model", "scheduled_after_sla", "sla_expired_before_schedule", "geo_cluster",
 }
 
 
@@ -76,6 +77,14 @@ class AiOrderFilters(BaseModel):
     # None (padrão) significa "não filtrar por isso", igual ao resto dos filtros deste schema.
     scheduled_after_sla: bool | None = None
     sla_expired_before_schedule: bool | None = None
+    # Filtros geográficos (ver ai/queries.py:_geo_filter_conditions). `radius_km` só tem efeito
+    # quando `near_latitude` e `near_longitude` também vêm preenchidos - os três juntos formam uma
+    # busca "O.S. num raio de X km de um ponto" (ex.: as coordenadas de uma O.S. já conhecida, pra
+    # achar reincidência no mesmo local ou nas proximidades).
+    has_coordinates: bool | None = None
+    near_latitude: float | None = Field(default=None, ge=-90, le=90)
+    near_longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_km: float | None = Field(default=None, gt=0, le=500)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -135,6 +144,7 @@ class AiSearchRequest(BaseModel):
 class AiOrderSearchItem(BaseModel):
     order_code: str
     regional: str | None
+    city: str | None
     os_type: str | None
     subject: str | None
     diagnosis: str | None
@@ -147,6 +157,10 @@ class AiOrderSearchItem(BaseModel):
     neighborhood: str | None
     latitude: float | None
     longitude: float | None
+    # Distância (km) até o ponto de `near_latitude`/`near_longitude` do filtro - None quando a
+    # busca não usou filtro geográfico de raio, ou quando esta O.S. não tem coordenadas.
+    distance_km: float | None
+    pop: str | None
     responsible: str | None
     team_model: str | None
     status: str | None

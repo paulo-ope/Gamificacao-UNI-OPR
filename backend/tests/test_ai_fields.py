@@ -26,9 +26,14 @@ def test_available_fields_flags_known_exposed_and_not_exposed_columns():
     # 20260811_0048).
     assert "neighborhood" in result["exposed_to_ai"]
 
-    # raw_payload e os identificadores de cliente deste PR nunca foram expostos como
-    # dimensão/filtro/texto de IA - devem aparecer como pendência, não somem silenciosamente.
-    # latitude/longitude também: são valores contínuos, não fazem sentido como dimensão de
-    # agrupamento nem filtro de texto - por design, só aparecem nos campos planos de search-orders.
-    for column in ("raw_payload", "customer_login", "customer_id", "latitude", "longitude"):
+    # latitude/longitude são valores contínuos - não entram como dimensão de agrupamento exata nem
+    # filtro de texto, mas SÃO usados pelo filtro geográfico de raio (near_latitude/near_longitude/
+    # radius_km) e pela dimensão calculada "geo_cluster" - por isso contam como expostos via
+    # MANUALLY_EXPOSED_COLUMNS, não como pendência.
+    assert "latitude" in result["exposed_to_ai"]
+    assert "longitude" in result["exposed_to_ai"]
+
+    # raw_payload e os identificadores de cliente nunca foram expostos como dimensão/filtro/texto
+    # de IA - devem aparecer como pendência, não somem silenciosamente.
+    for column in ("raw_payload", "customer_login", "customer_id"):
         assert column in result["not_exposed"], column
