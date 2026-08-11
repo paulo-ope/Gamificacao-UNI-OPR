@@ -26,7 +26,7 @@ from app.services.ixc_client import IxcApiError, IxcQueryLimitError, get_ixc_cli
 
 from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
-from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule
+from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
 from .schemas import (
@@ -192,13 +192,34 @@ def _replace_target_rules(db: Session, item: OperationTeamModel, rules: list[dic
         raise HTTPException(status_code=422, detail="Cada tipo de período pode aparecer somente uma vez.")
     for rule in normalized:
         _validate_target_rule(rule)
+    now = datetime.now(timezone.utc)
     if item.id is not None:
         db.execute(delete(OperationTeamTargetRule).where(OperationTeamTargetRule.team_model_id == item.id))
+        # Fecha o histórico da configuração que está sendo substituída - ver
+        # OperationTeamTargetVersion (models.py) sobre por que essa tabela existe e nunca perde
+        # linha (só fecha `valid_to` e abre uma nova, ao contrário de OperationTeamTargetRule).
+        db.execute(
+            update(OperationTeamTargetVersion)
+            .where(OperationTeamTargetVersion.team_model_id == item.id, OperationTeamTargetVersion.valid_to.is_(None))
+            .values(valid_to=now)
+        )
         db.flush()
         db.expire(item, ["target_rules"])
     else:
         item.target_rules.clear()
     item.target_rules.extend(OperationTeamTargetRule(**rule) for rule in normalized)
+    item.target_rule_versions.extend(
+        OperationTeamTargetVersion(
+            team_model_name=item.name,
+            period_type=rule["period_type"],
+            target_quantity=int(rule["target_quantity"]),
+            median_from_quantity=int(rule["median_from_quantity"]),
+            good_from_quantity=int(rule["good_from_quantity"]),
+            valid_from=now,
+            valid_to=None,
+        )
+        for rule in normalized
+    )
     weekday = next((rule for rule in normalized if rule["period_type"] == "weekday"), None)
     if weekday:
         item.median_from_quantity = int(weekday["median_from_quantity"])

@@ -175,6 +175,10 @@ class OperationTeamModel(Base):
         lazy="selectin",
         order_by="OperationTeamTargetRule.period_type",
     )
+    target_rule_versions: Mapped[list["OperationTeamTargetVersion"]] = relationship(
+        back_populates="team_model",
+        cascade="all, delete-orphan",
+    )
 
 
 class OperationTeamTargetRule(Base):
@@ -199,6 +203,38 @@ class OperationTeamTargetRule(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
     team_model: Mapped[OperationTeamModel] = relationship(back_populates="target_rules")
+
+
+class OperationTeamTargetVersion(Base):
+    """Histórico append-only de `OperationTeamTargetRule` - essa tabela nunca é editada nem tem
+    linha apagada (só fecha `valid_to` e abre uma nova). Criada porque `OperationTeamTargetRule`
+    é destrutiva (`_replace_target_rules`, operations/router.py, apaga e recria as regras a cada
+    edição, sem deixar rastro) e não há como saber hoje qual era a meta vigente numa data
+    passada. Só tem dado a partir do dia em que este recurso entrou em produção (mais o backfill
+    de uma migration, que assume a configuração atual válida desde a criação da regra) - sem
+    retroatividade para mudanças que já aconteceram antes disso."""
+
+    __tablename__ = "operations_team_target_versions"
+    __table_args__ = (
+        Index("ix_operations_team_target_versions_lookup", "team_model_name", "period_type", "valid_from"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    team_model_id: Mapped[int] = mapped_column(
+        ForeignKey("operations_team_models.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Snapshot do nome - as consultas de análise de O.S. já resolvem modelo de equipe por NOME
+    # (ai/queries.py:_group_label), não por id; evita um join extra em toda consulta de meta.
+    team_model_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    period_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    median_from_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    good_from_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    team_model: Mapped[OperationTeamModel] = relationship(back_populates="target_rule_versions")
 
 
 class OperationSubjectTypeMapping(Base):

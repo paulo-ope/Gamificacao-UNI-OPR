@@ -15,6 +15,7 @@ from app.modules.operations.models import (
     OperationOrder,
     OperationResponsibleAssignment,
     OperationTeamModel,
+    OperationTeamTargetVersion,
 )
 from app.modules.operations.period import local_period_utc_bounds
 from app.modules.operations.schemas import OperationFilters, _text_from_payload
@@ -354,7 +355,33 @@ def orders_timeseries(
     return results
 
 
-def _build_search_item(order: OperationOrder, team_model: str | None) -> dict:
+def _team_target_versions_for_names(db: Session, team_model_names: set[str]) -> list[OperationTeamTargetVersion]:
+    if not team_model_names:
+        return []
+    return list(
+        db.scalars(
+            select(OperationTeamTargetVersion).where(OperationTeamTargetVersion.team_model_name.in_(team_model_names))
+        )
+    )
+
+
+def _resolve_team_target(
+    versions: list[OperationTeamTargetVersion], team_model: str | None, period_type: str, reference_at: datetime
+) -> OperationTeamTargetVersion | None:
+    if not team_model:
+        return None
+    for version in versions:
+        if (
+            version.team_model_name == team_model
+            and version.period_type == period_type
+            and version.valid_from <= reference_at
+            and (version.valid_to is None or version.valid_to > reference_at)
+        ):
+            return version
+    return None
+
+
+def _build_search_item(order: OperationOrder, team_model: str | None, team_target: OperationTeamTargetVersion | None) -> dict:
     target = order.sla_target_hours
     elapsed = order.elapsed_hours
     is_open = order.closed_at is None
@@ -394,6 +421,14 @@ def _build_search_item(order: OperationOrder, team_model: str | None) -> dict:
         "horas_atrasada": horas_atrasada,
         "dias_em_aberto": dias_em_aberto,
         "sla_estourado": order.sla_status == "out_of_time",
+        # Só existe pra O.S. fechada (a meta é sobre produção realizada) e quando o modelo de
+        # equipe é conhecido - a meta VIGENTE em closed_at, não a de hoje (ver
+        # operations/models.py:OperationTeamTargetVersion sobre a limitação de não haver
+        # retroatividade anterior a quando esse histórico entrou em produção).
+        "team_target_quantity": team_target.target_quantity if team_target else None,
+        "team_target_period": team_target.period_type if team_target else None,
+        "team_target_valid_from": team_target.valid_from if team_target else None,
+        "team_target_valid_to": team_target.valid_to if team_target else None,
     }
 
 
@@ -429,10 +464,19 @@ def search_orders(
         )
     )
     team_model_by_responsible = _team_model_lookup(db, orders)
-    items = [
-        _build_search_item(order, team_model_by_responsible.get((order.responsible or "").lower()))
-        for order in orders
-    ]
+    target_versions = _team_target_versions_for_names(db, set(team_model_by_responsible.values()))
+    items = []
+    for order in orders:
+        team_model = team_model_by_responsible.get((order.responsible or "").lower())
+        team_target = None
+        if team_model and order.closed_at is not None:
+            # Mesma conversão pra fuso local de work_schedule_overview (services.py:85) antes de
+            # classificar o dia da semana - sem isso, uma O.S. fechada perto da meia-noite UTC
+            # pode cair no dia errado (America/Porto_Velho é UTC-4).
+            local_closed = order.closed_at.astimezone(operations_queries.OPERATIONS_TIMEZONE)
+            period_type = operations_queries.period_type_for_date(local_closed.date())
+            team_target = _resolve_team_target(target_versions, team_model, period_type, order.closed_at)
+        items.append(_build_search_item(order, team_model, team_target))
     return {
         "items": items,
         "total_encontrado": total,
@@ -586,3 +630,85 @@ def warranty_analytics_for_ai(
         for item in result["items"]
     ]
     return result
+
+
+def team_targets_for_ai(db: Session, reference_date: date) -> list[dict]:
+    """Metas de equipe vigentes numa data - repassa `operations_queries.team_targets_snapshot`
+    (histórico append-only, ver operations/models.py:OperationTeamTargetVersion)."""
+    versions = operations_queries.team_targets_snapshot(db, reference_date)
+    return [
+        {
+            "team_model": version.team_model_name,
+            "period_type": version.period_type,
+            "target_quantity": version.target_quantity,
+            "median_from_quantity": version.median_from_quantity,
+            "good_from_quantity": version.good_from_quantity,
+            "valid_from": version.valid_from,
+            "valid_to": version.valid_to,
+        }
+        for version in versions
+    ]
+
+
+TeamTargetGranularity = Literal["day", "week", "month"]
+
+
+def _team_target_for_bucket(
+    db: Session, team_model: str, bucket_start: date, granularity: TeamTargetGranularity, date_from: date, date_to: date
+) -> int | None:
+    if granularity == "month":
+        # A meta "monthly" é um valor configurado independente, não a soma dos alvos diários do
+        # mês (pode existir pra compensar feriados/férias etc.) - usar direto, sem somar dias.
+        version = operations_queries.team_target_for_date(db, team_model, "monthly", bucket_start)
+        return version.target_quantity if version else None
+
+    days_in_bucket = [bucket_start + timedelta(days=offset) for offset in range(7)] if granularity == "week" else [bucket_start]
+    total = 0
+    any_found = False
+    for day in days_in_bucket:
+        if day < date_from or day > date_to:
+            continue
+        period_type = operations_queries.period_type_for_date(day)
+        version = operations_queries.team_target_for_date(db, team_model, period_type, day)
+        if version:
+            total += version.target_quantity
+            any_found = True
+    return total if any_found else None
+
+
+def team_target_performance(
+    db: Session,
+    user: User,
+    *,
+    date_from: date,
+    date_to: date,
+    granularity: TeamTargetGranularity = "day",
+    **filters,
+) -> list[dict]:
+    """Produção realizada (fechadas) x meta prevista, por bucket e por modelo de equipe - a meta
+    usada é a que era VIGENTE naquele bucket (ver `_team_target_for_bucket`), não a de hoje.
+    Reaproveita `orders_timeseries` (metric="fechadas", group_by="team_model") pro lado realizado
+    - só cobre os modelos de equipe que aparecem com produção real no período, não todo modelo
+    cadastrado (evita gerar linha zerada pra modelo sem nenhuma atividade)."""
+    actual_points = orders_timeseries(
+        db, user, metric="fechadas", granularity=granularity, date_from=date_from, date_to=date_to,
+        group_by="team_model", **filters,
+    )
+    results = []
+    for point in actual_points:
+        team_model = point.get("group")
+        if not team_model:
+            continue
+        target = _team_target_for_bucket(db, team_model, point["period_start"], granularity, date_from, date_to)
+        actual = point["quantity"]
+        results.append(
+            {
+                "period_start": point["period_start"],
+                "team_model": team_model,
+                "actual": actual,
+                "target": target,
+                "delta": actual - target if target is not None else None,
+                "percentage_of_target": round(actual / target * 100, 1) if target else None,
+            }
+        )
+    return results

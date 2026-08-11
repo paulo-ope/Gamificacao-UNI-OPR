@@ -141,6 +141,10 @@ class AiOrderSearchItem(BaseModel):
     horas_atrasada: float | None
     dias_em_aberto: float | None
     sla_estourado: bool
+    team_target_quantity: int | None
+    team_target_period: str | None
+    team_target_valid_from: datetime | None
+    team_target_valid_to: datetime | None
 
 
 class AiSearchResponse(BaseModel):
@@ -248,3 +252,39 @@ class AiWarrantyAnalyticsResponse(BaseModel):
     by_origin_type: list[OperationWarrantyOriginTypeItem]
     items: list[AiWarrantyItem]
     items_truncated: bool
+
+
+class AiTeamTargetsRequest(BaseModel):
+    # Padrão hoje (data corrente) - a meta é sempre "a vigente nesta data", nunca "a mais recente"
+    # (ver operations/models.py:OperationTeamTargetVersion).
+    reference_date: date = Field(default_factory=date.today)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiTeamTargetItem(BaseModel):
+    team_model: str
+    period_type: Literal["weekday", "saturday", "sunday", "monthly"]
+    target_quantity: int
+    median_from_quantity: int
+    good_from_quantity: int
+    valid_from: datetime
+    valid_to: datetime | None
+
+
+class AiTeamTargetPerformanceRequest(BaseModel):
+    date_from: date
+    date_to: date
+    granularity: Literal["day", "week", "month"] = "day"
+    filters: AiOrderFilters = Field(default_factory=AiOrderFilters)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiTeamTargetPerformanceItem(BaseModel):
+    period_start: date
+    team_model: str
+    actual: int
+    target: int | None
+    delta: int | None
+    percentage_of_target: float | None

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import User
 from app.services.regional import effective_managed_regionals
 
-from .models import OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel
+from .models import OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE, OPERATIONS_TIMEZONE_NAME, local_period_utc_bounds, operations_period_bounds
 from .scope import ALL_SECTOR_NAMES
 
@@ -2449,3 +2449,41 @@ def opening_order_page(
         "page_size": page_size,
         "total_pages": math.ceil(total / page_size) if total else 0,
     }
+
+
+def period_type_for_date(day: date) -> str:
+    """Mesma classificação já usada em `services.work_schedule_overview`/
+    `classify_daily_performance` - domingo = "sunday", sábado = "saturday", resto = "weekday"."""
+    return "sunday" if day.weekday() == 6 else "saturday" if day.weekday() == 5 else "weekday"
+
+
+def team_target_for_date(
+    db: Session, team_model_name: str, period_type: str, reference_date: date
+) -> OperationTeamTargetVersion | None:
+    """A versão de `OperationTeamTargetVersion` vigente numa data - ver models.py sobre por que
+    essa tabela existe (histórico append-only, ao contrário de `OperationTeamTargetRule`)."""
+    reference_at = datetime.combine(reference_date, time.max, tzinfo=OPERATIONS_TIMEZONE).astimezone(timezone.utc)
+    return db.scalar(
+        select(OperationTeamTargetVersion)
+        .where(
+            OperationTeamTargetVersion.team_model_name == team_model_name,
+            OperationTeamTargetVersion.period_type == period_type,
+            OperationTeamTargetVersion.valid_from <= reference_at,
+            or_(OperationTeamTargetVersion.valid_to.is_(None), OperationTeamTargetVersion.valid_to > reference_at),
+        )
+        .order_by(OperationTeamTargetVersion.valid_from.desc())
+        .limit(1)
+    )
+
+
+def team_targets_snapshot(db: Session, reference_date: date) -> list[OperationTeamTargetVersion]:
+    """Todas as versões vigentes numa data - uma linha por (modelo de equipe, tipo de período)."""
+    reference_at = datetime.combine(reference_date, time.max, tzinfo=OPERATIONS_TIMEZONE).astimezone(timezone.utc)
+    return list(
+        db.scalars(
+            select(OperationTeamTargetVersion).where(
+                OperationTeamTargetVersion.valid_from <= reference_at,
+                or_(OperationTeamTargetVersion.valid_to.is_(None), OperationTeamTargetVersion.valid_to > reference_at),
+            )
+        )
+    )

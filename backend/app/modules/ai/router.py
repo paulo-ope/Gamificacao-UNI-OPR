@@ -14,6 +14,8 @@ from app.modules.ai.queries import (
     filter_options_for_ai,
     orders_timeseries,
     search_orders,
+    team_target_performance,
+    team_targets_for_ai,
     warranty_analytics_for_ai,
 )
 from app.modules.ai.schemas import (
@@ -25,6 +27,10 @@ from app.modules.ai.schemas import (
     AiFilterOptionsRequest,
     AiSearchRequest,
     AiSearchResponse,
+    AiTeamTargetItem,
+    AiTeamTargetPerformanceItem,
+    AiTeamTargetPerformanceRequest,
+    AiTeamTargetsRequest,
     AiTimeseriesPoint,
     AiTimeseriesRequest,
     AiWarrantyAnalyticsRequest,
@@ -158,6 +164,43 @@ def warranty_analytics_route(
         period_basis=payload.period_basis,
         denominator=payload.denominator,
         origin_excluded_diagnoses=payload.origin_excluded_diagnoses,
+        **payload.filters.model_dump(),
+    )
+
+
+@router.post(
+    "/team-targets",
+    response_model=list[AiTeamTargetItem],
+    description="Metas de equipe (por modelo e tipo de período) vigentes numa data - não é a mais recente, é a que valia naquele dia.",
+)
+def team_targets_route(
+    payload: AiTeamTargetsRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_api_key_user),
+) -> list[dict]:
+    return team_targets_for_ai(db, payload.reference_date)
+
+
+@router.post(
+    "/team-target-performance",
+    response_model=list[AiTeamTargetPerformanceItem],
+    description=(
+        "Produção realizada (fechadas) x meta prevista, por modelo de equipe. Usa a meta que "
+        "era vigente em cada bucket, não a de hoje. Só cobre modelos com produção real no "
+        "período (não gera linha zerada pra modelo sem nenhuma atividade)."
+    ),
+)
+def team_target_performance_route(
+    payload: AiTeamTargetPerformanceRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_api_key_user),
+) -> list[dict]:
+    return team_target_performance(
+        db,
+        user,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        granularity=payload.granularity,
         **payload.filters.model_dump(),
     )
 

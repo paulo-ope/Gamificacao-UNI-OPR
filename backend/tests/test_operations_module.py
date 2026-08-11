@@ -18,6 +18,7 @@ from app.modules.operations.models import (
     OperationResponsibleAssignment,
     OperationResponsibleDirectorySetting,
     OperationTeamModel,
+    OperationTeamTargetVersion,
 )
 from app.modules.operations.period import OPERATIONS_TIMEZONE, current_month_bounds
 from app.modules.operations.services import classify_daily_performance
@@ -1307,6 +1308,61 @@ def test_team_model_can_be_renamed_without_losing_identity(client):
     assert renamed.status_code == 200
     assert renamed.json()["id"] == model_id
     assert renamed.json()["name"] == "Plantão Rural Especial"
+
+
+def test_creating_team_model_opens_one_target_version_per_period(client, db_session):
+    created = client.post(
+        "/api/operations/team-models",
+        json={"name": "VERSIONADO", "daily_target": 5, "median_from_quantity": 3, "good_from_quantity": 4},
+    )
+    assert created.status_code == 201
+    model_id = created.json()["id"]
+
+    versions = db_session.query(OperationTeamTargetVersion).filter(
+        OperationTeamTargetVersion.team_model_id == model_id
+    ).all()
+    assert len(versions) == 4  # weekday/saturday/sunday/monthly (regras padrão)
+    assert all(version.valid_to is None for version in versions)
+    weekday = next(version for version in versions if version.period_type == "weekday")
+    assert weekday.target_quantity == 5
+    assert weekday.team_model_name == "VERSIONADO"
+
+
+def test_updating_team_model_closes_old_target_version_and_opens_new(client, db_session):
+    """Achado que motivou esta tabela: editar a meta hoje apaga a regra antiga sem deixar rastro -
+    a versão precisa fechar (`valid_to`) em vez de desaparecer, pra ainda ser possível saber qual
+    era a meta vigente antes desta edição."""
+    created = client.post(
+        "/api/operations/team-models",
+        json={"name": "VERSIONADO 2", "daily_target": 5, "median_from_quantity": 3, "good_from_quantity": 4},
+    )
+    model_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/api/operations/team-models/{model_id}",
+        json={
+            "target_rules": [
+                {"period_type": "weekday", "target_quantity": 8, "median_from_quantity": 4, "good_from_quantity": 6, "start_time": "08:00", "end_time": "18:00"},
+                {"period_type": "saturday", "target_quantity": 8, "median_from_quantity": 4, "good_from_quantity": 6, "start_time": "08:00", "end_time": "18:00"},
+                {"period_type": "sunday", "target_quantity": 4, "median_from_quantity": 2, "good_from_quantity": 3, "enabled": False},
+                {"period_type": "monthly", "target_quantity": 176, "median_from_quantity": 88, "good_from_quantity": 132},
+            ]
+        },
+    )
+    assert updated.status_code == 200
+
+    db_session.expire_all()
+    all_versions = db_session.query(OperationTeamTargetVersion).filter(
+        OperationTeamTargetVersion.team_model_id == model_id
+    ).all()
+    open_versions = {v.period_type: v for v in all_versions if v.valid_to is None}
+    closed_versions = {v.period_type: v for v in all_versions if v.valid_to is not None}
+
+    assert len(open_versions) == 4
+    assert len(closed_versions) == 4
+    assert open_versions["weekday"].target_quantity == 8
+    assert closed_versions["weekday"].target_quantity == 5
+    assert closed_versions["weekday"].valid_to is not None
 
 
 def test_team_model_can_be_deleted_only_without_linked_members(client):
