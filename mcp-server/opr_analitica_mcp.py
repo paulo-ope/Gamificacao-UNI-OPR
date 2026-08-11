@@ -1,0 +1,569 @@
+#!/usr/bin/env python3
+"""MCP server para o módulo de IA da Operação Analítica (backend/app/modules/ai).
+
+Expõe como tools MCP as mesmas rotas que já existem em /api/ai/* (protegidas por chave de API,
+permissão "ai:query") - este servidor não reimplementa nenhuma lógica de análise, só chama a API
+já em produção via HTTP. Roda local (stdio), pensado para Claude Code e Claude Desktop.
+
+Configuração via variáveis de ambiente:
+    OPR_API_BASE_URL   Base da API, ex.: "https://sistema.souuni.com/api" ou "http://localhost:8000/api"
+    OPR_API_KEY        Chave de API com permissão "ai:query" (ver README.md deste diretório sobre
+                        como gerar uma com `python -m app.modules.ai.cli create-service-user`)
+
+Os filtros de O.S. (regional, cidade, bairro, assunto, responsável, coordenadas, etapa de SLA
+etc.) são passados como um dicionário livre (`filters`), não como campos individuais no schema de
+cada tool - ver `FILTERS_DOC` para a lista de chaves aceitas. Essa lista é mantida manualmente e
+pode ficar desatualizada se o backend ganhar filtros novos sem atualizar este arquivo; chame
+`opr_list_fields` para conferir o que a API aceita "ao vivo" quando um filtro parecer não ter
+efeito.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+
+import httpx
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
+
+mcp = FastMCP("opr_analitica_mcp")
+
+API_BASE_URL = os.environ.get("OPR_API_BASE_URL", "http://localhost:8000/api").rstrip("/")
+API_KEY = os.environ.get("OPR_API_KEY", "")
+HTTP_TIMEOUT_SECONDS = 60.0
+
+if not API_KEY:
+    raise RuntimeError(
+        "OPR_API_KEY não está definida. Gere uma chave com:\n"
+        '  docker exec opr-gamification-backend python -m app.modules.ai.cli '
+        'create-service-user --name "Claude MCP"\n'
+        "e defina OPR_API_KEY (e, se necessário, OPR_API_BASE_URL) na configuração do MCP - "
+        "ver README.md deste diretório."
+    )
+
+# Documentação das chaves aceitas em `filters` - mesmo vocabulário de AiOrderFilters
+# (backend/app/modules/ai/schemas.py). Mantida aqui só para orientar quem for chamar as tools;
+# a validação de verdade acontece no backend, que rejeita chave desconhecida (extra="forbid").
+FILTERS_DOC = """
+Chaves aceitas em `filters` (todas opcionais; listas vazias/None = sem filtro):
+- team_models, companies, regionals, states, cities, contract_types, person_types, os_types,
+  subjects, diagnoses, departments, sectors, priorities, creators, responsibles, statuses,
+  sla_statuses, projects, pops: list[str] - filtro exato (valor precisa bater igual).
+- text_filters: list[{"field": ..., "operator": "contains"|"starts_with"|"ends_with"|"not_equals",
+  "value": str}] - "field" aceita: sector, subject, diagnosis, responsible, city, department,
+  service_description (descrição de abertura da O.S.), neighborhood (bairro).
+- scheduled_after_sla, sla_expired_before_schedule: bool - indicadores de em que etapa o SLA foi
+  perdido (ver group_by="scheduled_after_sla"/"sla_expired_before_schedule" para agrupar por eles).
+- has_coordinates: bool - só O.S. com (True) ou sem (False) latitude/longitude preenchidas.
+- near_latitude, near_longitude, radius_km: float - só tem efeito com os três juntos; filtra O.S.
+  dentro de `radius_km` quilômetros do ponto (near_latitude, near_longitude). Útil para achar
+  reincidência perto de uma O.S. já conhecida (usando as coordenadas dela como centro).
+"""
+
+GROUP_BY_DOC = """
+Dimensões aceitas em group_by (uma string, ou lista de até 3 para agrupamento composto):
+regional, city, neighborhood, os_type, subject, diagnosis, department, sector, priority,
+responsible, status, sla_status, team_model, scheduled_after_sla, sla_expired_before_schedule,
+geo_cluster (agrupa O.S. de ponto geográfico praticamente coincidente, ~111m).
+"""
+
+
+def _post(endpoint: str, payload: dict) -> Any:
+    with httpx.Client() as client:
+        response = client.post(
+            f"{API_BASE_URL}/ai/{endpoint}",
+            json=payload,
+            headers={"x-api-key": API_KEY},
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        return _parse_response(response, endpoint)
+
+
+def _get(endpoint: str) -> Any:
+    with httpx.Client() as client:
+        response = client.get(
+            f"{API_BASE_URL}/ai/{endpoint}",
+            headers={"x-api-key": API_KEY},
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        return _parse_response(response, endpoint)
+
+
+def _parse_response(response: httpx.Response, endpoint: str) -> Any:
+    if response.status_code == 401:
+        raise RuntimeError(
+            "Chave de API inválida ou revogada. Gere uma nova com "
+            "`docker exec opr-gamification-backend python -m app.modules.ai.cli "
+            'create-service-user --name "Claude MCP"` e atualize OPR_API_KEY.'
+        )
+    if response.status_code == 403:
+        raise RuntimeError("Permissão insuficiente (a chave precisa da permissão 'ai:query').")
+    if response.status_code == 422:
+        raise RuntimeError(f"Parâmetros inválidos para {endpoint}: {response.text}")
+    response.raise_for_status()
+    return response.json()
+
+
+def _dump(data: Any) -> str:
+    return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+
+
+def _call(endpoint: str, payload: dict) -> str:
+    """Wrapper comum a todas as tools POST: chama o endpoint e converte qualquer erro numa
+    mensagem de texto acionável, em vez de deixar a exceção subir crua para o cliente MCP."""
+    try:
+        return _dump(_post(endpoint, payload))
+    except httpx.TimeoutException:
+        return f"Erro: tempo esgotado chamando {endpoint}. Tente um período menor ou tente de novo."
+    except httpx.ConnectError:
+        return (
+            f"Erro: não foi possível conectar em {API_BASE_URL}. Confirme se o backend está no "
+            f"ar e se OPR_API_BASE_URL está correta (valor atual: {API_BASE_URL})."
+        )
+    except Exception as exc:  # noqa: BLE001 - repassado como texto pro agente decidir o que fazer
+        return f"Erro: {exc}"
+
+
+class DateRangeFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date_from: str = Field(..., description="Data inicial do período, formato AAAA-MM-DD.")
+    date_to: str = Field(..., description="Data final do período, formato AAAA-MM-DD.")
+    filters: dict[str, Any] = Field(default_factory=dict, description=FILTERS_DOC)
+
+
+class AggregateOrdersInput(DateRangeFilters):
+    group_by: str | list[str] = Field(..., description="Dimensão (ou lista de até 3). " + GROUP_BY_DOC)
+    metric: str = Field(
+        ...,
+        description=(
+            "Métrica a calcular por grupo: quantidade_aberta, quantidade_fechada, taxa_sla, "
+            "horas_medias, quantidade_atrasada, quantidade_backlog, horas_abertura_agenda "
+            "(abertura->agendamento), horas_agenda_execucao (agendamento->execução), "
+            "horas_execucao_fechamento (execução->fechamento), horas_abertura_fechamento "
+            "(abertura->fechamento, total)."
+        ),
+    )
+
+
+@mcp.tool(
+    name="opr_aggregate_orders",
+    annotations={
+        "title": "Agregar O.S. por dimensão",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_aggregate_orders(params: AggregateOrdersInput) -> str:
+    """Agrupa Ordens de Serviço por uma dimensão (ou até 3 combinadas) e calcula uma métrica por
+    grupo - a ferramenta principal para "concentração de X por Y" (ex.: backlog por bairro,
+    quantidade de O.S. por assunto, taxa de SLA por regional, horas médias de execução por
+    modelo de equipe).
+
+    Args:
+        params (AggregateOrdersInput): date_from, date_to (AAAA-MM-DD), group_by (uma dimensão ou
+            lista de até 3, ver GROUP_BY_DOC), metric (ver descrição do campo), filters (ver
+            FILTERS_DOC).
+
+    Returns:
+        str: JSON com uma lista de grupos. Com 1 dimensão: [{"label": str, "quantity": int,
+        "metric_value": float, "percentage": float}, ...], ordenado por quantidade decrescente.
+        Com 2-3 dimensões: cada item troca "label" por uma chave por dimensão pedida
+        (ex.: {"regional": ..., "subject": ..., "quantity": ..., "metric_value": ..., "percentage": ...}).
+
+    Exemplos de uso:
+        - "Quais bairros têm mais O.S. em aberto?" -> group_by="neighborhood", metric="quantidade_backlog"
+        - "Taxa de SLA por regional em julho" -> group_by="regional", metric="taxa_sla"
+        - "Onde o SLA está sendo perdido: na agenda ou na execução?" -> comparar
+          metric="horas_abertura_agenda" vs "horas_agenda_execucao" vs "horas_execucao_fechamento"
+        - "Clusters de chamado por ponto geográfico" -> group_by="geo_cluster", metric="quantidade_aberta"
+    """
+    payload = {
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "group_by": params.group_by,
+        "metric": params.metric,
+        "filters": params.filters,
+    }
+    return _call("aggregate-orders", payload)
+
+
+class OrdersTimeseriesInput(DateRangeFilters):
+    metric: str = Field(..., description="abertas, fechadas ou saldo (abertas - fechadas).")
+    granularity: str = Field(default="day", description="day, week ou month.")
+    group_by: str | None = Field(
+        default=None, description="Dimensão opcional para quebrar cada ponto da série. " + GROUP_BY_DOC
+    )
+
+
+@mcp.tool(
+    name="opr_orders_timeseries",
+    annotations={
+        "title": "Série temporal de O.S.",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_orders_timeseries(params: OrdersTimeseriesInput) -> str:
+    """Série temporal (dia/semana/mês) de O.S. abertas, fechadas, ou o saldo entre as duas -
+    para ver tendência ao longo do tempo, opcionalmente quebrada por uma dimensão.
+
+    Args:
+        params (OrdersTimeseriesInput): date_from, date_to, metric (abertas/fechadas/saldo),
+            granularity (day/week/month, default day), group_by (opcional, ver GROUP_BY_DOC),
+            filters (ver FILTERS_DOC).
+
+    Returns:
+        str: JSON com lista de pontos [{"period_start": "AAAA-MM-DD", "quantity": int,
+        "group": str|null}, ...]. "group" só aparece quando group_by foi informado.
+
+    Exemplos de uso:
+        - "Evolução diária de O.S. abertas em agosto" -> metric="abertas", granularity="day"
+        - "O backlog está crescendo ou diminuindo por semana?" -> metric="saldo", granularity="week"
+        - "Produção fechada por modelo de equipe, mês a mês" -> metric="fechadas",
+          granularity="month", group_by="team_model"
+    """
+    payload = {
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "metric": params.metric,
+        "granularity": params.granularity,
+        "group_by": params.group_by,
+        "filters": params.filters,
+    }
+    return _call("orders-timeseries", payload)
+
+
+class SearchOrdersInput(DateRangeFilters):
+    page: int = Field(default=1, ge=1, description="Página (1-indexado).")
+    page_size: int = Field(default=50, ge=10, le=200, description="Itens por página (10-200).")
+    keyword: str | None = Field(
+        default=None, max_length=160, description="Busca livre (mesmo campo 'search' do resto do sistema)."
+    )
+
+
+@mcp.tool(
+    name="opr_search_orders",
+    annotations={
+        "title": "Buscar O.S. individuais",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_search_orders(params: SearchOrdersInput) -> str:
+    """Busca paginada de O.S. individuais, com texto qualitativo (descrição de abertura, relato
+    técnico) e todos os campos de SLA/tempo já calculados - use para ler o conteúdo de O.S.
+    específicas, não para números agregados (para isso, use opr_aggregate_orders).
+
+    Args:
+        params (SearchOrdersInput): date_from, date_to, page (default 1), page_size (10-200,
+            default 50), keyword (busca livre opcional), filters (ver FILTERS_DOC - incluindo o
+            filtro geográfico de raio, útil para "O.S. perto deste ponto/desta O.S.").
+
+    Returns:
+        str: JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
+        "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, latitude,
+        longitude, distance_km (só quando o filtro de raio foi usado), service_description,
+        technical_report, service_address, datas do ciclo de vida (opened_at, scheduled_at,
+        execution_started_at, closed_at, sla_deadline_at...), indicadores de etapa de SLA
+        (scheduled_after_sla, sla_expired_before_schedule, hours_open_to_schedule, etc.) e a meta
+        de equipe vigente na O.S. (team_target_*).
+
+    Exemplos de uso:
+        - "Me mostra as O.S. abertas essa semana no bairro Centro sobre queda de sinal" ->
+          filters={"text_filters": [{"field": "neighborhood", "operator": "contains", "value": "centro"},
+          {"field": "service_description", "operator": "contains", "value": "queda de sinal"}]}
+        - "Tem outra O.S. perto das coordenadas -10.88,-61.90 nos últimos 30 dias?" ->
+          filters={"near_latitude": -10.88, "near_longitude": -61.90, "radius_km": 1}
+    """
+    payload = {
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "page": params.page,
+        "page_size": params.page_size,
+        "keyword": params.keyword,
+        "filters": params.filters,
+    }
+    return _call("search-orders", payload)
+
+
+class BacklogAgingInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date_to: str = Field(..., description="Data de referência do backlog, formato AAAA-MM-DD.")
+    group_by: str = Field(default="regional", description="Uma dimensão só. " + GROUP_BY_DOC)
+    filters: dict[str, Any] = Field(default_factory=dict, description=FILTERS_DOC)
+
+
+@mcp.tool(
+    name="opr_backlog_aging",
+    annotations={
+        "title": "Idade do backlog por dimensão",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_backlog_aging(params: BacklogAgingInput) -> str:
+    """Idade do backlog (O.S. ainda abertas em date_to) por dimensão: quantidade, idade média e
+    mediana em dias, a O.S. mais antiga, e quantas passam de 1/3/5/7/15 dias.
+
+    Args:
+        params (BacklogAgingInput): date_to (AAAA-MM-DD), group_by (uma dimensão, default
+            "regional", ver GROUP_BY_DOC), filters (ver FILTERS_DOC).
+
+    Returns:
+        str: JSON com lista [{"label": str, "quantity": int, "avg_age_days": float,
+        "median_age_days": float, "oldest_order_code": str, "oldest_age_days": float,
+        "over_1d": int, "over_3d": int, "over_5d": int, "over_7d": int, "over_15d": int}, ...],
+        ordenado por quantidade decrescente.
+
+    Exemplos de uso:
+        - "Qual bairro tem o backlog mais velho?" -> group_by="neighborhood", ordenar por avg_age_days
+        - "Quantas O.S. estão abertas há mais de 7 dias por setor?" -> group_by="sector", ler over_7d
+    """
+    payload = {"date_to": params.date_to, "group_by": params.group_by, "filters": params.filters}
+    return _call("backlog-aging", payload)
+
+
+class BacklogHistoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date_from: str = Field(..., description="Data inicial, formato AAAA-MM-DD.")
+    date_to: str = Field(..., description="Data final, formato AAAA-MM-DD.")
+    metric: str = Field(..., description="backlog ou backlog_atrasado.")
+    group_by: str = Field(
+        default="none", description="none, regional, team_model, sector ou city (só essas cinco)."
+    )
+    sector_filter: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            'Filtro de texto sobre o setor: {"operator": "contains"|"starts_with"|"ends_with"|'
+            '"not_equals", "value": str}.'
+        ),
+    )
+
+
+@mcp.tool(
+    name="opr_backlog_history",
+    annotations={
+        "title": "Série histórica de backlog",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_backlog_history(params: BacklogHistoryInput) -> str:
+    """Série histórica diária de backlog (ou backlog atrasado), lida de um snapshot capturado 1x
+    por dia - só tem dado a partir do dia em que essa captura entrou em produção, sem
+    retroatividade. Diferente das outras ferramentas, só quebra/filtra por regional, team_model,
+    sector ou city (o snapshot já vem pré-agregado só por essas quatro dimensões).
+
+    Args:
+        params (BacklogHistoryInput): date_from, date_to, metric (backlog/backlog_atrasado),
+            group_by (none/regional/team_model/sector/city, default none), sector_filter (opcional).
+
+    Returns:
+        str: JSON com lista [{"snapshot_date": "AAAA-MM-DD", "quantity": int, "group": str|null}, ...].
+
+    Exemplos de uso:
+        - "O backlog atrasado por cidade está subindo esse mês?" -> metric="backlog_atrasado",
+          group_by="city"
+    """
+    payload = {
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "metric": params.metric,
+        "group_by": params.group_by,
+        "sector_filter": params.sector_filter,
+    }
+    return _call("backlog-history", payload)
+
+
+class FilterOptionsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date_from: str = Field(..., description="Data inicial, formato AAAA-MM-DD.")
+    date_to: str = Field(..., description="Data final, formato AAAA-MM-DD.")
+
+
+@mcp.tool(
+    name="opr_filter_options",
+    annotations={
+        "title": "Listar valores cadastrados para filtro",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_filter_options(params: FilterOptionsInput) -> str:
+    """Lista os valores realmente cadastrados no período (regionais, modelos de equipe, setores,
+    assuntos, diagnósticos, responsáveis, status, status de SLA, prioridades etc.) - use antes de
+    montar um filtro exato quando não tiver certeza da grafia correta de um valor.
+
+    Args:
+        params (FilterOptionsInput): date_from, date_to (AAAA-MM-DD).
+
+    Returns:
+        str: JSON com listas de valores por categoria (regionals, team_models, sectors, subjects,
+        diagnoses, responsibles, statuses, sla_statuses, priorities, etc.).
+    """
+    return _call("filter-options", {"date_from": params.date_from, "date_to": params.date_to})
+
+
+class WarrantyAnalyticsInput(DateRangeFilters):
+    period_basis: str = Field(default="opened", description="opened ou closed - base temporal da consulta.")
+    denominator: str = Field(
+        default="active_origins",
+        description="closed_origins, active_origins, maintenance_total ou activation_closed.",
+    )
+    origin_excluded_diagnoses: list[str] = Field(
+        default_factory=list, description="Diagnósticos de origem a excluir (ex.: 'Desistência da solicitação')."
+    )
+
+
+@mcp.tool(
+    name="opr_warranty_analytics",
+    annotations={
+        "title": "Análise de garantia de ativação",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_warranty_analytics(params: WarrantyAnalyticsInput) -> str:
+    """Garantia de ativação: uma Manutenção é garantia quando abre no mesmo contrato até 30 dias
+    após o fechamento de uma Ativação/Mud. Endereço/Mud. Tecnologia elegível. Mesma conta da aba
+    Garantias da tela de Operação.
+
+    Args:
+        params (WarrantyAnalyticsInput): date_from, date_to, period_basis (opened/closed, default
+            opened), denominator (closed_origins/active_origins/maintenance_total/activation_closed,
+            default active_origins), origin_excluded_diagnoses (opcional), filters (ver FILTERS_DOC).
+
+    Returns:
+        str: JSON com numerator, denominator_count, percentage, contracts_with_warranty,
+        customers_with_warranty, breakdown por diversas dimensões (by_regional, by_diagnosis,
+        by_subject, by_origin_type), items (lista plana de cada garantia encontrada) e
+        items_truncated (bool, se a lista de items foi cortada por volume).
+    """
+    payload = {
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "period_basis": params.period_basis,
+        "denominator": params.denominator,
+        "origin_excluded_diagnoses": params.origin_excluded_diagnoses,
+        "filters": params.filters,
+    }
+    return _call("warranty-analytics", payload)
+
+
+class TeamTargetsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_date: str = Field(
+        ..., description="Data de referência, formato AAAA-MM-DD - traz a meta VIGENTE nessa data, não a mais recente."
+    )
+
+
+@mcp.tool(
+    name="opr_team_targets",
+    annotations={
+        "title": "Metas de equipe vigentes numa data",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_team_targets(params: TeamTargetsInput) -> str:
+    """Metas de equipe (por modelo e tipo de período: dia útil/sábado/domingo/mensal) vigentes
+    numa data específica - não é a configuração atual, é a que valia naquele dia (histórico
+    append-only).
+
+    Args:
+        params (TeamTargetsInput): reference_date (AAAA-MM-DD).
+
+    Returns:
+        str: JSON com lista [{"team_model": str, "period_type": str, "target_quantity": int,
+        "median_from_quantity": int, "good_from_quantity": int, "valid_from": str,
+        "valid_to": str|null}, ...].
+    """
+    return _call("team-targets", {"reference_date": params.reference_date})
+
+
+class TeamTargetPerformanceInput(DateRangeFilters):
+    granularity: str = Field(default="day", description="day, week ou month.")
+
+
+@mcp.tool(
+    name="opr_team_target_performance",
+    annotations={
+        "title": "Realizado x meta por modelo de equipe",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+def opr_team_target_performance(params: TeamTargetPerformanceInput) -> str:
+    """Produção realizada (O.S. fechadas) x meta prevista, por modelo de equipe - usa a meta que
+    era vigente em cada período, não a de hoje. Só cobre modelos com produção real no período
+    (não gera linha zerada para modelo sem nenhuma atividade).
+
+    Args:
+        params (TeamTargetPerformanceInput): date_from, date_to, granularity (day/week/month,
+            default day), filters (ver FILTERS_DOC).
+
+    Returns:
+        str: JSON com lista [{"period_start": "AAAA-MM-DD", "team_model": str, "actual": int,
+        "target": int|null, "delta": int|null, "percentage_of_target": float|null}, ...].
+    """
+    payload = {
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "granularity": params.granularity,
+        "filters": params.filters,
+    }
+    return _call("team-target-performance", payload)
+
+
+@mcp.tool(
+    name="opr_list_fields",
+    annotations={
+        "title": "Listar campos disponíveis da O.S.",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_list_fields() -> str:
+    """Lista todos os campos da tabela de Ordens de Serviço e mostra quais já estão expostos
+    às ferramentas de IA (como dimensão de agrupamento, filtro exato ou filtro de texto) e quais
+    ainda não estão - use quando um filtro/agrupamento que você esperava não existir, ou pra
+    confirmar se um campo específico já é consultável antes de tentar usá-lo.
+
+    Returns:
+        str: JSON {"all_fields": [str, ...], "exposed_to_ai": [str, ...], "not_exposed": [str, ...]}.
+    """
+    try:
+        return _dump(_get("fields"))
+    except Exception as exc:  # noqa: BLE001
+        return f"Erro: {exc}"
+
+
+if __name__ == "__main__":
+    mcp.run()
