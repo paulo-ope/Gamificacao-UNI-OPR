@@ -51,6 +51,41 @@ def test_ai_text_filter_service_description_matches_raw_payload_only(db_session,
     assert [item["order_code"] for item in result["items"]] == ["DESC-HIT"]
 
 
+def test_ai_aggregate_orders_groups_by_neighborhood(db_session, ai_user):
+    """Item 3: bairro confirmado como campo separado (ver migration 20260811_0048) - precisa dar
+    pra agrupar O.S. por ele, respondendo ao pedido original de mapear concentração por bairro."""
+    opened_at = datetime(2026, 7, 15, tzinfo=timezone.utc)
+    _make_order(db_session, order_code="NEI-1", raw_payload={}, opened_at=opened_at)
+    _make_order(db_session, order_code="NEI-2", raw_payload={}, opened_at=opened_at)
+    db_session.query(OperationOrder).filter(OperationOrder.order_code == "NEI-1").update({"neighborhood": "Centro"})
+    db_session.query(OperationOrder).filter(OperationOrder.order_code == "NEI-2").update({"neighborhood": "Nova Brasília"})
+    db_session.flush()
+
+    result = ai_queries.aggregate_orders(
+        db_session, ai_user, group_by="neighborhood", metric="quantidade_fechada", date_from=DATE_FROM, date_to=DATE_TO,
+    )
+    by_label = {item["label"]: item["quantity"] for item in result}
+    assert by_label == {"Centro": 1, "Nova Brasília": 1}
+
+
+def test_ai_text_filter_neighborhood_is_case_insensitive_contains(db_session, ai_user):
+    """Achado real: a grafia de bairro é inconsistente na fonte (ex.: "Centro" e "CENTRO"
+    convivem) - por isso "neighborhood" também entra como filtro de texto "contém", não só como
+    dimensão de agrupamento exato."""
+    opened_at = datetime(2026, 7, 15, tzinfo=timezone.utc)
+    _make_order(db_session, order_code="NEI-CASE-1", raw_payload={}, opened_at=opened_at)
+    _make_order(db_session, order_code="NEI-CASE-2", raw_payload={}, opened_at=opened_at)
+    db_session.query(OperationOrder).filter(OperationOrder.order_code == "NEI-CASE-1").update({"neighborhood": "CENTRO"})
+    db_session.query(OperationOrder).filter(OperationOrder.order_code == "NEI-CASE-2").update({"neighborhood": "Zona Rural"})
+    db_session.flush()
+
+    result = ai_queries.search_orders(
+        db_session, ai_user, date_from=DATE_FROM, date_to=DATE_TO,
+        text_filters=[{"field": "neighborhood", "operator": "contains", "value": "centro"}],
+    )
+    assert [item["order_code"] for item in result["items"]] == ["NEI-CASE-1"]
+
+
 def test_ai_fields_lists_service_description_expression_without_crashing():
     """`available_fields()` não deve quebrar por causa da expressão calculada de
     "service_description" em TEXT_FILTER_COLUMNS (que não tem `.key` de coluna real)."""

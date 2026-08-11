@@ -114,6 +114,13 @@ class OperationOrder(Base):
     regional: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     state: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     city: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    # Confirmados contra uma amostra real de 104k+ O.S. já importadas (raw_payload->>'bairro'/
+    # 'latitude'/'longitude', ver ixc_ingestion.py) - diferente de rua/número/CEP, que só existem
+    # embutidos na string única de `endereco` (ver OperationOrderOut.address_is_structured em
+    # schemas.py), estes três SÃO campos separados na origem e valeu a pena materializar.
+    neighborhood: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     contract_type: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     person_type: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     os_type: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)

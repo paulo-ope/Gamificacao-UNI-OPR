@@ -14,7 +14,7 @@ from app.modules.operations.schemas import (
 )
 
 AggregationDimension = Literal[
-    "regional", "city", "os_type", "subject", "diagnosis",
+    "regional", "city", "neighborhood", "os_type", "subject", "diagnosis",
     "department", "sector", "priority", "responsible", "status", "sla_status",
     # "team_model", "scheduled_after_sla" e "sla_expired_before_schedule" não são colunas de
     # OperationOrder (são calculadas em ai/queries.py:_group_label - a primeira casando
@@ -30,9 +30,13 @@ assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS) | {
 
 # Só campos de texto livre (não status_code ou outros campos curtos/categóricos, onde "contém"
 # não faz sentido) - lista curada, não é qualquer coluna da O.S. "service_description" é a
-# descrição de abertura, dentro do raw_payload bruto do IXC (ver
-# ai/queries.py:TEXT_FILTER_COLUMNS e o caveat de chaves não confirmadas em operations/schemas.py).
-TextFilterField = Literal["sector", "subject", "diagnosis", "responsible", "city", "department", "service_description"]
+# descrição de abertura, dentro do raw_payload bruto do IXC (ver ai/queries.py:TEXT_FILTER_COLUMNS
+# - chave confirmada contra amostra real, ver operations/schemas.py). "neighborhood" (bairro) entra
+# aqui, e não só em AggregationDimension, por causa da grafia inconsistente confirmada na amostra
+# real (ex.: "Centro" e "CENTRO" convivem) - "contém" tolera isso melhor que igualdade exata.
+TextFilterField = Literal[
+    "sector", "subject", "diagnosis", "responsible", "city", "department", "service_description", "neighborhood",
+]
 
 
 class AiTextFilter(BaseModel):
@@ -135,9 +139,14 @@ class AiOrderSearchItem(BaseModel):
     subject: str | None
     diagnosis: str | None
     technical_report: str | None
-    # Texto livre (endereço+complemento+referência do payload bruto do IXC) - não há rua/bairro/
-    # número/CEP/coordenadas estruturados na ingestão atual, só esta concatenação.
+    # Texto livre (endereço+complemento+referência do payload bruto do IXC) - rua/número/CEP
+    # continuam embutidos nessa string única, sem chave própria confirmada na fonte.
     service_address: str | None
+    # Bairro e coordenadas SÃO campos separados na origem (confirmados contra amostra real) -
+    # None quando a O.S. não tiver esse dado preenchido no IXC.
+    neighborhood: str | None
+    latitude: float | None
+    longitude: float | None
     responsible: str | None
     team_model: str | None
     status: str | None

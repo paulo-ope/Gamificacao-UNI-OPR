@@ -389,6 +389,12 @@ def _normalize_record(
         "regional": normalize_regional(_clean(record.get("id_filial")) or None),
         "state": state or None,
         "city": city or None,
+        # "bairro"/"latitude"/"longitude" confirmados como campos separados numa amostra real de
+        # 104k+ O.S. já importadas (ver migration 20260811_0048) - diferente de número/CEP, que só
+        # existem embutidos dentro da string única de "endereco" (sem chave própria observada).
+        "neighborhood": _clean(record.get("bairro")) or None,
+        "latitude": _float_or_none(record.get("latitude")),
+        "longitude": _float_or_none(record.get("longitude")),
         "contract_type": _first(contract_record, "contrato", "descricao", "nome") or None,
         "person_type": person_type or None,
         "os_type": os_type,

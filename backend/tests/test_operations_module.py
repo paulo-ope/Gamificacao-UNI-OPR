@@ -1624,6 +1624,44 @@ def test_ixc_analytics_import_queries_only_period_and_targeted_lookup_ids(db_ses
     assert all(call[2]["max_records"] == 200 for call in support_calls)
 
 
+def test_ixc_import_populates_neighborhood_and_coordinates_confirmed_against_real_sample(db_session, admin_user):
+    """Item 3: bairro/latitude/longitude confirmados como campos separados numa amostra real de
+    104k+ O.S. já importadas (ver migration 20260811_0048) - a ingestão precisa popular as três
+    colunas novas de OperationOrder a partir dessas chaves. Latitude usa vírgula como separador
+    decimal (achado real, confirmado em 177 das O.S. da amostra) - `_float_or_none` já converte."""
+    date_from, _ = current_month_bounds()
+    opened = datetime.combine(date_from, time(hour=8)).strftime("%Y-%m-%d %H:%M:%S")
+    fake_client = FakeIxcClient(
+        {
+            "id": "555",
+            "protocolo": "PROTO-555",
+            "id_filial": "6",
+            "id_assunto": "10",
+            "id_su_diagnostico": "20",
+            "id_tecnico": "30",
+            "id_ticket": "70",
+            "setor": "9",
+            "id_cliente": "40",
+            "id_login": "50",
+            "status": "A",
+            "data_abertura": opened,
+            "bairro": "Nova Brasília",
+            "latitude": "-9,2306221",
+            "longitude": "-61,9940897",
+        }
+    )
+
+    import_current_month_period(
+        db_session, fake_client, date_from=date_from, date_to=date_from, imported_by=admin_user.id, sector_ids=["7", "8", "9"],
+    )
+
+    imported = db_session.scalar(select(OperationOrder).where(OperationOrder.source_order_id == "555"))
+    assert imported is not None
+    assert imported.neighborhood == "Nova Brasília"
+    assert imported.latitude == pytest.approx(-9.2306221)
+    assert imported.longitude == pytest.approx(-61.9940897)
+
+
 def test_sla_target_change_bumps_source_updated_at_even_without_ixc_timestamp_change(db_session, admin_user):
     """sla_status/sla_target_hours/elapsed_hours sao derivados da meta de horas do ASSUNTO atual,
     nao de um campo proprio da O.S - se a meta muda na IXC, uma O.S ja fechada ha muito tempo pode

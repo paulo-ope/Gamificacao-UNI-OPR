@@ -30,6 +30,9 @@ from app.services.regional import effective_managed_regionals
 AGGREGATION_DIMENSIONS = {
     "regional": OperationOrder.regional,
     "city": OperationOrder.city,
+    # Confirmado contra amostra real de 104k+ O.S. (ver migration 20260811_0048) - permite achar
+    # concentração de O.S. por bairro (pedido original: "quais bairros geram mais manutenção").
+    "neighborhood": OperationOrder.neighborhood,
     "os_type": OperationOrder.os_type,
     "subject": OperationOrder.os_subject,
     "diagnosis": OperationOrder.diagnosis,
@@ -123,6 +126,20 @@ Granularity = Literal["day", "week", "month"]
 
 AI_SEARCH_MAX_PAGE_SIZE = 200
 
+# Descrição de abertura - não é coluna própria, vive só dentro do `raw_payload` bruto do IXC
+# ("mensagem", confirmado contra amostra real - ver RAW_PAYLOAD_DESCRIPTION_KEYS em
+# operations/queries.py). `coalesce` reproduziria a regra de "primeira chave preenchida vence" de
+# `_text_from_payload` se houvesse mais de uma chave - com uma só, usa a expressão direto: SQLite
+# rejeita `coalesce()` com um único argumento (Postgres aceita, mas os testes rodam em SQLite).
+_SERVICE_DESCRIPTION_CANDIDATES = [
+    OperationOrder.raw_payload[key].as_string() for key in operations_queries.RAW_PAYLOAD_DESCRIPTION_KEYS
+]
+_SERVICE_DESCRIPTION_EXPR = (
+    _SERVICE_DESCRIPTION_CANDIDATES[0]
+    if len(_SERVICE_DESCRIPTION_CANDIDATES) == 1
+    else func.coalesce(*_SERVICE_DESCRIPTION_CANDIDATES)
+)
+
 # Campos de texto livre onde "contém"/"começa com"/"termina com"/"diferente de" fazem sentido -
 # não inclui campos tipo status_code, que são códigos curtos, não texto pra buscar por trecho.
 TEXT_FILTER_COLUMNS = {
@@ -132,16 +149,8 @@ TEXT_FILTER_COLUMNS = {
     "responsible": OperationOrder.responsible,
     "city": OperationOrder.city,
     "department": OperationOrder.department,
-    # Descrição de abertura - não é coluna própria, vive só dentro do `raw_payload` bruto do IXC
-    # (mesmas chaves candidatas de `_text_from_payload`/`RAW_PAYLOAD_DESCRIPTION_KEYS`, NÃO
-    # confirmadas contra amostra real - ver caveat em operations/schemas.py). `coalesce` reproduz
-    # a mesma regra de "primeira chave preenchida vence" usada em `_text_from_payload`.
-    "service_description": func.coalesce(
-        *(
-            OperationOrder.raw_payload[key].as_string()
-            for key in operations_queries.RAW_PAYLOAD_DESCRIPTION_KEYS
-        )
-    ),
+    "neighborhood": OperationOrder.neighborhood,
+    "service_description": _SERVICE_DESCRIPTION_EXPR,
 }
 
 
@@ -560,10 +569,16 @@ def _build_search_item(order: OperationOrder, team_model: str | None, team_targe
         "os_type": order.os_type,
         "subject": order.os_subject,
         "diagnosis": order.diagnosis,
-        "technical_report": _text_from_payload(order.raw_payload, "mensagem_resposta", "relato_tecnico", "relato"),
-        # Texto livre (endereço+complemento+referência do payload bruto do IXC) - não há rua/
-        # bairro/número/CEP/coordenadas estruturados na ingestão atual, só esta concatenação.
+        # "mensagem_resposta" confirmado contra amostra real (ver operations/schemas.py) -
+        # "relato_tecnico"/"relato" nunca apareceram, removidas.
+        "technical_report": _text_from_payload(order.raw_payload, "mensagem_resposta"),
+        # Texto livre (endereço+complemento+referência do payload bruto do IXC) - rua/número/CEP
+        # continuam embutidos nessa string única (sem chave própria confirmada na fonte); bairro e
+        # coordenadas, em contraste, JÁ são campos separados - ver neighborhood/latitude/longitude.
         "service_address": _service_address_from_payload(order.raw_payload),
+        "neighborhood": order.neighborhood,
+        "latitude": order.latitude,
+        "longitude": order.longitude,
         "responsible": order.responsible,
         "team_model": team_model,
         "status": order.status,

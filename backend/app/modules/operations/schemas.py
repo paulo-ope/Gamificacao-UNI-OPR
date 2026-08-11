@@ -19,13 +19,22 @@ def _text_from_payload(payload: dict | None, *keys: str) -> str | None:
     return None
 
 
+# Chaves confirmadas contra uma amostra real de 104.203 O.S. já importadas (consulta direta ao
+# banco local, 2026-08-11): "endereco" (~97% preenchido), "complemento" (~41%) e "referencia"
+# (~41%) SÃO as chaves corretas. As antigas candidatas alternativas ("endereco_os",
+# "endereco_cliente", "logradouro", "complemento_endereco", "ponto_referencia",
+# "referencia_endereco") NUNCA apareceram em nenhuma das 104.203 linhas - removidas daqui.
+# "endereco" já vem formatado pelo IXC como uma única string completa (ex.: "Rua Curitiba, 2477 -
+# Nova Brasília Ji-Paraná RO - 76908-650"): número e CEP estão embutidos nela, sem chave própria
+# observada na amostra - por isso continuam fora de `OperationOrderOut` como campo isolado (ver
+# `address_is_structured`). Bairro, em contraste, TEM chave própria - ver `neighborhood`.
 def _service_address_from_payload(payload: dict | None) -> str | None:
     if not payload:
         return None
 
-    address = _text_from_payload(payload, "endereco", "endereco_os", "endereco_cliente", "logradouro")
-    complement = _text_from_payload(payload, "complemento", "complemento_endereco")
-    reference = _text_from_payload(payload, "referencia", "ponto_referencia", "referencia_endereco")
+    address = _text_from_payload(payload, "endereco")
+    complement = _text_from_payload(payload, "complemento")
+    reference = _text_from_payload(payload, "referencia")
 
     parts: list[str] = []
     if address:
@@ -727,6 +736,9 @@ class OperationOrderOut(BaseModel):
     company_id: str | None
     regional: str | None
     city: str | None
+    neighborhood: str | None
+    latitude: float | None
+    longitude: float | None
     contract_type: str | None
     person_type: str | None
     os_type: str | None
@@ -761,31 +773,29 @@ class OperationOrderOut(BaseModel):
     @computed_field
     @property
     def address_is_structured(self) -> bool:
-        """Sempre `False` hoje: `service_address` é uma única string concatenada a partir de
-        chaves candidatas do payload bruto do IXC (endereco/complemento/referencia) - não existe
-        rua/número/bairro/CEP/coordenadas como campos separados na ingestão atual
-        (`ixc_ingestion.py` só resolve `city` via `cidade`/`cliente`, nada mais de endereço).
-        Não foi possível, a partir deste ambiente, confirmar contra uma amostra real de
-        `su_oss_chamado`/cadastro de cliente do IXC se esses campos existem separados na fonte -
-        fica documentado aqui como limitação explícita em vez de presumir uma estrutura não
-        verificada. Ver docs/plano-integracao-ixc.md (não cobre este ponto)."""
-        return False
+        """`True` quando esta O.S. tem bairro e/ou coordenadas separados de `service_address`
+        (`neighborhood`/`latitude`/`longitude` - confirmados contra amostra real, ver
+        `ixc_ingestion.py` e a migration `20260811_0048`). Ainda assim `service_address` continua
+        sendo uma única string pra rua/número/CEP: essa parte do endereço vem pré-formatada pelo
+        IXC como um bloco só (ex.: "Rua Curitiba, 2477 - Nova Brasília Ji-Paraná RO -
+        76908-650"), sem chave própria pra número/CEP observada na amostra - portanto esse recorte
+        específico permanece não decomponível, mesmo quando este campo é `True`."""
+        return self.neighborhood is not None or (self.latitude is not None and self.longitude is not None)
 
     @computed_field
     @property
     def service_description(self) -> str | None:
-        # Chaves candidatas ("mensagem", "descricao", "descricao_servico") NÃO foram confirmadas
-        # contra uma amostra real de `su_oss_chamado` - não há amostra de payload disponível neste
-        # ambiente (sem acesso à API do IXC) nem registro de validação anterior no histórico do
-        # projeto (docs/plano-integracao-ixc.md cobre outros campos, não estes). Mantidas como
-        # estavam porque alterá-las sem confirmação arriscaria trocar uma chave certa por uma
-        # errada às cegas.
-        return _text_from_payload(self.raw_payload, "mensagem", "descricao", "descricao_servico")
+        # "mensagem" confirmado contra amostra real de 104.203 O.S. (preenchido em ~99,99% delas).
+        # "descricao"/"descricao_servico" (candidatas antigas) NUNCA apareceram em nenhuma linha -
+        # removidas.
+        return _text_from_payload(self.raw_payload, "mensagem")
 
     @computed_field
     @property
     def technical_report(self) -> str | None:
-        return _text_from_payload(self.raw_payload, "mensagem_resposta", "relato_tecnico", "relato")
+        # "mensagem_resposta" confirmado contra amostra real (preenchido em ~85% das O.S.).
+        # "relato_tecnico"/"relato" (candidatas antigas) NUNCA apareceram - removidas.
+        return _text_from_payload(self.raw_payload, "mensagem_resposta")
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -108,13 +108,11 @@ SEARCH_COLUMNS = (
     OperationOrder.pop,
 )
 
-# Chaves candidatas da descrição de abertura dentro do `raw_payload` bruto do IXC - mesmas de
-# `_text_from_payload(payload, "mensagem", "descricao", "descricao_servico")` em schemas.py (NÃO
-# confirmadas contra uma amostra real de `su_oss_chamado`, ver caveat em
-# schemas.py:OperationOrderOut.service_description - sem acesso à API do IXC deste ambiente para
-# validar). Vive aqui, não como coluna própria, porque a descrição não é materializada em coluna
-# hoje - só existe dentro do JSON bruto.
-RAW_PAYLOAD_DESCRIPTION_KEYS = ("mensagem", "descricao", "descricao_servico")
+# Chave da descrição de abertura dentro do `raw_payload` bruto do IXC - confirmada contra amostra
+# real de 104.203 O.S. (preenchida em ~99,99% delas; ver schemas.py:OperationOrderOut.service_description
+# sobre as candidatas antigas, que nunca apareceram e foram removidas). Vive aqui, não como coluna
+# própria, porque a descrição não é materializada em coluna hoje - só existe dentro do JSON bruto.
+RAW_PAYLOAD_DESCRIPTION_KEYS = ("mensagem",)
 
 
 def _raw_payload_text_search_condition(pattern: str):

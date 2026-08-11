@@ -48,39 +48,37 @@ def test_orders_search_finds_matches_inside_raw_payload_description(client, db_s
     assert [item["order_code"] for item in response.json()["items"]] == ["RAW-SEARCH-HIT"]
 
 
-def test_orders_search_checks_descricao_and_descricao_servico_keys_too(client, db_session):
+def test_orders_search_only_checks_the_confirmed_mensagem_key(client, db_session):
+    """"descricao"/"descricao_servico" foram candidatas antigas em RAW_PAYLOAD_DESCRIPTION_KEYS -
+    confirmado contra uma amostra real de 104.203 O.S. que NUNCA aparecem na fonte (0 ocorrências),
+    diferente de "mensagem" (~99,99% preenchido). Removidas: a busca não deve mais achar nada só
+    porque o valor está guardado sob uma dessas duas chaves mortas."""
     date_from, _ = current_month_bounds()
     opened_at = _utc_at(date_from, 8)
     db_session.add_all(
         [
             OperationOrder(
                 source="ixc",
-                source_order_id="RAW-SEARCH-DESCRICAO",
-                order_code="RAW-SEARCH-DESCRICAO",
+                source_order_id="RAW-SEARCH-DEAD-KEY",
+                order_code="RAW-SEARCH-DEAD-KEY",
                 sector="Suporte Externo Fibra",
                 opened_at=opened_at,
-                raw_payload={"descricao": "Roteador reiniciando sozinho"},
+                raw_payload={"descricao": "Roteador reiniciando sozinho", "descricao_servico": "Instalação de novo ponto"},
             ),
             OperationOrder(
                 source="ixc",
-                source_order_id="RAW-SEARCH-DESCRICAO-SERVICO",
-                order_code="RAW-SEARCH-DESCRICAO-SERVICO",
+                source_order_id="RAW-SEARCH-LIVE-KEY",
+                order_code="RAW-SEARCH-LIVE-KEY",
                 sector="Suporte Externo Fibra",
                 opened_at=opened_at,
-                raw_payload={"descricao_servico": "Instalação de novo ponto de rede"},
+                raw_payload={"mensagem": "Roteador reiniciando sozinho"},
             ),
         ]
     )
     db_session.flush()
 
-    reiniciando = client.get(
+    response = client.get(
         "/api/operations/orders",
         params={"date_from": date_from.isoformat(), "date_to": date_from.isoformat(), "search": "reiniciando"},
     )
-    assert [item["order_code"] for item in reiniciando.json()["items"]] == ["RAW-SEARCH-DESCRICAO"]
-
-    instalacao = client.get(
-        "/api/operations/orders",
-        params={"date_from": date_from.isoformat(), "date_to": date_from.isoformat(), "search": "novo ponto"},
-    )
-    assert [item["order_code"] for item in instalacao.json()["items"]] == ["RAW-SEARCH-DESCRICAO-SERVICO"]
+    assert [item["order_code"] for item in response.json()["items"]] == ["RAW-SEARCH-LIVE-KEY"]
