@@ -296,12 +296,16 @@ class OperationBacklogSnapshot(Base):
     `sector` foi adicionado um dia depois da primeira versão desta tabela - achado real: sem ele,
     a série histórica de backlog não conseguia ser filtrada por setor (ex.: "contém Ex"), porque
     esse dado nunca tinha sido capturado. As poucas linhas gravadas no dia anterior a esta mudança
-    não têm granularidade de setor (ficam com o valor de fallback "Não identificado")."""
+    não têm granularidade de setor (ficam com o valor de fallback "Não identificado").
+
+    `city` segue o mesmo padrão de `sector`: adicionada depois, pra permitir concentração
+    geográfica (ex.: "quais cidades mais geram backlog") sem precisar de uma tabela nova. Linhas
+    gravadas antes desta coluna existir também ficam com o fallback "Não identificado"."""
 
     __tablename__ = "operations_backlog_snapshots"
     __table_args__ = (
         UniqueConstraint(
-            "snapshot_date", "regional", "team_model", "sector", name="uq_operations_backlog_snapshot_identity"
+            "snapshot_date", "regional", "team_model", "sector", "city", name="uq_operations_backlog_snapshot_identity"
         ),
     )
 
@@ -312,6 +316,7 @@ class OperationBacklogSnapshot(Base):
     # NULL, pro agrupamento não precisar tratar ausência como caso especial.
     team_model: Mapped[str] = mapped_column(String(120), nullable=False)
     sector: Mapped[str] = mapped_column(String(160), nullable=False, server_default="Não identificado")
+    city: Mapped[str] = mapped_column(String(160), nullable=False, server_default="Não identificado")
     backlog_count: Mapped[int] = mapped_column(Integer, nullable=False)
     backlog_atrasado_count: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

@@ -534,6 +534,11 @@ def test_order_detail_exposes_new_fields_and_sanitizes_raw_payload(client, db_se
     assert payload["company_id"] == "EMP-1"
     assert payload["contract_type"] == "Residencial"
     assert payload["person_type"] == "PF"
+    # Item 2: descrição de abertura precisa aparecer no detalhe também, não só na listagem.
+    assert payload["service_description"] == "Relato normal do atendimento"
+    # Item 3: sem rua/bairro/CEP/coordenadas estruturados na ingestão atual - a API documenta essa
+    # limitação de forma explícita em vez de fingir uma estrutura que não existe.
+    assert payload["address_is_structured"] is False
 
     raw_payload = payload["raw_payload"]
     assert raw_payload["mensagem"] == "Relato normal do atendimento"

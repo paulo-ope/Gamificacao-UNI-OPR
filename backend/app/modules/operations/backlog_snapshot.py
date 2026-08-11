@@ -50,25 +50,28 @@ def capture_backlog_snapshot(db: Session) -> int:
     regional_label = func.coalesce(OperationOrder.regional, "Não identificado")
     team_model_label = _team_model_label()
     sector_label = func.coalesce(OperationOrder.sector, "Não identificado")
+    city_label = func.coalesce(OperationOrder.city, "Não identificado")
     rows = db.execute(
         select(
             regional_label,
             team_model_label,
             sector_label,
+            city_label,
             func.count(OperationOrder.id),
             func.sum(case((OperationOrder.sla_status == "out_of_time", 1), else_=0)),
         )
         .where(OperationOrder.is_closed.is_(False))
-        .group_by(regional_label, team_model_label, sector_label)
+        .group_by(regional_label, team_model_label, sector_label, city_label)
     ).all()
 
-    for regional, team_model, sector, backlog_count, backlog_atrasado_count in rows:
+    for regional, team_model, sector, city, backlog_count, backlog_atrasado_count in rows:
         db.add(
             OperationBacklogSnapshot(
                 snapshot_date=today,
                 regional=regional,
                 team_model=team_model,
                 sector=sector,
+                city=city,
                 backlog_count=int(backlog_count),
                 backlog_atrasado_count=int(backlog_atrasado_count or 0),
             )

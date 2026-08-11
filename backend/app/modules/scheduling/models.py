@@ -25,9 +25,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 from app.models import utc_now
 
-# Eventos de `su_oss_evento` que o sync espelha. O restante (Alteração, Em Análise etc.) não
-# alimenta nenhum KPI do módulo e ficaria como peso morto no banco.
-SYNCED_EVENT_TYPES = ("1", "5", "10", "6")  # Abertura, Agendamento, Reagendar, Fechamento
+# Eventos de `su_oss_evento` que o sync espelha. Os 4 originais (Abertura/Agendamento/Reagendar/
+# Fechamento) alimentam os KPIs de tempo de resposta (`_recompute_derived`, sync.py); os 6
+# acrescentados depois (Alteração/Reabertura/Alteração de setor/Em Análise/Assumido/Em Execução)
+# não entram em nenhum cálculo - servem só para o log completo da O.S. ficar de fato completo
+# (`order_timeline`, metrics.py), pedido do dono do produto.
+SYNCED_EVENT_TYPES = ("1", "5", "10", "6", "2", "3", "4", "7", "8", "9")
 
 
 class SchedulingOrder(Base):

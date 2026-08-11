@@ -16,17 +16,23 @@ from app.modules.operations.schemas import (
 AggregationDimension = Literal[
     "regional", "city", "os_type", "subject", "diagnosis",
     "department", "sector", "priority", "responsible", "status", "sla_status",
-    # "team_model" não é uma coluna de OperationOrder (é calculado casando responsável+regional
-    # contra a atribuição de modelo de equipe, ver ai/queries.py:_group_label) - por isso não
-    # aparece em AGGREGATION_DIMENSIONS, só aqui na lista de valores aceitos pela API.
-    "team_model",
+    # "team_model", "scheduled_after_sla" e "sla_expired_before_schedule" não são colunas de
+    # OperationOrder (são calculadas em ai/queries.py:_group_label - a primeira casando
+    # responsável+regional contra a atribuição de modelo de equipe, as outras duas comparando
+    # timestamps do ciclo de vida da O.S. contra a meta de SLA) - por isso não aparecem em
+    # AGGREGATION_DIMENSIONS, só aqui na lista de valores aceitos pela API.
+    "team_model", "scheduled_after_sla", "sla_expired_before_schedule",
 ]
-assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS) | {"team_model"}
+assert set(AggregationDimension.__args__) == set(AGGREGATION_DIMENSIONS) | {
+    "team_model", "scheduled_after_sla", "sla_expired_before_schedule",
+}
 
 
 # Só campos de texto livre (não status_code ou outros campos curtos/categóricos, onde "contém"
-# não faz sentido) - lista curada, não é qualquer coluna da O.S.
-TextFilterField = Literal["sector", "subject", "diagnosis", "responsible", "city", "department"]
+# não faz sentido) - lista curada, não é qualquer coluna da O.S. "service_description" é a
+# descrição de abertura, dentro do raw_payload bruto do IXC (ver
+# ai/queries.py:TEXT_FILTER_COLUMNS e o caveat de chaves não confirmadas em operations/schemas.py).
+TextFilterField = Literal["sector", "subject", "diagnosis", "responsible", "city", "department", "service_description"]
 
 
 class AiTextFilter(BaseModel):
@@ -62,6 +68,10 @@ class AiOrderFilters(BaseModel):
     projects: list[str] = Field(default_factory=list, max_length=100)
     pops: list[str] = Field(default_factory=list, max_length=100)
     text_filters: list[AiTextFilter] = Field(default_factory=list, max_length=10)
+    # Filtros booleanos exatos de etapa de SLA (ver ai/queries.py:_sla_stage_filter_conditions) -
+    # None (padrão) significa "não filtrar por isso", igual ao resto dos filtros deste schema.
+    scheduled_after_sla: bool | None = None
+    sla_expired_before_schedule: bool | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -76,6 +86,7 @@ class AiAggregationRequest(BaseModel):
     metric: Literal[
         "quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias",
         "quantidade_atrasada", "quantidade_backlog",
+        "horas_abertura_agenda", "horas_agenda_execucao", "horas_execucao_fechamento", "horas_abertura_fechamento",
     ]
     filters: AiOrderFilters = Field(default_factory=AiOrderFilters)
 
@@ -124,12 +135,16 @@ class AiOrderSearchItem(BaseModel):
     subject: str | None
     diagnosis: str | None
     technical_report: str | None
+    # Texto livre (endereço+complemento+referência do payload bruto do IXC) - não há rua/bairro/
+    # número/CEP/coordenadas estruturados na ingestão atual, só esta concatenação.
+    service_address: str | None
     responsible: str | None
     team_model: str | None
     status: str | None
     opened_at: datetime
     scheduled_at: datetime | None
     assumed_at: datetime | None
+    displacement_started_at: datetime | None
     execution_started_at: datetime | None
     finished_at: datetime | None
     closed_at: datetime | None
@@ -141,6 +156,15 @@ class AiOrderSearchItem(BaseModel):
     horas_atrasada: float | None
     dias_em_aberto: float | None
     sla_estourado: bool
+    # Etapa em que o SLA foi perdido - ver ai/queries.py:_sla_stage_flags_for_order.
+    # scheduled_after_sla é None quando a O.S. não tem agendamento (não dá pra dizer que "o
+    # agendamento venceu" sem agendamento nenhum).
+    scheduled_after_sla: bool | None
+    sla_expired_before_schedule: bool | None
+    hours_open_to_schedule: float | None
+    hours_schedule_to_execution: float | None
+    hours_execution_to_close: float | None
+    hours_open_to_close: float | None
     team_target_quantity: int | None
     team_target_period: str | None
     team_target_valid_from: datetime | None
@@ -201,9 +225,9 @@ class AiBacklogHistoryRequest(BaseModel):
     date_from: date
     date_to: date
     metric: Literal["backlog", "backlog_atrasado"]
-    # Diferente das outras ferramentas: só "regional"/"team_model"/"sector" (o snapshot diário já
-    # vem pré-agregado só por essas três - ver operations/backlog_snapshot.py).
-    group_by: Literal["none", "regional", "team_model", "sector"] = "none"
+    # Diferente das outras ferramentas: só "regional"/"team_model"/"sector"/"city" (o snapshot
+    # diário já vem pré-agregado só por essas quatro - ver operations/backlog_snapshot.py).
+    group_by: Literal["none", "regional", "team_model", "sector", "city"] = "none"
     sector_filter: AiBacklogSectorFilter | None = None
 
     model_config = ConfigDict(extra="forbid")

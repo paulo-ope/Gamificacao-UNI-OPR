@@ -108,6 +108,23 @@ SEARCH_COLUMNS = (
     OperationOrder.pop,
 )
 
+# Chaves candidatas da descrição de abertura dentro do `raw_payload` bruto do IXC - mesmas de
+# `_text_from_payload(payload, "mensagem", "descricao", "descricao_servico")` em schemas.py (NÃO
+# confirmadas contra uma amostra real de `su_oss_chamado`, ver caveat em
+# schemas.py:OperationOrderOut.service_description - sem acesso à API do IXC deste ambiente para
+# validar). Vive aqui, não como coluna própria, porque a descrição não é materializada em coluna
+# hoje - só existe dentro do JSON bruto.
+RAW_PAYLOAD_DESCRIPTION_KEYS = ("mensagem", "descricao", "descricao_servico")
+
+
+def _raw_payload_text_search_condition(pattern: str):
+    """Busca "contém" (case-insensitive) na descrição de abertura guardada só no `raw_payload` -
+    usa o operador de extração JSON nativo do tipo `JSON` do SQLAlchemy (`->>` no Postgres,
+    `json_extract` no SQLite dos testes; `.as_string()` já resolve a diferença entre dialetos)."""
+    return or_(
+        *(OperationOrder.raw_payload[key].as_string().ilike(pattern) for key in RAW_PAYLOAD_DESCRIPTION_KEYS)
+    )
+
 
 def _query_conditions(
     db: Session,
@@ -246,7 +263,12 @@ def _dimension_conditions(
     search = str(filters.get("search") or "").strip()
     if search:
         pattern = f"%{search}%"
-        conditions.append(or_(*(cast(column, String).ilike(pattern) for column in SEARCH_COLUMNS)))
+        conditions.append(
+            or_(
+                *(cast(column, String).ilike(pattern) for column in SEARCH_COLUMNS),
+                _raw_payload_text_search_condition(pattern),
+            )
+        )
     closed_time_from = filters.get("closed_time_from")
     closed_time_to = filters.get("closed_time_to")
     if closed_time_from or closed_time_to:

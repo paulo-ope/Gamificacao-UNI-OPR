@@ -760,7 +760,26 @@ class OperationOrderOut(BaseModel):
 
     @computed_field
     @property
+    def address_is_structured(self) -> bool:
+        """Sempre `False` hoje: `service_address` é uma única string concatenada a partir de
+        chaves candidatas do payload bruto do IXC (endereco/complemento/referencia) - não existe
+        rua/número/bairro/CEP/coordenadas como campos separados na ingestão atual
+        (`ixc_ingestion.py` só resolve `city` via `cidade`/`cliente`, nada mais de endereço).
+        Não foi possível, a partir deste ambiente, confirmar contra uma amostra real de
+        `su_oss_chamado`/cadastro de cliente do IXC se esses campos existem separados na fonte -
+        fica documentado aqui como limitação explícita em vez de presumir uma estrutura não
+        verificada. Ver docs/plano-integracao-ixc.md (não cobre este ponto)."""
+        return False
+
+    @computed_field
+    @property
     def service_description(self) -> str | None:
+        # Chaves candidatas ("mensagem", "descricao", "descricao_servico") NÃO foram confirmadas
+        # contra uma amostra real de `su_oss_chamado` - não há amostra de payload disponível neste
+        # ambiente (sem acesso à API do IXC) nem registro de validação anterior no histórico do
+        # projeto (docs/plano-integracao-ixc.md cobre outros campos, não estes). Mantidas como
+        # estavam porque alterá-las sem confirmação arriscaria trocar uma chave certa por uma
+        # errada às cegas.
         return _text_from_payload(self.raw_payload, "mensagem", "descricao", "descricao_servico")
 
     @computed_field

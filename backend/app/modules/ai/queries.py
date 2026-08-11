@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, literal, select
 from sqlalchemy.orm import Session
 
 from app.models import User
@@ -18,7 +18,7 @@ from app.modules.operations.models import (
     OperationTeamTargetVersion,
 )
 from app.modules.operations.period import local_period_utc_bounds
-from app.modules.operations.schemas import OperationFilters, _text_from_payload
+from app.modules.operations.schemas import OperationFilters, _service_address_from_payload, _text_from_payload
 from app.services.regional import effective_managed_regionals
 
 # As mesmas 9 dimensões que a tela de Operação já deixa filtrar/agrupar hoje (regional, cidade,
@@ -44,7 +44,80 @@ AGGREGATION_DIMENSIONS = {
 AggregationMetric = Literal[
     "quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias",
     "quantidade_atrasada", "quantidade_backlog",
+    # Métricas de etapa de SLA (ver _sla_stage_duration_columns) - horas médias entre dois marcos
+    # consecutivos do ciclo de vida da O.S., pra achar em qual etapa o tempo foi de fato perdido.
+    "horas_abertura_agenda", "horas_agenda_execucao", "horas_execucao_fechamento", "horas_abertura_fechamento",
 ]
+
+# Pares (início, fim) de cada métrica de horas por etapa acima - todas medidas em relação a O.S.
+# fechadas no período (mesmo corte de "horas_medias"), exigindo que os dois marcos existam.
+_SLA_STAGE_DURATION_COLUMNS = {
+    "horas_abertura_agenda": (OperationOrder.opened_at, OperationOrder.scheduled_at),
+    "horas_agenda_execucao": (OperationOrder.scheduled_at, OperationOrder.execution_started_at),
+    "horas_execucao_fechamento": (OperationOrder.execution_started_at, OperationOrder.closed_at),
+    "horas_abertura_fechamento": (OperationOrder.opened_at, OperationOrder.closed_at),
+}
+
+
+def _hours_diff_expr(db: Session, end_column, start_column):
+    """Diferença em horas entre duas colunas de timestamp, em SQL. `func.extract("epoch", a - b)`
+    só é portável no Postgres - no SQLite (usado nos testes) a subtração de duas colunas DATETIME
+    não produz um intervalo que "epoch" saiba extrair, então usa `julianday` (mesma ramificação de
+    `operations_queries._execution_hours`, que já resolveu esse mesmo problema)."""
+    if db.get_bind().dialect.name == "postgresql":
+        return func.extract("epoch", end_column - start_column) / 3600.0
+    return (func.julianday(end_column) - func.julianday(start_column)) * 24.0
+
+
+def _scheduled_after_sla_expr(db: Session):
+    """"Agendamento ocorreu após o deadline do SLA" (opened_at + sla_target_hours) - só tem
+    resposta (True/False) quando a O.S. TEM meta de SLA e TEM agendamento; sem um dos dois vira
+    NULL (não "Não", que sugeriria falsamente que o agendamento foi dentro do prazo)."""
+    hours_to_schedule = _hours_diff_expr(db, OperationOrder.scheduled_at, OperationOrder.opened_at)
+    return case(
+        (
+            and_(OperationOrder.sla_target_hours.is_not(None), OperationOrder.scheduled_at.is_not(None)),
+            hours_to_schedule > OperationOrder.sla_target_hours,
+        ),
+        else_=None,
+    )
+
+
+def _sla_expired_before_schedule_expr(db: Session, reference_at: datetime):
+    """Generalização de `_scheduled_after_sla_expr` pra cobrir também O.S. que AINDA não foram
+    agendadas: usa o agendamento quando existe (mesmo resultado do indicador acima); sem
+    agendamento, usa o fechamento (se já fechou sem nunca ter sido agendada) ou `reference_at`
+    (o "agora" da consulta, pra O.S. ainda aberta e sem agenda) - decisão tomada explicitamente
+    com o usuário: O.S. aberta sem agenda deve contar como filtrável em tempo real, não ficar
+    sempre None até fechar."""
+    hours_to_schedule = _hours_diff_expr(db, OperationOrder.scheduled_at, OperationOrder.opened_at)
+    hours_to_close = _hours_diff_expr(db, OperationOrder.closed_at, OperationOrder.opened_at)
+    hours_to_reference = _hours_diff_expr(db, literal(reference_at), OperationOrder.opened_at)
+    hours_elapsed_before_schedule = case(
+        (OperationOrder.scheduled_at.is_not(None), hours_to_schedule),
+        (OperationOrder.closed_at.is_not(None), hours_to_close),
+        else_=hours_to_reference,
+    )
+    return case(
+        (OperationOrder.sla_target_hours.is_not(None), hours_elapsed_before_schedule > OperationOrder.sla_target_hours),
+        else_=None,
+    )
+
+
+def _sla_stage_filter_conditions(db: Session, filters: dict) -> list:
+    """Filtros booleanos exatos (True/False) para `scheduled_after_sla`/`sla_expired_before_schedule`
+    - `None` (chave ausente ou valor não informado) significa "não filtrar por isso", igual ao
+    resto dos filtros deste módulo."""
+    conditions = []
+    if filters.get("scheduled_after_sla") is not None:
+        conditions.append(_scheduled_after_sla_expr(db).is_(filters["scheduled_after_sla"]))
+    if filters.get("sla_expired_before_schedule") is not None:
+        conditions.append(
+            _sla_expired_before_schedule_expr(db, datetime.now(timezone.utc)).is_(filters["sla_expired_before_schedule"])
+        )
+    return conditions
+
+
 TimeseriesMetric = Literal["abertas", "fechadas", "saldo"]
 Granularity = Literal["day", "week", "month"]
 
@@ -59,6 +132,16 @@ TEXT_FILTER_COLUMNS = {
     "responsible": OperationOrder.responsible,
     "city": OperationOrder.city,
     "department": OperationOrder.department,
+    # Descrição de abertura - não é coluna própria, vive só dentro do `raw_payload` bruto do IXC
+    # (mesmas chaves candidatas de `_text_from_payload`/`RAW_PAYLOAD_DESCRIPTION_KEYS`, NÃO
+    # confirmadas contra amostra real - ver caveat em operations/schemas.py). `coalesce` reproduz
+    # a mesma regra de "primeira chave preenchida vence" usada em `_text_from_payload`.
+    "service_description": func.coalesce(
+        *(
+            OperationOrder.raw_payload[key].as_string()
+            for key in operations_queries.RAW_PAYLOAD_DESCRIPTION_KEYS
+        )
+    ),
 }
 
 
@@ -76,7 +159,13 @@ def available_fields() -> dict:
     ferramentas) descobrir o que ainda não tem cobertura, sem precisar ler o código-fonte."""
     all_fields = sorted(OperationOrder.__table__.columns.keys())
     exposed_columns = {column.key for column in AGGREGATION_DIMENSIONS.values()}
-    exposed_columns |= {column.key for column in TEXT_FILTER_COLUMNS.values()}
+    # `getattr(..., "key", None)` porque "service_description" (acima) é uma expressão SQL
+    # calculada a partir do JSON bruto, não uma `Column` de verdade - não tem `.key` e não
+    # corresponde a nenhum campo isolado de `OperationOrder.__table__` (só faz sentido excluir,
+    # não contar como coluna "exposta" nem afetar a lista de "não exposta").
+    exposed_columns |= {
+        key for column in TEXT_FILTER_COLUMNS.values() if (key := getattr(column, "key", None)) is not None
+    }
     exposed_columns |= {
         operations_queries.FILTER_COLUMNS[field].key for field in AI_ORDER_FILTER_FIELDS
     }
@@ -123,6 +212,7 @@ def _dimension_conditions_with_text(db: Session, user: User, filters: dict, *, o
     base_filters = operations_queries._opening_filters(filters) if opening else filters
     conditions = operations_queries._dimension_conditions(db, user, base_filters)
     conditions.extend(_text_filter_conditions(filters.get("text_filters")))
+    conditions.extend(_sla_stage_filter_conditions(db, filters))
     return conditions
 
 
@@ -133,7 +223,7 @@ def _group_labels(group_by: str | list[str]) -> list[str]:
     return dims[:3] or ["regional"]
 
 
-def _group_label(group_by: str):
+def _group_label(db: Session, group_by: str):
     """"team_model" não é uma coluna de OperationOrder - é calculado casando o responsável contra
     a atribuição de modelo de equipe, SÓ PELO NOME (case-insensitive) - igual ao filtro
     `team_models` (`_dimension_conditions`, operations/queries.py:176-189) e ao resto do sistema
@@ -156,6 +246,12 @@ def _group_label(group_by: str):
             .scalar_subquery()
         )
         return func.coalesce(team_model_name, "Não identificado")
+    if group_by == "scheduled_after_sla":
+        expr = _scheduled_after_sla_expr(db)
+        return case((expr.is_(True), "Sim"), (expr.is_(False), "Não"), else_="Sem meta/agendamento")
+    if group_by == "sla_expired_before_schedule":
+        expr = _sla_expired_before_schedule_expr(db, datetime.now(timezone.utc))
+        return case((expr.is_(True), "Sim"), (expr.is_(False), "Não"), else_="Sem meta de SLA")
     field = AGGREGATION_DIMENSIONS.get(group_by, OperationOrder.regional)
     return func.coalesce(field, "Não identificado")
 
@@ -223,7 +319,7 @@ def aggregate_orders(
     sua própria chave (ex.: `{"regional": "...", "subject": "...", "quantity": ...}`) - aditivo,
     não quebra quem já chama com 1 dimensão só."""
     dims = _group_labels(group_by)
-    labels = [_group_label(dim) for dim in dims]
+    labels = [_group_label(db, dim) for dim in dims]
     start, end = local_period_utc_bounds(date_from, date_to)
 
     if metric == "quantidade_aberta":
@@ -288,6 +384,25 @@ def aggregate_orders(
         ).all()
         entries = [(row[:-2], int(row[-2]), round(float(row[-1] or 0), 1)) for row in rows]
 
+    elif metric in _SLA_STAGE_DURATION_COLUMNS:
+        # Mesmo corte de período de "horas_medias" (O.S. fechada no período) - a diferença é o par
+        # de marcos medido (ver _SLA_STAGE_DURATION_COLUMNS), pra localizar em qual etapa do ciclo
+        # de vida da O.S. o tempo foi de fato perdido, não só o total abertura-fechamento.
+        conditions = _dimension_conditions_with_text(db, user, filters)
+        start_column, end_column = _SLA_STAGE_DURATION_COLUMNS[metric]
+        duration = _hours_diff_expr(db, end_column, start_column)
+        rows = db.execute(
+            select(*labels, func.count(OperationOrder.id), func.avg(duration))
+            .where(
+                *conditions,
+                OperationOrder.closed_at.between(start, end),
+                start_column.is_not(None),
+                end_column.is_not(None),
+            )
+            .group_by(*labels)
+        ).all()
+        entries = [(row[:-2], int(row[-2]), round(float(row[-1] or 0), 1)) for row in rows]
+
     else:  # "quantidade_fechada"
         conditions = _dimension_conditions_with_text(db, user, filters)
         rows = db.execute(
@@ -330,7 +445,7 @@ def orders_timeseries(
     start, end = local_period_utc_bounds(date_from, date_to)
     opened_day = operations_queries._local_date(db, OperationOrder.opened_at)
     closed_day = operations_queries._local_date(db, OperationOrder.closed_at)
-    label = _group_label(group_by) if group_by else None
+    label = _group_label(db, group_by) if group_by else None
 
     def _counts(day_expr, conditions, date_column) -> dict[tuple[date, str | None], int]:
         columns = (day_expr, label) if label is not None else (day_expr,)
@@ -404,16 +519,40 @@ def _resolve_team_target(
     return None
 
 
+def _hours_between(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    return round((end - start).total_seconds() / 3600, 1)
+
+
+def _sla_stage_flags_for_order(order: OperationOrder, reference_at: datetime) -> tuple[bool | None, bool | None]:
+    """Versão em Python de `_scheduled_after_sla_expr`/`_sla_expired_before_schedule_expr` (mesma
+    regra, calculada por linha já carregada em memória em vez de em SQL) - usada aqui porque
+    `search_orders` já itera `OperationOrder` como objeto ORM, então recalcular em SQL por O.S.
+    seria uma query extra à toa."""
+    target = order.sla_target_hours
+    if target is None:
+        return None, None
+    if order.scheduled_at is not None:
+        scheduled_after_sla = _hours_between(order.opened_at, order.scheduled_at) > target
+        return scheduled_after_sla, scheduled_after_sla
+    reference = order.closed_at or reference_at
+    hours_elapsed_before_schedule = _hours_between(order.opened_at, reference)
+    return None, hours_elapsed_before_schedule > target
+
+
 def _build_search_item(order: OperationOrder, team_model: str | None, team_target: OperationTeamTargetVersion | None) -> dict:
     target = order.sla_target_hours
     elapsed = order.elapsed_hours
     is_open = order.closed_at is None
+    reference_at = datetime.now(timezone.utc)
 
     has_target = target is not None and elapsed is not None
     horas_para_vencer = round(target - elapsed, 1) if has_target else None
     horas_atrasada = round(max(0.0, elapsed - target), 1) if has_target else None
-    dias_em_aberto = round((datetime.now(timezone.utc) - order.opened_at).total_seconds() / 86400, 1) if is_open else None
+    dias_em_aberto = round((reference_at - order.opened_at).total_seconds() / 86400, 1) if is_open else None
     sla_deadline_at = order.opened_at + timedelta(hours=target) if target is not None else None
+    scheduled_after_sla, sla_expired_before_schedule = _sla_stage_flags_for_order(order, reference_at)
 
     return {
         "order_code": order.order_code,
@@ -422,12 +561,16 @@ def _build_search_item(order: OperationOrder, team_model: str | None, team_targe
         "subject": order.os_subject,
         "diagnosis": order.diagnosis,
         "technical_report": _text_from_payload(order.raw_payload, "mensagem_resposta", "relato_tecnico", "relato"),
+        # Texto livre (endereço+complemento+referência do payload bruto do IXC) - não há rua/
+        # bairro/número/CEP/coordenadas estruturados na ingestão atual, só esta concatenação.
+        "service_address": _service_address_from_payload(order.raw_payload),
         "responsible": order.responsible,
         "team_model": team_model,
         "status": order.status,
         "opened_at": order.opened_at,
         "scheduled_at": order.scheduled_at,
         "assumed_at": order.assumed_at,
+        "displacement_started_at": order.displacement_started_at,
         "execution_started_at": order.execution_started_at,
         "finished_at": order.finished_at,
         "closed_at": order.closed_at,
@@ -444,6 +587,16 @@ def _build_search_item(order: OperationOrder, team_model: str | None, team_targe
         "horas_atrasada": horas_atrasada,
         "dias_em_aberto": dias_em_aberto,
         "sla_estourado": order.sla_status == "out_of_time",
+        # Etapa em que o SLA foi de fato perdido - ver _sla_stage_flags_for_order/
+        # _scheduled_after_sla_expr/_sla_expired_before_schedule_expr sobre a definição de cada um
+        # e por que scheduled_after_sla fica None quando a O.S. não tem agendamento (não dá pra
+        # dizer que "o agendamento venceu" sem agendamento nenhum).
+        "scheduled_after_sla": scheduled_after_sla,
+        "sla_expired_before_schedule": sla_expired_before_schedule,
+        "hours_open_to_schedule": _hours_between(order.opened_at, order.scheduled_at),
+        "hours_schedule_to_execution": _hours_between(order.scheduled_at, order.execution_started_at),
+        "hours_execution_to_close": _hours_between(order.execution_started_at, order.closed_at),
+        "hours_open_to_close": _hours_between(order.opened_at, order.closed_at),
         # Só existe pra O.S. fechada (a meta é sobre produção realizada) e quando o modelo de
         # equipe é conhecido - a meta VIGENTE em closed_at, não a de hoje (ver
         # operations/models.py:OperationTeamTargetVersion sobre a limitação de não haver
@@ -475,6 +628,7 @@ def search_orders(
 
     conditions, _, _ = operations_queries._query_conditions(db, date_from, date_to, user, filters)
     conditions.extend(_text_filter_conditions(filters.get("text_filters")))
+    conditions.extend(_sla_stage_filter_conditions(db, filters))
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
     offset = (page - 1) * page_size
     orders = list(
@@ -514,7 +668,7 @@ def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **fi
     e mediana em dias, a O.S. mais antiga, e quantas passam de 1/3/5/7/15 dias. Calculado em
     Python (não em SQL) porque o volume é do tamanho do backlog atual - milhares, não a base toda
     - e mediana não é portável entre Postgres/SQLite sem depender de extensão específica."""
-    label = _group_label(group_by)
+    label = _group_label(db, group_by)
     conditions = _dimension_conditions_with_text(db, user, filters)
     _, reference_at = local_period_utc_bounds(date_to, date_to)
     rows = db.execute(
@@ -562,7 +716,7 @@ def filter_options_for_ai(db: Session, user: User, date_from: date, date_to: dat
 
 
 BacklogHistoryMetric = Literal["backlog", "backlog_atrasado"]
-BacklogHistoryGroupBy = Literal["none", "regional", "team_model", "sector"]
+BacklogHistoryGroupBy = Literal["none", "regional", "team_model", "sector", "city"]
 
 
 def backlog_history(
@@ -579,8 +733,9 @@ def backlog_history(
     `operations/backlog_snapshot.py`). Limitações que a IA precisa saber (documentadas na
     descrição da ferramenta, ver schemas.py): (1) só tem dado a partir do dia em que o job de
     captura entrou em produção, sem retroatividade nenhuma; (2) só quebra/filtra por "regional",
-    "team_model" ou "sector" - o snapshot já vem pré-agregado por essas três dimensões, não por
-    qualquer uma como as outras ferramentas.
+    "team_model", "sector" ou "city" - o snapshot já vem pré-agregado por essas quatro dimensões,
+    não por qualquer uma como as outras ferramentas. `city` foi adicionada depois das outras três -
+    snapshots capturados antes dessa mudança ficam com "Não identificado" nessa dimensão.
 
     `sector_filter` é `{"operator": "contains"|"starts_with"|"ends_with"|"not_equals", "value":
     str}` - reaproveita `_text_filter_conditions` (mesma sintaxe/escape das outras ferramentas),
@@ -607,6 +762,7 @@ def backlog_history(
         "regional": OperationBacklogSnapshot.regional,
         "team_model": OperationBacklogSnapshot.team_model,
         "sector": OperationBacklogSnapshot.sector,
+        "city": OperationBacklogSnapshot.city,
     }.get(group_by)
 
     columns = (OperationBacklogSnapshot.snapshot_date, group_column) if group_column is not None else (OperationBacklogSnapshot.snapshot_date,)

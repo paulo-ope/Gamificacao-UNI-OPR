@@ -32,6 +32,12 @@ EVENT_TYPE_LABELS = {
     "5": "Agendamento",
     "10": "Reagendar",
     "6": "Fechamento",
+    "2": "Alteração",
+    "3": "Reabertura",
+    "4": "Alteração de setor",
+    "7": "Em Análise",
+    "8": "Assumido",
+    "9": "Em Execução",
 }
 
 
