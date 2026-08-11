@@ -13,11 +13,22 @@ from app.core.security import ensure_access_profiles, ensure_initial_admin
 from app.modules.admin.router import router as admin_router
 from app.modules.ai.router import public_router as ai_public_router, router as ai_router
 from app.modules.management.router import router as management_router
+from app.modules.mcp_connector.router import router as mcp_connector_router
+from app.modules.mcp_connector.server import build_mcp_server
 from app.modules.operations.backlog_snapshot import run_backlog_snapshot_loop
 from app.modules.operations.router import router as operations_router
 from app.modules.scheduling.router import router as scheduling_router
 from app.modules.workspace.router import router as workspace_router
 from app.services.ixc_scheduler import run_ixc_sync_loop
+
+
+settings_obj = get_settings()
+
+# Instanciado uma vez, em nível de módulo (não dentro de `lifespan`), porque tanto `lifespan`
+# (que precisa iniciar o gerenciador de sessão do MCP) quanto o `app.mount` abaixo (que precisa
+# do app ASGI dele) precisam do MESMO objeto `FastMCP` - dois `build_mcp_server()` criariam dois
+# gerenciadores de sessão independentes, um dos quais nunca seria inicializado.
+mcp_server_instance = build_mcp_server() if settings_obj.public_base_url else None
 
 
 @asynccontextmanager
@@ -43,7 +54,15 @@ async def lifespan(app: FastAPI):
     # leitura do próprio banco de O.S. já sincronizado.
     backlog_snapshot_task = asyncio.create_task(run_backlog_snapshot_loop())
 
-    yield
+    # `streamable_http_app()` tem seu próprio lifespan (inicia o gerenciador de sessão MCP), mas
+    # Starlette não propaga o protocolo ASGI "lifespan" automaticamente para apps montados via
+    # `app.mount` - sem isso, toda chamada de tool falha com "Task group is not initialized"
+    # (achado real, confirmado testando o fluxo OAuth de ponta a ponta antes de subir isso).
+    if mcp_server_instance is not None:
+        async with mcp_server_instance.session_manager.run():
+            yield
+    else:
+        yield
 
     if ixc_sync_task:
         ixc_sync_task.cancel()
@@ -55,7 +74,6 @@ async def lifespan(app: FastAPI):
         await backlog_snapshot_task
 
 
-settings_obj = get_settings()
 app = FastAPI(title=settings_obj.app_name, version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
@@ -89,3 +107,11 @@ app.include_router(operations_router, prefix=settings_obj.api_prefix)
 app.include_router(scheduling_router, prefix=settings_obj.api_prefix)
 app.include_router(ai_router, prefix=settings_obj.api_prefix)
 app.include_router(ai_public_router, prefix=settings_obj.api_prefix)
+
+# Conector MCP remoto (Claude.ai/Cowork) - servidor OAuth + endpoint MCP, montado só quando
+# PUBLIC_BASE_URL está configurada (ver app/core/config.py). `app.mount` porque
+# `streamable_http_app()` devolve um app Starlette pronto (com as rotas de OAuth do SDK do MCP já
+# registradas), não um APIRouter do FastAPI - `include_router` não serviria aqui.
+app.include_router(mcp_connector_router, prefix=settings_obj.api_prefix)
+if mcp_server_instance is not None:
+    app.mount(f"{settings_obj.api_prefix}/mcp", mcp_server_instance.streamable_http_app())

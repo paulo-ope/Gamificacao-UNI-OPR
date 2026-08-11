@@ -114,11 +114,10 @@ def backlog_aging_route(
     "/backlog-history",
     response_model=list[AiBacklogHistoryPoint],
     description=(
-        "Série histórica de backlog/backlog atrasado. Só há dado a partir da entrada em produção "
-        "da captura diária (sem retroatividade). Quebra/filtra só por regional, team_model, "
-        "sector ou city; use sector_filter (ex.: contains 'Ex') para restringir por setor. "
-        "'city' foi adicionada depois das outras três dimensões - snapshots anteriores ficam "
-        "com 'Não identificado' nela."
+        "Série histórica de backlog/backlog atrasado. Só há dado desde a entrada em produção "
+        "da captura diária (sem retroatividade). Agrupa por regional, team_model, sector ou "
+        "city; use sector_filter pra restringir setor. 'city' é mais recente - snapshots "
+        "antigos mostram 'Não identificado' nela."
     ),
 )
 def backlog_history_route(

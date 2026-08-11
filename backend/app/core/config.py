@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     ixc_sync_interval_minutes: int = 20
     cpk_api_base_url: str = ""
     cpk_api_key: str = ""
+    # URL pública (com esquema, sem barra final) por onde este backend é alcançado de fora -
+    # usada como issuer/resource server nos metadados OAuth do conector MCP remoto
+    # (app/modules/mcp_connector), que precisam de uma URL absoluta fixa (não dá pra descobrir por
+    # request como o schema OpenAPI do ChatGPT Actions faz via X-Forwarded-*, porque a URL do
+    # issuer precisa ser estável e conhecida ANTES da primeira requisição chegar). Vazio = conector
+    # MCP remoto desligado (só dá erro se alguém tentar usá-lo, não impede o resto do app de subir).
+    public_base_url: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
