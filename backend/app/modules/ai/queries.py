@@ -684,6 +684,11 @@ def _build_search_item(
         "os_type": order.os_type,
         "subject": order.os_subject,
         "diagnosis": order.diagnosis,
+        # "mensagem" confirmado contra amostra real (ver operations/schemas.py) - mesma chave de
+        # `service_description` no filtro de texto (TEXT_FILTER_COLUMNS); faltava no retorno de
+        # search_orders, que só tinha o relato de FECHAMENTO (technical_report) - sem isso dava
+        # pra filtrar pelo conteúdo da descrição de abertura mas não pra realmente lê-la.
+        "service_description": _text_from_payload(order.raw_payload, "mensagem"),
         # "mensagem_resposta" confirmado contra amostra real (ver operations/schemas.py) -
         # "relato_tecnico"/"relato" nunca apareceram, removidas.
         "technical_report": _text_from_payload(order.raw_payload, "mensagem_resposta"),

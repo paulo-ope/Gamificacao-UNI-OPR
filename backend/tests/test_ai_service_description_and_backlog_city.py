@@ -49,6 +49,9 @@ def test_ai_text_filter_service_description_matches_raw_payload_only(db_session,
         text_filters=[{"field": "service_description", "operator": "contains", "value": "sinal caindo"}],
     )
     assert [item["order_code"] for item in result["items"]] == ["DESC-HIT"]
+    # Não basta filtrar por conteúdo - o texto da descrição de abertura precisa vir no retorno
+    # também, senão a IA acha a O.S. mas não consegue ler o que ela diz.
+    assert result["items"][0]["service_description"] == "Sinal caindo toda noite"
 
 
 def test_ai_aggregate_orders_groups_by_neighborhood(db_session, ai_user):

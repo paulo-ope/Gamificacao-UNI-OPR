@@ -148,6 +148,9 @@ class AiOrderSearchItem(BaseModel):
     os_type: str | None
     subject: str | None
     diagnosis: str | None
+    # Descrição de abertura ("mensagem" no IXC, confirmada contra amostra real) - mesma chave do
+    # filtro de texto "service_description" em TEXT_FILTER_COLUMNS.
+    service_description: str | None
     technical_report: str | None
     # Texto livre (endereço+complemento+referência do payload bruto do IXC) - rua/número/CEP
     # continuam embutidos nessa string única, sem chave própria confirmada na fonte.
