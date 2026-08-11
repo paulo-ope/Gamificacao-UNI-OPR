@@ -9,10 +9,12 @@ contra o backend local antes de entregar — funcionou com dado real.
 
 ## 1. Gerar uma chave de API
 
-O backend já tem um comando pronto pra isso (ver `backend/app/modules/ai/cli.py`):
+O backend já tem um comando pronto pra isso (ver `backend/app/modules/ai/cli.py`). Rode **no
+servidor de produção** (`/opt/opr-gamificacao`, via SSH) — é lá que fica o banco que este MCP vai
+consultar, já que o backend fica na VM atrás de `https://operacao.souuni.com`:
 
 ```bash
-docker exec opr-gamification-backend python -m app.modules.ai.cli create-service-user --name "Claude Code MCP"
+sudo docker exec opr-gamification-backend python -m app.modules.ai.cli create-service-user --name "Claude Code MCP"
 ```
 
 Copie a chave impressa — ela não é mostrada de novo (só o hash fica salvo). Se perder, rode o
@@ -40,16 +42,16 @@ Linux/Mac:
 
 Duas variáveis de ambiente:
 
-- `OPR_API_BASE_URL` — base da API. Local: `http://localhost:8000/api`. Produção (se você quiser
-  consultar dados de produção direto, sem estar com o backend local rodando):
-  `https://sistema.souuni.com/api` (ajuste para o domínio real).
-- `OPR_API_KEY` — a chave gerada no passo 1.
+- `OPR_API_BASE_URL` — base da API. Produção (backend fica na VM, atrás de HTTPS já configurado):
+  `https://operacao.souuni.com/api`. Se algum dia quiser apontar pro backend local em vez do de
+  produção, use `http://localhost:8000/api`.
+- `OPR_API_KEY` — a chave gerada no passo 1 (gerada contra o banco de produção).
 
 ### Claude Code
 
 ```bash
 claude mcp add opr-analitica \
-  -e OPR_API_BASE_URL=http://localhost:8000/api \
+  -e OPR_API_BASE_URL=https://operacao.souuni.com/api \
   -e OPR_API_KEY=SUA_CHAVE_AQUI \
   -- /caminho/completo/para/mcp-server/.venv/Scripts/python.exe /caminho/completo/para/mcp-server/opr_analitica_mcp.py
 ```
@@ -68,7 +70,7 @@ adicione:
       "command": "C:\\caminho\\completo\\para\\mcp-server\\.venv\\Scripts\\python.exe",
       "args": ["C:\\caminho\\completo\\para\\mcp-server\\opr_analitica_mcp.py"],
       "env": {
-        "OPR_API_BASE_URL": "http://localhost:8000/api",
+        "OPR_API_BASE_URL": "https://operacao.souuni.com/api",
         "OPR_API_KEY": "SUA_CHAVE_AQUI"
       }
     }

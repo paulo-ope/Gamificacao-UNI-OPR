@@ -6,7 +6,8 @@ permissão "ai:query") - este servidor não reimplementa nenhuma lógica de aná
 já em produção via HTTP. Roda local (stdio), pensado para Claude Code e Claude Desktop.
 
 Configuração via variáveis de ambiente:
-    OPR_API_BASE_URL   Base da API, ex.: "https://sistema.souuni.com/api" ou "http://localhost:8000/api"
+    OPR_API_BASE_URL   Base da API, ex.: "https://operacao.souuni.com/api" (produção, backend na
+                       VM) ou "http://localhost:8000/api" (backend local)
     OPR_API_KEY        Chave de API com permissão "ai:query" (ver README.md deste diretório sobre
                         como gerar uma com `python -m app.modules.ai.cli create-service-user`)
 
