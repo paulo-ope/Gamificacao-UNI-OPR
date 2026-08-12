@@ -54,6 +54,19 @@ def test_ai_text_filter_service_description_matches_raw_payload_only(db_session,
     assert result["items"][0]["service_description"] == "Sinal caindo toda noite"
 
 
+def test_ai_search_orders_returns_sector(db_session, ai_user):
+    """`sector` já era filtrável (text_filters) e agrupável (group_by), mas faltava no item
+    individual de busca - sem isso não dava pra reconstruir "abertas no mês X, setor Y" a partir
+    dos registros brutos (só via agregação)."""
+    opened_at = datetime(2026, 7, 15, tzinfo=timezone.utc)
+    order = _make_order(db_session, order_code="SECTOR-1", raw_payload={}, opened_at=opened_at)
+    order.sector = "Manutenção Externa"
+    db_session.flush()
+
+    result = ai_queries.search_orders(db_session, ai_user, date_from=DATE_FROM, date_to=DATE_TO)
+    assert result["items"][0]["sector"] == "Manutenção Externa"
+
+
 def test_ai_aggregate_orders_groups_by_neighborhood(db_session, ai_user):
     """Item 3: bairro confirmado como campo separado (ver migration 20260811_0048) - precisa dar
     pra agrupar O.S. por ele, respondendo ao pedido original de mapear concentração por bairro."""

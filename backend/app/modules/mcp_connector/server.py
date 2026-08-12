@@ -20,10 +20,12 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import ValidationError
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.modules.ai import queries as ai_queries
+from app.modules.ai.schemas import AiOrderFilters
 
 from .provider import SCOPE, OprMcpOAuthProvider, resolve_user_for_access_token
 
@@ -62,6 +64,19 @@ def _parse_date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"Data inválida: '{value}' - use o formato AAAA-MM-DD.") from exc
+
+
+def _validated_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
+    """Valida `filters` contra o mesmo schema da rota HTTP (`AiOrderFilters`, `extra="forbid"`)
+    antes de expandi-lo como kwargs pras funções de `ai.queries`. Achado real: sem isso, uma chave
+    errada (ex.: "regional" no singular, em vez de "regionals") não dava erro nenhum - as funções
+    de consulta recebem `**filters` livre e só reconhecem os nomes exatos de `FILTER_COLUMNS`, então
+    a chave errada era descartada em silêncio, dando a impressão de que o filtro "não funcionava".
+    A rota HTTP (`ai/router.py`) já passa por esse mesmo schema e sempre teria pego isso com 422."""
+    try:
+        return AiOrderFilters.model_validate(filters or {}).model_dump()
+    except ValidationError as exc:
+        raise ValueError(f"filters inválido: {exc}") from exc
 
 
 def _current_user():
@@ -138,7 +153,7 @@ def build_mcp_server() -> FastMCP:
             return _dump(
                 ai_queries.aggregate_orders(
                     db, user, group_by=group_by, metric=metric,
-                    date_from=_parse_date(date_from), date_to=_parse_date(date_to), **(filters or {}),
+                    date_from=_parse_date(date_from), date_to=_parse_date(date_to), **_validated_filters(filters),
                 )
             )
 
@@ -174,7 +189,7 @@ def build_mcp_server() -> FastMCP:
                 ai_queries.orders_timeseries(
                     db, user, metric=metric, granularity=granularity,
                     date_from=_parse_date(date_from), date_to=_parse_date(date_to),
-                    group_by=group_by, **(filters or {}),
+                    group_by=group_by, **_validated_filters(filters),
                 )
             )
 
@@ -193,6 +208,11 @@ def build_mcp_server() -> FastMCP:
         """Busca paginada de O.S. individuais, com texto qualitativo (descrição de abertura,
         relato técnico) e todos os campos de SLA/tempo já calculados.
 
+        IMPORTANTE sobre date_from/date_to: uma O.S. entra no resultado se teve QUALQUER atividade
+        no período - abriu OU fechou dentro de [date_from, date_to] (união, não intersecção). Uma
+        O.S. aberta antes de date_from mas fechada dentro do período aparece, e vice-versa. Não é
+        "abertas no período"; é "com atividade no período" (mesma semântica da tela de Operação).
+
         Args:
             date_from, date_to: AAAA-MM-DD.
             page: página (1-indexado).
@@ -203,7 +223,7 @@ def build_mcp_server() -> FastMCP:
 
         Returns:
             JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-            "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood,
+            "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, sector,
             latitude, longitude, distance_km (só com filtro de raio), service_description,
             technical_report, service_address, datas do ciclo de vida, indicadores de etapa de
             SLA e a meta de equipe vigente na O.S.
@@ -213,7 +233,7 @@ def build_mcp_server() -> FastMCP:
             return _dump(
                 ai_queries.search_orders(
                     db, user, date_from=_parse_date(date_from), date_to=_parse_date(date_to),
-                    page=page, page_size=min(page_size, 200), keyword=keyword, **(filters or {}),
+                    page=page, page_size=min(page_size, 200), keyword=keyword, **_validated_filters(filters),
                 )
             )
 
@@ -237,7 +257,7 @@ def build_mcp_server() -> FastMCP:
         """
         user = _current_user()
         with SessionLocal() as db:
-            return _dump(ai_queries.backlog_aging(db, user, group_by=group_by, date_to=_parse_date(date_to), **(filters or {})))
+            return _dump(ai_queries.backlog_aging(db, user, group_by=group_by, date_to=_parse_date(date_to), **_validated_filters(filters)))
 
     @mcp.tool(
         name="opr_backlog_history",
@@ -319,7 +339,7 @@ def build_mcp_server() -> FastMCP:
             return _dump(
                 ai_queries.warranty_analytics_for_ai(
                     db, user, date_from=_parse_date(date_from), date_to=_parse_date(date_to), period_basis=period_basis,
-                    denominator=denominator, origin_excluded_diagnoses=origin_excluded_diagnoses or [], **(filters or {}),
+                    denominator=denominator, origin_excluded_diagnoses=origin_excluded_diagnoses or [], **_validated_filters(filters),
                 )
             )
 
@@ -365,7 +385,7 @@ def build_mcp_server() -> FastMCP:
             return _dump(
                 ai_queries.team_target_performance(
                     db, user, date_from=_parse_date(date_from), date_to=_parse_date(date_to),
-                    granularity=granularity, **(filters or {}),
+                    granularity=granularity, **_validated_filters(filters),
                 )
             )
 

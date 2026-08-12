@@ -264,6 +264,11 @@ def opr_search_orders(params: SearchOrdersInput) -> str:
     técnico) e todos os campos de SLA/tempo já calculados - use para ler o conteúdo de O.S.
     específicas, não para números agregados (para isso, use opr_aggregate_orders).
 
+    IMPORTANTE sobre date_from/date_to: uma O.S. entra no resultado se teve QUALQUER atividade no
+    período - abriu OU fechou dentro de [date_from, date_to] (união, não intersecção). Uma O.S.
+    aberta antes de date_from mas fechada dentro do período aparece, e vice-versa. Não é "abertas
+    no período"; é "com atividade no período" (mesma semântica da tela de Operação).
+
     Args:
         params (SearchOrdersInput): date_from, date_to, page (default 1), page_size (10-200,
             default 50), keyword (busca livre opcional), filters (ver FILTERS_DOC - incluindo o
@@ -271,8 +276,8 @@ def opr_search_orders(params: SearchOrdersInput) -> str:
 
     Returns:
         str: JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-        "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, latitude,
-        longitude, distance_km (só quando o filtro de raio foi usado), service_description,
+        "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, sector,
+        latitude, longitude, distance_km (só quando o filtro de raio foi usado), service_description,
         technical_report, service_address, datas do ciclo de vida (opened_at, scheduled_at,
         execution_started_at, closed_at, sla_deadline_at...), indicadores de etapa de SLA
         (scheduled_after_sla, sla_expired_before_schedule, hours_open_to_schedule, etc.) e a meta

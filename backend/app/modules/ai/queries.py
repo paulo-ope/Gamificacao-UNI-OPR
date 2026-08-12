@@ -684,6 +684,7 @@ def _build_search_item(
         "os_type": order.os_type,
         "subject": order.os_subject,
         "diagnosis": order.diagnosis,
+        "sector": order.sector,
         # "mensagem" confirmado contra amostra real (ver operations/schemas.py) - mesma chave de
         # `service_description` no filtro de texto (TEXT_FILTER_COLUMNS); faltava no retorno de
         # search_orders, que só tinha o relato de FECHAMENTO (technical_report) - sem isso dava

@@ -22,6 +22,7 @@ from app.modules.mcp_connector.models import McpOAuthAuthorizationCode, McpOAuth
 from app.modules.mcp_connector.provider import OprMcpOAuthProvider
 from app.modules.mcp_connector.router import router as consent_router
 from app.modules.mcp_connector.provider import SCOPE
+from app.modules.mcp_connector.server import _validated_filters
 
 
 class _FakeSettings:
@@ -305,3 +306,22 @@ def test_consent_decide_approve_without_scope_returns_403(client, db_session, us
     client.post("/api/oauth/consent/login", data={"request_id": request_id, "email": user_without_scope.email, "password": "Segredo123!"})
     response = client.post("/api/oauth/consent/decide", data={"request_id": request_id, "decision": "approve"})
     assert response.status_code == 403
+
+
+def test_validated_filters_rejects_unknown_key():
+    """Regressão: `filters={"regional": ...}` (singular) era descartado em silêncio antes desta
+    validação - a chave certa é `regionals` (plural, ver AiOrderFilters). Sem checagem nenhuma,
+    isso passava como se o filtro tivesse sido aplicado, sem nenhum efeito real na consulta."""
+    with pytest.raises(ValueError):
+        _validated_filters({"regional": "UNI - JI PARANA"})
+
+
+def test_validated_filters_accepts_known_keys_and_fills_defaults():
+    result = _validated_filters({"regionals": ["UNI - JI PARANA"], "sectors": ["Manutenção"]})
+    assert result["regionals"] == ["UNI - JI PARANA"]
+    assert result["sectors"] == ["Manutenção"]
+    assert result["team_models"] == []  # default de quem não foi filtrado, não ausente
+
+
+def test_validated_filters_accepts_none():
+    assert _validated_filters(None)["regionals"] == []
