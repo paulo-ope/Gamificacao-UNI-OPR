@@ -14,10 +14,12 @@ from __future__ import annotations
 import json
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
@@ -83,6 +85,12 @@ def build_mcp_server() -> FastMCP:
     issuer_url = f"{base}{settings.api_prefix}/mcp"
     resource_server_url = f"{issuer_url}/mcp"
 
+    # A proteção de DNS rebinding do SDK do MCP (TransportSecurityMiddleware) rejeita com 421
+    # qualquer `Host` fora da lista permitida - por padrão só localhost/127.0.0.1. Sem isto, TODA
+    # chamada de tool (POST /mcp) do domínio real de produção falha, mesmo com o OAuth já
+    # completo (achado real: consentimento e token funcionaram, só a chamada MCP em si quebrava).
+    public_host = urlparse(base).netloc
+
     mcp = FastMCP(
         "opr_analitica_mcp_remote",
         auth_server_provider=OprMcpOAuthProvider(),
@@ -94,6 +102,10 @@ def build_mcp_server() -> FastMCP:
             ),
             revocation_options=RevocationOptions(enabled=True),
             required_scopes=[SCOPE],
+        ),
+        transport_security=TransportSecuritySettings(
+            allowed_hosts=[public_host, "localhost", "127.0.0.1"],
+            allowed_origins=[base, "http://localhost", "http://127.0.0.1"],
         ),
     )
 
