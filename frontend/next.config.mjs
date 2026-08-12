@@ -36,6 +36,16 @@ const nextConfig = {
       {
         source: "/api/:path*",
         destination: `${backendUrl}/api/:path*`
+      },
+      // O conector MCP remoto (backend/app/modules/mcp_connector) fica montado sob /api/mcp, mas
+      // a RFC 9728 (e a função build_resource_metadata_url do SDK do MCP) sempre calcula a URL de
+      // metadados do recurso protegido colocando /.well-known/oauth-protected-resource logo após
+      // a raiz do domínio, ignorando esse prefixo - achado real: sem este redirect, o Claude segue
+      // a URL do cabeçalho WWW-Authenticate, cai na raiz (que o Next.js serve, não o backend),
+      // toma 404 e desiste silenciosamente de completar a conexão OAuth.
+      {
+        source: "/.well-known/oauth-protected-resource/:path*",
+        destination: `${backendUrl}/api/mcp/.well-known/oauth-protected-resource/:path*`
       }
     ];
   }
