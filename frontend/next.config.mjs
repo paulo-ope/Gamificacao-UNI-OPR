@@ -46,6 +46,15 @@ const nextConfig = {
       {
         source: "/.well-known/oauth-protected-resource/:path*",
         destination: `${backendUrl}/api/mcp/.well-known/oauth-protected-resource/:path*`
+      },
+      // Mesmo problema, segunda rota: a RFC 8414 manda o cliente descobrir os metadados do
+      // authorization server inserindo /.well-known/oauth-authorization-server ANTES do path do
+      // issuer (aqui, /api/mcp) - ou seja, na raiz do domínio. O SDK do MCP, porém, registra essa
+      // rota sem o sufixo do path (só /.well-known/oauth-authorization-server dentro do sub-app),
+      // então o alvo do redirect não repete :path* no destino.
+      {
+        source: "/.well-known/oauth-authorization-server/:path*",
+        destination: `${backendUrl}/api/mcp/.well-known/oauth-authorization-server`
       }
     ];
   }
