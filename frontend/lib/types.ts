@@ -25,6 +25,7 @@ export type Permission =
   | "operations:sync_ixc"
   | "operations:manage_filters"
   | "operations:manage_team_models"
+  | "operations:manage_own_team_members"
   | "operations:manage_subjects"
   | "operations:view_order_details"
   | "operations:view_openings"

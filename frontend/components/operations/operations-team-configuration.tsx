@@ -127,6 +127,7 @@ function payloadFromModel(
 
 export function OperationsTeamConfiguration({
   canManageTeamModels,
+  canManageOwnTeamMembers,
   canManageSubjects,
   canManageViews,
   canSyncIxc,
@@ -134,16 +135,23 @@ export function OperationsTeamConfiguration({
   onIxcSyncSettingsChange,
 }: {
   canManageTeamModels: boolean;
+  canManageOwnTeamMembers: boolean;
   canManageSubjects: boolean;
   canManageViews: boolean;
   canSyncIxc: boolean;
   ixcSyncSettings: OperationIxcSyncSettings | null;
   onIxcSyncSettingsChange: (settings: OperationIxcSyncSettings) => void;
 }) {
+  // `canManage` continua exclusivo do catálogo inteiro (criar/editar/excluir modelo, cores, metas,
+  // origem da lista de responsáveis) - um supervisor (`canManageOwnTeamMembers`, sem
+  // `operations:manage_team_models`) nunca toca nisso, só reatribui quem já está na lista que o
+  // backend já filtra pra ele (ver operations/router.py:_team_scope_for_user).
   const canManage = canManageTeamModels;
+  const canAccessTeamsSection = canManageTeamModels || canManageOwnTeamMembers;
+  const canAssignMembers = canAccessTeamsSection;
   const [data, setData] = useState<OperationTeamConfiguration | null>(null);
   const [section, setSection] = useState<"models" | "members" | "subjects" | "sync">(
-    canManageTeamModels ? "models" : canManageSubjects ? "subjects" : "sync",
+    canManageTeamModels ? "models" : canManageOwnTeamMembers ? "members" : canManageSubjects ? "subjects" : "sync",
   );
   const [subjectMappings, setSubjectMappings] = useState<
     OperationSubjectTypeMapping[]
@@ -179,7 +187,7 @@ export function OperationsTeamConfiguration({
     setLoading(true);
     try {
       const [configuration, mappings] = await Promise.all([
-        canManageTeamModels
+        canAccessTeamsSection
           ? operationsApi.teamConfiguration()
           : Promise.resolve(null),
         canManageSubjects
@@ -201,7 +209,7 @@ export function OperationsTeamConfiguration({
 
   useEffect(() => {
     void load();
-  }, [canManageSubjects, canManageTeamModels]);
+  }, [canAccessTeamsSection, canManageSubjects]);
 
   useEffect(() => {
     if (!ixcSyncSettings) return;
@@ -618,7 +626,9 @@ export function OperationsTeamConfiguration({
                 ? canManageSubjects
                 : value === "sync"
                   ? canSyncIxc
-                  : canManageTeamModels,
+                  : value === "members"
+                    ? canAccessTeamsSection
+                    : canManageTeamModels,
             )
             .map(([value, label, description, Icon]) => (
             <button
@@ -1215,7 +1225,12 @@ export function OperationsTeamConfiguration({
             <p className="text-xs text-slate-500">
               Atribua apenas o modelo de equipe ao responsável que vem do IXC.
             </p>
-            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            {!canManageTeamModels && canManageOwnTeamMembers ? (
+              <p className="mt-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-800">
+                Você só vê e reatribui os colaboradores em que está cadastrado como supervisor.
+              </p>
+            ) : null}
+            <div className={`mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 ${canManageTeamModels ? "" : "hidden"}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold text-slate-800">Responsáveis exibidos nos filtros</p>
@@ -1296,7 +1311,7 @@ export function OperationsTeamConfiguration({
                       </td>
                       <td className="px-3 py-2">
                         <select
-                          disabled={!canManage}
+                          disabled={!canAssignMembers}
                           value={member.team_model_id || ""}
                           onChange={(event) =>
                             void assign(member, {

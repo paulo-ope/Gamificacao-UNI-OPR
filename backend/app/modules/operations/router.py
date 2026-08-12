@@ -24,6 +24,8 @@ from app.services.ixc_scheduler import (
 )
 from app.services.ixc_client import IxcApiError, IxcQueryLimitError, get_ixc_client
 
+from app.modules.management.models import ManagementOperationalMember
+
 from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
 from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
@@ -251,6 +253,31 @@ def _team_model_or_404(db: Session, model_id: int) -> OperationTeamModel:
     if item is None:
         raise HTTPException(status_code=404, detail="Modelo de equipe não encontrado.")
     return item
+
+
+def _team_scope_for_user(user: User = Depends(get_current_user)) -> Literal["full", "own"]:
+    """`full` administra o catálogo de modelos e qualquer colaborador; `own` (supervisor) só
+    reatribui o modelo de equipe dos colaboradores em que ele é o supervisor cadastrado em
+    `ManagementOperationalMember` - nunca cria/edita/exclui modelo, nunca vê colaborador alheio."""
+    perms = permissions_for_user(user)
+    if "operations:manage_team_models" in perms:
+        return "full"
+    if "operations:manage_own_team_members" in perms:
+        return "own"
+    raise HTTPException(status_code=403, detail="Permissão insuficiente.")
+
+
+def _supervised_identities(db: Session, user: User) -> set[str]:
+    """Nomes (normalizados) dos colaboradores em que `user` é o supervisor cadastrado - mesmo
+    vínculo que já rege a visibilidade de casos em `management/cases.py`, reaproveitado aqui para
+    também reger quem um supervisor pode reatribuir de modelo de equipe."""
+    names = db.scalars(
+        select(ManagementOperationalMember.responsible_name).where(
+            ManagementOperationalMember.supervisor_user_id == user.id,
+            ManagementOperationalMember.is_active.is_(True),
+        )
+    )
+    return {_responsible_identity(name) for name in names}
 
 
 def _filter_params(
@@ -1124,12 +1151,23 @@ def list_saved_filters(
     )
 
 
-@router.get("/team-configuration", response_model=OperationTeamConfiguration, dependencies=[Depends(require_permission("operations:manage_team_models"))])
+@router.get("/team-configuration", response_model=OperationTeamConfiguration)
 def get_team_configuration(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    scope: Literal["full", "own"] = Depends(_team_scope_for_user),
 ):
-    return queries.team_configuration(db, user)
+    configuration = queries.team_configuration(db, user)
+    if scope == "full":
+        return configuration
+    # Supervisor (`own`): só enxerga os colaboradores em que é o supervisor cadastrado - o
+    # catálogo de modelos continua visível (precisa das opções pra reatribuir), mas nenhum
+    # colaborador alheio aparece na lista.
+    supervised = _supervised_identities(db, user)
+    configuration["members"] = [
+        member for member in configuration["members"] if _responsible_identity(member["responsible_name"]) in supervised
+    ]
+    return configuration
 
 
 @router.put("/responsible-directory", response_model=OperationTeamConfiguration)
@@ -1528,10 +1566,15 @@ def delete_team_model(
 def assign_team_member(
     payload: OperationResponsibleAssignmentUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("operations:manage_team_models")),
+    user: User = Depends(get_current_user),
+    scope: Literal["full", "own"] = Depends(_team_scope_for_user),
 ):
     responsible_name = _normalize_responsible_name(payload.responsible_name)
     regional = payload.regional.strip()
+    if scope == "own" and _responsible_identity(responsible_name) not in _supervised_identities(db, user):
+        # 404, não 403: um supervisor não deve conseguir nem confirmar que um nome existe fora
+        # da própria equipe testando o formulário (mesmo padrão de management/router.py).
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado na sua equipe.")
     if payload.team_model_id is not None:
         model = _team_model_or_404(db, payload.team_model_id)
         if not model.active:
@@ -1558,6 +1601,16 @@ def assign_team_member(
     item.updated_at = datetime.now(timezone.utc)
     for duplicate in matches[1:]:
         db.delete(duplicate)
+    # `ManagementOperationalMember.team_model_id` é um espelho (ver management/services.py:
+    # refresh_operational_members, que só preenche quando ainda está nulo) - sem este ajuste, uma
+    # reatribuição feita aqui nunca chegaria lá, e o painel de Gestão continuaria mostrando o
+    # modelo antigo (ou "sem modelo de equipe") pro colaborador reatribuído.
+    for member in db.scalars(
+        select(ManagementOperationalMember).where(
+            func.lower(ManagementOperationalMember.responsible_name) == responsible_name.casefold()
+        )
+    ):
+        member.team_model_id = payload.team_model_id
     record_audit_log(db, user, "update", "operations_responsible_assignments", item.id, before, snapshot(item))
     db.commit()
 

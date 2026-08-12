@@ -1475,6 +1475,117 @@ def test_team_model_can_be_deleted_only_without_linked_members(client):
     assert "1 colaborador" in blocked.json()["detail"]
 
 
+def test_supervisor_scope_can_only_reassign_own_team_members(client, db_session):
+    """Cobre o autoatendimento pedido pela operação: um supervisor (`operations:manage_own_team_members`,
+    sem `operations:manage_team_models`) só pode reatribuir modelo de equipe de quem está vinculado a
+    ele em `ManagementOperationalMember` - nunca vê nem edita colaborador de outro supervisor, e nunca
+    cria/exclui modelo (isso continua exclusivo de `operations:manage_team_models`)."""
+    from app.modules.management.models import ManagementOperationalMember
+
+    date_from, date_to = current_month_bounds()
+    for name in ("Tecnico Da Equipe A", "Tecnico De Outro Supervisor"):
+        db_session.add(
+            OperationOrder(
+                source="ixc",
+                source_order_id=f"supervisor-scope-{name}",
+                order_code=f"IXC-SUP-{name}",
+                regional="UNI - TESTE",
+                sector="Suporte Externo Fibra",
+                os_type="Manutenção",
+                responsible=name,
+                status="Finalizada",
+                status_code="F",
+                is_closed=True,
+                sla_status="on_time",
+                opened_at=_utc_at(date_to, 8),
+                closed_at=_utc_at(date_to, 12),
+                raw_payload={},
+            )
+        )
+    db_session.flush()
+
+    model_a = client.post(
+        "/api/operations/team-models",
+        json={"name": "EQUIPE SUPERVISOR A", "daily_target": 5, "median_from_quantity": 3, "good_from_quantity": 4},
+    )
+    assert model_a.status_code == 201
+    model_a_id = model_a.json()["id"]
+
+    db_session.add_all(
+        [
+            ManagementOperationalMember(
+                responsible_name="Tecnico Da Equipe A",
+                regional="UNI - TESTE",
+                supervisor_user_id=501,
+                is_active=True,
+            ),
+            ManagementOperationalMember(
+                responsible_name="Tecnico De Outro Supervisor",
+                regional="UNI - TESTE",
+                supervisor_user_id=999,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    supervisor = SimpleNamespace(
+        id=501,
+        role="workspace_restricted",
+        managed_regional=None,
+        managed_regionals=[],
+        access_profiles=[
+            SimpleNamespace(
+                active=True,
+                permissions=[
+                    SimpleNamespace(permission="operations:read"),
+                    SimpleNamespace(permission="operations:manage_own_team_members"),
+                ],
+            )
+        ],
+    )
+    app.dependency_overrides[get_current_user] = lambda: supervisor
+    try:
+        # Não pode criar modelo - isso continua exclusivo de operations:manage_team_models.
+        assert client.post(
+            "/api/operations/team-models",
+            json={"name": "NOVO MODELO", "daily_target": 5, "median_from_quantity": 3, "good_from_quantity": 4},
+        ).status_code == 403
+
+        # A lista só mostra quem é dele.
+        configuration = client.get("/api/operations/team-configuration")
+        assert configuration.status_code == 200
+        names = {member["responsible_name"] for member in configuration.json()["members"]}
+        assert "Tecnico Da Equipe A" in names
+        assert "Tecnico De Outro Supervisor" not in names
+
+        # Reatribuir quem é dele funciona.
+        assigned = client.put(
+            "/api/operations/team-members",
+            json={"responsible_name": "Tecnico Da Equipe A", "regional": "UNI - TESTE", "team_model_id": model_a_id},
+        )
+        assert assigned.status_code == 204
+
+        # Reatribuir quem NÃO é dele dá 404 (não 403 - não deve nem confirmar que existe).
+        blocked = client.put(
+            "/api/operations/team-members",
+            json={"responsible_name": "Tecnico De Outro Supervisor", "regional": "UNI - TESTE", "team_model_id": model_a_id},
+        )
+        assert blocked.status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    db_session.expire_all()
+    member = db_session.scalar(
+        select(ManagementOperationalMember).where(ManagementOperationalMember.responsible_name == "Tecnico Da Equipe A")
+    )
+    assert member.team_model_id == model_a_id
+    untouched = db_session.scalar(
+        select(ManagementOperationalMember).where(ManagementOperationalMember.responsible_name == "Tecnico De Outro Supervisor")
+    )
+    assert untouched.team_model_id is None
+
+
 def test_team_model_assignment_is_global_for_the_collaborator(client, db_session):
     created = client.post(
         "/api/operations/team-models",

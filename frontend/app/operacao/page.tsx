@@ -682,6 +682,9 @@ export default function OperacaoPage() {
   const canManageTeamModels = Boolean(
     user?.permissions.includes("operations:manage_team_models"),
   );
+  const canManageOwnTeamMembers = Boolean(
+    user?.permissions.includes("operations:manage_own_team_members"),
+  );
   const canManageSubjects = Boolean(
     user?.permissions.includes("operations:manage_subjects"),
   );
@@ -705,9 +708,9 @@ export default function OperacaoPage() {
       ...(canViewCalendar ? ["calendar" as const] : []),
       ...(canViewBacklog ? ["progress" as const] : []),
       ...(canViewOrderDetails ? ["details" as const] : []),
-      ...(canManageTeamModels || canManageSubjects || canSyncIxc ? ["teams" as const] : []),
+      ...(canManageTeamModels || canManageOwnTeamMembers || canManageSubjects || canSyncIxc ? ["teams" as const] : []),
     ],
-    [canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
+    [canManageOwnTeamMembers, canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
   );
 
   const loadDashboard = useCallback(
@@ -2226,6 +2229,7 @@ export default function OperacaoPage() {
           <TabsContent value="teams">
             <OperationsTeamConfiguration
               canManageTeamModels={canManageTeamModels}
+              canManageOwnTeamMembers={canManageOwnTeamMembers}
               canManageSubjects={canManageSubjects}
               canManageViews={canManageViews}
               canSyncIxc={canSyncIxc}

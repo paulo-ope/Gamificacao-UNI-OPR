@@ -41,6 +41,11 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         # sem `management:review`, ele só enxerga os próprios casos e os das suas regionais.
         "management:read",
         "management:write_justification",
+        # Mesmo racional: reatribuir o modelo de equipe só dos colaboradores em que ele é o
+        # supervisor cadastrado (ManagementOperationalMember.supervisor_user_id) - recortado no
+        # servidor, nunca o catálogo de modelos inteiro nem colaboradores de outro supervisor
+        # (ver operations/router.py:_team_scope_for_user).
+        "operations:manage_own_team_members",
     },
     "viewer": {
         "dashboard:read",
@@ -81,6 +86,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         # casos dela. Revisar/encerrar continua exclusivo da matriz (`management:review`).
         "management:read",
         "management:write_justification",
+        "operations:manage_own_team_members",
     },
     "admin": {
         "dashboard:read",
@@ -110,6 +116,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "operations:views:update_global",
         "operations:views:delete_global",
         "operations:manage_team_models",
+        "operations:manage_own_team_members",
         "operations:manage_subjects",
         "operations:view_order_details",
         "operations:view_openings",
@@ -175,6 +182,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "operations:views:update_global": "Operação: atualizar visões globais",
     "operations:views:delete_global": "Operação: excluir visões globais",
     "operations:manage_team_models": "Operação: configurar modelos de equipe",
+    "operations:manage_own_team_members": "Operação: reatribuir modelo de equipe da própria equipe supervisionada",
     "operations:manage_subjects": "Operação: configurar assuntos",
     "operations:view_order_details": "Operação: ver detalhes de O.S.",
     "operations:view_openings": "Operação: ver aberturas",
