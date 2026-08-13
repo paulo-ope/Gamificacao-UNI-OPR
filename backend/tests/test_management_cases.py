@@ -334,3 +334,121 @@ def test_case_reasons_are_seeded_on_first_read(client, db_session):
     body = client.get("/api/management/case-reasons").json()
     assert len(body) == len(cases_engine.DEFAULT_CASE_REASONS)
     assert all(item["active"] for item in body)
+
+
+# --- Caso de um dia (drill do calendário) --------------------------------------------------------
+
+
+def test_get_or_create_daily_case_opens_a_new_case(db_session, operation_setup):
+    case, was_created = cases_engine.get_or_create_daily_case(
+        db_session,
+        responsible_name="Joao Campo",
+        regional="UNI JARU",
+        reference_date=date(2026, 7, 15),
+        expected_value=5.0,
+        actual_value=2.0,
+    )
+    db_session.commit()
+
+    assert was_created is True
+    assert case.case_type == cases_engine.CASE_TYPE_DAILY_BELOW
+    assert case.source_module == "operations_calendar"
+    assert case.metric_name == cases_engine.METRIC_DAILY_COUNT
+    assert case.reference_date == date(2026, 7, 15)
+    assert case.expected_value == 5.0
+    assert case.actual_value == 2.0
+    assert case.deviation_value == 60.0
+    assert case.severity == "high"
+    assert case.status == "pending"
+    # Herda supervisor/modelo/colaborador do cadastro operacional, igual ao caso mensal.
+    assert case.supervisor_user_id == operation_setup["supervisor"].id
+    assert case.team_model_id == operation_setup["model"].id
+    assert case.collaborator_id == operation_setup["collaborator"].id
+
+
+def test_get_or_create_daily_case_is_idempotent_for_the_same_day(db_session, operation_setup):
+    first, first_created = cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=2.0,
+    )
+    db_session.commit()
+    second, second_created = cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=2.0,
+    )
+    db_session.commit()
+
+    assert first_created is True
+    assert second_created is False
+    assert first.id == second.id
+    assert db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_DAILY_BELOW).count() == 1
+
+
+def test_daily_case_endpoint_lets_supervisor_open_and_justify_their_own_day(client, db_session, operation_setup):
+    response = client.post(
+        "/api/management/cases/daily",
+        json={
+            "responsible_name": "Joao Campo",
+            "regional": "UNI JARU",
+            "reference_date": "2026-07-15",
+            "expected_value": 5.0,
+            "actual_value": 2.0,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["case_type"] == cases_engine.CASE_TYPE_DAILY_BELOW
+    assert body["status"] == "pending"
+
+    justify = client.post(
+        f"/api/management/cases/{body['id']}/justify",
+        json={"justification_text": "Equipe reduzida por afastamento médico de um dos técnicos."},
+    )
+    assert justify.status_code == 200
+    assert justify.json()["status"] == "justified"
+
+    # Clicar de novo no mesmo dia devolve o MESMO caso, já justificado - não reabre pendente.
+    reopened = client.post(
+        "/api/management/cases/daily",
+        json={
+            "responsible_name": "Joao Campo",
+            "regional": "UNI JARU",
+            "reference_date": "2026-07-15",
+            "expected_value": 5.0,
+            "actual_value": 2.0,
+        },
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["id"] == body["id"]
+    assert reopened.json()["status"] == "justified"
+
+
+def test_daily_case_endpoint_hides_case_outside_supervisor_scope(db_session, operation_setup):
+    """Um supervisor não pode usar o endpoint pra descobrir/abrir o caso de outra regional."""
+    other_supervisor = User(name="Supervisor Ariquemes", email="sup.ari.daily@pytest.local", role="operator", active=True, password_hash="x")
+    other_model = OperationTeamModel(name="Suporte Ariquemes", daily_target=5, active=True)
+    db_session.add_all([other_supervisor, other_model])
+    db_session.flush()
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Maria Campo", regional="UNI ARIQUEMES", team_model_id=other_model.id,
+            supervisor_user_id=other_supervisor.id, status="validated_operation", is_active=True,
+        )
+    )
+    db_session.commit()
+
+    try:
+        client = _client_as(db_session, operation_setup["supervisor"])
+        response = client.post(
+            "/api/management/cases/daily",
+            json={
+                "responsible_name": "Maria Campo",
+                "regional": "UNI ARIQUEMES",
+                "reference_date": "2026-07-15",
+                "expected_value": 5.0,
+                "actual_value": 1.0,
+            },
+        )
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()

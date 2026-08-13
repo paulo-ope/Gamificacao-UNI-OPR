@@ -42,8 +42,9 @@ export const CASE_STATUS_LABELS: Record<string, string> = {
 
 const SEVERITY_LABELS: Record<string, string> = { high: "Alta", medium: "Média", low: "Baixa" };
 
-const CASE_TYPE_LABELS: Record<string, string> = {
+export const CASE_TYPE_LABELS: Record<string, string> = {
   productivity_below_target: "Produtividade abaixo da meta",
+  daily_performance_below_target: "Dia abaixo da meta",
 };
 
 function severityTone(severity: string) {
@@ -436,7 +437,7 @@ export function ManagementCasesPanel({
   );
 }
 
-function CaseDetailDialog({
+export function CaseDetailDialog({
   caseId,
   reasons,
   canReview,

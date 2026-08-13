@@ -699,6 +699,8 @@ export default function OperacaoPage() {
   const canCreateGlobalViews = Boolean(
     user?.permissions.includes("operations:views:create_global"),
   );
+  const canJustifyManagement = Boolean(user?.permissions.includes("management:write_justification"));
+  const canReviewManagement = Boolean(user?.permissions.includes("management:review"));
   const visibleTabs = useMemo<OperationTab[]>(
     () => [
       "overview",
@@ -1806,6 +1808,8 @@ export default function OperacaoPage() {
                 data={calendar}
                 filters={appliedFilters}
                 isLoading={loading}
+                canJustifyManagement={canJustifyManagement}
+                canReviewManagement={canReviewManagement}
                 groupBy={calendarGroupBy}
                 onGroupByChange={(groupBy) => {
                   setCalendarGroupBy(groupBy);

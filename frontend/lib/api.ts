@@ -321,6 +321,14 @@ export const api = {
     due_date?: string | null;
   }) =>
     request<ManagementCase>("/management/cases", { method: "POST", body: JSON.stringify(payload) }),
+  openDailyManagementCase: (payload: {
+    responsible_name: string;
+    regional: string;
+    reference_date: string;
+    expected_value?: number | null;
+    actual_value: number;
+  }) =>
+    request<ManagementCase>("/management/cases/daily", { method: "POST", body: JSON.stringify(payload) }),
   generateManagementCases: (reference_year: number, reference_month: number) =>
     request<ManagementCaseGenerateResult>("/management/cases/generate", {
       method: "POST",

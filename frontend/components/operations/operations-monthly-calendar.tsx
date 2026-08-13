@@ -9,6 +9,7 @@ import {
   FileSpreadsheet,
   Loader2,
   MapPin,
+  ShieldAlert,
   Target,
   UserRound,
 } from "lucide-react";
@@ -26,6 +27,9 @@ import {
 } from "@/components/ui/sheet";
 import { OperationsCalendarDayMetricsPanel } from "@/components/operations/operations-calendar-day-metrics";
 import { OperationsOrderDetailDialog } from "@/components/operations/operations-order-detail-dialog";
+import { CaseDetailDialog } from "@/components/management/management-cases-panel";
+import { api } from "@/lib/api";
+import type { ManagementCaseReason } from "@/lib/types";
 import {
   operationsApi,
   type OperationCalendar,
@@ -46,6 +50,11 @@ import {
 } from "@/lib/operations-calendar-helpers";
 import { useCalendarExport } from "@/hooks/use-calendar-export";
 import { cn } from "@/lib/utils";
+
+function weekdayOf(dayIso: string): number {
+  const utcDay = new Date(`${dayIso}T12:00:00Z`).getUTCDay();
+  return utcDay === 0 ? 6 : utcDay - 1;
+}
 
 const WEEKDAYS = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"];
 const EMPTY_PAGE: OperationOrderPage = {
@@ -217,6 +226,8 @@ export function OperationsMonthlyCalendar({
   groupBy,
   onGroupByChange,
   onBack,
+  canJustifyManagement = false,
+  canReviewManagement = false,
 }: {
   data: OperationCalendar;
   filters: OperationFilterState;
@@ -224,6 +235,8 @@ export function OperationsMonthlyCalendar({
   groupBy: "regional" | "collaborator";
   onGroupByChange: (groupBy: "regional" | "collaborator") => void;
   onBack: () => void;
+  canJustifyManagement?: boolean;
+  canReviewManagement?: boolean;
 }) {
   const [selected, setSelected] = useState<SelectedCell | null>(null);
   const [orders, setOrders] = useState<OperationOrderPage>(EMPTY_PAGE);
@@ -244,6 +257,39 @@ export function OperationsMonthlyCalendar({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const exportWorkbook = useCalendarExport();
+
+  // Justificativa do dia vermelho (drill do calendário -> Gestão Integrada): abre/recupera um
+  // ManagementCase para o dia clicado e reaproveita o mesmo diálogo de justificativa da Gestão
+  // Integrada, em vez de duplicar a UI de justificar/comentar aqui.
+  const [caseReasons, setCaseReasons] = useState<ManagementCaseReason[]>([]);
+  const [dailyCaseId, setDailyCaseId] = useState<number | null>(null);
+  const [openingCase, setOpeningCase] = useState(false);
+  const [openCaseError, setOpenCaseError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!canJustifyManagement) return;
+    void api.managementCaseReasons().then(setCaseReasons).catch(() => undefined);
+  }, [canJustifyManagement]);
+
+  async function openDailyJustification(cell: SelectedCell) {
+    setOpeningCase(true);
+    setOpenCaseError(null);
+    try {
+      const expected = dayTarget(cell.teamModel, weekdayOf(cell.day))?.target_quantity ?? null;
+      const managementCase = await api.openDailyManagementCase({
+        responsible_name: cell.responsible,
+        regional: cell.referenceRegional ?? cell.regional,
+        reference_date: cell.day,
+        expected_value: expected,
+        actual_value: cell.quantity,
+      });
+      setDailyCaseId(managementCase.id);
+    } catch (reason) {
+      setOpenCaseError(reason instanceof Error ? reason.message : "Não foi possível abrir a justificativa deste dia.");
+    } finally {
+      setOpeningCase(false);
+    }
+  }
 
   async function handleExport() {
     setExporting(true);
@@ -1078,6 +1124,35 @@ export function OperationsMonthlyCalendar({
               </div>
             </div>
           ) : null}
+          {selected &&
+          selected.performance === "below" &&
+          selected.responsible !== ALL_RESPONSIBLES &&
+          (!selected.periodEnd || selected.periodEnd === selected.day) &&
+          canJustifyManagement ? (
+            <div className="flex flex-col gap-2 border-b border-red-100 bg-red-50/60 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+              <p className="text-xs text-red-800">
+                Dia abaixo da meta - registre uma justificativa na Gestão Integrada.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 shrink-0 border-red-300 bg-white text-xs text-red-700 hover:bg-red-100"
+                disabled={openingCase}
+                onClick={() => void openDailyJustification(selected)}
+              >
+                {openingCase ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                )}
+                Justificar dia
+              </Button>
+            </div>
+          ) : null}
+          {openCaseError ? (
+            <p className="border-b border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700 sm:px-4">{openCaseError}</p>
+          ) : null}
           {!detailLoading && !detailError && selected ? (
             <OperationsCalendarDayMetricsPanel metrics={metrics} />
           ) : null}
@@ -1477,6 +1552,16 @@ export function OperationsMonthlyCalendar({
           if (!open) setSelectedOrder(null);
         }}
       />
+      {dailyCaseId !== null ? (
+        <CaseDetailDialog
+          caseId={dailyCaseId}
+          reasons={caseReasons}
+          canJustify={canJustifyManagement}
+          canReview={canReviewManagement}
+          onClose={() => setDailyCaseId(null)}
+          onChanged={() => undefined}
+        />
+      ) : null}
     </div>
   );
 }

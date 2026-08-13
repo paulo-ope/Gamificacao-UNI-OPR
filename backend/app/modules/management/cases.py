@@ -51,6 +51,12 @@ from app.services.regional import effective_managed_regionals, normalize_regiona
 CASE_TYPE_PRODUCTIVITY = "productivity_below_target"
 METRIC_DAILY_AVERAGE = "Média diária de O.S. concluídas"
 
+# Caso de um único dia "abaixo da meta" (vermelho no drill do calendário) - diferente do caso
+# mensal (`CASE_TYPE_PRODUCTIVITY`), que só olha a média do mês fechado. Aberto sob demanda quando
+# o supervisor clica em "Justificar" num dia vermelho, não por varredura em lote.
+CASE_TYPE_DAILY_BELOW = "daily_performance_below_target"
+METRIC_DAILY_COUNT = "O.S. concluídas no dia"
+
 DEFAULT_SETTINGS = {
     # Desvio percentual mínimo abaixo da meta para abrir caso. 15% evita transformar ruído normal
     # de operação (4,3 de 5) em cobrança formal.
@@ -286,6 +292,82 @@ def generate_performance_cases(
         "reference_year": year,
         "reference_month": month,
     }
+
+
+def get_or_create_daily_case(
+    db: Session,
+    *,
+    responsible_name: str,
+    regional: str,
+    reference_date: date,
+    expected_value: float | None,
+    actual_value: float,
+    created_by: int | None = None,
+) -> tuple[ManagementCase, bool]:
+    """Abre (ou devolve, se já existir) o caso de um dia específico marcado abaixo da meta no
+    drill do calendário. Idempotente por (tipo, responsável, regional, data) - clicar em
+    "Justificar" duas vezes no mesmo dia não duplica caso, só devolve o que já existe (podendo já
+    estar justificado ou até resolvido). Devolve `(caso, foi_criado_agora)` - o chamador usa o
+    segundo valor pra so registrar auditoria/side-effects na primeira vez.
+
+    Diferente de `generate_performance_cases` (varredura em lote do mês fechado), este é criado
+    sob demanda, um dia de cada vez, a partir do que o supervisor está vendo no drill."""
+    normalized_regional = normalize_regional(regional)
+    target_key = (_norm(responsible_name), _norm(normalized_regional))
+    # Compara em Python (via `_norm`, que casefold + colapsa espaços) em vez de SQL - mesmo
+    # criterio de idempotencia que `generate_performance_cases` ja usa para este mesmo par de
+    # campos, para as duas formas de abrir caso nunca divergirem sobre o que conta como "o mesmo"
+    # responsavel/regional.
+    same_day_cases = db.scalars(
+        select(ManagementCase).where(
+            ManagementCase.case_type == CASE_TYPE_DAILY_BELOW,
+            ManagementCase.reference_date == reference_date,
+        )
+    ).all()
+    for candidate in same_day_cases:
+        if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key:
+            return candidate, False
+
+    settings = load_settings(db)
+    due_days = int(_setting_float(settings, "management_case_due_days"))
+    deviation_pct = None
+    severity = "medium"
+    if expected_value:
+        deviation_pct = round(max(0.0, (expected_value - actual_value) / expected_value * 100), 1)
+        severity = severity_for(deviation_pct, settings)
+
+    member = next(
+        (
+            candidate
+            for candidate in db.scalars(select(ManagementOperationalMember)).all()
+            if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key
+        ),
+        None,
+    )
+
+    item = ManagementCase(
+        case_type=CASE_TYPE_DAILY_BELOW,
+        source_module="operations_calendar",
+        reference_date=reference_date,
+        reference_month=reference_date.month,
+        reference_year=reference_date.year,
+        regional=normalized_regional,
+        collaborator_id=member.collaborator_id if member else None,
+        responsible_name=responsible_name,
+        supervisor_user_id=member.supervisor_user_id if member else None,
+        team_model_id=member.team_model_id if member else None,
+        metric_name=METRIC_DAILY_COUNT,
+        expected_value=expected_value,
+        actual_value=actual_value,
+        deviation_value=deviation_pct,
+        severity=severity,
+        status="pending",
+        due_date=date.today() + timedelta(days=due_days),
+        created_by=created_by,
+    )
+    db.add(item)
+    db.flush()
+    return item, True
 
 
 # --- Escopo de visibilidade -------------------------------------------------------------------

@@ -166,6 +166,17 @@ class ManagementCaseCreate(BaseModel):
     due_date: date | None = None
 
 
+class ManagementDailyCaseRequest(BaseModel):
+    """Abre (ou devolve, se já existir) o caso de justificativa de um dia específico marcado
+    abaixo da meta no drill do calendário da Operação Analítica."""
+
+    responsible_name: str = Field(min_length=1, max_length=180)
+    regional: str = Field(min_length=1, max_length=160)
+    reference_date: date
+    expected_value: float | None = None
+    actual_value: float = Field(ge=0)
+
+
 class ManagementCaseJustification(BaseModel):
     reason_id: int | None = None
     justification_text: str = Field(min_length=3)

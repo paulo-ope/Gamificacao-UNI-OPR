@@ -35,6 +35,7 @@ from app.modules.management.schemas import (
     ManagementCaseGenerateRequest,
     ManagementCaseGenerateResult,
     ManagementCaseJustification,
+    ManagementDailyCaseRequest,
     ManagementCaseOut,
     ManagementCasePage,
     ManagementCaseReasonCreate,
@@ -259,6 +260,37 @@ def create_case(
     db.commit()
     db.refresh(item)
     return cases_engine.case_out(item)
+
+
+@router.post("/cases/daily", response_model=ManagementCaseOut)
+def open_daily_case(
+    payload: ManagementDailyCaseRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:write_justification")),
+):
+    """Abre (ou devolve) o caso do dia vermelho clicado no drill do calendário - o mesmo permissao
+    de quem justifica (não exige `management:review`, ao contrário da criação manual de caso via
+    POST /cases): o supervisor pode abrir a justificativa do próprio dia sem depender da matriz."""
+    item, was_created = cases_engine.get_or_create_daily_case(
+        db,
+        responsible_name=payload.responsible_name,
+        regional=payload.regional,
+        reference_date=payload.reference_date,
+        expected_value=payload.expected_value,
+        actual_value=payload.actual_value,
+        created_by=user.id,
+    )
+    scope = cases_engine.case_scope_conditions(user)
+    if scope:
+        in_scope = db.scalar(select(ManagementCase.id).where(ManagementCase.id == item.id, *scope))
+        if not in_scope:
+            raise HTTPException(status_code=404, detail="Caso de gestão não encontrado.")
+    if was_created:
+        record_audit_log(db, user, "open_daily", "management_cases", item.id, None, snapshot(item))
+    db.commit()
+    db.refresh(item)
+    counts = cases_engine.comment_counts(db, [item.id])
+    return cases_engine.case_out(item, comment_count=counts.get(item.id, 0))
 
 
 @router.post("/cases/generate", response_model=ManagementCaseGenerateResult)
