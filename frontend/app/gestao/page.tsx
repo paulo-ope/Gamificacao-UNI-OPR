@@ -5,6 +5,7 @@ import { ArrowLeft, BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, LogO
 import { useEffect, useMemo, useState } from "react";
 
 import { ManagementCasesPanel } from "@/components/management/management-cases-panel";
+import { ManagementReasonsPanel } from "@/components/management/management-reasons-panel";
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
@@ -87,6 +88,7 @@ export default function ManagementPage() {
   const canManage = Boolean(user?.permissions.includes("management:manage_structure"));
   const canReview = Boolean(user?.permissions.includes("management:review"));
   const canJustify = Boolean(user?.permissions.includes("management:write_justification"));
+  const canAdminReasons = Boolean(user?.permissions.includes("management:admin"));
   const regionals = useMemo(() => Array.from(new Set((data?.members ?? []).map((item) => item.regional))).sort(), [data]);
 
   async function load() {
@@ -221,11 +223,18 @@ export default function ManagementPage() {
                 </span>
               ) : null}
             </TabsTrigger>
+            {canAdminReasons ? <TabsTrigger value="reasons">Motivos de justificativa</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="cases">
             <ManagementCasesPanel options={options} canReview={canReview} canJustify={canJustify} />
           </TabsContent>
+
+          {canAdminReasons ? (
+            <TabsContent value="reasons">
+              <ManagementReasonsPanel />
+            </TabsContent>
+          ) : null}
 
           <TabsContent value="structure" className="grid gap-5">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">

@@ -348,7 +348,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ comment })
     }),
-  managementCaseReasons: () => request<ManagementCaseReason[]>("/management/case-reasons"),
+  managementCaseReasons: (includeInactive?: boolean) =>
+    request<ManagementCaseReason[]>(`/management/case-reasons${includeInactive ? "?include_inactive=true" : ""}`),
+  createManagementCaseReason: (payload: { name: string; description?: string | null; active?: boolean; requires_description?: boolean }) =>
+    request<ManagementCaseReason>("/management/case-reasons", { method: "POST", body: JSON.stringify(payload) }),
+  updateManagementCaseReason: (
+    id: number,
+    payload: { name?: string; description?: string | null; active?: boolean; requires_description?: boolean }
+  ) =>
+    request<ManagementCaseReason>(`/management/case-reasons/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   managementSettings: () => request<Record<string, string>>("/management/settings"),
   updateManagementSettings: (values: Record<string, string>) =>
     request<Record<string, string>>("/management/settings", { method: "PUT", body: JSON.stringify(values) }),
