@@ -21,8 +21,10 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import ValidationError
+from sqlalchemy import select
 
 from app.core.config import get_settings
+from app.core.security import permissions_for_user
 from app.db.session import SessionLocal
 from app.modules.ai import queries as ai_queries
 from app.modules.ai.schemas import AiOrderFilters
@@ -402,5 +404,73 @@ def build_mcp_server() -> FastMCP:
         """
         _current_user()
         return _dump(ai_queries.available_fields())
+
+    @mcp.tool(
+        name="opr_management_cases",
+        annotations={"title": "Casos de Gestão Integrada", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_management_cases(
+        status: str | None = None,
+        severity: str | None = None,
+        regional: str | None = None,
+        case_type: str | None = None,
+        reference_year: int | None = None,
+        reference_month: int | None = None,
+        only_overdue: bool = False,
+        only_open: bool = False,
+        search: str | None = None,
+    ) -> str:
+        """Casos de gestão (desvios cobrados formalmente da matriz - produtividade abaixo da meta,
+        dia vermelho do calendário, etc.), com justificativa do supervisor e decisão da matriz.
+
+        Mesmo escopo de visibilidade da tela: quem não tem `management:review` só vê os casos das
+        regionais que gerencia (ou dos quais é supervisor direto) - nunca a operação inteira.
+
+        Args:
+            status: pending, justified, in_progress, resolved ou rejected.
+            severity: high, medium ou low.
+            regional: nome da regional (normalizado internamente).
+            case_type: productivity_below_target ou daily_performance_below_target.
+            reference_year, reference_month: competência do caso.
+            only_overdue: só casos abertos com prazo vencido.
+            only_open: só casos ainda não encerrados (pending/justified/in_progress).
+            search: busca em responsável, regional ou métrica.
+
+        Returns:
+            JSON {"summary": {...contadores...}, "items": [{status, severity, responsible_name,
+            regional, metric_name, expected_value, actual_value, deviation_value, is_overdue,
+            justification_text, action_plan, reviewed_by, ...}, ...]}.
+        """
+        from app.modules.management import cases as management_cases
+        from app.modules.management.models import OPEN_CASE_STATUSES, ManagementCase
+
+        user = _current_user()
+        if "management:read" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para consultar a Gestão Integrada (management:read).")
+        filters = management_cases.ManagementCaseFilters(
+            status=status,
+            severity=severity,
+            regional=regional,
+            case_type=case_type,
+            reference_year=reference_year,
+            reference_month=reference_month,
+            only_overdue=only_overdue,
+            search=search,
+            statuses=list(OPEN_CASE_STATUSES) if only_open else [],
+        )
+        with SessionLocal() as db:
+            conditions = [*management_cases.case_scope_conditions(user), *management_cases.case_filter_conditions(filters)]
+            rows = db.scalars(
+                select(ManagementCase)
+                .where(*conditions)
+                .order_by(ManagementCase.created_at.desc())
+                .limit(500)
+            ).all()
+            return _dump(
+                {
+                    "summary": management_cases.summarize_cases(db, conditions),
+                    "items": [management_cases.case_out(item).model_dump() for item in rows],
+                }
+            )
 
     return mcp
