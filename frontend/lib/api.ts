@@ -42,6 +42,7 @@ import type {
   ManagementCaseReason,
   ManagementDashboard,
   ManagementOptions,
+  Notification,
   EcosystemPermission,
   Permission,
   PenaltyRule,
@@ -351,6 +352,10 @@ export const api = {
   managementSettings: () => request<Record<string, string>>("/management/settings"),
   updateManagementSettings: (values: Record<string, string>) =>
     request<Record<string, string>>("/management/settings", { method: "PUT", body: JSON.stringify(values) }),
+  notifications: (limit?: number) => request<Notification[]>(`/notifications${limit ? `?limit=${limit}` : ""}`),
+  notificationsUnreadCount: () => request<{ unread_count: number }>("/notifications/unread-count"),
+  markNotificationRead: (id: number) => request<Notification>(`/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () => request<{ marked_read: number }>("/notifications/read-all", { method: "POST" }),
   leadershipProfiles: () => request<LeadershipProfile[]>("/leadership/profiles"),
   leadershipRoleProfiles: () => request<LeadershipRoleProfile[]>("/leadership/role-profiles"),
   createLeadershipRoleProfile: (payload: Partial<LeadershipRoleProfile>) =>

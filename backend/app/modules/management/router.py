@@ -51,6 +51,7 @@ from app.modules.management.schemas import (
 )
 from app.modules.management.services import member_out, refresh_operational_members, summarize_members, visible_member_filters
 from app.modules.operations.models import OperationTeamModel
+from app.services import notifications as notifications_service
 from app.services.audit_log import record_audit_log, snapshot
 from app.services.regional import normalize_regional
 
@@ -340,6 +341,21 @@ def justify_case(
     item.status = payload.status
     item.justified_at = datetime.now(timezone.utc)
     record_audit_log(db, user, "justify", "management_cases", item.id, before, snapshot(item))
+
+    if item.status == "justified":
+        # So neste status ha algo pronto pra decisao da matriz - "in_progress" (o supervisor
+        # pedindo mais tempo/complemento) nao gera aviso, ninguem precisa agir ainda.
+        notifications_service.notify_users_with_permission(
+            db,
+            permission="management:review",
+            title="Caso pronto para revisão",
+            message=f"{item.responsible_name or 'Colaborador'} justificou o caso #{item.id} ({item.metric_name}) - pronto para decisão da matriz.",
+            link_url=f"/gestao?case_id={item.id}",
+            entity_type="management_case",
+            entity_id=item.id,
+            exclude_user_id=user.id,
+        )
+
     db.commit()
     db.refresh(item)
     return cases_engine.case_out(item)

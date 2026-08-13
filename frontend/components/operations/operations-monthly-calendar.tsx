@@ -284,6 +284,11 @@ export function OperationsMonthlyCalendar({
         actual_value: cell.quantity,
       });
       setDailyCaseId(managementCase.id);
+      // Fecha o painel do dia ao abrir a justificativa - com os dois abertos ao mesmo tempo, o
+      // Radix (Sheet) marca tudo que nao e o proprio modal como inerte/oculto pra acessibilidade,
+      // e o dialogo de justificativa (que roda por cima via portal) ficava impossivel de clicar,
+      // inclusive o proprio botao de fechar (achado real, 2026-08-13).
+      setSelected(null);
     } catch (reason) {
       setOpenCaseError(reason instanceof Error ? reason.message : "Não foi possível abrir a justificativa deste dia.");
     } finally {

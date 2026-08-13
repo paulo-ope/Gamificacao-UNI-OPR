@@ -5,6 +5,7 @@ import { ArrowLeft, BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, LogO
 import { useEffect, useMemo, useState } from "react";
 
 import { ManagementCasesPanel } from "@/components/management/management-cases-panel";
+import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -175,7 +176,10 @@ export default function ManagementPage() {
               <h1 className="text-base font-semibold text-slate-950">Gestão Integrada</h1>
             </div>
           </div>
-          <Button type="button" variant="ghost" onClick={logout}><LogOut className="h-4 w-4" /> Sair</Button>
+          <div className="flex items-center gap-1">
+            <NotificationBell />
+            <Button type="button" variant="ghost" onClick={logout}><LogOut className="h-4 w-4" /> Sair</Button>
+          </div>
         </div>
       </header>
 

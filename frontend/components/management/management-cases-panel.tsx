@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { useSearchParams } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -148,6 +149,18 @@ export function ManagementCasesPanel({
 
   useEffect(() => {
     void api.managementCaseReasons().then(setReasons).catch(() => undefined);
+  }, []);
+
+  // Abre direto o caso quando a tela é acessada via link de notificação (?case_id=97) - só
+  // precisa do id, o próprio CaseDetailDialog busca o resto (ver uso de `selected.id` abaixo).
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const caseIdParam = searchParams.get("case_id");
+    const caseId = caseIdParam ? Number(caseIdParam) : null;
+    if (caseId && Number.isFinite(caseId)) {
+      setSelected({ id: caseId } as ManagementCase);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function generate() {

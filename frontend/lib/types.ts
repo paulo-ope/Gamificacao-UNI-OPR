@@ -1343,6 +1343,17 @@ export type PointBalanceEntry = {
   created_at: string;
 };
 
+export type Notification = {
+  id: number;
+  title: string;
+  message: string;
+  link_url: string | null;
+  entity_type: string | null;
+  entity_id: number | null;
+  is_read: boolean;
+  created_at: string;
+};
+
 export type CollaboratorPointBalance = {
   collaborator_id: number;
   collaborator_name: string | null;

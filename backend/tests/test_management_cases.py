@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.main import app
-from app.models import Collaborator, User
+from app.models import Collaborator, Notification, User
 from app.modules.management import cases as cases_engine
 from app.modules.management.models import ManagementCase, ManagementCaseReason, ManagementOperationalMember
 from app.modules.operations.models import OperationOrder, OperationTeamModel
@@ -421,6 +421,51 @@ def test_daily_case_endpoint_lets_supervisor_open_and_justify_their_own_day(clie
     assert reopened.status_code == 200
     assert reopened.json()["id"] == body["id"]
     assert reopened.json()["status"] == "justified"
+
+
+def test_justifying_a_case_notifies_reviewers_but_not_the_supervisor_itself(db_session, admin_user, operation_setup):
+    """Quando o supervisor justifica um caso, quem tem management:review precisa ficar sabendo -
+    mas o proprio supervisor (que nao tem essa permissao) nao deve receber nada disso."""
+    case = _make_case(db_session, supervisor_user_id=operation_setup["supervisor"].id)
+    db_session.commit()
+
+    try:
+        client = _client_as(db_session, operation_setup["supervisor"])
+        response = client.post(
+            f"/api/management/cases/{case.id}/justify",
+            json={"justification_text": "Equipe reduzida por afastamento."},
+        )
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    notifications = db_session.query(Notification).all()
+    assert len(notifications) == 1
+    notification = notifications[0]
+    assert notification.user_id == admin_user.id
+    assert notification.entity_type == "management_case"
+    assert notification.entity_id == case.id
+    assert notification.link_url == f"/gestao?case_id={case.id}"
+    assert not notification.is_read
+
+
+def test_returning_a_case_to_in_progress_does_not_notify_reviewers(db_session, operation_setup):
+    """'Em andamento' significa que o supervisor ainda nao terminou - nao ha nada pronto pra
+    matriz decidir ainda, entao nao faz sentido notificar aqui."""
+    case = _make_case(db_session, supervisor_user_id=operation_setup["supervisor"].id)
+    db_session.commit()
+
+    try:
+        client = _client_as(db_session, operation_setup["supervisor"])
+        response = client.post(
+            f"/api/management/cases/{case.id}/justify",
+            json={"justification_text": "Ainda apurando o motivo.", "status": "in_progress"},
+        )
+        assert response.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    assert db_session.query(Notification).count() == 0
 
 
 def test_daily_case_endpoint_hides_case_outside_supervisor_scope(db_session, operation_setup):

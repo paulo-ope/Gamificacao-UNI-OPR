@@ -109,6 +109,29 @@ class User(Base):
         secondary="user_access_profiles",
         back_populates="users",
     )
+    notifications: Mapped[list["Notification"]] = relationship(back_populates="user")
+
+
+class Notification(Base):
+    """Notificação in-app (sino no topo, sem integração externa) - avisa um usuário de algo que
+    precisa da atenção dele, com um link pra abrir direto o que gerou o aviso. Genérica de
+    propósito (entity_type/entity_id livres): a primeira origem é a Gestão Integrada (caso
+    justificado, pronto pra decisão da matriz), mas outros eventos podem reaproveitar a mesma
+    tabela sem precisar de uma nova por funcionalidade."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    link_url: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    entity_type: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+
+    user: Mapped[User] = relationship(back_populates="notifications")
 
 
 class AccessProfile(Base):
