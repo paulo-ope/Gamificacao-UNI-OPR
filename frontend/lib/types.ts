@@ -300,6 +300,7 @@ export type ManagementCaseFilters = {
   severity?: string;
   regional?: string;
   supervisor_user_id?: number;
+  case_type?: string;
   reference_year?: number;
   reference_month?: number;
   only_overdue?: boolean;

@@ -13,7 +13,7 @@ import {
   Target,
   UserRound,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,6 +55,28 @@ function weekdayOf(dayIso: string): number {
   const utcDay = new Date(`${dayIso}T12:00:00Z`).getUTCDay();
   return utcDay === 0 ? 6 : utcDay - 1;
 }
+
+// Mesmo criterio de normalizacao do backend (casefold + colapsa espaco) para casar o responsavel
+// do caso com o responsavel da celula do calendario, independente de acento/maiusculo.
+function dailyCaseKey(responsibleName: string, referenceDate: string): string {
+  return `${responsibleName.trim().toLowerCase().replace(/\s+/g, " ")}|${referenceDate}`;
+}
+
+const DAILY_CASE_STATUS_DOT: Record<string, string> = {
+  pending: "bg-amber-500",
+  justified: "bg-blue-500",
+  in_progress: "bg-violet-500",
+  resolved: "bg-emerald-500",
+  rejected: "bg-slate-400",
+};
+
+const DAILY_CASE_STATUS_LABEL: Record<string, string> = {
+  pending: "Aguardando justificativa",
+  justified: "Justificado, aguardando decisão da matriz",
+  in_progress: "Em andamento",
+  resolved: "Resolvido pela matriz",
+  rejected: "Rejeitado pela matriz",
+};
 
 const WEEKDAYS = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"];
 const EMPTY_PAGE: OperationOrderPage = {
@@ -265,11 +287,41 @@ export function OperationsMonthlyCalendar({
   const [dailyCaseId, setDailyCaseId] = useState<number | null>(null);
   const [openingCase, setOpeningCase] = useState(false);
   const [openCaseError, setOpenCaseError] = useState<string | null>(null);
+  // Status do caso de cada dia ja justificado/em analise neste mes - sem isso o supervisor so
+  // descobre que um dia ja foi tratado clicando nele de novo, um por um (achado real, 2026-08-13).
+  // Chave: responsavel normalizado + data (a mesma dupla que identifica um caso diario no backend).
+  const [dailyCaseStatusByKey, setDailyCaseStatusByKey] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!canJustifyManagement) return;
     void api.managementCaseReasons().then(setCaseReasons).catch(() => undefined);
   }, [canJustifyManagement]);
+
+  const loadDailyCaseStatuses = useCallback(async () => {
+    if (!canJustifyManagement || !data.competence) return;
+    const [year, month] = data.competence.split("-").map(Number);
+    if (!year || !month) return;
+    try {
+      const page = await api.managementCases({
+        case_type: "daily_performance_below_target",
+        reference_year: year,
+        reference_month: month,
+        page_size: 200,
+      });
+      const next = new Map<string, string>();
+      for (const item of page.items) {
+        if (!item.responsible_name || !item.reference_date) continue;
+        next.set(dailyCaseKey(item.responsible_name, item.reference_date), item.status);
+      }
+      setDailyCaseStatusByKey(next);
+    } catch {
+      // Indicador e so um reforco visual - falha aqui nao deve travar o calendario.
+    }
+  }, [canJustifyManagement, data.competence]);
+
+  useEffect(() => {
+    void loadDailyCaseStatuses();
+  }, [loadDailyCaseStatuses]);
 
   async function openDailyJustification(cell: SelectedCell) {
     setOpeningCase(true);
@@ -594,6 +646,17 @@ export function OperationsMonthlyCalendar({
             Nenhum modelo de equipe vinculado aos colaboradores deste recorte.
           </p>
         )}
+        {canJustifyManagement ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3" aria-label="Legenda de status de justificativa">
+            <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">Bolinha no dia = já tem caso na Gestão Integrada</p>
+            {Object.entries(DAILY_CASE_STATUS_LABEL).map(([status, label]) => (
+              <span key={status} className="flex items-center gap-1 text-[9px] font-semibold text-slate-600">
+                <span className={cn("h-2 w-2 rounded-full", DAILY_CASE_STATUS_DOT[status])} />
+                {label}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {isLoading ? <CalendarSkeleton /> : null}
@@ -898,11 +961,12 @@ export function OperationsMonthlyCalendar({
                               referenceRegional:
                                 collaborator.reference_regional,
                             };
+                            const dailyCaseStatus = dailyCaseStatusByKey.get(dailyCaseKey(collaborator.responsible, day.date));
                             return (
                               <Fragment key={day.date}>
                                 <td
                                   className={cn(
-                                    "h-12 border-r border-slate-100 p-0 text-center",
+                                    "relative h-12 border-r border-slate-100 p-0 text-center",
                                     day.weekday >= 5 && "bg-slate-50/60",
                                     !day.available && "bg-slate-100/70",
                                   )}
@@ -924,7 +988,7 @@ export function OperationsMonthlyCalendar({
                                         ),
                                       )}
                                       aria-label={`${quantity} O.S. de ${collaborator.responsible} em ${shortDate(day.date)}. ${label}.`}
-                                      title={`${label} · ${quantity} O.S.${target ? ` · meta ${target.target_quantity}` : " · sem meta neste dia"}`}
+                                      title={`${label} · ${quantity} O.S.${target ? ` · meta ${target.target_quantity}` : " · sem meta neste dia"}${dailyCaseStatus ? ` · ${DAILY_CASE_STATUS_LABEL[dailyCaseStatus] ?? dailyCaseStatus}` : ""}`}
                                       onClick={() => void loadCell(cell)}
                                     >
                                       {quantity || "·"}
@@ -932,6 +996,15 @@ export function OperationsMonthlyCalendar({
                                   ) : (
                                     <span className="text-slate-300">—</span>
                                   )}
+                                  {dailyCaseStatus ? (
+                                    <span
+                                      className={cn(
+                                        "pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full ring-1 ring-white",
+                                        DAILY_CASE_STATUS_DOT[dailyCaseStatus] ?? "bg-slate-400",
+                                      )}
+                                      aria-hidden="true"
+                                    />
+                                  ) : null}
                                 </td>
                                 {data.days[index + 1]?.week !== day.week ? (
                                   <td className="h-12 border-r-2 border-slate-300 bg-slate-100 p-0 text-center font-bold tabular-nums text-slate-700">
@@ -1564,7 +1637,7 @@ export function OperationsMonthlyCalendar({
           canJustify={canJustifyManagement}
           canReview={canReviewManagement}
           onClose={() => setDailyCaseId(null)}
-          onChanged={() => undefined}
+          onChanged={() => void loadDailyCaseStatuses()}
         />
       ) : null}
     </div>

@@ -4,10 +4,10 @@ precisa da atenção dele, com um link pra abrir direto o que gerou o aviso."""
 from __future__ import annotations
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import permissions_for_user
-from app.models import Notification, User
+from app.models import AccessProfile, Notification, User
 
 
 def create_notification(
@@ -49,8 +49,17 @@ def notify_users_with_permission(
     mudar a qualquer momento via Admin > Perfis, sem exigir código novo aqui).
 
     `exclude_user_id`: quem disparou a ação não precisa ser notificado de si mesmo (ex.: um
-    admin com `management:review` que também justifica os próprios casos)."""
-    users = db.scalars(select(User).where(User.active.is_(True))).all()
+    admin com `management:review` que também justifica os próprios casos).
+
+    `selectinload` dos perfis/permissões é obrigatório aqui: sem isso, `permissions_for_user`
+    (que acessa `user.access_profiles` e `profile.permissions`) dispara duas consultas lazy POR
+    USUÁRIO ativo do sistema a cada chamada - lentidão real sentida ao justificar um caso
+    (achado real, 2026-08-13)."""
+    users = db.scalars(
+        select(User)
+        .where(User.active.is_(True))
+        .options(selectinload(User.access_profiles).selectinload(AccessProfile.permissions))
+    ).all()
     created: list[Notification] = []
     for user in users:
         if user.id == exclude_user_id:
