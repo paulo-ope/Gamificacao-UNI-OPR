@@ -12,6 +12,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import type {
   ManagementCase,
   ManagementCaseComment,
@@ -538,8 +540,14 @@ export function CaseDetailDialog({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+  // Via portal direto em document.body: sem isso, este dialog fica preso na posicao normal do
+  // DOM (dentro da arvore de quem o abriu) enquanto outros overlays baseados em Radix (Sheet,
+  // Dialog) sao portados para o FIM do body pelo proprio Radix - quando os dois aparecem juntos
+  // (ex.: aberto de dentro do drill do calendario, que usa Sheet), o portal do Radix, montado
+  // depois, pintava por cima deste dialog mesmo com z-index igual, deixando o formulario de
+  // justificativa visualmente atras e impossivel de clicar (achado real, 2026-08-13).
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
       <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
           <div>
@@ -637,6 +645,14 @@ export function CaseDetailDialog({
                       value={justification}
                       onChange={(event) => setJustification(event.target.value)}
                     />
+                    {needsLongText ? (
+                      <p className={cn(
+                        "-mt-1 text-xs",
+                        justification.trim().length >= 15 ? "text-emerald-600" : "text-amber-600"
+                      )}>
+                        Este motivo exige detalhamento: {justification.trim().length}/15 caracteres mínimos.
+                      </p>
+                    ) : null}
                     <Textarea
                       rows={3}
                       placeholder="Plano de ação (opcional): o que será feito para corrigir."
@@ -726,6 +742,7 @@ export function CaseDetailDialog({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
