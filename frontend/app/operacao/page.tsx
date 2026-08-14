@@ -12,6 +12,7 @@ import {
   OperationsModuleSidebar,
   type OperationTab,
 } from "@/components/operations/operations-module-sidebar";
+import { OperationsNetworkMap } from "@/components/operations/operations-network-map";
 import { OperationsOpeningsAnalytics } from "@/components/operations/operations-openings-analytics";
 import { OperationsOrderDetailDialog } from "@/components/operations/operations-order-detail-dialog";
 import { OperationsOverviewCharts } from "@/components/operations/operations-overview-charts";
@@ -710,6 +711,7 @@ export default function OperacaoPage() {
       ...(canViewCalendar ? ["calendar" as const] : []),
       ...(canViewBacklog ? ["progress" as const] : []),
       ...(canViewOrderDetails ? ["details" as const] : []),
+      "network",
       ...(canManageTeamModels || canManageOwnTeamMembers || canManageSubjects || canSyncIxc ? ["teams" as const] : []),
     ],
     [canManageOwnTeamMembers, canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
@@ -745,7 +747,7 @@ export default function OperacaoPage() {
         }
         setAppliedFilters(effectiveFilters);
 
-        if (requestedTab === "teams") return;
+        if (requestedTab === "teams" || requestedTab === "network") return;
 
         if (!hasPeriod && !openScope) {
           const nextOptions = await operationsApi.filters(
@@ -2228,6 +2230,10 @@ export default function OperacaoPage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="network">
+            <OperationsNetworkMap />
           </TabsContent>
 
           <TabsContent value="teams">

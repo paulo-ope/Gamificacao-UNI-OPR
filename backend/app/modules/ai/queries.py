@@ -750,6 +750,61 @@ def _build_search_item(
     }
 
 
+# Nome em `AiOrderSearchItem` -> nome de campo na governança IA/MCP (entidade "operations_orders",
+# ver ai_governance/field_registry.py) - só difere pra "subject" (alias de os_subject na resposta).
+# Nomes de `AiOrderSearchItem` fora deste dict são calculados (distância, risco de SLA, meta de
+# equipe) - não são coluna nenhuma do banco, então ficam fora da governança de campos (sempre
+# disponíveis, como já é hoje). A validação de autorização de `fields` fica no chamador
+# (ai/router.py, mcp_connector/server.py), não aqui, pra evitar import circular com
+# `ai_governance.field_registry` (que já importa este módulo para AGGREGATION_DIMENSIONS/
+# TEXT_FILTER_COLUMNS).
+AI_SEARCH_GOVERNED_FIELDS = {
+    "order_code": "order_code",
+    "regional": "regional",
+    "city": "city",
+    "os_type": "os_type",
+    "subject": "os_subject",
+    "diagnosis": "diagnosis",
+    "sector": "sector",
+    "service_description": "service_description",
+    "technical_report": "technical_report",
+    "service_address": "service_address",
+    "neighborhood": "neighborhood",
+    "latitude": "latitude",
+    "longitude": "longitude",
+    "pop": "pop",
+    "responsible": "responsible",
+    "status": "status",
+    "sla_status": "sla_status",
+    "opened_at": "opened_at",
+    "scheduled_at": "scheduled_at",
+    "assumed_at": "assumed_at",
+    "displacement_started_at": "displacement_started_at",
+    "execution_started_at": "execution_started_at",
+    "finished_at": "finished_at",
+    "closed_at": "closed_at",
+}
+
+AI_SEARCH_ITEM_FIELDS = set(AI_SEARCH_GOVERNED_FIELDS) | {
+    "distance_km", "team_model", "sla_risk", "sla_target_hours", "sla_deadline_at",
+    "horas_para_vencer", "horas_atrasada", "dias_em_aberto", "sla_estourado", "scheduled_after_sla",
+    "sla_expired_before_schedule", "hours_open_to_schedule", "hours_schedule_to_execution",
+    "hours_execution_to_close", "hours_open_to_close", "team_target_quantity", "team_target_period",
+    "team_target_valid_from", "team_target_valid_to",
+}
+
+AI_SEARCH_SUMMARY_FIELDS = [
+    "order_code", "regional", "city", "os_type", "subject", "sector", "status", "sla_status",
+    "opened_at", "closed_at", "responsible",
+]
+
+
+def _shape_search_item(item: dict, fields: list[str] | None) -> dict:
+    if fields is None:
+        return item
+    return {key: value for key, value in item.items() if key in fields}
+
+
 def search_orders(
     db: Session,
     user: User,
@@ -759,16 +814,21 @@ def search_orders(
     page: int = 1,
     page_size: int = 50,
     keyword: str | None = None,
+    date_field: str | None = None,
+    fields: list[str] | None = None,
     **filters,
 ) -> dict:
     """Busca paginada de O.S. com diagnóstico/relato técnico, para leitura qualitativa. Período
     obrigatório + paginação real (mesmo padrão de `operations_queries.order_page`) para nunca
-    devolver um volume de texto capaz de lotar o contexto da IA de uma vez só."""
+    devolver um volume de texto capaz de lotar o contexto da IA de uma vez só.
+
+    `fields` já deve chegar validado/autorizado pelo chamador (ver `AI_SEARCH_GOVERNED_FIELDS`
+    acima) - esta função só filtra o dict de saída, não decide o que é permitido."""
     page_size = min(page_size, AI_SEARCH_MAX_PAGE_SIZE)
     if keyword:
         filters = {**filters, "search": keyword}
 
-    conditions, _, _ = operations_queries._query_conditions(db, date_from, date_to, user, filters)
+    conditions, _, _ = operations_queries._query_conditions(db, date_from, date_to, user, filters, date_field=date_field)
     conditions.extend(_text_filter_conditions(filters.get("text_filters")))
     conditions.extend(_sla_stage_filter_conditions(db, filters))
     conditions.extend(_geo_filter_conditions(filters))
@@ -811,7 +871,8 @@ def search_orders(
             local_closed = order.closed_at.astimezone(operations_queries.OPERATIONS_TIMEZONE)
             period_type = operations_queries.period_type_for_date(local_closed.date())
             team_target = _resolve_team_target(target_versions, team_model, period_type, order.closed_at)
-        items.append(_build_search_item(order, team_model, team_target, reference_point=reference_point))
+        item = _build_search_item(order, team_model, team_target, reference_point=reference_point)
+        items.append(_shape_search_item(item, fields))
     return {
         "items": items,
         "total_encontrado": total,

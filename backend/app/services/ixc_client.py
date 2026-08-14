@@ -378,6 +378,40 @@ def fetch_logins_by_ids(client: IxcClient, login_ids: list[int], *, rp: int = 20
     yield from client.list_all("radusuarios", grid_param=grid_param, rp=rp, sortname="radusuarios.id")
 
 
+def fetch_onu_signal_by_login_ids(client: IxcClient, login_ids: list[int], *, rp: int = 200) -> Iterator[dict[str, Any]]:
+    """Telemetria de sinal óptico/ONU (transmissor, sinal RX/TX em dBm, serial da ONU, causa da
+    última queda) - tabela `radpop_radio_cliente_fibra`, achada por sondagem manual contra a API
+    real (não documentada publicamente pelo IXC; é a fonte da aba "Cliente Fibra (ONU)" da tela de
+    login). Não varre a tabela inteira (~90 mil linhas) de propósito - só os logins que o chamador
+    já monitora (ver `operations/onu_signal_snapshot.py`), para não sobrecarregar a API do IXC."""
+    if not login_ids:
+        return
+    grid_param = [{"TB": "radpop_radio_cliente_fibra.id_login", "OP": "IN", "P": ",".join(str(lid) for lid in login_ids)}]
+    yield from client.list_all(
+        "radpop_radio_cliente_fibra", grid_param=grid_param, rp=rp, sortname="radpop_radio_cliente_fibra.id_login"
+    )
+
+
+LOGIN_STATUS_SNAPSHOT_FIELDS = (
+    "id",
+    "login",
+    "online",
+    "latitude",
+    "longitude",
+    "ultima_conexao_inicial",
+    "ultima_conexao_final",
+)
+
+
+def fetch_login_status_snapshot(client: IxcClient, *, rp: int = 500) -> Iterator[dict[str, Any]]:
+    """Varre todos os logins ativos (`radusuarios.ativo = 'S'`) trazendo só os campos usados pelo
+    histórico de status/geolocalização (`LOGIN_STATUS_SNAPSHOT_FIELDS`) - filtrado por ativo pra não
+    varrer também os ~30 mil logins de contrato encerrado/cancelado que compõem o restante da tabela
+    (confirmado em produção: 88079 ativos de ~120060 no total)."""
+    grid_param = [{"TB": "radusuarios.ativo", "OP": "=", "P": "S"}]
+    yield from client.list_all("radusuarios", grid_param=grid_param, rp=rp, sortname="radusuarios.id")
+
+
 def fetch_clientes_by_ids(client: IxcClient, cliente_ids: list[int], *, rp: int = 200) -> Iterator[dict[str, Any]]:
     if not cliente_ids:
         return

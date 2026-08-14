@@ -14,6 +14,7 @@ from app.core.security import get_current_user
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.modules.ai_governance.bootstrap import ensure_ai_governance_seed
 from app.models import (
     AppSetting,
     Collaborator,
@@ -38,6 +39,10 @@ def db_session():
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     session = session_factory()
     try:
+        # Mesma inicialização que `main.py:lifespan` roda em produção (ensure_ai_governance_seed) -
+        # sem isso, toda rota que passa pelo gate de `ai_governance` nega tudo por padrão (nenhum
+        # AiEndpoint/AiFieldPermission cadastrado), diferente do sistema real já inicializado.
+        ensure_ai_governance_seed(session)
         yield session
     finally:
         session.close()

@@ -27,7 +27,16 @@ from app.core.config import get_settings
 from app.core.security import permissions_for_user
 from app.db.session import SessionLocal
 from app.modules.ai import queries as ai_queries
+from app.modules.ai.router import (
+    resolve_ai_order_details_output_fields,
+    resolve_ai_search_output_fields,
+    validate_ai_search_fields,
+)
 from app.modules.ai.schemas import AiOrderFilters
+from app.modules.ai_governance.field_registry import ENTITY_OPERATION_ORDERS
+from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_requested_fields
+from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
+from app.modules.operations.schemas import OperationOrderDetailOut
 
 from .provider import SCOPE, OprMcpOAuthProvider, resolve_user_for_access_token
 
@@ -79,6 +88,19 @@ def _validated_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
         return AiOrderFilters.model_validate(filters or {}).model_dump()
     except ValidationError as exc:
         raise ValueError(f"filters inválido: {exc}") from exc
+
+
+def _enforce(callable_, *args, **kwargs):
+    """Chama uma função de `ai_governance.gate` (que levanta `HTTPException`, pensada pra FastAPI)
+    convertendo em `ValueError` - mesma família de erro que o resto deste arquivo já usa pra
+    validação (`_parse_date`/`_validated_filters`), que vira mensagem de erro legível pro Claude em
+    vez de um `HTTPException` com status_code/detail que não faz sentido fora de uma resposta HTTP."""
+    from fastapi import HTTPException
+
+    try:
+        return callable_(*args, **kwargs)
+    except HTTPException as exc:
+        raise ValueError(str(exc.detail)) from exc
 
 
 def _current_user():
@@ -206,14 +228,18 @@ def build_mcp_server() -> FastMCP:
         page_size: int = 50,
         keyword: str | None = None,
         filters: dict[str, Any] | None = None,
+        date_field: str | None = None,
+        fields: list[str] | None = None,
+        response_mode: str = "full",
     ) -> str:
         """Busca paginada de O.S. individuais, com texto qualitativo (descrição de abertura,
         relato técnico) e todos os campos de SLA/tempo já calculados.
 
-        IMPORTANTE sobre date_from/date_to: uma O.S. entra no resultado se teve QUALQUER atividade
-        no período - abriu OU fechou dentro de [date_from, date_to] (união, não intersecção). Uma
-        O.S. aberta antes de date_from mas fechada dentro do período aparece, e vice-versa. Não é
-        "abertas no período"; é "com atividade no período" (mesma semântica da tela de Operação).
+        IMPORTANTE sobre date_from/date_to: por padrão (date_field=None), uma O.S. entra no
+        resultado se teve QUALQUER atividade no período - abriu OU fechou dentro de [date_from,
+        date_to] (união, não intersecção). Passe `date_field` para filtrar por um único marco
+        específico em vez dessa regra (ex.: "closed_at" para só O.S. FECHADAS no período - nunca
+        use opened_at como substituto de closed_at).
 
         Args:
             date_from, date_to: AAAA-MM-DD.
@@ -222,21 +248,94 @@ def build_mcp_server() -> FastMCP:
             keyword: busca livre opcional.
             filters: """ + FILTERS_DOC + """ (inclui o filtro geográfico de raio, útil para "O.S.
                 perto deste ponto/desta O.S.").
+            date_field: opened_at, closed_at, scheduled_at, assumed_at, displacement_started_at,
+                execution_started_at, finished_at ou deadline_at - default (None) mantém a regra
+                "abriu OU fechou no período" acima.
+            fields: subconjunto de campos a retornar (nomes iguais aos do item de resposta, ver
+                Returns) - rejeitado explicitamente se algum nome não existir ou não estiver
+                autorizado para este perfil, nunca omitido em silêncio.
+            response_mode: "full" (default, todos os campos autorizados) ou "summary" (poucos
+                campos, para triagem antes de pedir detalhe de uma O.S. específica).
 
         Returns:
             JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
             "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, sector,
             latitude, longitude, distance_km (só com filtro de raio), service_description,
             technical_report, service_address, datas do ciclo de vida, indicadores de etapa de
-            SLA e a meta de equipe vigente na O.S.
+            SLA e a meta de equipe vigente na O.S. - recortado por `fields`/`response_mode` quando
+            informados.
         """
         user = _current_user()
         with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "ai.search_orders", "mcp")
+            resolved_date_field = _enforce(enforce_date_field, policy, ENTITY_OPERATION_ORDERS, date_field, DATE_FIELD_COLUMNS)
+            validated_fields = _enforce(validate_ai_search_fields, policy, fields)
+            output_fields = resolve_ai_search_output_fields(policy, response_mode, validated_fields)
             return _dump(
                 ai_queries.search_orders(
                     db, user, date_from=_parse_date(date_from), date_to=_parse_date(date_to),
-                    page=page, page_size=min(page_size, 200), keyword=keyword, **_validated_filters(filters),
+                    page=page, page_size=min(page_size, 200), keyword=keyword,
+                    date_field=resolved_date_field, fields=output_fields, **_validated_filters(filters),
                 )
+            )
+
+    @mcp.tool(
+        name="opr_order_details",
+        annotations={"title": "Detalhe de O.S. por order_code/OS_ID", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_order_details(
+        order_codes: list[str] | None = None,
+        source_order_ids: list[str] | None = None,
+        fields: list[str] | None = None,
+        response_mode: str = "full",
+    ) -> str:
+        """Detalhe de uma ou várias O.S. por `order_code` e/ou `source_order_id` (OS_ID) - use
+        quando já se sabe qual(is) O.S. se quer (ex.: após uma triagem com opr_search_orders em
+        response_mode="summary"), em vez de `opr_search_orders` com filtro/keyword. Não exige
+        período: quem já sabe qual O.S. quer não precisa também acertar a data de abertura/fechamento.
+
+        Args:
+            order_codes: lista de order_code (ex.: "IXC-12345"). Até 50 por chamada.
+            source_order_ids: lista de OS_ID bruto do IXC. Até 50 por chamada.
+                Informe pelo menos um de order_codes/source_order_ids.
+            fields: subconjunto de campos a retornar - rejeitado explicitamente se algum nome não
+                existir ou não estiver autorizado para este perfil.
+            response_mode: "full" (default, todos os detalhes autorizados, incluindo o relato
+                técnico/descrição de abertura) ou "summary" (poucos campos).
+
+        Returns:
+            JSON {"items": [...], "not_found_order_codes": [...], "not_found_source_order_ids": [...]}.
+            Um order_code/source_order_id que não aparece em nenhuma das duas listas de resultado
+            foi encontrado normalmente (está em algum item de "items").
+        """
+        if not order_codes and not source_order_ids:
+            raise ValueError("Informe ao menos um order_code ou source_order_id (OS_ID).")
+        user = _current_user()
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "ai.order_details", "mcp")
+            validated_fields = _enforce(enforce_requested_fields, policy, ENTITY_OPERATION_ORDERS, fields, "detail_available")
+            output_fields = resolve_ai_order_details_output_fields(policy, response_mode, validated_fields)
+
+            orders = orders_by_identifiers(
+                db, user, order_codes=order_codes or [], source_order_ids=source_order_ids or []
+            )
+            found_order_codes: set[str] = set()
+            found_source_order_ids: set[str] = set()
+            items = []
+            for order in orders:
+                found_order_codes.add(order.order_code)
+                found_source_order_ids.add(order.source_order_id)
+                detail = OperationOrderDetailOut.model_validate(order).model_dump()
+                if output_fields is not None:
+                    detail = {key: value for key, value in detail.items() if key in output_fields}
+                items.append(detail)
+
+            return _dump(
+                {
+                    "items": items,
+                    "not_found_order_codes": sorted(set(order_codes or []) - found_order_codes),
+                    "not_found_source_order_ids": sorted(set(source_order_ids or []) - found_source_order_ids),
+                }
             )
 
     @mcp.tool(
@@ -396,14 +495,20 @@ def build_mcp_server() -> FastMCP:
         annotations={"title": "Listar campos disponíveis da O.S.", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     )
     def opr_list_fields() -> str:
-        """Lista todos os campos da tabela de Ordens de Serviço e mostra quais já estão expostos
-        às ferramentas de IA e quais ainda não estão.
+        """Catálogo dinâmico de campos e capacidades - reflete a política de exposição vigente
+        (configuração administrativa + restrição por perfil) para quem está chamando, não um
+        estado estático do código. Use antes de montar `fields`/`filters`/`group_by` em outra tool
+        para confirmar o que está de fato autorizado agora.
 
         Returns:
-            JSON {"all_fields": [...], "exposed_to_ai": [...], "not_exposed": [...]}.
+            JSON: lista de {"entity", "field", "type", "description", "filterable",
+            "text_filterable", "groupable", "returnable", "selectable", "detail_available",
+            "sensitive", "enabled_for_api", "enabled_for_mcp", "enabled_for_ai"}.
         """
-        _current_user()
-        return _dump(ai_queries.available_fields())
+        user = _current_user()
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "ai.list_fields", "mcp")
+            return _dump(policy.field_catalog())
 
     @mcp.tool(
         name="opr_management_cases",

@@ -725,6 +725,30 @@ export type OperationConfigurationImportResult = {
   saved_filters: number;
 };
 
+export type OperationOfflineLogin = {
+  login_id: number;
+  login: string;
+  online: string;
+  latitude: number;
+  longitude: number;
+  last_disconnected_at: string | null;
+};
+
+export type OperationOfflineLoginCluster = {
+  center_latitude: number;
+  center_longitude: number;
+  radius_meters: number;
+  size: number;
+  logins: OperationOfflineLogin[];
+};
+
+export type OperationOfflineLoginClusters = {
+  radius_meters: number;
+  min_cluster_size: number;
+  window_minutes: number;
+  clusters: OperationOfflineLoginCluster[];
+};
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 const TOKEN_KEY = "gamification_auth_token";
 
@@ -1085,4 +1109,18 @@ export const operationsApi = {
         body: JSON.stringify({ subjects, os_type: osType }),
       },
     ),
+  networkOfflineLoginClusters: (params: {
+    radiusMeters: number;
+    minClusterSize: number;
+    windowMinutes: number;
+  }) => {
+    const search = new URLSearchParams({
+      radius_meters: String(params.radiusMeters),
+      min_cluster_size: String(params.minClusterSize),
+      window_minutes: String(params.windowMinutes),
+    });
+    return request<OperationOfflineLoginClusters>(
+      `/operations/network/offline-login-clusters?${search.toString()}`,
+    );
+  },
 };

@@ -12,10 +12,14 @@ from app.db.session import SessionLocal, engine
 from app.core.security import ensure_access_profiles, ensure_initial_admin
 from app.modules.admin.router import router as admin_router
 from app.modules.ai.router import public_router as ai_public_router, router as ai_router
+from app.modules.ai_governance.bootstrap import ensure_ai_governance_seed
+from app.modules.ai_governance.router import router as ai_governance_router
 from app.modules.management.router import router as management_router
 from app.modules.mcp_connector.router import router as mcp_connector_router
 from app.modules.mcp_connector.server import build_mcp_server
 from app.modules.operations.backlog_snapshot import run_backlog_snapshot_loop
+from app.modules.operations.login_status_snapshot import run_login_status_snapshot_loop
+from app.modules.operations.onu_signal_snapshot import run_onu_signal_snapshot_loop
 from app.modules.operations.router import router as operations_router
 from app.modules.scheduling.router import router as scheduling_router
 from app.modules.workspace.router import router as workspace_router
@@ -39,6 +43,9 @@ async def lifespan(app: FastAPI):
         with SessionLocal() as db:
             ensure_initial_admin(db)
             ensure_access_profiles(db)
+    if inspector.has_table("ai_endpoints") and inspector.has_table("ai_field_permissions"):
+        with SessionLocal() as db:
+            ensure_ai_governance_seed(db)
 
     # O loop fica sempre rodando quando o IXC está configurado - se ligar/desligar e o intervalo passam a
     # ser controlados pelo banco (AppSetting), lidos a cada ciclo, para dar pra mudar pela própria tela de
@@ -53,6 +60,19 @@ async def lifespan(app: FastAPI):
     # Sem dependência de configuração externa (ao contrário do IXC) - sempre roda, é só uma
     # leitura do próprio banco de O.S. já sincronizado.
     backlog_snapshot_task = asyncio.create_task(run_backlog_snapshot_loop())
+
+    # Histórico de status de conexão dos logins (para detecção de queda de fibra por proximidade
+    # geográfica) - só roda quando o IXC está configurado, mesma condição do `ixc_sync_task`.
+    login_status_snapshot_task = None
+    if settings_.ixc_api_base_url and settings_.ixc_api_token:
+        login_status_snapshot_task = asyncio.create_task(run_login_status_snapshot_loop())
+
+    # Telemetria óptica/ONU (sinal RX/TX, causa da última queda, transmissor) dos logins já
+    # monitorados - mesma condição de configuração do IXC, intervalo mais espaçado (ver
+    # docstring de run_onu_signal_snapshot_loop).
+    onu_signal_snapshot_task = None
+    if settings_.ixc_api_base_url and settings_.ixc_api_token:
+        onu_signal_snapshot_task = asyncio.create_task(run_onu_signal_snapshot_loop())
 
     # `streamable_http_app()` tem seu próprio lifespan (inicia o gerenciador de sessão MCP), mas
     # Starlette não propaga o protocolo ASGI "lifespan" automaticamente para apps montados via
@@ -72,6 +92,16 @@ async def lifespan(app: FastAPI):
     backlog_snapshot_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await backlog_snapshot_task
+
+    if login_status_snapshot_task:
+        login_status_snapshot_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await login_status_snapshot_task
+
+    if onu_signal_snapshot_task:
+        onu_signal_snapshot_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await onu_signal_snapshot_task
 
 
 app = FastAPI(title=settings_obj.app_name, version="0.1.0", lifespan=lifespan)
@@ -103,6 +133,7 @@ app.include_router(notifications.router, prefix=settings_obj.api_prefix)
 app.include_router(portal.router, prefix=settings_obj.api_prefix)
 app.include_router(workspace_router, prefix=settings_obj.api_prefix)
 app.include_router(admin_router, prefix=settings_obj.api_prefix)
+app.include_router(ai_governance_router, prefix=settings_obj.api_prefix)
 app.include_router(management_router, prefix=settings_obj.api_prefix)
 app.include_router(operations_router, prefix=settings_obj.api_prefix)
 app.include_router(scheduling_router, prefix=settings_obj.api_prefix)

@@ -327,3 +327,137 @@ class OperationBacklogSnapshot(Base):
     backlog_count: Mapped[int] = mapped_column(Integer, nullable=False)
     backlog_atrasado_count: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class OperationLoginStatusSnapshot(Base):
+    """Fotografia periódica (várias vezes por dia, não 1x/dia como o backlog) do status de conexão
+    de cada login do IXC (`radusuarios.online`) - append-only, nunca upsertada, pra permitir montar
+    a série "esse login ficou fora de 'online' nos últimos N dias" e cruzar com lat/long pra achar
+    clusters geográficos de queda (ex.: rompimento de fibra num trecho). Sem esta tabela o IXC só
+    devolve o status atual (achado confirmado consultando `radusuarios` direto: não existe endpoint
+    de histórico de status por login, só accounting RADIUS em `radacct`, que não cobre logins fibra
+    monitorados por sinal óptico - a maioria dos casos com `online` diferente de 'S').
+
+    `online` guarda o valor bruto do IXC ('S', 'N', 'SS' = sem sinal, ou vazio), sem normalizar pra
+    boolean - achado real: 'SS' é quase 40% dos logins fibra numa amostra de produção e é
+    justamente o estado que se quer detectar, então perder essa distinção reduzindo pra
+    True/False descartaria o sinal mais relevante da feature.
+
+    `latitude`/`longitude` são gravados a cada captura (não só uma vez) porque o cadastro do login
+    pode ganhar coordenada depois de já existir - guardar por captura evita ter que voltar no IXC
+    pra saber "quando essa coordenada passou a existir"."""
+
+    __tablename__ = "operations_login_status_snapshots"
+    __table_args__ = (
+        Index("ix_operations_login_status_snapshots_login_captured", "login_id", "captured_at"),
+        Index(
+            "ix_operations_login_status_snapshots_online_geo",
+            "online",
+            "latitude",
+            "longitude",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    login_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    login: Mapped[str] = mapped_column(String(160), nullable=False)
+    online: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_disconnected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OperationLoginCurrentStatus(Base):
+    """Estado ATUAL de cada login (1 linha por login, sempre upsertada) - existe ao lado de
+    `OperationLoginStatusSnapshot` (histórico append-only) porque a detecção de cluster geográfico
+    precisa saber "quem mudou pra desconectado nos últimos N minutos" toda vez que alguém abre a
+    tela, e calcular isso escaneando o histórico inteiro não escala (achado real: com ~11M linhas
+    de histórico acumuladas em poucas horas de teste, essa consulta levava 11s sozinha, porque
+    `DISTINCT ON` com filtro de data não consegue usar um índice pra pular direto pro registro mais
+    recente de cada login). Aqui a resposta já vem pronta: `status_changed_at` é atualizado só
+    quando `online` muda de valor (ver `upsert_login_current_status`), então a consulta de
+    clusterização vira um filtro simples e indexado em vez de uma varredura."""
+
+    __tablename__ = "operations_login_current_status"
+    __table_args__ = (
+        Index("ix_operations_login_current_status_online_changed", "online", "status_changed_at"),
+    )
+
+    login_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    login: Mapped[str] = mapped_column(String(160), nullable=False)
+    online: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_disconnected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Só muda quando `online` muda de valor em relação à captura anterior - NÃO é "última vez que
+    # vimos esse login" (isso é `captured_at`). É o campo que a detecção de transição usa.
+    status_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class OperationOnuSignalCurrent(Base):
+    """Estado ATUAL de telemetria óptica/ONU por login (1 linha por login, sempre upsertada) -
+    tabela `radpop_radio_cliente_fibra` do IXC (achada por sondagem manual contra a API real em
+    2026-08-14, não documentada publicamente; é a fonte da aba "Cliente Fibra (ONU)" da tela de
+    login) - sinal RX/TX em dBm, serial/MAC da ONU, transmissor (OLT) e causa da última queda
+    (ex.: "Link Loss"), telemetria que o simples `online`/'SS' de `OperationLoginCurrentStatus`
+    não tem.
+
+    Só cobre os logins já presentes em `OperationLoginCurrentStatus` (não a base inteira de ~90 mil
+    ONUs do IXC) - decisão deliberada para não sobrecarregar a API do IXC com uma varredura
+    periódica completa (ver `operations/onu_signal_snapshot.py`)."""
+
+    __tablename__ = "operations_onu_signal_current"
+    __table_args__ = (
+        Index("ix_operations_onu_signal_current_drop_cause", "last_drop_cause"),
+        Index("ix_operations_onu_signal_current_transmitter", "transmitter_id"),
+    )
+
+    login_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    contract_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    signal_rx_dbm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_tx_dbm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_drop_cause: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    onu_serial: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    onu_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    transmitter_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pon_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    pon_no: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    slot_no: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class OperationBranchCapacity(Base):
+    """Capacidade mensal de produção configurada POR FILIAL (`regional` - já é a identidade
+    granular por `id_filial` do IXC, ver `app/services/regional.py`), com 3 faixas positivas:
+    Boa, Ótima e Excelente. Indicador GERENCIAL agregado da filial inteira - paralelo e
+    independente das metas por Modelo de Equipe (`OperationTeamModel`), que continuam pintando
+    cada célula do calendário por colaborador/dia como sempre pintaram. Não existe faixa "abaixo"
+    aqui de propósito: abaixo de `good_threshold` a filial simplesmente não bateu nenhuma faixa
+    (ver `services.branch_capacity_summary`), não precisa de cor própria configurável.
+
+    Uma linha por filial (`regional` é único) - sem linha configurada, a filial não aparece no
+    indicador de capacidade (não tem como calcular percentual sem faixas definidas)."""
+
+    __tablename__ = "operations_branch_capacity"
+    __table_args__ = (UniqueConstraint("regional", name="uq_operations_branch_capacity_regional"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    regional: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    good_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=2500)
+    great_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=3000)
+    excellent_threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=3500)
+    good_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#dcfce7")
+    great_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#dbeafe")
+    excellent_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#ede9fe")
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)

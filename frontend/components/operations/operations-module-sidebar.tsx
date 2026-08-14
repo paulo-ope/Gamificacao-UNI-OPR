@@ -1,12 +1,12 @@
 ﻿"use client";
 
-import { BarChart3, CalendarDays, ClipboardList, Gauge, Inbox, ListChecks, Menu, Settings2, ShieldCheck } from "lucide-react";
+import { BarChart3, CalendarDays, ClipboardList, Gauge, Inbox, ListChecks, Menu, Radio, Settings2, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
-export type OperationTab = "overview" | "openings" | "sla" | "garantias" | "calendar" | "progress" | "details" | "teams";
+export type OperationTab = "overview" | "openings" | "sla" | "garantias" | "calendar" | "progress" | "details" | "network" | "teams";
 
 const ITEMS: Array<{ value: OperationTab; label: string; description: string; icon: typeof Gauge }> = [
   { value: "overview", label: "Visão Geral", description: "Indicadores do período", icon: Gauge },
@@ -16,6 +16,7 @@ const ITEMS: Array<{ value: OperationTab; label: string; description: string; ic
   { value: "garantias", label: "Garantias", description: "Retornos em garantia de ativação", icon: ShieldCheck },
   { value: "calendar", label: "Calendário", description: "Produção mensal", icon: CalendarDays },
   { value: "details", label: "Detalhamento", description: "Drill-through e busca", icon: ClipboardList },
+  { value: "network", label: "Rede", description: "Quedas de conexão por proximidade", icon: Radio },
   { value: "teams", label: "Config", description: "Modelos, jornadas, metas e assuntos", icon: Settings2 }
 ];
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, History, Home, Loader2, LogOut, PlugZap, Plus, Save, Settings2, ShieldCheck, SlidersHorizontal, Trash2, UserCog, Users } from "lucide-react";
+import { Boxes, History, Home, KeyRound, Loader2, LogOut, PlugZap, Plus, Save, Settings2, ShieldCheck, SlidersHorizontal, Trash2, UserCog, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
@@ -18,6 +18,7 @@ import { ModuleNavigationSidebar, type ModuleNavigationItem } from "@/components
 import { ModuleUserVisibilityEditor } from "@/components/workspace/module-user-visibility-editor";
 import { IxcSyncSettingsCard } from "@/components/workspace/ixc-sync-settings-card";
 import { AuditTrailPanel } from "@/components/shared/audit-trail-panel";
+import { AiGovernancePanel } from "@/components/admin/ai-governance-panel";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
 import { workspaceModules } from "@/lib/module-registry";
@@ -70,7 +71,7 @@ const STRUCTURE_STATUS_LABELS: Record<string, string> = {
   inactive: "Inativo",
 };
 
-type AdminTab = "users" | "profiles" | "structure" | "modules" | "parameters" | "integrations" | "audit";
+type AdminTab = "users" | "profiles" | "structure" | "modules" | "parameters" | "integrations" | "ai_governance" | "audit";
 
 const ADMIN_NAV_ITEMS: Array<ModuleNavigationItem<AdminTab>> = [
   { value: "users", label: "Usuários", description: "Acessos e escopo", icon: Users },
@@ -79,6 +80,7 @@ const ADMIN_NAV_ITEMS: Array<ModuleNavigationItem<AdminTab>> = [
   { value: "modules", label: "Módulos", description: "Visibilidade por perfil", icon: Boxes },
   { value: "parameters", label: "Parametrizações", description: "Regras por módulo", icon: SlidersHorizontal },
   { value: "integrations", label: "Integrações", description: "IXC, APIs e IA", icon: PlugZap },
+  { value: "ai_governance", label: "Gestão API/MCP", description: "O que a IA pode acessar", icon: KeyRound },
   { value: "audit", label: "Auditoria", description: "Ações sensíveis", icon: History },
 ];
 
@@ -174,6 +176,7 @@ export default function AdminPage() {
   const canDeleteUsers = Boolean(user?.permissions.includes("admin:users:delete"));
   const canWriteProfiles = Boolean(user?.permissions.includes("admin:roles:write"));
   const canReadAudit = Boolean(user?.permissions.includes("admin:audit:read"));
+  const canReadAiGovernance = Boolean(user?.permissions.includes("admin:ai_governance:read"));
   const groupedPermissions = useMemo(() => permissionGroups(permissions), [permissions]);
   const activeUsers = users.filter((item) => item.active).length;
   const filteredPeople = (peopleStructure?.people || []).filter((person) => {
@@ -889,18 +892,32 @@ export default function AdminPage() {
                 <h3 className="text-lg font-semibold text-slate-950">Outras integrações</h3>
               </div>
               <div className="grid gap-3 p-5 md:grid-cols-2">
-                {[
-                  ["API interna", "Fonte própria para dados não sensíveis"],
-                  ["IA", "Análise de padrões com filtros governados"],
-                ].map(([name, scope]) => (
-                  <div key={name} className="rounded-2xl border border-slate-200 p-4">
-                    <h4 className="font-semibold text-slate-950">{name}</h4>
-                    <p className="mt-2 text-sm text-slate-600">{scope}</p>
-                    <Badge className="mt-3 border border-slate-200 bg-white text-slate-600">Ainda não implementado</Badge>
-                  </div>
-                ))}
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <h4 className="font-semibold text-slate-950">API interna</h4>
+                  <p className="mt-2 text-sm text-slate-600">Fonte própria para dados não sensíveis</p>
+                  <Badge className="mt-3 border border-slate-200 bg-white text-slate-600">Ainda não implementado</Badge>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("ai_governance")}
+                  className="rounded-2xl border border-slate-200 p-4 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <h4 className="font-semibold text-slate-950">IA (API/MCP)</h4>
+                  <p className="mt-2 text-sm text-slate-600">Endpoints, campos, perfis, tokens e logs governados pela aba Gestão API/MCP</p>
+                  <Badge className="mt-3 border border-emerald-200 bg-emerald-50 text-emerald-700">Abrir Gestão API/MCP</Badge>
+                </button>
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="ai_governance" className="mt-4 grid gap-4">
+            {canReadAiGovernance ? (
+              <AiGovernancePanel user={user} profiles={profiles} />
+            ) : (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                Seu perfil não possui a permissão admin:ai_governance:read para ver esta tela.
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="audit" className="mt-4 grid gap-4">

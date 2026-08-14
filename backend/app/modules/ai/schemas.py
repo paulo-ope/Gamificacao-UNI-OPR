@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.ai.queries import AGGREGATION_DIMENSIONS
 from app.modules.operations.schemas import (
     OperationBreakdownItem,
     OperationFilters,
+    OperationOfflineLoginClustersOut,
     OperationWarrantyOriginTypeItem,
     OperationWarrantyRegionalRankingItem,
 )
@@ -137,6 +138,16 @@ class AiSearchRequest(BaseModel):
     page_size: int = Field(default=50, ge=10, le=200)
     keyword: str | None = Field(default=None, max_length=160)
     filters: AiOrderFilters = Field(default_factory=AiOrderFilters)
+    # Item 7 do pedido de governança IA/MCP: base explícita de data, nunca opened_at por padrão
+    # quando o chamador quer closed_at (ou outro marco do ciclo de vida). `None` mantém a regra de
+    # sempre (abriu OU fechou no período) - ver operations.queries.DATE_FIELD_COLUMNS.
+    date_field: str | None = Field(default=None)
+    # Item 4: seleção de campos - rejeitado explicitamente (não omitido em silêncio) se algum nome
+    # não existir ou não estiver autorizado para o perfil do chamador.
+    fields: list[str] | None = Field(default=None)
+    # Item 6: "summary" evita payload excessivo pra triagem; "full" (default) preserva o
+    # comportamento de sempre.
+    response_mode: Literal["summary", "full"] = Field(default="full")
 
     model_config = ConfigDict(extra="forbid")
 
@@ -210,6 +221,55 @@ class AiFieldsResponse(BaseModel):
     all_fields: list[str]
     exposed_to_ai: list[str]
     not_exposed: list[str]
+
+
+class AiFieldCatalogItem(BaseModel):
+    """Uma linha do catálogo dinâmico de campos (item 10 do pedido) - reflete a política de
+    exposição vigente para o perfil de quem chamou, não um estado estático do código."""
+
+    entity: str
+    field: str
+    type: str
+    description: str | None = None
+    filterable: bool
+    text_filterable: bool
+    groupable: bool
+    returnable: bool
+    selectable: bool
+    detail_available: bool
+    sensitive: bool
+    enabled_for_api: bool
+    enabled_for_mcp: bool
+    enabled_for_ai: bool
+
+
+class AiOrderDetailsRequest(BaseModel):
+    """Detalhe de uma ou várias O.S. por `order_code` e/ou `source_order_id` (OS_ID) - item 5 do
+    pedido. Pelo menos uma lista precisa vir não vazia."""
+
+    order_codes: list[str] = Field(default_factory=list, max_length=50)
+    source_order_ids: list[str] = Field(default_factory=list, max_length=50)
+    fields: list[str] | None = Field(default=None)
+    response_mode: Literal["summary", "full"] = Field(default="full")
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _require_at_least_one_identifier(self) -> "AiOrderDetailsRequest":
+        # `model_validator(mode="after")` (não `field_validator`) de propósito - um
+        # `field_validator` não roda sobre valor DEFAULT no Pydantic v2 (só quando o campo é
+        # passado explicitamente), então um corpo `{}` (nenhum dos dois campos enviado) passaria
+        # batido e `orders_by_identifiers` devolveria uma lista vazia em silêncio, em vez do erro
+        # claro que o item 5 do pedido exige.
+        if not self.order_codes and not self.source_order_ids:
+            raise ValueError("Informe ao menos um order_code ou source_order_id (OS_ID).")
+        return self
+
+
+class AiOrderDetailsResponse(BaseModel):
+    items: list[dict]
+    not_found_order_codes: list[str]
+    not_found_source_order_ids: list[str]
 
 
 class AiFilterOptionsRequest(BaseModel):
@@ -345,3 +405,26 @@ class AiTeamTargetPerformanceItem(BaseModel):
     target: int | None
     delta: int | None
     percentage_of_target: float | None
+
+
+class AiOfflineLoginClustersRequest(BaseModel):
+    """Item 19 do pedido ("consulta de Infra" no monitor de incidentes) - mesmos parâmetros de
+    `GET /operations/network/offline-login-clusters`, agora acessível para IA/MCP."""
+
+    radius_meters: float = Field(default=300.0, ge=10.0, le=5000.0)
+    min_cluster_size: int = Field(default=3, ge=2, le=100)
+    window_minutes: int = Field(default=30, ge=5, le=1440, description="Janela de detecção - 30/60/90 minutos são os valores mais comuns.")
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiOnuSignalRequest(BaseModel):
+    """Telemetria óptica/ONU (sinal RX/TX em dBm, causa da última queda, transmissor) - só dos
+    logins já monitorados pelo sistema, não a base inteira de ONUs do IXC."""
+
+    login_ids: list[int] = Field(default_factory=list, max_length=200)
+    last_drop_causes: list[str] = Field(default_factory=list)
+    transmitter_ids: list[str] = Field(default_factory=list)
+    limit: int = Field(default=200, ge=1, le=500)
+
+    model_config = ConfigDict(extra="forbid")

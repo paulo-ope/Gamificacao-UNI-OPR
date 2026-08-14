@@ -959,3 +959,122 @@ class OperationQuery(BaseModel):
     closed_time_to: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     responsible_mode: Literal["all", "completed"] = "all"
     search: str | None = Field(default=None, max_length=160)
+
+
+class OperationOfflineLoginOut(BaseModel):
+    login_id: int
+    login: str
+    online: str
+    latitude: float
+    longitude: float
+    last_disconnected_at: datetime | None
+
+
+class OperationOfflineLoginClusterOut(BaseModel):
+    center_latitude: float
+    center_longitude: float
+    radius_meters: float
+    size: int
+    logins: list[OperationOfflineLoginOut]
+
+
+class OperationOfflineLoginClustersOut(BaseModel):
+    radius_meters: float
+    min_cluster_size: int
+    window_minutes: int
+    clusters: list[OperationOfflineLoginClusterOut]
+
+
+class OperationLoginStatusOut(BaseModel):
+    login_id: int
+    login: str
+    online: str
+    latitude: float | None
+    longitude: float | None
+    last_connected_at: datetime | None
+    last_disconnected_at: datetime | None
+    status_changed_at: datetime
+    captured_at: datetime
+
+
+class OperationOnuSignalOut(BaseModel):
+    login_id: int
+    login: str
+    contract_id: str | None
+    signal_rx_dbm: float | None
+    signal_tx_dbm: float | None
+    last_drop_cause: str | None
+    onu_serial: str | None
+    onu_model: str | None
+    transmitter_id: str | None
+    temperature_c: float | None
+    voltage: float | None
+    signal_measured_at: datetime | None
+    pon_id: str | None
+    pon_no: str | None
+    slot_no: str | None
+    latitude: float | None
+    longitude: float | None
+    captured_at: datetime
+
+
+class OperationBranchCapacityOut(BaseModel):
+    id: int
+    regional: str
+    good_threshold: int
+    great_threshold: int
+    excellent_threshold: int
+    good_color: str
+    great_color: str
+    excellent_color: str
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OperationBranchCapacityUpdate(BaseModel):
+    good_threshold: int = Field(ge=0)
+    great_threshold: int = Field(ge=0)
+    excellent_threshold: int = Field(ge=0)
+    good_color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    great_color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    excellent_color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+
+    @field_validator("great_threshold")
+    @classmethod
+    def _great_above_good(cls, value: int, info) -> int:
+        good = info.data.get("good_threshold")
+        if good is not None and value <= good:
+            raise ValueError("A faixa Ótima precisa ser maior que a faixa Boa.")
+        return value
+
+    @field_validator("excellent_threshold")
+    @classmethod
+    def _excellent_above_great(cls, value: int, info) -> int:
+        great = info.data.get("great_threshold")
+        if great is not None and value <= great:
+            raise ValueError("A faixa Excelente precisa ser maior que a faixa Ótima.")
+        return value
+
+
+class OperationBranchCapacitySummaryItem(BaseModel):
+    regional: str
+    realized: int
+    good_threshold: int
+    great_threshold: int
+    excellent_threshold: int
+    good_color: str
+    great_color: str
+    excellent_color: str
+    tier: Literal["below", "good", "great", "excellent"]
+    tier_label: str
+    percent_of_excellent: float
+    difference_to_next_tier: int | None
+    collaborators_count: int
+    average_per_collaborator: float
+
+
+class OperationBranchCapacitySummary(BaseModel):
+    date_from: date
+    date_to: date
+    items: list[OperationBranchCapacitySummaryItem]

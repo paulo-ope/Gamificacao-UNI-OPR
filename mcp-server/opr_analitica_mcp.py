@@ -247,6 +247,22 @@ class SearchOrdersInput(DateRangeFilters):
     keyword: str | None = Field(
         default=None, max_length=160, description="Busca livre (mesmo campo 'search' do resto do sistema)."
     )
+    date_field: str | None = Field(
+        default=None,
+        description=(
+            "opened_at, closed_at, scheduled_at, assumed_at, displacement_started_at, "
+            "execution_started_at, finished_at ou deadline_at - default (None) mantém a regra "
+            "'abriu OU fechou no período'. Nunca use opened_at como substituto de closed_at."
+        ),
+    )
+    fields: list[str] | None = Field(
+        default=None,
+        description="Subconjunto de campos a retornar (nomes iguais aos do item de resposta) - rejeitado explicitamente se algum não estiver autorizado.",
+    )
+    response_mode: str = Field(
+        default="full",
+        description="'full' (default, todos os campos autorizados) ou 'summary' (poucos campos, para triagem).",
+    )
 
 
 @mcp.tool(
@@ -297,8 +313,59 @@ def opr_search_orders(params: SearchOrdersInput) -> str:
         "page_size": params.page_size,
         "keyword": params.keyword,
         "filters": params.filters,
+        "date_field": params.date_field,
+        "fields": params.fields,
+        "response_mode": params.response_mode,
     }
     return _call("search-orders", payload)
+
+
+class OrderDetailsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_codes: list[str] = Field(default_factory=list, description="Lista de order_code (ex.: 'IXC-12345'). Até 50 por chamada.")
+    source_order_ids: list[str] = Field(default_factory=list, description="Lista de OS_ID bruto do IXC. Até 50 por chamada.")
+    fields: list[str] | None = Field(
+        default=None,
+        description="Subconjunto de campos a retornar - rejeitado explicitamente se algum não estiver autorizado.",
+    )
+    response_mode: str = Field(
+        default="full",
+        description="'full' (default, todos os detalhes autorizados) ou 'summary' (poucos campos).",
+    )
+
+
+@mcp.tool(
+    name="opr_order_details",
+    annotations={
+        "title": "Detalhe de O.S. por order_code/OS_ID",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_order_details(params: OrderDetailsInput) -> str:
+    """Detalhe de uma ou várias O.S. por `order_code` e/ou `source_order_id` (OS_ID) - use quando
+    já se sabe qual(is) O.S. se quer (ex.: após uma triagem com opr_search_orders em
+    response_mode="summary"), em vez de opr_search_orders com filtro/keyword. Não exige período.
+
+    Args:
+        params (OrderDetailsInput): order_codes e/ou source_order_ids (pelo menos um não vazio),
+            fields (subconjunto de campos), response_mode ("full" ou "summary").
+
+    Returns:
+        str: JSON {"items": [...], "not_found_order_codes": [...], "not_found_source_order_ids": [...]}.
+    """
+    if not params.order_codes and not params.source_order_ids:
+        return "Erro: informe ao menos um order_code ou source_order_id (OS_ID) em params."
+    payload = {
+        "order_codes": params.order_codes,
+        "source_order_ids": params.source_order_ids,
+        "fields": params.fields,
+        "response_mode": params.response_mode,
+    }
+    return _call("orders/details", payload)
 
 
 class BacklogAgingInput(BaseModel):

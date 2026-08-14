@@ -53,7 +53,10 @@ export type Permission =
   | "admin:permissions:read"
   | "admin:modules:read"
   | "admin:modules:write"
-  | "admin:audit:read";
+  | "admin:audit:read"
+  | "admin:ai_governance:read"
+  | "admin:ai_governance:write"
+  | "admin:ai_tokens:manage";
 
 export type AuthUser = {
   id: number;

@@ -145,6 +145,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "admin:modules:read",
         "admin:modules:write",
         "admin:audit:read",
+        "admin:ai_governance:read",
+        "admin:ai_governance:write",
+        "admin:ai_tokens:manage",
     },
     # Identidade de máquina (não uma pessoa logando) - usada pela chave de API que expõe dados
     # analíticos de O.S. para consumo por IA (conector MCP/Actions). Só leitura, sem nenhuma
@@ -211,6 +214,9 @@ PERMISSION_LABELS: dict[str, str] = {
     "admin:modules:read": "Administração: listar módulos",
     "admin:modules:write": "Administração: alterar visibilidade de módulos",
     "admin:audit:read": "Administração: ver auditoria",
+    "admin:ai_governance:read": "Administração: ver Gestão API/MCP",
+    "admin:ai_governance:write": "Administração: configurar Gestão API/MCP",
+    "admin:ai_tokens:manage": "Administração: emitir/revogar tokens de API",
     "ai:query": "IA: consultar dados analíticos de O.S.",
 }
 

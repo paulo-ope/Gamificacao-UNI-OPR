@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import User
 from app.services.regional import effective_managed_regionals
 
-from .models import OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
+from .models import OperationBranchCapacity, OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE, OPERATIONS_TIMEZONE_NAME, local_period_utc_bounds, operations_period_bounds
 from .scope import ALL_SECTOR_NAMES
 
@@ -66,6 +66,35 @@ FILTER_COLUMNS = {
     "projects": OperationOrder.project,
     "pops": OperationOrder.pop,
 }
+
+# Campos de data que podem servir de base para `date_field` (item 7 do pedido de governança
+# IA/MCP) - `order_page` usa isto para trocar a regra fixa "abriu OU fechou no período" por um
+# único marco explícito quando o chamador pede. Nunca usar opened_at como substituto de closed_at
+# (ou vice-versa) por trás das costas do chamador - por isso o default (`date_field=None`) mantém a
+# regra OR de sempre, e só passa a valer um único campo quando pedido explicitamente.
+DATE_FIELD_COLUMNS = {
+    "opened_at": OperationOrder.opened_at,
+    "closed_at": OperationOrder.closed_at,
+    "deadline_at": OperationOrder.deadline_at,
+    "scheduled_at": OperationOrder.scheduled_at,
+    "assumed_at": OperationOrder.assumed_at,
+    "displacement_started_at": OperationOrder.displacement_started_at,
+    "execution_started_at": OperationOrder.execution_started_at,
+    "finished_at": OperationOrder.finished_at,
+    "source_updated_at": OperationOrder.source_updated_at,
+}
+
+
+def resolve_date_field(date_field: str | None):
+    """`None` preserva o comportamento de sempre (chamador decide a regra); um nome inválido é
+    erro do chamador, não deve ser engolido silenciosamente."""
+    if date_field is None:
+        return None
+    column = DATE_FIELD_COLUMNS.get(date_field)
+    if column is None:
+        raise ValueError(f"date_field inválido: {date_field}")
+    return column
+
 
 CONTROL_TOWER_COLUMNS = {
     "subject": OperationOrder.os_subject,
@@ -124,6 +153,54 @@ def _raw_payload_text_search_condition(pattern: str):
     )
 
 
+# Raio da Terra em km (mesmo valor de `ai.queries.EARTH_RADIUS_KM`) - duplicado aqui de propósito:
+# `operations.queries` é importado POR `ai.queries` (não o contrário), então reusar a expressão de
+# lá criaria import circular. É só uma fórmula de trigonometria, não vale a pena um módulo neutro
+# só para isto.
+_EARTH_RADIUS_KM = 6371.0
+
+
+def geo_radius_condition(near_latitude: float | None, near_longitude: float | None, radius_km: float | None):
+    """Filtro geográfico por raio (item 20 do pedido de governança IA/MCP) - só ativa quando os
+    três parâmetros vêm juntos (mesmo critério "tudo ou nada" do filtro geográfico do módulo `ai`).
+    Fórmula de Haversine em SQL puro (sin/cos/acos/radians), portável entre Postgres e SQLite."""
+    if near_latitude is None or near_longitude is None or radius_km is None:
+        return None
+    ref_lat_rad = func.radians(near_latitude)
+    ref_lng_rad = func.radians(near_longitude)
+    lat_rad = func.radians(OperationOrder.latitude)
+    lng_rad = func.radians(OperationOrder.longitude)
+    cos_angle = (
+        func.sin(lat_rad) * func.sin(ref_lat_rad)
+        + func.cos(lat_rad) * func.cos(ref_lat_rad) * func.cos(lng_rad - ref_lng_rad)
+    )
+    # CASE em vez de LEAST/GREATEST (só existem no Postgres) - imprecisão de ponto flutuante pode
+    # deixar o cosseno levemente fora de [-1, 1] quando o ponto de referência é (quase) o mesmo da
+    # O.S., o que travaria `acos()` com erro de domínio no caso de uso mais comum.
+    clamped_cos_angle = case((cos_angle > 1.0, 1.0), (cos_angle < -1.0, -1.0), else_=cos_angle)
+    distance_km = _EARTH_RADIUS_KM * func.acos(clamped_cos_angle)
+    return and_(
+        OperationOrder.latitude.is_not(None),
+        OperationOrder.longitude.is_not(None),
+        distance_km <= radius_km,
+    )
+
+
+def geo_distance_km_expr(near_latitude: float, near_longitude: float):
+    """Mesma fórmula de `geo_radius_condition`, como expressão de distância (não condição) - usada
+    para ordenar "mais perto primeiro" quando uma busca geográfica está ativa."""
+    ref_lat_rad = func.radians(near_latitude)
+    ref_lng_rad = func.radians(near_longitude)
+    lat_rad = func.radians(OperationOrder.latitude)
+    lng_rad = func.radians(OperationOrder.longitude)
+    cos_angle = (
+        func.sin(lat_rad) * func.sin(ref_lat_rad)
+        + func.cos(lat_rad) * func.cos(ref_lat_rad) * func.cos(lng_rad - ref_lng_rad)
+    )
+    clamped_cos_angle = case((cos_angle > 1.0, 1.0), (cos_angle < -1.0, -1.0), else_=cos_angle)
+    return _EARTH_RADIUS_KM * func.acos(clamped_cos_angle)
+
+
 def _query_conditions(
     db: Session,
     date_from: date,
@@ -132,14 +209,19 @@ def _query_conditions(
     filters: dict,
     *,
     exclude_filter: str | None = None,
+    date_field: str | None = None,
 ) -> tuple[list, datetime, datetime]:
     start, end = local_period_utc_bounds(date_from, date_to)
-    conditions = [
-        or_(
-            OperationOrder.opened_at.between(start, end),
-            OperationOrder.closed_at.between(start, end),
-        )
-    ]
+    column = resolve_date_field(date_field)
+    if column is not None:
+        conditions = [column.between(start, end)]
+    else:
+        conditions = [
+            or_(
+                OperationOrder.opened_at.between(start, end),
+                OperationOrder.closed_at.between(start, end),
+            )
+        ]
     conditions.extend(_dimension_conditions(db, user, filters, exclude_filter=exclude_filter))
     return conditions, start, end
 
@@ -575,6 +657,100 @@ def overview(db: Session, date_from: date, date_to: date, user: User, **filters)
         "average_wait_to_displacement_minutes": round(sum(wait_minutes) / len(wait_minutes), 2) if wait_minutes else None,
         "average_cycle_minutes": round(sum(cycle_minutes) / len(cycle_minutes), 2) if cycle_minutes else None,
     }
+
+
+_BRANCH_CAPACITY_TIER_LABEL = {
+    "below": "Abaixo da meta",
+    "good": "Capacidade Boa",
+    "great": "Capacidade Ótima",
+    "excellent": "Capacidade Excelente",
+}
+
+
+def branch_capacities(db: Session) -> list[OperationBranchCapacity]:
+    return list(db.execute(select(OperationBranchCapacity).order_by(OperationBranchCapacity.regional)).scalars().all())
+
+
+def upsert_branch_capacity(db: Session, regional: str, payload, updated_by: int | None) -> OperationBranchCapacity:
+    existing = db.execute(
+        select(OperationBranchCapacity).where(OperationBranchCapacity.regional == regional)
+    ).scalar_one_or_none()
+    if existing is None:
+        existing = OperationBranchCapacity(regional=regional)
+        db.add(existing)
+    existing.good_threshold = payload.good_threshold
+    existing.great_threshold = payload.great_threshold
+    existing.excellent_threshold = payload.excellent_threshold
+    existing.good_color = payload.good_color
+    existing.great_color = payload.great_color
+    existing.excellent_color = payload.excellent_color
+    existing.updated_by = updated_by
+    db.flush()
+    return existing
+
+
+def branch_capacity_summary(db: Session, date_from: date, date_to: date, user: User, **filters) -> list[dict]:
+    """Realizado (O.S. fechadas no período, mesma regra de `overview()`'s "completed") por filial,
+    comparado contra as faixas cadastradas em `OperationBranchCapacity`. Só entram filiais com
+    capacidade configurada - sem faixa cadastrada não tem contra o que comparar. Se o filtro de
+    regional já restringe a UMA filial, o resultado natural já vem com 1 item só."""
+    capacities = {capacity.regional: capacity for capacity in branch_capacities(db)}
+    if not capacities:
+        return []
+
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters, date_field="closed_at")
+    regional_label = func.coalesce(OperationOrder.regional, "Não identificada")
+    rows = db.execute(
+        select(
+            regional_label,
+            func.count(OperationOrder.id),
+            func.count(func.distinct(OperationOrder.responsible)),
+        )
+        .where(*conditions)
+        .group_by(regional_label)
+    ).all()
+
+    items = []
+    for regional, realized_count, collaborators_count in rows:
+        capacity = capacities.get(str(regional))
+        if capacity is None:
+            continue
+        realized = int(realized_count or 0)
+        collaborators = int(collaborators_count or 0)
+        if realized >= capacity.excellent_threshold:
+            tier = "excellent"
+            difference_to_next_tier = None
+        elif realized >= capacity.great_threshold:
+            tier = "great"
+            difference_to_next_tier = capacity.excellent_threshold - realized
+        elif realized >= capacity.good_threshold:
+            tier = "good"
+            difference_to_next_tier = capacity.great_threshold - realized
+        else:
+            tier = "below"
+            difference_to_next_tier = capacity.good_threshold - realized
+        items.append(
+            {
+                "regional": str(regional),
+                "realized": realized,
+                "good_threshold": capacity.good_threshold,
+                "great_threshold": capacity.great_threshold,
+                "excellent_threshold": capacity.excellent_threshold,
+                "good_color": capacity.good_color,
+                "great_color": capacity.great_color,
+                "excellent_color": capacity.excellent_color,
+                "tier": tier,
+                "tier_label": _BRANCH_CAPACITY_TIER_LABEL[tier],
+                "percent_of_excellent": round((realized / capacity.excellent_threshold) * 100, 1)
+                if capacity.excellent_threshold
+                else 0.0,
+                "difference_to_next_tier": difference_to_next_tier,
+                "collaborators_count": collaborators,
+                "average_per_collaborator": round(realized / collaborators, 1) if collaborators else 0.0,
+            }
+        )
+    items.sort(key=lambda item: item["realized"], reverse=True)
+    return items
 
 
 def work_schedule_orders(db: Session, date_from: date, date_to: date, user: User, **filters):
@@ -2386,17 +2562,30 @@ def order_page(
     page_size: int,
     sort_by: str | None = None,
     sort_dir: str = "desc",
+    date_field: str | None = None,
+    near_latitude: float | None = None,
+    near_longitude: float | None = None,
+    radius_km: float | None = None,
     **filters,
 ) -> dict:
-    conditions, _, _ = _query_conditions(db, date_from, date_to, user, filters)
+    conditions, _, _ = _query_conditions(db, date_from, date_to, user, filters, date_field=date_field)
+    geo_condition = geo_radius_condition(near_latitude, near_longitude, radius_km)
+    if geo_condition is not None:
+        conditions.append(geo_condition)
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
     start = (page - 1) * page_size
-    primary, tiebreaker = _order_sort_clauses(sort_by, sort_dir)
+    # Com busca geográfica ativa e sem ordenação explícita pedida, o mais útil é ver primeiro quem
+    # está mais perto do ponto de referência (mesmo critério de `ai.queries.search_orders`) - uma
+    # ordenação explícita (`sort_by`) continua tendo prioridade sobre isso.
+    if geo_condition is not None and sort_by is None:
+        order_clauses = (geo_distance_km_expr(near_latitude, near_longitude).asc(), OperationOrder.id.desc())
+    else:
+        order_clauses = _order_sort_clauses(sort_by, sort_dir)
     orders = list(
         db.scalars(
             select(OperationOrder)
             .where(*conditions)
-            .order_by(primary, tiebreaker)
+            .order_by(*order_clauses)
             .offset(start)
             .limit(page_size)
         )
@@ -2420,6 +2609,38 @@ def order_by_source_id(db: Session, user: User, source_order_id: str) -> Operati
         OperationOrder.source_order_id == source_order_id,
     ]
     return db.scalar(select(OperationOrder).where(*conditions))
+
+
+# Item 5 do pedido de governança IA/MCP: limite defensivo pro lote de identificadores de
+# `orders_by_identifiers` - mesmo espírito de `page_size` alhures, evita que um agente peça
+# centenas de O.S. de uma vez só.
+MAX_ORDER_IDENTIFIERS_PER_REQUEST = 50
+
+
+def orders_by_identifiers(
+    db: Session,
+    user: User,
+    *,
+    order_codes: list[str] | None = None,
+    source_order_ids: list[str] | None = None,
+) -> list[OperationOrder]:
+    """Detalhe de uma ou várias O.S. por `order_code` e/ou `source_order_id` (OS_ID) - mesmo
+    escopo regional de `order_by_source_id`, mas em lote. Sem período: um agente pedindo detalhe de
+    uma O.S. específica já sabe qual é, não faz sentido também ter que acertar a data de abertura."""
+    order_codes = [code for code in (order_codes or []) if code]
+    source_order_ids = [source_id for source_id in (source_order_ids or []) if source_id]
+    if not order_codes and not source_order_ids:
+        return []
+    identity_conditions = []
+    if order_codes:
+        identity_conditions.append(OperationOrder.order_code.in_(order_codes))
+    if source_order_ids:
+        identity_conditions.append(OperationOrder.source_order_id.in_(source_order_ids))
+    conditions = [
+        *_dimension_conditions(db, user, {}),
+        or_(*identity_conditions),
+    ]
+    return list(db.scalars(select(OperationOrder).where(*conditions)))
 
 
 AGING_BUCKET_BOUNDS = {

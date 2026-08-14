@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date, datetime, time, timezone
+from time import perf_counter
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -25,9 +26,14 @@ from app.services.ixc_scheduler import (
 from app.services.ixc_client import IxcApiError, IxcQueryLimitError, get_ixc_client
 
 from app.modules.management.models import ManagementOperationalMember
+from app.modules.ai_governance.audit import record_ai_access
+from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
+from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
 
 from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
+from .login_geo_clusters import find_offline_login_clusters, query_login_status
+from .onu_signal_snapshot import query_onu_signal_status
 from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
@@ -52,6 +58,7 @@ from .schemas import (
     OperationOpeningsAnalytics,
     OperationOpenBacklogJobOut,
     OperationOrderDetailOut,
+    OperationOrderOut,
     OperationOrderPage,
     OperationOverview,
     OperationWorkScheduleOverview,
@@ -72,6 +79,9 @@ from .schemas import (
     OperationTeamModelUpdate,
     OperationSubjectTypeBulkUpdate,
     OperationSubjectTypeMappingOut,
+    OperationOfflineLoginClustersOut,
+    OperationLoginStatusOut,
+    OperationOnuSignalOut,
 )
 
 
@@ -86,6 +96,47 @@ router = APIRouter(
 def _validated_period(date_from: date, date_to: date) -> tuple[date, date]:
     validate_operations_period(date_from, date_to)
     return date_from, date_to
+
+
+# Conjunto enxuto para `response_mode=summary` (item 6 do pedido - "apropriado para agentes de IA
+# que precisam primeiro fazer triagem") - a interseção final com `policy.selectable_fields` garante
+# que a Administração ainda pode remover qualquer um destes sem precisar mexer aqui.
+ORDER_SUMMARY_FIELDS = [
+    "order_code",
+    "regional",
+    "city",
+    "os_type",
+    "os_subject",
+    "sector",
+    "status",
+    "sla_status",
+    "opened_at",
+    "closed_at",
+    "responsible",
+    "priority",
+]
+
+
+def _resolve_order_output_fields(policy, response_mode: str, fields: list[str] | None) -> list[str] | None:
+    """`None` = manter o comportamento de sempre (todo campo autorizado). Um `fields` explícito
+    sempre vence; sem ele, `response_mode=summary` recorta para um conjunto enxuto."""
+    if fields is not None:
+        return fields
+    if response_mode == "summary":
+        allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
+        return [name for name in ORDER_SUMMARY_FIELDS if name in allowed]
+    return None
+
+
+def _serialize_order(order: OperationOrder, fields: list[str] | None) -> dict:
+    full = OperationOrderOut.model_validate(order).model_dump()
+    if fields is None:
+        return full
+    return {key: value for key, value in full.items() if key in fields}
+
+
+def _validated_date_field(policy, date_field: str | None) -> str | None:
+    return enforce_date_field(policy, ENTITY_OPERATION_ORDERS, date_field, queries.DATE_FIELD_COLUMNS)
 
 
 def _validated_ixc_sector_ids(sector_ids: list[str] | None) -> list[str]:
@@ -613,6 +664,40 @@ def overview(
     )
 
 
+@router.get("/capacity-summary", response_model=OperationBranchCapacitySummary)
+def capacity_summary(
+    date_from: date,
+    date_to: date,
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validated_period(date_from, date_to)
+    items = queries.branch_capacity_summary(db, date_from, date_to, user, **selected_filters)
+    return {"date_from": date_from, "date_to": date_to, "items": items}
+
+
+@router.get("/branch-capacity", response_model=list[OperationBranchCapacityOut])
+def list_branch_capacity(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("operations:manage_team_models")),
+):
+    return queries.branch_capacities(db)
+
+
+@router.put("/branch-capacity/{regional}", response_model=OperationBranchCapacityOut)
+def update_branch_capacity(
+    regional: str,
+    payload: OperationBranchCapacityUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("operations:manage_team_models")),
+):
+    item = queries.upsert_branch_capacity(db, regional, payload, user.id)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
 @router.get("/overview/work-schedule", response_model=OperationWorkScheduleOverview)
 def overview_work_schedule(
     date_from: date,
@@ -989,7 +1074,117 @@ def in_progress_orders(
     )
 
 
-@router.get("/orders", response_model=OperationOrderPage, dependencies=[Depends(require_permission("operations:view_order_details"))])
+@router.get("/network/offline-login-clusters", response_model=OperationOfflineLoginClustersOut)
+def network_offline_login_clusters(
+    radius_meters: float = Query(default=300.0, ge=10.0, le=5000.0),
+    min_cluster_size: int = Query(default=3, ge=2, le=100),
+    window_minutes: int = Query(default=30, ge=5, le=1440),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Agrupa logins que transicionaram pra desconectado ('N') nos últimos `window_minutes` e estão
+    geograficamente próximos - candidato a rompimento de fibra num trecho, distinto de uma queda
+    isolada de um único cliente. Olha transição recente, não o status estático (achado real: 'SS'
+    é quase sempre crônico, não um evento - ver `login_geo_clusters._DISCONNECTED_VALUE`). Não
+    recebe filtro de regional/setor de propósito: proximidade geográfica é a única dimensão
+    relevante aqui, e os mesmos filtros do resto do módulo (que operam sobre O.S., não sobre
+    login) não se aplicam a este dado."""
+    clusters = find_offline_login_clusters(
+        db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+    )
+    return {
+        "radius_meters": radius_meters,
+        "min_cluster_size": min_cluster_size,
+        "window_minutes": window_minutes,
+        "clusters": [
+            {
+                "center_latitude": cluster.center_latitude,
+                "center_longitude": cluster.center_longitude,
+                "radius_meters": cluster.radius_meters,
+                "size": cluster.size,
+                "logins": [
+                    {
+                        "login_id": point.login_id,
+                        "login": point.login,
+                        "online": point.online,
+                        "latitude": point.latitude,
+                        "longitude": point.longitude,
+                        "last_disconnected_at": point.last_disconnected_at,
+                    }
+                    for point in cluster.logins
+                ],
+            }
+            for cluster in clusters
+        ],
+    }
+
+
+@router.get("/network/logins", response_model=list[OperationLoginStatusOut])
+def network_login_status(
+    logins: list[str] = Query(default_factory=list),
+    online_statuses: list[str] = Query(default_factory=list),
+    near_latitude: float | None = Query(default=None, ge=-90, le=90, description="Busca geográfica por raio - use junto com near_longitude e radius_km."),
+    near_longitude: float | None = Query(default=None, ge=-180, le=180),
+    radius_km: float | None = Query(default=None, gt=0, le=500),
+    limit: int = Query(default=200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Consulta individual de status de conectividade por login (item novo do inventário: até esta
+    rota, as tabelas de status/geo de login só eram acessíveis via o agregado de cluster em
+    `/network/offline-login-clusters`). Sem filtro de regional/setor pelo mesmo motivo daquela rota -
+    proximidade geográfica e status são as dimensões relevantes aqui, não O.S."""
+    policy = enforce_ai_endpoint_for_user(db, user, "operations.network.logins", "api")
+    if logins:
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "login", "filterable")
+    if online_statuses:
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "online", "filterable")
+    if (near_latitude is None) != (near_longitude is None) or (radius_km is not None and near_latitude is None):
+        raise HTTPException(status_code=422, detail="Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+    if near_latitude is not None:
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "latitude", "filterable")
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "longitude", "filterable")
+    return query_login_status(
+        db,
+        logins=logins,
+        online_statuses=online_statuses,
+        near_latitude=near_latitude,
+        near_longitude=near_longitude,
+        radius_km=radius_km,
+        limit=limit,
+    )
+
+
+@router.get("/network/onu-signal", response_model=list[OperationOnuSignalOut])
+def network_onu_signal(
+    login_ids: list[int] = Query(default_factory=list),
+    last_drop_causes: list[str] = Query(default_factory=list),
+    transmitter_ids: list[str] = Query(default_factory=list),
+    limit: int = Query(default=200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Telemetria óptica/ONU (transmissor, sinal RX/TX em dBm, serial da ONU, causa da última
+    queda - ex.: "Link Loss") dos logins já monitorados em `operations_login_current_status`. Não
+    varre a base inteira de ONUs do IXC (~90 mil) - só os logins que o sistema já acompanha, para
+    não sobrecarregar a API deles (decisão de escopo do produto, não limitação técnica)."""
+    policy = enforce_ai_endpoint_for_user(db, user, "operations.network.onu_signal", "api")
+    if login_ids:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "login_id", "filterable")
+    if last_drop_causes:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "last_drop_cause", "filterable")
+    if transmitter_ids:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "transmitter_id", "filterable")
+    return query_onu_signal_status(
+        db,
+        login_ids=login_ids,
+        last_drop_causes=last_drop_causes,
+        transmitter_ids=transmitter_ids,
+        limit=limit,
+    )
+
+
+@router.get("/orders", response_model=None, dependencies=[Depends(require_permission("operations:view_order_details"))])
 def orders(
     date_from: date,
     date_to: date,
@@ -998,11 +1193,27 @@ def orders(
     page_size: int = Query(default=50, ge=10, le=200),
     sort_by: str | None = Query(default=None, max_length=40),
     sort_dir: Literal["asc", "desc"] = Query(default="desc"),
+    date_field: str | None = Query(default=None, description="opened_at, closed_at, scheduled_at, execution_started_at, finished_at, displacement_started_at, assumed_at ou deadline_at - default mantém a regra de sempre (abriu OU fechou no período)."),
+    fields: list[str] | None = Query(default=None, description="Subconjunto de campos a retornar - rejeitado explicitamente se algum não estiver autorizado."),
+    response_mode: Literal["summary", "full"] = Query(default="full"),
+    near_latitude: float | None = Query(default=None, ge=-90, le=90, description="Busca geográfica por raio - use junto com near_longitude e radius_km."),
+    near_longitude: float | None = Query(default=None, ge=-180, le=180),
+    radius_km: float | None = Query(default=None, gt=0, le=500),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-):
+) -> dict:
+    started_at = perf_counter()
     _validated_period(date_from, date_to)
-    return queries.order_page(
+    policy = enforce_ai_endpoint_for_user(db, user, "operations.orders.list", "api")
+    date_field = _validated_date_field(policy, date_field)
+    fields = enforce_requested_fields(policy, ENTITY_OPERATION_ORDERS, fields, "selectable")
+    output_fields = _resolve_order_output_fields(policy, response_mode, fields)
+    if (near_latitude is None) != (near_longitude is None) or (radius_km is not None and near_latitude is None):
+        raise HTTPException(status_code=422, detail="Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+    if near_latitude is not None:
+        enforce_filter_field(policy, ENTITY_OPERATION_ORDERS, "latitude", "filterable")
+        enforce_filter_field(policy, ENTITY_OPERATION_ORDERS, "longitude", "filterable")
+    page_result = queries.order_page(
         db,
         date_from,
         date_to,
@@ -1011,8 +1222,30 @@ def orders(
         page_size=page_size,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        date_field=date_field,
+        near_latitude=near_latitude,
+        near_longitude=near_longitude,
+        radius_km=radius_km,
         **selected_filters,
     )
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="operations.orders.list",
+        user=user,
+        filters={**selected_filters, "date_field": date_field},
+        fields_requested=fields,
+        response_mode=response_mode,
+        result_count=page_result["total"],
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return {
+        "items": [_serialize_order(order, output_fields) for order in page_result["items"]],
+        "total": page_result["total"],
+        "page": page_result["page"],
+        "page_size": page_result["page_size"],
+        "total_pages": page_result["total_pages"],
+    }
 
 
 @router.get(
@@ -1056,18 +1289,38 @@ def opening_orders(
 
 @router.get(
     "/orders/{source_order_id}",
-    response_model=OperationOrderDetailOut,
+    response_model=None,
     dependencies=[Depends(require_permission("operations:view_order_details"))],
 )
 def order_detail(
     source_order_id: str,
+    fields: list[str] | None = Query(default=None, description="Subconjunto de campos a retornar - rejeitado explicitamente se algum não estiver autorizado."),
+    response_mode: Literal["summary", "full"] = Query(default="full"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-):
+) -> dict:
     order = queries.order_by_source_id(db, user, source_order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
-    return order
+    policy = enforce_ai_endpoint_for_user(db, user, "operations.orders.detail", "api")
+    # "detail_available" (não "selectable") porque este é um endpoint de DETALHE - autoriza também
+    # campos que só existem no detalhe (ex.: raw_payload redigido), consistente com o detalhe em
+    # lote de `POST /ai/orders/details`.
+    fields = enforce_requested_fields(policy, ENTITY_OPERATION_ORDERS, fields, "detail_available")
+    output_fields = _resolve_order_output_fields(policy, response_mode, fields)
+    detail = OperationOrderDetailOut.model_validate(order).model_dump()
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="operations.orders.detail",
+        user=user,
+        fields_requested=fields,
+        response_mode=response_mode,
+        result_count=1,
+    )
+    if output_fields is None:
+        return detail
+    return {key: value for key, value in detail.items() if key in output_fields}
 
 
 def _saved_filter_or_404(db: Session, saved_filter_id: int, user_id: int) -> OperationSavedFilter:
