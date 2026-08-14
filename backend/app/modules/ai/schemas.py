@@ -438,6 +438,7 @@ class AiLoginStatusRequest(BaseModel):
 
     logins: list[str] = Field(default_factory=list, max_length=200)
     online_statuses: list[str] = Field(default_factory=list)
+    regionals: list[str] = Field(default_factory=list, description="Ex.: 'UNI - MACHADINHO DOESTE' - mesma normalização usada nas O.S.")
     near_latitude: float | None = Field(default=None, ge=-90, le=90)
     near_longitude: float | None = Field(default=None, ge=-180, le=180)
     radius_km: float | None = Field(default=None, gt=0, le=500)

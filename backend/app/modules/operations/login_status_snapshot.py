@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.ixc_client import IxcClient, fetch_login_status_snapshot, get_ixc_client
+from app.services.regional import normalize_regional
 
 from .models import OperationLoginCurrentStatus, OperationLoginStatusSnapshot
 
@@ -62,6 +63,7 @@ def upsert_login_current_status(db: Session, rows: list[dict]) -> None:
             set_={
                 "login": stmt.excluded.login,
                 "online": stmt.excluded.online,
+                "regional": stmt.excluded.regional,
                 "latitude": stmt.excluded.latitude,
                 "longitude": stmt.excluded.longitude,
                 "last_connected_at": stmt.excluded.last_connected_at,
@@ -85,25 +87,34 @@ def capture_login_status_snapshot(db: Session, client: IxcClient) -> int:
     model) e faz upsert de `operations_login_current_status` (a tabela que a detecção de cluster
     realmente consulta). Retorna quantas linhas foram gravadas no histórico."""
     captured_at = datetime.now(timezone.utc)
-    parsed = [
-        {
-            "login_id": int(record["id"]),
-            "login": record.get("login") or "",
-            "online": record.get("online") or "",
-            "latitude": _parse_ixc_float(record.get("latitude")),
-            "longitude": _parse_ixc_float(record.get("longitude")),
-            "last_connected_at": _parse_ixc_datetime(record.get("ultima_conexao_inicial")),
-            "last_disconnected_at": _parse_ixc_datetime(record.get("ultima_conexao_final")),
-        }
-        for record in fetch_login_status_snapshot(client)
-    ]
+    parsed = []
+    regionals = []
+    for record in fetch_login_status_snapshot(client):
+        parsed.append(
+            {
+                "login_id": int(record["id"]),
+                "login": record.get("login") or "",
+                "online": record.get("online") or "",
+                "latitude": _parse_ixc_float(record.get("latitude")),
+                "longitude": _parse_ixc_float(record.get("longitude")),
+                "last_connected_at": _parse_ixc_datetime(record.get("ultima_conexao_inicial")),
+                "last_disconnected_at": _parse_ixc_datetime(record.get("ultima_conexao_final")),
+            }
+        )
+        # `regional` só existe em `operations_login_current_status` (não no histórico append-only
+        # `OperationLoginStatusSnapshot`, que não tem essa coluna) - por isso fica de fora de
+        # `parsed`, guardado à parte na mesma ordem pra juntar só no upsert abaixo.
+        regionals.append(normalize_regional(record.get("id_filial")))
     if not parsed:
         return 0
 
     db.bulk_save_objects([OperationLoginStatusSnapshot(captured_at=captured_at, **fields) for fields in parsed])
     upsert_login_current_status(
         db,
-        [{**fields, "captured_at": captured_at, "status_changed_at": captured_at} for fields in parsed],
+        [
+            {**fields, "regional": regional, "captured_at": captured_at, "status_changed_at": captured_at}
+            for fields, regional in zip(parsed, regionals)
+        ],
     )
     db.commit()
     return len(parsed)

@@ -400,6 +400,7 @@ LOGIN_STATUS_SNAPSHOT_FIELDS = (
     "longitude",
     "ultima_conexao_inicial",
     "ultima_conexao_final",
+    "id_filial",
 )
 
 

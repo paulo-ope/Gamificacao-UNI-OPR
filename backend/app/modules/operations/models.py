@@ -383,11 +383,17 @@ class OperationLoginCurrentStatus(Base):
     __tablename__ = "operations_login_current_status"
     __table_args__ = (
         Index("ix_operations_login_current_status_online_changed", "online", "status_changed_at"),
+        Index("ix_operations_login_current_status_regional", "regional"),
     )
 
     login_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     login: Mapped[str] = mapped_column(String(160), nullable=False)
     online: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    # Mesma normalização de `app.services.regional.normalize_regional` (radusuarios.id_filial),
+    # usada pela Operação Analítica para O.S. - pedido do usuário em 2026-08-14 pra poder filtrar
+    # status de login por regional (ex.: "quais logins de Machadinho D'Oeste estão offline"), o que
+    # nao era possivel so com lat/long.
+    regional: Mapped[str | None] = mapped_column(String(80), nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

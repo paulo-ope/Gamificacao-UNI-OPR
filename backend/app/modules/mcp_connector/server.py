@@ -347,6 +347,7 @@ def build_mcp_server() -> FastMCP:
     def opr_login_status(
         logins: list[str] | None = None,
         online_statuses: list[str] | None = None,
+        regionals: list[str] | None = None,
         near_latitude: float | None = None,
         near_longitude: float | None = None,
         radius_km: float | None = None,
@@ -354,19 +355,21 @@ def build_mcp_server() -> FastMCP:
     ) -> str:
         """Status ATUAL de conectividade por login - não é um evento de queda, é o estado agora e
         há quanto tempo está nesse estado. Use para "quais logins estão desconectados perto deste
-        ponto" ou "há quanto tempo esse login caiu".
+        ponto/nesta regional" ou "há quanto tempo esse login caiu".
 
         Args:
             logins: lista de login (ex.: "cliente.teste"). Vazio = sem filtro por login.
             online_statuses: filtra pelo status bruto do IXC - "S" (conectado), "N"
                 (desconectado - sinal real de queda recente), "SS" (conectado sem sinal,
                 característica crônica de equipamento/login, não é queda recente).
+            regionals: filtra pela regional (ex.: "UNI - MACHADINHO DOESTE") - mesma normalização
+                usada nas O.S. (radusuarios.id_filial).
             near_latitude, near_longitude, radius_km: busca geográfica por raio - os três juntos,
                 ou nenhum.
             limit: até 500 (default 200).
 
         Returns:
-            JSON com lista de {"login_id", "login", "online", "latitude", "longitude",
+            JSON com lista de {"login_id", "login", "online", "regional", "latitude", "longitude",
             "last_connected_at", "last_disconnected_at", "status_changed_at", "captured_at"}.
             `status_changed_at` só avança quando `online` muda de valor - é o campo certo para
             "quando começou esse estado", não `captured_at` (última vez que o sistema viu o login).
@@ -380,6 +383,8 @@ def build_mcp_server() -> FastMCP:
                 _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "login", "filterable")
             if online_statuses:
                 _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "online", "filterable")
+            if regionals:
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "regional", "filterable")
             if near_latitude is not None:
                 _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "latitude", "filterable")
                 _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "longitude", "filterable")
@@ -387,6 +392,7 @@ def build_mcp_server() -> FastMCP:
                 db,
                 logins=logins or [],
                 online_statuses=online_statuses or [],
+                regionals=regionals or [],
                 near_latitude=near_latitude,
                 near_longitude=near_longitude,
                 radius_km=radius_km,
@@ -398,6 +404,7 @@ def build_mcp_server() -> FastMCP:
                         "login_id": row.login_id,
                         "login": row.login,
                         "online": row.online,
+                        "regional": row.regional,
                         "latitude": row.latitude,
                         "longitude": row.longitude,
                         "last_connected_at": row.last_connected_at,

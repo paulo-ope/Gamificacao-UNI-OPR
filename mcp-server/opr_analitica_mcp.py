@@ -380,6 +380,10 @@ class LoginStatusInput(BaseModel):
             "equipamento/login, não é queda recente)."
         ),
     )
+    regionals: list[str] = Field(
+        default_factory=list,
+        description="Filtra pela regional (ex.: 'UNI - MACHADINHO DOESTE') - mesma normalização usada nas O.S.",
+    )
     near_latitude: float | None = Field(default=None, description="Busca geográfica por raio - use junto com near_longitude e radius_km.")
     near_longitude: float | None = Field(default=None)
     radius_km: float | None = Field(default=None)
@@ -398,22 +402,25 @@ class LoginStatusInput(BaseModel):
 )
 def opr_login_status(params: LoginStatusInput) -> str:
     """Status ATUAL de conectividade por login - não é um evento de queda, é o estado agora e há
-    quanto tempo está nesse estado. Use para "quais logins estão desconectados perto deste ponto"
-    ou "há quanto tempo esse login caiu".
+    quanto tempo está nesse estado. Use para "quais logins estão desconectados perto deste
+    ponto/nesta regional" ou "há quanto tempo esse login caiu".
 
     Args:
-        params (LoginStatusInput): logins, online_statuses, near_latitude/near_longitude/radius_km
-            (os três juntos, ou nenhum), limit (até 500, default 200).
+        params (LoginStatusInput): logins, online_statuses, regionals,
+            near_latitude/near_longitude/radius_km (os três juntos, ou nenhum), limit (até 500,
+            default 200).
 
     Returns:
-        str: JSON com lista de {"login_id", "login", "online", "latitude", "longitude",
-        "last_connected_at", "last_disconnected_at", "status_changed_at", "captured_at"}.
-        `status_changed_at` só avança quando `online` muda de valor - é o campo certo para "quando
-        começou esse estado", não `captured_at` (última vez que o sistema viu o login).
+        str: JSON com lista de {"login_id", "login", "online", "regional", "latitude",
+        "longitude", "last_connected_at", "last_disconnected_at", "status_changed_at",
+        "captured_at"}. `status_changed_at` só avança quando `online` muda de valor - é o campo
+        certo para "quando começou esse estado", não `captured_at` (última vez que o sistema viu o
+        login).
     """
     payload = {
         "logins": params.logins,
         "online_statuses": params.online_statuses,
+        "regionals": params.regionals,
         "near_latitude": params.near_latitude,
         "near_longitude": params.near_longitude,
         "radius_km": params.radius_km,

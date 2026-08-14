@@ -322,6 +322,7 @@ def login_status_route(
         db,
         logins=payload.logins,
         online_statuses=payload.online_statuses,
+        regionals=payload.regionals,
         near_latitude=payload.near_latitude,
         near_longitude=payload.near_longitude,
         radius_km=payload.radius_km,
@@ -333,7 +334,7 @@ def login_status_route(
         endpoint_key="ai.login_status",
         user=context.user,
         token_id=context.token_id,
-        filters={"logins": payload.logins, "online_statuses": payload.online_statuses, "near_latitude": payload.near_latitude},
+        filters={"logins": payload.logins, "online_statuses": payload.online_statuses, "regionals": payload.regionals, "near_latitude": payload.near_latitude},
         result_count=len(results),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )

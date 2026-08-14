@@ -205,12 +205,13 @@ def query_login_status(
     *,
     logins: list[str] | None = None,
     online_statuses: list[str] | None = None,
+    regionals: list[str] | None = None,
     near_latitude: float | None = None,
     near_longitude: float | None = None,
     radius_km: float | None = None,
     limit: int = 200,
 ) -> list[OperationLoginCurrentStatus]:
-    """Consulta individual de status de conectividade por login/regional geográfica - sem filtro
+    """Consulta individual de status de conectividade por login/regional/geografia - sem filtro
     nenhum, limita a `limit` (até `MAX_LOGIN_STATUS_RESULTS`) para nunca devolver a base inteira de
     logins de uma vez só."""
     conditions = []
@@ -218,6 +219,8 @@ def query_login_status(
         conditions.append(OperationLoginCurrentStatus.login.in_(logins))
     if online_statuses:
         conditions.append(OperationLoginCurrentStatus.online.in_(online_statuses))
+    if regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(regionals))
     if near_latitude is not None and near_longitude is not None and radius_km is not None:
         conditions.append(
             _geo_radius_condition(

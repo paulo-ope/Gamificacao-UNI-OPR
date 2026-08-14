@@ -989,6 +989,7 @@ class OperationLoginStatusOut(BaseModel):
     login_id: int
     login: str
     online: str
+    regional: str | None
     latitude: float | None
     longitude: float | None
     last_connected_at: datetime | None

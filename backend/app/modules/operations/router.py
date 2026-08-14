@@ -1126,6 +1126,7 @@ def network_offline_login_clusters(
 def network_login_status(
     logins: list[str] = Query(default_factory=list),
     online_statuses: list[str] = Query(default_factory=list),
+    regionals: list[str] = Query(default_factory=list),
     near_latitude: float | None = Query(default=None, ge=-90, le=90, description="Busca geográfica por raio - use junto com near_longitude e radius_km."),
     near_longitude: float | None = Query(default=None, ge=-180, le=180),
     radius_km: float | None = Query(default=None, gt=0, le=500),
@@ -1135,13 +1136,15 @@ def network_login_status(
 ):
     """Consulta individual de status de conectividade por login (item novo do inventário: até esta
     rota, as tabelas de status/geo de login só eram acessíveis via o agregado de cluster em
-    `/network/offline-login-clusters`). Sem filtro de regional/setor pelo mesmo motivo daquela rota -
-    proximidade geográfica e status são as dimensões relevantes aqui, não O.S."""
+    `/network/offline-login-clusters`). `regionals` filtra pela mesma normalização de
+    `radusuarios.id_filial` usada pelas O.S. (ver `app.services.regional.normalize_regional`)."""
     policy = enforce_ai_endpoint_for_user(db, user, "operations.network.logins", "api")
     if logins:
         enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "login", "filterable")
     if online_statuses:
         enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "online", "filterable")
+    if regionals:
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "regional", "filterable")
     if (near_latitude is None) != (near_longitude is None) or (radius_km is not None and near_latitude is None):
         raise HTTPException(status_code=422, detail="Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
     if near_latitude is not None:
@@ -1151,6 +1154,7 @@ def network_login_status(
         db,
         logins=logins,
         online_statuses=online_statuses,
+        regionals=regionals,
         near_latitude=near_latitude,
         near_longitude=near_longitude,
         radius_km=radius_km,

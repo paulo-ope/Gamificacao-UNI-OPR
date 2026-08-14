@@ -113,7 +113,7 @@ def _login_current_status_registry() -> dict[str, FieldDescriptor]:
     # (item 20 do pedido, adicionado depois deste catálogo) já sabe filtrar por login/status/raio
     # geográfico, mas o ENDPOINT inteiro entra desabilitado por padrão no seed (item 26: capacidade
     # nova não entra habilitada sozinha), então marcar a capacidade aqui não expõe nada sozinho.
-    filterable_keys = {"login_id", "login", "online", "latitude", "longitude"}
+    filterable_keys = {"login_id", "login", "online", "regional", "latitude", "longitude"}
     registry: dict[str, FieldDescriptor] = {}
     for column in OperationLoginCurrentStatus.__table__.columns:
         key = column.key
@@ -123,7 +123,7 @@ def _login_current_status_registry() -> dict[str, FieldDescriptor]:
             type=str(column.type),
             filterable=key in filterable_keys,
             text_filterable=key == "login",
-            groupable=key == "online",
+            groupable=key in {"online", "regional"},
             returnable=True,
             selectable=True,
             detail_available=True,
