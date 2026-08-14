@@ -648,7 +648,11 @@ export function OperationsMonthlyCalendar({
         )}
         {canJustifyManagement ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3" aria-label="Legenda de status de justificativa">
-            <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">Bolinha no dia = já tem caso na Gestão Integrada</p>
+            <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">Bolinha no dia = status na Gestão Integrada</p>
+            <span className="flex items-center gap-1 text-[9px] font-semibold text-slate-600">
+              <span className="h-2 w-2 rounded-full bg-white ring-2 ring-red-500" />
+              Abaixo da meta, ainda sem caso aberto
+            </span>
             {Object.entries(DAILY_CASE_STATUS_LABEL).map(([status, label]) => (
               <span key={status} className="flex items-center gap-1 text-[9px] font-semibold text-slate-600">
                 <span className={cn("h-2 w-2 rounded-full", DAILY_CASE_STATUS_DOT[status])} />
@@ -1003,6 +1007,17 @@ export function OperationsMonthlyCalendar({
                                         DAILY_CASE_STATUS_DOT[dailyCaseStatus] ?? "bg-slate-400",
                                       )}
                                       aria-hidden="true"
+                                      title={DAILY_CASE_STATUS_LABEL[dailyCaseStatus] ?? dailyCaseStatus}
+                                    />
+                                  ) : canJustifyManagement && performance === "below" ? (
+                                    // Distingue "abaixo da meta e ninguem verificou ainda" de "ja
+                                    // tem caso aberto" (bolinha colorida acima) - sem isso, os dois
+                                    // casos pareciam iguais (nenhum marcador), escondendo o que
+                                    // realmente falta tratar (achado real, 2026-08-14).
+                                    <span
+                                      className="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-white ring-2 ring-red-500"
+                                      aria-hidden="true"
+                                      title="Abaixo da meta - ainda sem caso aberto na Gestão Integrada"
                                     />
                                   ) : null}
                                 </td>
