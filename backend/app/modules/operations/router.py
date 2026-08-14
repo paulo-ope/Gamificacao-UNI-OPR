@@ -38,6 +38,9 @@ from .models import OperationIxcCollaborator, OperationOrder, OperationResponsib
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
 from .schemas import (
+    OperationBranchCapacityOut,
+    OperationBranchCapacitySummary,
+    OperationBranchCapacityUpdate,
     OperationBreakdownItem,
     OperationSlaRiskItem,
     OperationBackfillJobOut,
