@@ -428,3 +428,27 @@ class AiOnuSignalRequest(BaseModel):
     limit: int = Field(default=200, ge=1, le=500)
 
     model_config = ConfigDict(extra="forbid")
+
+
+class AiLoginStatusRequest(BaseModel):
+    """Status ATUAL de conectividade por login - mesmos parâmetros de `GET
+    /operations/network/logins`, agora acessível para IA/MCP via chave de API. Distinto de
+    `AiOfflineLoginClustersRequest`: aqui é consulta individual (um login específico ou uma busca
+    geográfica pontual), não a detecção de cluster de queda em massa."""
+
+    logins: list[str] = Field(default_factory=list, max_length=200)
+    online_statuses: list[str] = Field(default_factory=list)
+    near_latitude: float | None = Field(default=None, ge=-90, le=90)
+    near_longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_km: float | None = Field(default=None, gt=0, le=500)
+    limit: int = Field(default=200, ge=1, le=500)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _validate_geo_triplet(self) -> "AiLoginStatusRequest":
+        if (self.near_latitude is None) != (self.near_longitude is None) or (
+            self.radius_km is not None and self.near_latitude is None
+        ):
+            raise ValueError("Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+        return self

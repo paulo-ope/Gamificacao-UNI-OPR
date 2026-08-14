@@ -368,6 +368,106 @@ def opr_order_details(params: OrderDetailsInput) -> str:
     return _call("orders/details", payload)
 
 
+class LoginStatusInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    logins: list[str] = Field(default_factory=list, description="Lista de login (ex.: 'cliente.teste'). Vazio = sem filtro por login.")
+    online_statuses: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Filtra pelo status bruto do IXC - 'S' (conectado), 'N' (desconectado - sinal real de "
+            "queda recente), 'SS' (conectado sem sinal, característica crônica de "
+            "equipamento/login, não é queda recente)."
+        ),
+    )
+    near_latitude: float | None = Field(default=None, description="Busca geográfica por raio - use junto com near_longitude e radius_km.")
+    near_longitude: float | None = Field(default=None)
+    radius_km: float | None = Field(default=None)
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+@mcp.tool(
+    name="opr_login_status",
+    annotations={
+        "title": "Status de conectividade de login",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_login_status(params: LoginStatusInput) -> str:
+    """Status ATUAL de conectividade por login - não é um evento de queda, é o estado agora e há
+    quanto tempo está nesse estado. Use para "quais logins estão desconectados perto deste ponto"
+    ou "há quanto tempo esse login caiu".
+
+    Args:
+        params (LoginStatusInput): logins, online_statuses, near_latitude/near_longitude/radius_km
+            (os três juntos, ou nenhum), limit (até 500, default 200).
+
+    Returns:
+        str: JSON com lista de {"login_id", "login", "online", "latitude", "longitude",
+        "last_connected_at", "last_disconnected_at", "status_changed_at", "captured_at"}.
+        `status_changed_at` só avança quando `online` muda de valor - é o campo certo para "quando
+        começou esse estado", não `captured_at` (última vez que o sistema viu o login).
+    """
+    payload = {
+        "logins": params.logins,
+        "online_statuses": params.online_statuses,
+        "near_latitude": params.near_latitude,
+        "near_longitude": params.near_longitude,
+        "radius_km": params.radius_km,
+        "limit": params.limit,
+    }
+    return _call("infra/login-status", payload)
+
+
+class OnuSignalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    login_ids: list[int] = Field(default_factory=list, max_length=200, description="Lista de login_id. Vazio = sem filtro.")
+    last_drop_causes: list[str] = Field(
+        default_factory=list,
+        description="Filtra pela causa da última queda registrada na ONU (ex.: 'Link Loss', 'Power Fail' - varia conforme o hardware).",
+    )
+    transmitter_ids: list[str] = Field(default_factory=list, description="Filtra por id do transmissor/OLT.")
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+@mcp.tool(
+    name="opr_onu_signal",
+    annotations={
+        "title": "Telemetria óptica/ONU e PON",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_onu_signal(params: OnuSignalInput) -> str:
+    """Telemetria óptica/ONU (sinal RX/TX em dBm, causa da última queda, transmissor/OLT, PON/slot)
+    dos logins já monitorados por opr_login_status. Não cobre a base inteira de ONUs do IXC (~90
+    mil) - só os logins que o sistema já acompanha, para não sobrecarregar a API deles.
+
+    Args:
+        params (OnuSignalInput): login_ids, last_drop_causes, transmitter_ids, limit (até 500,
+            default 200).
+
+    Returns:
+        str: JSON com lista de {"login_id", "login", "contract_id", "signal_rx_dbm",
+        "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
+        "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no", "slot_no",
+        "latitude", "longitude", "captured_at"}.
+    """
+    payload = {
+        "login_ids": params.login_ids,
+        "last_drop_causes": params.last_drop_causes,
+        "transmitter_ids": params.transmitter_ids,
+        "limit": params.limit,
+    }
+    return _call("infra/onu-signal", payload)
+
+
 class BacklogAgingInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

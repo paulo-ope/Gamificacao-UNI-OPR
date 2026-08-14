@@ -31,7 +31,7 @@ from app.modules.ai_governance.gate import (
     enforce_requested_fields,
 )
 from app.modules.ai_governance.policy import EffectivePolicy
-from app.modules.operations.login_geo_clusters import find_offline_login_clusters
+from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.ai.schemas import (
@@ -42,6 +42,7 @@ from app.modules.ai.schemas import (
     AiBacklogHistoryRequest,
     AiFieldCatalogItem,
     AiFilterOptionsRequest,
+    AiLoginStatusRequest,
     AiOfflineLoginClustersRequest,
     AiOnuSignalRequest,
     AiOrderDetailsRequest,
@@ -58,6 +59,7 @@ from app.modules.ai.schemas import (
 )
 from app.modules.operations.schemas import (
     OperationFilters,
+    OperationLoginStatusOut,
     OperationOfflineLoginClustersOut,
     OperationOnuSignalOut,
     OperationOrderDetailOut,
@@ -300,6 +302,42 @@ def offline_login_clusters_route(
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
+
+
+@router.post("/infra/login-status", response_model=list[OperationLoginStatusOut])
+def login_status_route(
+    payload: AiLoginStatusRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> list:
+    """Status ATUAL de conectividade por login (item novo, pedido do usuário em 2026-08-14) - não
+    é um evento de queda, é o estado agora e há quanto tempo está nesse estado (`status_changed_at`
+    só avança quando `online` muda de valor). Distinto de `/infra/offline-login-clusters`: aqui é
+    consulta individual (um login específico ou uma busca geográfica pontual), não detecção de
+    cluster de queda em massa."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.login_status", "api")
+    results = query_login_status(
+        db,
+        logins=payload.logins,
+        online_statuses=payload.online_statuses,
+        near_latitude=payload.near_latitude,
+        near_longitude=payload.near_longitude,
+        radius_km=payload.radius_km,
+        limit=payload.limit,
+    )
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.login_status",
+        user=context.user,
+        token_id=context.token_id,
+        filters={"logins": payload.logins, "online_statuses": payload.online_statuses, "near_latitude": payload.near_latitude},
+        result_count=len(results),
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return results
 
 
 @router.post("/infra/onu-signal", response_model=list[OperationOnuSignalOut])

@@ -33,8 +33,10 @@ from app.modules.ai.router import (
     validate_ai_search_fields,
 )
 from app.modules.ai.schemas import AiOrderFilters
-from app.modules.ai_governance.field_registry import ENTITY_OPERATION_ORDERS
-from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_requested_fields
+from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
+from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
+from app.modules.operations.login_geo_clusters import query_login_status
+from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.operations.schemas import OperationOrderDetailOut
 
@@ -336,6 +338,122 @@ def build_mcp_server() -> FastMCP:
                     "not_found_order_codes": sorted(set(order_codes or []) - found_order_codes),
                     "not_found_source_order_ids": sorted(set(source_order_ids or []) - found_source_order_ids),
                 }
+            )
+
+    @mcp.tool(
+        name="opr_login_status",
+        annotations={"title": "Status de conectividade de login", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_login_status(
+        logins: list[str] | None = None,
+        online_statuses: list[str] | None = None,
+        near_latitude: float | None = None,
+        near_longitude: float | None = None,
+        radius_km: float | None = None,
+        limit: int = 200,
+    ) -> str:
+        """Status ATUAL de conectividade por login - não é um evento de queda, é o estado agora e
+        há quanto tempo está nesse estado. Use para "quais logins estão desconectados perto deste
+        ponto" ou "há quanto tempo esse login caiu".
+
+        Args:
+            logins: lista de login (ex.: "cliente.teste"). Vazio = sem filtro por login.
+            online_statuses: filtra pelo status bruto do IXC - "S" (conectado), "N"
+                (desconectado - sinal real de queda recente), "SS" (conectado sem sinal,
+                característica crônica de equipamento/login, não é queda recente).
+            near_latitude, near_longitude, radius_km: busca geográfica por raio - os três juntos,
+                ou nenhum.
+            limit: até 500 (default 200).
+
+        Returns:
+            JSON com lista de {"login_id", "login", "online", "latitude", "longitude",
+            "last_connected_at", "last_disconnected_at", "status_changed_at", "captured_at"}.
+            `status_changed_at` só avança quando `online` muda de valor - é o campo certo para
+            "quando começou esse estado", não `captured_at` (última vez que o sistema viu o login).
+        """
+        if (near_latitude is None) != (near_longitude is None) or (radius_km is not None and near_latitude is None):
+            raise ValueError("Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+        user = _current_user()
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "operations.network.logins", "mcp")
+            if logins:
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "login", "filterable")
+            if online_statuses:
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "online", "filterable")
+            if near_latitude is not None:
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "latitude", "filterable")
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "longitude", "filterable")
+            rows = query_login_status(
+                db,
+                logins=logins or [],
+                online_statuses=online_statuses or [],
+                near_latitude=near_latitude,
+                near_longitude=near_longitude,
+                radius_km=radius_km,
+                limit=limit,
+            )
+            return _dump(
+                [
+                    {
+                        "login_id": row.login_id,
+                        "login": row.login,
+                        "online": row.online,
+                        "latitude": row.latitude,
+                        "longitude": row.longitude,
+                        "last_connected_at": row.last_connected_at,
+                        "last_disconnected_at": row.last_disconnected_at,
+                        "status_changed_at": row.status_changed_at,
+                        "captured_at": row.captured_at,
+                    }
+                    for row in rows
+                ]
+            )
+
+    @mcp.tool(
+        name="opr_onu_signal",
+        annotations={"title": "Telemetria óptica/ONU e PON", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_onu_signal(
+        login_ids: list[int] | None = None,
+        last_drop_causes: list[str] | None = None,
+        transmitter_ids: list[str] | None = None,
+        limit: int = 200,
+    ) -> str:
+        """Telemetria óptica/ONU (sinal RX/TX em dBm, causa da última queda, transmissor/OLT,
+        PON/slot) dos logins já monitorados por opr_login_status. Não cobre a base inteira de ONUs
+        do IXC (~90 mil) - só os logins que o sistema já acompanha, para não sobrecarregar a API
+        deles.
+
+        Args:
+            login_ids: lista de login_id. Vazio = sem filtro.
+            last_drop_causes: filtra pela causa da última queda registrada na ONU (ex.: "Link
+                Loss", "Power Fail" - os valores existentes variam conforme o hardware).
+            transmitter_ids: filtra por id do transmissor/OLT.
+            limit: até 500 (default 200).
+
+        Returns:
+            JSON com lista de {"login_id", "login", "contract_id", "signal_rx_dbm",
+            "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
+            "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no", "slot_no",
+            "latitude", "longitude", "captured_at"}.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "operations.network.onu_signal", "mcp")
+            if login_ids:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "login_id", "filterable")
+            if last_drop_causes:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "last_drop_cause", "filterable")
+            if transmitter_ids:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "transmitter_id", "filterable")
+            return _dump(
+                query_onu_signal_status(
+                    db,
+                    login_ids=login_ids or [],
+                    last_drop_causes=last_drop_causes or [],
+                    transmitter_ids=transmitter_ids or [],
+                    limit=limit,
+                )
             )
 
     @mcp.tool(

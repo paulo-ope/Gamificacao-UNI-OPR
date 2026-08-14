@@ -57,6 +57,10 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     ("operations.network.onu_signal", "Telemetria óptica/ONU (GET /operations/network/onu-signal)", "api", False),
     ("ai.offline_login_clusters", "Clusters de login offline para IA (POST /ai/infra/offline-login-clusters)", "api", False),
     ("ai.onu_signal", "Telemetria óptica/ONU para IA (POST /ai/infra/onu-signal)", "api", False),
+    # Novo (pedido do usuário em 2026-08-14) - status individual de login para IA/MCP (chave de API
+    # e conector remoto), distinto do agregado de cluster acima. Entra desabilitado por padrão,
+    # mesmo racional de "operations.network.logins".
+    ("ai.login_status", "Status individual de login para IA (POST /ai/infra/login-status)", "api", False),
 ]
 
 

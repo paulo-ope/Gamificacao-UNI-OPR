@@ -75,8 +75,16 @@ def capture_onu_signal_snapshot(db: Session, client: IxcClient) -> int:
         return 0
 
     captured_at = datetime.now(timezone.utc)
-    parsed = [
-        {
+    # Dedup por login_id, ficando com a última ocorrência - achado real: `radpop_radio_cliente_fibra`
+    # pode ter mais de uma linha para o mesmo `id_login` (ex.: ONU trocada/re-provisionada sem
+    # apagar o registro antigo), e um único `INSERT ... ON CONFLICT DO UPDATE` não pode afetar a
+    # mesma linha duas vezes (Postgres levanta `CardinalityViolation`, derrubando o snapshot inteiro
+    # do ciclo). Sem isso, um único login duplicado quebrava a captura de todos os outros.
+    deduped: dict[int, dict] = {}
+    for record in fetch_onu_signal_by_login_ids(client, login_ids):
+        if not record.get("id_login"):
+            continue
+        deduped[int(record["id_login"])] = {
             "login_id": int(record["id_login"]),
             "contract_id": _parse_ixc_text(record.get("id_contrato")),
             "signal_rx_dbm": _parse_ixc_float(record.get("sinal_rx")),
@@ -95,9 +103,7 @@ def capture_onu_signal_snapshot(db: Session, client: IxcClient) -> int:
             "longitude": _parse_ixc_float(record.get("longitude")),
             "captured_at": captured_at,
         }
-        for record in fetch_onu_signal_by_login_ids(client, login_ids)
-        if record.get("id_login")
-    ]
+    parsed = list(deduped.values())
     if not parsed:
         return 0
 
