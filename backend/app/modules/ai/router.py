@@ -264,11 +264,9 @@ def offline_login_clusters_route(
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
 ) -> dict:
-    """Item 19 do pedido ("consulta de Infra" no monitor de incidentes) - agrupa logins que
-    transicionaram pra desconectado nos últimos `window_minutes` e estão geograficamente próximos,
-    candidato a rompimento de fibra num trecho (distinto de uma queda isolada de um único cliente -
-    ver `operations/login_geo_clusters.py`). Não recebe filtro de O.S. de propósito: proximidade
-    geográfica e tempo de desconexão são as dimensões relevantes aqui, não regional/setor/assunto."""
+    """Agrupa logins que caíram nos últimos `window_minutes` e estão geograficamente próximos -
+    candidato a rompimento de fibra num trecho (distinto de uma queda isolada). Só considera
+    proximidade e tempo de desconexão, não regional/setor/assunto de O.S."""
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.offline_login_clusters", "api")
@@ -322,11 +320,9 @@ def login_status_route(
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
 ) -> list:
-    """Status ATUAL de conectividade por login (item novo, pedido do usuário em 2026-08-14) - não
-    é um evento de queda, é o estado agora e há quanto tempo está nesse estado (`status_changed_at`
-    só avança quando `online` muda de valor). Distinto de `/infra/offline-login-clusters`: aqui é
-    consulta individual (um login específico ou uma busca geográfica pontual), não detecção de
-    cluster de queda em massa."""
+    """Status ATUAL de conectividade por login - não é um evento de queda, é o estado agora e há
+    quanto tempo está nesse estado (`status_changed_at` só avança quando `online` muda). Consulta
+    individual (login específico ou busca geográfica), não cluster de queda em massa."""
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_status", "api")
@@ -496,9 +492,8 @@ def onu_signal_route(
     context: ApiKeyContext = Depends(require_api_key_context),
 ) -> list[dict]:
     """Telemetria óptica/ONU (transmissor, sinal RX/TX em dBm, serial da ONU, causa da última
-    queda - ex.: "Link Loss") - pedido do usuário em 2026-08-14, achada por sondagem manual contra
-    a API real do IXC (tabela `radpop_radio_cliente_fibra`, não documentada publicamente). Só
-    cobre os logins já monitorados pelo sistema, não a base inteira de ONUs do IXC."""
+    queda - ex.: "Link Loss"). Só cobre os logins já monitorados pelo sistema, não a base inteira
+    de ONUs do IXC."""
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.onu_signal", "api")
@@ -645,8 +640,11 @@ def team_target_performance_route(
 
 @public_router.get("/openapi.json", include_in_schema=False)
 def ai_openapi_schema(request: Request) -> dict:
-    """Schema OpenAPI só com as 3 rotas deste módulo - pra importar no ChatGPT Actions sem
-    vazar nada do resto do sistema, mesmo que ele cresça.
+    """Schema OpenAPI só com as rotas deste módulo (`/ai/*`, hoje bem mais que as 3 originais) -
+    pra importar no ChatGPT Actions sem vazar nada do resto do sistema. O ChatGPT limita a
+    `description` de cada operação a 300 caracteres - ao adicionar uma rota nova aqui, confira o
+    tamanho do docstring antes de publicar (achado real 2026-08-15: 3 rotas excediam o limite e
+    quebravam a importação inteira do schema, não só a rota problemática).
 
     Gera o schema a partir de `router.routes` (o APIRouter isolado deste módulo, ANTES de ser
     incluído no app) - não do app inteiro. Isso importa porque `get_openapi()` computa
