@@ -6,7 +6,21 @@ import { AppCombobox, AppInput, AppSwitch } from "@/components/gamification/conf
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import type { HealthRule } from "@/lib/types";
+
+// Campo pode ficar transitoriamente NaN enquanto o usuário limpa pra digitar de novo (ver
+// `numericInputValue`/`parseNumericInput`) - nunca mandar isso pra API no clique de "Salvar",
+// senão vira `null` no JSON. Normaliza pra 0 no envio, mesmo fallback que já existia antes
+// (`Number(event.target.value || 0)`), só que agora só se aplica no submit, não a cada tecla.
+function withValidNumbers(rule: HealthRule): HealthRule {
+  return {
+    ...rule,
+    min_sla: Number.isFinite(rule.min_sla) ? rule.min_sla : 0,
+    max_recurrence_rate: Number.isFinite(rule.max_recurrence_rate) ? rule.max_recurrence_rate : 0,
+    multiplier: Number.isFinite(rule.multiplier) ? rule.multiplier : 0,
+  };
+}
 
 type Props = {
   pointValue: string;
@@ -174,16 +188,16 @@ export function GovernanceRulesPanel({
                   <TableCell className="w-28">
                     <AppInput
                       type="number"
-                      value={rule.min_sla}
-                      onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { min_sla: Number(event.target.value || 0) }))}
+                      value={numericInputValue(rule.min_sla)}
+                      onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { min_sla: parseNumericInput(event.target.value) }))}
                     />
                   </TableCell>
                   <TableCell className="w-28">
                     <AppInput
                       type="number"
-                      value={rule.max_recurrence_rate}
+                      value={numericInputValue(rule.max_recurrence_rate)}
                       onChange={(event) =>
-                        setHealthRules(replaceById(healthRules, rule.id, { max_recurrence_rate: Number(event.target.value || 0) }))
+                        setHealthRules(replaceById(healthRules, rule.id, { max_recurrence_rate: parseNumericInput(event.target.value) }))
                       }
                     />
                   </TableCell>
@@ -191,15 +205,15 @@ export function GovernanceRulesPanel({
                     <AppInput
                       type="number"
                       step="0.05"
-                      value={rule.multiplier}
-                      onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { multiplier: Number(event.target.value || 0) }))}
+                      value={numericInputValue(rule.multiplier)}
+                      onChange={(event) => setHealthRules(replaceById(healthRules, rule.id, { multiplier: parseNumericInput(event.target.value) }))}
                     />
                   </TableCell>
                   <TableCell>
                     <AppSwitch checked={rule.active} onCheckedChange={(checked) => setHealthRules(replaceById(healthRules, rule.id, { active: checked }))} />
                   </TableCell>
                   <TableCell>
-                    <Button variant="outline" size="sm" onClick={() => onSaveHealthRule(rule)}>
+                    <Button variant="outline" size="sm" onClick={() => onSaveHealthRule(withValidNumbers(rule))}>
                       <Save className="h-4 w-4" />
                       Salvar
                     </Button>

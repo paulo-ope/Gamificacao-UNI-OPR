@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatInteger, formatMoney } from "@/lib/format";
+import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import type { DiagnosisActionType, ImportedDiagnosis } from "@/lib/types";
 
 function severityTone(serviceOrdersCount: number): "danger" | "warning" | "neutral" {
@@ -43,7 +44,10 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
   const [query, setQuery] = useState("");
   const [drafts, setDrafts] = useState<Record<string, DiagnosisDraft>>({});
   const [bulkAction, setBulkAction] = useState<DiagnosisActionType>("requires_review");
-  const [bulkPoints, setBulkPoints] = useState("0");
+  // Vazio (não "0") por padrão - `buildDraft` já trata "" como 0 ao aplicar. Começar em "0"
+  // literal fazia o campo concatenar dígitos ao digitar (achado real: "0" + "500" digitado
+  // virava "0500", porque esse estado é string crua e nunca é reconvertido a cada tecla).
+  const [bulkPoints, setBulkPoints] = useState("");
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -78,6 +82,9 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
   function toPayload(diagnosisName: string, currentDraft: DiagnosisDraft): DiagnosisConfigurePayload {
     return {
       ...currentDraft,
+      // Pode estar vazio (NaN) se o usuário limpou o campo pra digitar de novo - nunca mandar
+      // isso pra API.
+      penalty_points: Number.isFinite(currentDraft.penalty_points) ? currentDraft.penalty_points : 0,
       active: true,
       description: `Regra criada a partir do diagnóstico sem regra ${diagnosisName}.`
     };
@@ -243,13 +250,17 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
                 <TableCell className="w-32">
                   <AppInput
                     type="number"
-                    value={currentDraft.action_type === "force_points" ? currentDraft.force_points_value ?? "" : currentDraft.penalty_points}
+                    value={
+                      currentDraft.action_type === "force_points"
+                        ? currentDraft.force_points_value ?? ""
+                        : numericInputValue(currentDraft.penalty_points)
+                    }
                     onChange={(event) =>
                       updateDraft(
                         item,
                         currentDraft.action_type === "force_points"
                           ? { force_points_value: event.target.value === "" ? null : Number(event.target.value) }
-                          : { penalty_points: Number(event.target.value) }
+                          : { penalty_points: parseNumericInput(event.target.value) }
                       )
                     }
                   />

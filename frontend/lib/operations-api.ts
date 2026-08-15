@@ -613,6 +613,10 @@ export type OperationIxcSyncSettings = {
   sector_ids: string[];
   sector_scope_label: string;
   available_sectors: OperationIxcSector[];
+  login_status_interval_minutes: number;
+  onu_signal_interval_minutes: number;
+  login_status_enabled: boolean;
+  onu_signal_enabled: boolean;
 };
 
 export type OperationFilterState = {
@@ -740,6 +744,52 @@ export type OperationOfflineLoginCluster = {
   radius_meters: number;
   size: number;
   logins: OperationOfflineLogin[];
+};
+
+export type OperationBranchCapacity = {
+  id: number;
+  regional: string;
+  good_threshold: number;
+  great_threshold: number;
+  excellent_threshold: number;
+  good_color: string;
+  great_color: string;
+  excellent_color: string;
+  updated_at: string;
+};
+
+export type OperationBranchCapacityUpdate = {
+  good_threshold: number;
+  great_threshold: number;
+  excellent_threshold: number;
+  good_color: string;
+  great_color: string;
+  excellent_color: string;
+};
+
+export type OperationBranchCapacityTier = "below" | "good" | "great" | "excellent";
+
+export type OperationBranchCapacitySummaryItem = {
+  regional: string;
+  realized: number;
+  good_threshold: number;
+  great_threshold: number;
+  excellent_threshold: number;
+  good_color: string;
+  great_color: string;
+  excellent_color: string;
+  tier: OperationBranchCapacityTier;
+  tier_label: string;
+  percent_of_excellent: number;
+  difference_to_next_tier: number | null;
+  collaborators_count: number;
+  average_per_collaborator: number;
+};
+
+export type OperationBranchCapacitySummary = {
+  date_from: string;
+  date_to: string;
+  items: OperationBranchCapacitySummaryItem[];
 };
 
 export type OperationOfflineLoginClusters = {
@@ -1123,4 +1173,12 @@ export const operationsApi = {
       `/operations/network/offline-login-clusters?${search.toString()}`,
     );
   },
+  capacitySummary: (filters: OperationFilterState) =>
+    request<OperationBranchCapacitySummary>(`/operations/capacity-summary?${query(filters)}`),
+  branchCapacities: () => request<OperationBranchCapacity[]>("/operations/branch-capacity"),
+  updateBranchCapacity: (regional: string, payload: OperationBranchCapacityUpdate) =>
+    request<OperationBranchCapacity>(`/operations/branch-capacity/${encodeURIComponent(regional)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
 };

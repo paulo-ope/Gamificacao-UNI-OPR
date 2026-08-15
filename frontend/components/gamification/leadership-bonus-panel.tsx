@@ -24,6 +24,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RegionalMultiSelect, uniqueRegionals } from "@/components/gamification/config-ui";
+import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import { cn } from "@/lib/utils";
 import type { LeadershipAverageSource, LeadershipProfile, LeadershipRoleProfile, LeadershipRoleType } from "@/lib/types";
@@ -599,9 +600,9 @@ export function LeadershipBonusPanel({
                   type="number"
                   step="0.01"
                   min="0"
-                  value={roleDraft.default_multiplier}
+                  value={numericInputValue(roleDraft.default_multiplier)}
                   onChange={(event) =>
-                    setRoleDraft((current) => ({ ...current, default_multiplier: Number(event.target.value) }))
+                    setRoleDraft((current) => ({ ...current, default_multiplier: parseNumericInput(event.target.value) }))
                   }
                   disabled={readOnly}
                 />
@@ -632,6 +633,11 @@ export function LeadershipBonusPanel({
                 type="button"
                 disabled={readOnly || !roleDraft.name.trim()}
                 onClick={() => {
+                  // Campo pode estar vazio (NaN) se o usuário limpou pra digitar de novo -
+                  // nunca mandar isso pra API, cai no multiplicador padrão do escopo escolhido.
+                  const defaultMultiplier = Number.isFinite(roleDraft.default_multiplier)
+                    ? roleDraft.default_multiplier
+                    : DEFAULT_MULTIPLIERS[roleDraft.scope_type];
                   if (editingRoleId) {
                     const current = roleProfiles.find((item) => item.id === editingRoleId);
                     if (!current) return;
@@ -639,7 +645,7 @@ export function LeadershipBonusPanel({
                       ...current,
                       name: roleDraft.name.trim(),
                       scope_type: roleDraft.scope_type,
-                      default_multiplier: roleDraft.default_multiplier,
+                      default_multiplier: defaultMultiplier,
                       active: roleDraft.active,
                     }).then(() => {
                       setRoleDrawerOpen(false);
@@ -647,7 +653,7 @@ export function LeadershipBonusPanel({
                     });
                     return;
                   }
-                  void onCreateRoleProfile(roleDraft).then(() => {
+                  void onCreateRoleProfile({ ...roleDraft, default_multiplier: defaultMultiplier }).then(() => {
                     setRoleDrawerOpen(false);
                     resetRoleDraft();
                   });
@@ -775,9 +781,11 @@ export function LeadershipBonusPanel({
                     step="0.01"
                     min="0"
                     disabled={readOnly || !leaderDraft.use_custom_multiplier}
-                    value={leaderDraft.use_custom_multiplier ? leaderDraft.custom_multiplier ?? leaderDraft.multiplier : leaderDraft.multiplier}
+                    value={numericInputValue(
+                      leaderDraft.use_custom_multiplier ? leaderDraft.custom_multiplier ?? leaderDraft.multiplier : leaderDraft.multiplier,
+                    )}
                     onChange={(event) => {
-                      const value = Number(event.target.value);
+                      const value = parseNumericInput(event.target.value);
                       setLeaderDraft((current) => ({
                         ...current,
                         custom_multiplier: value,
@@ -839,13 +847,17 @@ export function LeadershipBonusPanel({
                   !leaderDraft.role_profile_id
                 }
                 onClick={() => {
+                  const fallbackMultiplier = selectedRoleProfile?.default_multiplier ?? leaderDraft.multiplier;
+                  // Campo pode estar vazio (NaN) se o usuário limpou pra digitar de novo - nunca
+                  // mandar isso pra API, cai no multiplicador do perfil de liderança selecionado.
+                  const customMultiplier = leaderDraft.custom_multiplier;
+                  const resolvedCustomMultiplier: number =
+                    typeof customMultiplier === "number" && Number.isFinite(customMultiplier) ? customMultiplier : fallbackMultiplier;
                   const payload: DraftLeader = {
                     ...leaderDraft,
                     name: leaderDraft.name.trim(),
-                    multiplier:
-                      leaderDraft.use_custom_multiplier
-                        ? leaderDraft.custom_multiplier ?? leaderDraft.multiplier
-                        : (selectedRoleProfile?.default_multiplier ?? leaderDraft.multiplier),
+                    custom_multiplier: resolvedCustomMultiplier,
+                    multiplier: leaderDraft.use_custom_multiplier ? resolvedCustomMultiplier : fallbackMultiplier,
                   };
                   if (editingLeaderId) {
                     const current = profiles.find((item) => item.id === editingLeaderId);

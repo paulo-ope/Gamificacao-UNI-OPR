@@ -22,6 +22,7 @@ import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import { cn } from "@/lib/utils";
 import type {
   ManagementCase,
@@ -168,7 +169,10 @@ export function ManagementCasesPanel({
     setError(null);
     setMessage(null);
     try {
-      const result = await api.generateManagementCases(period.year, period.month);
+      // Ano pode estar vazio (NaN) se o usuário limpou o campo pra digitar de novo - nunca mandar
+      // isso pra API, cai no ano do período inicial.
+      const year = Number.isFinite(period.year) ? period.year : initialPeriod.year;
+      const result = await api.generateManagementCases(year, period.month);
       setMessage(
         result.created_cases > 0
           ? `${result.created_cases} caso(s) aberto(s) para ${String(period.month).padStart(2, "0")}/${period.year}.`
@@ -317,8 +321,8 @@ export function ManagementCasesPanel({
               <Input
                 type="number"
                 className="h-9 w-24"
-                value={period.year}
-                onChange={(event) => setPeriod({ ...period, year: Number(event.target.value) })}
+                value={numericInputValue(period.year)}
+                onChange={(event) => setPeriod({ ...period, year: parseNumericInput(event.target.value) })}
               />
               <Button type="button" onClick={() => void generate()} disabled={generating}>
                 {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}

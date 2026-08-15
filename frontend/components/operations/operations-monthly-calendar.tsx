@@ -5,6 +5,7 @@ import {
   CalendarDays,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   ClipboardList,
   FileSpreadsheet,
   Loader2,
@@ -26,6 +27,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { OperationsCalendarDayMetricsPanel } from "@/components/operations/operations-calendar-day-metrics";
+import { OperationsCapacitySummaryCards } from "@/components/operations/operations-capacity-summary-cards";
 import { OperationsOrderDetailDialog } from "@/components/operations/operations-order-detail-dialog";
 import { CaseDetailDialog } from "@/components/management/management-cases-panel";
 import { api } from "@/lib/api";
@@ -144,11 +146,11 @@ const PERFORMANCE: Record<
     className: "border-red-200 bg-red-50 text-red-700",
   },
   median: {
-    label: "Mediano",
+    label: "Boa",
     className: "border-amber-200 bg-amber-50 text-amber-700",
   },
   good: {
-    label: "Bom",
+    label: "Ótima",
     className: "border-emerald-200 bg-emerald-50 text-emerald-700",
   },
   excellent: {
@@ -278,6 +280,9 @@ export function OperationsMonthlyCalendar({
   const [expandedRegional, setExpandedRegional] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  // Legenda comeca fechada de proposito (pedido do usuario) - o calendario e o que importa ao
+  // abrir a tela; quem ja sabe o que as cores significam nao precisa rolar por ela toda vez.
+  const [legendOpen, setLegendOpen] = useState(false);
   const exportWorkbook = useCalendarExport();
 
   // Justificativa do dia vermelho (drill do calendário -> Gestão Integrada): abre/recupera um
@@ -580,7 +585,11 @@ export function OperationsMonthlyCalendar({
               type="button"
               size="sm"
               variant={groupBy === "regional" ? "default" : "ghost"}
-              className="h-8 text-xs"
+              // `ghost` (estado inativo) não define cor de texto nem fundo próprio - achado real:
+              // sem isso, "Por filial" ficava sem nenhuma affordance de botão ao lado do "Por
+              // colaborador" azul, parecendo texto solto/quebrado. Só aplica o reforço quando
+              // inativo, pra não sobrescrever o texto branco do estado selecionado (`default`).
+              className={cn("h-8 text-xs", groupBy !== "regional" && "text-slate-600 hover:bg-white hover:text-slate-900")}
               onClick={() => onGroupByChange("regional")}
               aria-pressed={groupBy === "regional"}
             >
@@ -590,15 +599,26 @@ export function OperationsMonthlyCalendar({
               type="button"
               size="sm"
               variant={groupBy === "collaborator" ? "default" : "ghost"}
-              className="h-8 text-xs"
+              className={cn("h-8 text-xs", groupBy !== "collaborator" && "text-slate-600 hover:bg-white hover:text-slate-900")}
               onClick={() => onGroupByChange("collaborator")}
               aria-pressed={groupBy === "collaborator"}
             >
               Por colaborador
             </Button>
           </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs"
+            onClick={() => setLegendOpen((current) => !current)}
+            aria-expanded={legendOpen}
+          >
+            {legendOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            {legendOpen ? "Ocultar legenda" : "Exibir legenda"}
+          </Button>
         </div>
-        {legendModels.length ? (
+        {legendOpen && legendModels.length ? (
           <div
             className="mt-4 space-y-2 border-t border-slate-100 pt-3"
             aria-label="Legenda de desempenho por modelo de equipe"
@@ -641,12 +661,12 @@ export function OperationsMonthlyCalendar({
               })}
             </div>
           </div>
-        ) : (
+        ) : legendOpen ? (
           <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
             Nenhum modelo de equipe vinculado aos colaboradores deste recorte.
           </p>
-        )}
-        {canJustifyManagement ? (
+        ) : null}
+        {legendOpen && canJustifyManagement ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3" aria-label="Legenda de status de justificativa">
             <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">Bolinha no dia = status na Gestão Integrada</p>
             <span className="flex items-center gap-1 text-[9px] font-semibold text-slate-600">
@@ -662,6 +682,8 @@ export function OperationsMonthlyCalendar({
           </div>
         ) : null}
       </section>
+
+      <OperationsCapacitySummaryCards filters={filters} />
 
       {isLoading ? <CalendarSkeleton /> : null}
 
@@ -709,7 +731,13 @@ export function OperationsMonthlyCalendar({
               {expandedRegional === regional.regional ? (
                 <CardContent
                   id={`calendar-regional-${encodeURIComponent(regional.regional)}`}
-                  className="overflow-x-auto p-0"
+                  // `max-h` + `overflow-y-auto` são o que faz o cabeçalho (`sticky top-0` na
+                  // `<thead>` abaixo) realmente grudar durante a rolagem - achado real: sem uma
+                  // altura limitada aqui, este container nunca chega a rolar de verdade (fica do
+                  // tamanho exato do conteúdo, quem rola é a página inteira), e um `sticky` sem
+                  // viewport própria não gruda em lugar nenhum - só "parece" sticky no CSS, mas
+                  // na prática o cabeçalho sobe junto com o resto ao rolar a página.
+                  className="max-h-[70vh] overflow-x-auto overflow-y-auto p-0"
                 >
                   <table
                     className="w-full min-w-[1120px] table-fixed border-collapse text-[9px]"

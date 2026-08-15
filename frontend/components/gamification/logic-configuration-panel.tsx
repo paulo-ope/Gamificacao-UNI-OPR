@@ -33,6 +33,7 @@ import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { formatInteger, formatMoney, formatPoints } from "@/lib/format";
+import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import { cn } from "@/lib/utils";
 import type {
   CpkRegionalSnapshot,
@@ -135,14 +136,6 @@ function replaceById<T extends { id: number }>(items: T[], id: number, patch: Pa
 }
 
 const HEALTH_BELOW_MINIMUM_MULTIPLIER_SETTING = "health_below_minimum_multiplier";
-
-function numericInputValue(value: number) {
-  return Number.isFinite(value) ? value : "";
-}
-
-function parseNumericInput(value: string) {
-  return value === "" ? Number.NaN : Number(value);
-}
 
 type GroupSnapshot = Pick<ScoringGroup, "name" | "default_points" | "point_value_override" | "active">;
 
@@ -781,12 +774,18 @@ export function LogicConfigurationPanel({
   async function saveGroup(groupId: number) {
     const group = groups.find((item) => item.id === groupId);
     if (!group) return;
+    // Pontos pode estar vazio (NaN) se o usuário limpou o campo pra digitar de novo - nunca
+    // mandar isso pra API, cai no valor salvo anteriormente (baseline) ou 0.
+    const validatedGroup: ScoringGroup = {
+      ...group,
+      default_points: Number.isFinite(group.default_points) ? group.default_points : groupBaselines[groupId]?.default_points ?? 0,
+    };
     setSavingGroupId(groupId);
     await runConfigAction(async () => {
-      await onSaveGroup(group);
+      await onSaveGroup(validatedGroup);
       setGroupBaselines((current) => ({
         ...current,
-        [groupId]: groupSnapshot(group),
+        [groupId]: groupSnapshot(validatedGroup),
       }));
     }, `Grupo "${group.name}" salvo.`);
     setSavingGroupId((current) => (current === groupId ? null : current));
@@ -1127,7 +1126,7 @@ export function LogicConfigurationPanel({
       min_hours_between: newRecurrenceRule.min_hours_between ?? null,
       require_same_subject: Boolean(newRecurrenceRule.require_same_subject),
       require_same_diagnosis: Boolean(newRecurrenceRule.require_same_diagnosis),
-      priority: Number(newRecurrenceRule.priority ?? 100),
+      priority: Number.isFinite(newRecurrenceRule.priority) ? (newRecurrenceRule.priority as number) : 100,
       description: newRecurrenceRule.description || null,
       active: newRecurrenceRule.active ?? true
     });
@@ -1428,8 +1427,8 @@ export function LogicConfigurationPanel({
                 <Label>Pontos padrão</Label>
                 <AppInput
                   type="number"
-                  value={newGroupDraft.default_points}
-                  onChange={(event) => setNewGroupDraft((current) => ({ ...current, default_points: Number(event.target.value) }))}
+                  value={numericInputValue(newGroupDraft.default_points)}
+                  onChange={(event) => setNewGroupDraft((current) => ({ ...current, default_points: parseNumericInput(event.target.value) }))}
                 />
               </div>
               <Button type="button" onClick={() => void createGroup()} disabled={busy}>
@@ -1740,7 +1739,8 @@ export function LogicConfigurationPanel({
               <TableBody>
                 {diagnosisRows.slice(0, visibleDiagnosisRowsCount).map((item) => {
                   const draft = diagnosisDraft(item);
-                  const value = draft.action_type === "force_points" ? draft.force_points_value ?? "" : draft.penalty_points;
+                  const value =
+                    draft.action_type === "force_points" ? draft.force_points_value ?? "" : numericInputValue(draft.penalty_points);
                   const pointsField = diagnosisPointsFieldState(draft.action_type);
                   return (
                     <TableRow key={item.diagnosis_name}>
@@ -1773,7 +1773,7 @@ export function LogicConfigurationPanel({
                               item,
                               draft.action_type === "force_points"
                                 ? { force_points_value: event.target.value === "" ? null : Number(event.target.value) }
-                                : { penalty_points: Number(event.target.value || 0) }
+                                : { penalty_points: parseNumericInput(event.target.value) }
                             )
                           }
                         />
@@ -1789,7 +1789,14 @@ export function LogicConfigurationPanel({
                         <Button
                           variant="default"
                           size="sm"
-                          onClick={() => onSaveDiagnosisRule(item.diagnosis_name, item.rule_id, draft)}
+                          onClick={() =>
+                            onSaveDiagnosisRule(item.diagnosis_name, item.rule_id, {
+                              ...draft,
+                              // Pode estar vazio (NaN) se o usuário limpou o campo pra digitar
+                              // de novo - nunca mandar isso pra API.
+                              penalty_points: Number.isFinite(draft.penalty_points) ? draft.penalty_points : 0,
+                            })
+                          }
                         >
                           <Save className="h-4 w-4" />
                           Salvar
@@ -1862,15 +1869,26 @@ export function LogicConfigurationPanel({
                     <TableCell className="w-40">
                       <Input
                         type="number"
-                        value={valueField.editable ? rule.penalty_value : ""}
+                        value={valueField.editable ? numericInputValue(rule.penalty_value) : ""}
                         disabled={!valueField.editable}
                         placeholder={valueField.editable ? undefined : "N/A"}
-                        onChange={(event) => setSlaRules(replaceById(slaRules, rule.id, { penalty_value: Number(event.target.value) }))}
+                        onChange={(event) => setSlaRules(replaceById(slaRules, rule.id, { penalty_value: parseNumericInput(event.target.value) }))}
                       />
                       <div className="mt-1 text-xs text-slate-500">{valueField.helper}</div>
                     </TableCell>
                     <TableCell>
-                      <Button variant="default" size="sm" onClick={() => onSaveSlaRule(rule)}>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() =>
+                          onSaveSlaRule({
+                            ...rule,
+                            // Pode estar vazio (NaN) se o usuário limpou o campo pra digitar de
+                            // novo - nunca mandar isso pra API.
+                            penalty_value: Number.isFinite(rule.penalty_value) ? rule.penalty_value : 0,
+                          })
+                        }
+                      >
                         <Save className="h-4 w-4" />
                         Salvar
                       </Button>
@@ -1957,7 +1975,7 @@ export function LogicConfigurationPanel({
                         <Input
                           type="number"
                           step="0.05"
-                          value={localSettings[HEALTH_BELOW_MINIMUM_MULTIPLIER_SETTING] ?? "0"}
+                          value={localSettings[HEALTH_BELOW_MINIMUM_MULTIPLIER_SETTING] ?? ""}
                           onChange={(event) =>
                             setLocalSettings({
                               ...localSettings,
@@ -2273,8 +2291,8 @@ export function LogicConfigurationPanel({
                         <Input
                           type="number"
                           className="w-28"
-                          value={newRecurrenceRule.priority ?? 100}
-                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, priority: Number(event.target.value || 0) })}
+                          value={numericInputValue(newRecurrenceRule.priority ?? 100)}
+                          onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, priority: parseNumericInput(event.target.value) })}
                         />
                         <p className="text-[11px] text-slate-500">Regras com prioridade menor são conferidas primeiro quando mais de uma bate com a mesma O.S.</p>
                       </div>
@@ -2337,7 +2355,18 @@ export function LogicConfigurationPanel({
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <Button variant="default" size="sm" onClick={() => onSaveRecurrenceRule(rule)}>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() =>
+                          // Prioridade pode estar vazia (NaN) se o usuário limpou pra digitar de
+                          // novo - nunca mandar isso pra API, cai em 100 (mesmo padrão de antes).
+                          onSaveRecurrenceRule({
+                            ...rule,
+                            priority: Number.isFinite(rule.priority) ? rule.priority : 100,
+                          })
+                        }
+                      >
                         <Save className="h-4 w-4" />
                         Salvar
                       </Button>
@@ -2461,9 +2490,9 @@ export function LogicConfigurationPanel({
                           <Label>Prioridade</Label>
                           <Input
                             type="number"
-                            value={rule.priority ?? 100}
+                            value={numericInputValue(rule.priority ?? 100)}
                             onChange={(event) =>
-                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { priority: Number(event.target.value || 0) }))
+                              setRecurrenceRules(replaceById(recurrenceRules, rule.id, { priority: parseNumericInput(event.target.value) }))
                             }
                           />
                         </div>
@@ -3021,8 +3050,8 @@ export function LogicConfigurationPanel({
                     <Label>Pontos do grupo</Label>
                     <AppInput
                       type="number"
-                      value={currentEditingGroup.default_points}
-                      onChange={(event) => updateGroupField(currentEditingGroup.id, { default_points: Number(event.target.value) })}
+                      value={numericInputValue(currentEditingGroup.default_points)}
+                      onChange={(event) => updateGroupField(currentEditingGroup.id, { default_points: parseNumericInput(event.target.value) })}
                     />
                   </div>
                   <div className="grid gap-2">

@@ -34,7 +34,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { OperationsBranchCapacityPanel } from "@/components/operations/operations-branch-capacity-panel";
 import { StatusToast } from "@/components/ui/status-toast";
+import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import {
   operationsApi,
   type OperationIxcSyncSettings,
@@ -150,7 +152,7 @@ export function OperationsTeamConfiguration({
   const canAccessTeamsSection = canManageTeamModels || canManageOwnTeamMembers;
   const canAssignMembers = canAccessTeamsSection;
   const [data, setData] = useState<OperationTeamConfiguration | null>(null);
-  const [section, setSection] = useState<"models" | "members" | "subjects" | "sync">(
+  const [section, setSection] = useState<"models" | "members" | "subjects" | "sync" | "capacity">(
     canManageTeamModels ? "models" : canManageOwnTeamMembers ? "members" : canManageSubjects ? "subjects" : "sync",
   );
   const [subjectMappings, setSubjectMappings] = useState<
@@ -175,10 +177,18 @@ export function OperationsTeamConfiguration({
   const [syncingDirectory, setSyncingDirectory] = useState(false);
   const [savingSyncSettings, setSavingSyncSettings] = useState(false);
   const [syncEnabled, setSyncEnabled] = useState(false);
-  const [syncIntervalMinutes, setSyncIntervalMinutes] = useState("20");
-  const [syncBacklogIntervalMinutes, setSyncBacklogIntervalMinutes] = useState("60");
-  const [syncLookbackDays, setSyncLookbackDays] = useState("1");
+  // Estado number (não string) - o `onChange` reconverte a cada tecla via `parseNumericInput`,
+  // então o React sempre reescreve o DOM com o valor já limpo. Achado real: a versão anterior
+  // guardava string crua direto de `event.target.value` sem nunca reconverter, então digitar
+  // depois de um valor existente concatenava em vez de substituir.
+  const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(20);
+  const [syncBacklogIntervalMinutes, setSyncBacklogIntervalMinutes] = useState(60);
+  const [syncLookbackDays, setSyncLookbackDays] = useState(1);
   const [syncSectorIds, setSyncSectorIds] = useState<string[]>([]);
+  const [loginStatusEnabled, setLoginStatusEnabled] = useState(true);
+  const [onuSignalEnabled, setOnuSignalEnabled] = useState(true);
+  const [loginStatusIntervalMinutes, setLoginStatusIntervalMinutes] = useState(5);
+  const [onuSignalIntervalMinutes, setOnuSignalIntervalMinutes] = useState(15);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -214,10 +224,14 @@ export function OperationsTeamConfiguration({
   useEffect(() => {
     if (!ixcSyncSettings) return;
     setSyncEnabled(ixcSyncSettings.enabled);
-    setSyncIntervalMinutes(String(ixcSyncSettings.interval_minutes));
-    setSyncBacklogIntervalMinutes(String(ixcSyncSettings.backlog_sweep_interval_minutes));
-    setSyncLookbackDays(String(ixcSyncSettings.lookback_days));
+    setSyncIntervalMinutes(ixcSyncSettings.interval_minutes);
+    setSyncBacklogIntervalMinutes(ixcSyncSettings.backlog_sweep_interval_minutes);
+    setSyncLookbackDays(ixcSyncSettings.lookback_days);
     setSyncSectorIds(ixcSyncSettings.sector_ids);
+    setLoginStatusEnabled(ixcSyncSettings.login_status_enabled);
+    setOnuSignalEnabled(ixcSyncSettings.onu_signal_enabled);
+    setLoginStatusIntervalMinutes(ixcSyncSettings.login_status_interval_minutes);
+    setOnuSignalIntervalMinutes(ixcSyncSettings.onu_signal_interval_minutes);
   }, [ixcSyncSettings]);
 
   const regionals = useMemo(
@@ -512,17 +526,18 @@ export function OperationsTeamConfiguration({
     setError(null);
     setMessage(null);
     try {
-      const interval = Number(syncIntervalMinutes);
-      const backlogInterval = Number(syncBacklogIntervalMinutes);
-      const lookbackDays = Number(syncLookbackDays);
       const saved = await operationsApi.updateIxcSyncSettings({
         enabled: syncEnabled,
-        interval_minutes: Number.isFinite(interval) ? interval : 20,
-        backlog_sweep_interval_minutes: Number.isFinite(backlogInterval)
-          ? backlogInterval
+        interval_minutes: Number.isFinite(syncIntervalMinutes) ? syncIntervalMinutes : 20,
+        backlog_sweep_interval_minutes: Number.isFinite(syncBacklogIntervalMinutes)
+          ? syncBacklogIntervalMinutes
           : 60,
-        lookback_days: Number.isFinite(lookbackDays) ? lookbackDays : 1,
+        lookback_days: Number.isFinite(syncLookbackDays) ? syncLookbackDays : 1,
         sector_ids: syncSectorIds,
+        login_status_enabled: loginStatusEnabled,
+        onu_signal_enabled: onuSignalEnabled,
+        login_status_interval_minutes: Number.isFinite(loginStatusIntervalMinutes) ? loginStatusIntervalMinutes : 5,
+        onu_signal_interval_minutes: Number.isFinite(onuSignalIntervalMinutes) ? onuSignalIntervalMinutes : 15,
       });
       onIxcSyncSettingsChange(saved);
       setMessage(`Sincronização IXC atualizada: ${saved.sector_scope_label}.`);
@@ -619,6 +634,12 @@ export function OperationsTeamConfiguration({
                 "Intervalo automatico e setores importados",
                 RefreshCw,
               ],
+              [
+                "capacity",
+                "Capacidade por filial",
+                "Faixas Boa, Ótima e Excelente por filial",
+                Target,
+              ],
             ] as const
           )
             .filter(([value]) =>
@@ -695,8 +716,8 @@ export function OperationsTeamConfiguration({
                   type="number"
                   min={5}
                   max={1440}
-                  value={syncIntervalMinutes}
-                  onChange={(event) => setSyncIntervalMinutes(event.target.value)}
+                  value={numericInputValue(syncIntervalMinutes)}
+                  onChange={(event) => setSyncIntervalMinutes(parseNumericInput(event.target.value))}
                 />
                 <span className="text-[10px] font-normal text-slate-500">
                   Mínimo 5 min. Recomendado: 20 a 60 min.
@@ -708,8 +729,8 @@ export function OperationsTeamConfiguration({
                   type="number"
                   min={15}
                   max={1440}
-                  value={syncBacklogIntervalMinutes}
-                  onChange={(event) => setSyncBacklogIntervalMinutes(event.target.value)}
+                  value={numericInputValue(syncBacklogIntervalMinutes)}
+                  onChange={(event) => setSyncBacklogIntervalMinutes(parseNumericInput(event.target.value))}
                 />
                 <span className="text-[10px] font-normal text-slate-500">
                   Mínimo 15 min. Essa consulta é mais pesada.
@@ -721,8 +742,8 @@ export function OperationsTeamConfiguration({
                   type="number"
                   min={1}
                   max={30}
-                  value={syncLookbackDays}
-                  onChange={(event) => setSyncLookbackDays(event.target.value)}
+                  value={numericInputValue(syncLookbackDays)}
+                  onChange={(event) => setSyncLookbackDays(parseNumericInput(event.target.value))}
                 />
                 <span className="text-[10px] font-normal text-slate-500">
                   Quantos dias antes de hoje o ciclo reimporta a cada rodada
@@ -773,6 +794,93 @@ export function OperationsTeamConfiguration({
                 Se nada for selecionado, o backend usa o escopo seguro dos 3 setores.
               </p>
             </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3">
+              <p className="mb-1 text-xs font-semibold text-slate-900">
+                Monitoramento de rede (status de login e sinal ONU)
+              </p>
+              <p className="mb-3 text-[11px] text-slate-500">
+                Loops independentes da sincronização de O.S. acima - desligue
+                quando não estiver acompanhando incidentes, mantendo só a
+                atualização de O.S. rodando.
+              </p>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold text-slate-900">
+                    Status de login
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Conectividade (online/offline) de todos os logins ativos.
+                  </p>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={loginStatusEnabled}
+                    onClick={() => setLoginStatusEnabled((current) => !current)}
+                    className={`mt-3 inline-flex h-9 items-center rounded-full border px-1 transition ${loginStatusEnabled ? "border-blue-600 bg-blue-600" : "border-slate-300 bg-white"}`}
+                  >
+                    <span
+                      className={`inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-[10px] font-bold shadow transition ${loginStatusEnabled ? "translate-x-14 text-blue-700" : "translate-x-0 text-slate-500"}`}
+                    >
+                      {loginStatusEnabled ? "ON" : "OFF"}
+                    </span>
+                    <span className="w-14 text-center text-xs font-semibold text-white">
+                      {loginStatusEnabled ? "" : "OFF"}
+                    </span>
+                  </button>
+                  <label className="mt-3 grid gap-1.5 text-xs font-medium text-slate-700">
+                    Intervalo (minutos)
+                    <Input
+                      type="number"
+                      min={2}
+                      max={120}
+                      value={numericInputValue(loginStatusIntervalMinutes)}
+                      onChange={(event) => setLoginStatusIntervalMinutes(parseNumericInput(event.target.value))}
+                    />
+                    <span className="text-[10px] font-normal text-slate-500">
+                      Mínimo 2 min. Padrão: 5 min.
+                    </span>
+                  </label>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold text-slate-900">
+                    Sinal ONU/PON
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Telemetria óptica só de quem está offline, mudou de status
+                    recentemente, ou nunca foi capturado - não a base inteira.
+                  </p>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={onuSignalEnabled}
+                    onClick={() => setOnuSignalEnabled((current) => !current)}
+                    className={`mt-3 inline-flex h-9 items-center rounded-full border px-1 transition ${onuSignalEnabled ? "border-blue-600 bg-blue-600" : "border-slate-300 bg-white"}`}
+                  >
+                    <span
+                      className={`inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-[10px] font-bold shadow transition ${onuSignalEnabled ? "translate-x-14 text-blue-700" : "translate-x-0 text-slate-500"}`}
+                    >
+                      {onuSignalEnabled ? "ON" : "OFF"}
+                    </span>
+                    <span className="w-14 text-center text-xs font-semibold text-white">
+                      {onuSignalEnabled ? "" : "OFF"}
+                    </span>
+                  </button>
+                  <label className="mt-3 grid gap-1.5 text-xs font-medium text-slate-700">
+                    Intervalo (minutos)
+                    <Input
+                      type="number"
+                      min={5}
+                      max={180}
+                      value={numericInputValue(onuSignalIntervalMinutes)}
+                      onChange={(event) => setOnuSignalIntervalMinutes(parseNumericInput(event.target.value))}
+                    />
+                    <span className="text-[10px] font-normal text-slate-500">
+                      Mínimo 5 min. Padrão: 15 min.
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
               <p className="text-xs text-blue-900">
                 Para importar desde 01/01/2026, selecione “Todos os setores”,
@@ -794,6 +902,20 @@ export function OperationsTeamConfiguration({
               </Button>
             </div>
           </CardContent>
+        </Card>
+        <Card
+          className={`${section === "capacity" ? "block" : "hidden"} min-w-0 rounded-2xl border-slate-200`}
+        >
+          <CardHeader className="border-b">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Target className="h-4 w-4 text-blue-600" /> Capacidade por filial
+            </CardTitle>
+            <p className="text-xs text-slate-500">
+              Faixas Boa, Ótima e Excelente usadas no indicador gerencial do Calendário - independentes das metas
+              por modelo de equipe.
+            </p>
+          </CardHeader>
+          <OperationsBranchCapacityPanel regionals={regionals} canManage={canManage} />
         </Card>
         <Card
           className={`${section === "models" ? "block" : "hidden"} min-w-0 rounded-2xl border-slate-200`}
@@ -863,22 +985,22 @@ export function OperationsTeamConfiguration({
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-3">
                 <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
-                  Mediano a partir de
+                  Boa a partir de
                   <Input
                     type="number"
                     min={2}
                     max={Math.max(2, form.good_from_quantity - 1)}
-                    value={form.median_from_quantity}
+                    value={numericInputValue(form.median_from_quantity)}
                     disabled={!canManage}
                     onChange={(event) =>
                       updateWeekday({
-                        median_from_quantity: Number(event.target.value),
+                        median_from_quantity: parseNumericInput(event.target.value),
                       })
                     }
                   />
                 </label>
                 <label className="grid gap-1 text-[11px] font-semibold text-slate-600">
-                  Bom a partir de
+                  Ótima a partir de
                   <Input
                     type="number"
                     min={form.median_from_quantity + 1}
@@ -886,11 +1008,11 @@ export function OperationsTeamConfiguration({
                       form.median_from_quantity + 1,
                       form.daily_target - 1,
                     )}
-                    value={form.good_from_quantity}
+                    value={numericInputValue(form.good_from_quantity)}
                     disabled={!canManage}
                     onChange={(event) =>
                       updateWeekday({
-                        good_from_quantity: Number(event.target.value),
+                        good_from_quantity: parseNumericInput(event.target.value),
                       })
                     }
                   />
@@ -901,11 +1023,11 @@ export function OperationsTeamConfiguration({
                     type="number"
                     min={form.good_from_quantity + 1}
                     max={500}
-                    value={form.daily_target}
+                    value={numericInputValue(form.daily_target)}
                     disabled={!canManage}
                     onChange={(event) =>
                       updateWeekday({
-                        daily_target: Number(event.target.value),
+                        daily_target: parseNumericInput(event.target.value),
                       })
                     }
                   />
@@ -991,17 +1113,17 @@ export function OperationsTeamConfiguration({
                             </>
                           ) : null}
                           <label className="grid gap-1 text-[10px] font-semibold text-slate-500">
-                            Mediano
+                            Boa
                             <Input
                               type="number"
                               min={2}
-                              value={rule.median_from_quantity}
+                              value={numericInputValue(rule.median_from_quantity)}
                               disabled={
                                 !canManage || rule.period_type === "weekday"
                               }
                               onChange={(event) =>
                                 updateRule(rule.period_type, {
-                                  median_from_quantity: Number(
+                                  median_from_quantity: parseNumericInput(
                                     event.target.value,
                                   ),
                                 })
@@ -1009,17 +1131,17 @@ export function OperationsTeamConfiguration({
                             />
                           </label>
                           <label className="grid gap-1 text-[10px] font-semibold text-slate-500">
-                            Bom
+                            Ótima
                             <Input
                               type="number"
                               min={3}
-                              value={rule.good_from_quantity}
+                              value={numericInputValue(rule.good_from_quantity)}
                               disabled={
                                 !canManage || rule.period_type === "weekday"
                               }
                               onChange={(event) =>
                                 updateRule(rule.period_type, {
-                                  good_from_quantity: Number(
+                                  good_from_quantity: parseNumericInput(
                                     event.target.value,
                                   ),
                                 })
@@ -1031,13 +1153,13 @@ export function OperationsTeamConfiguration({
                             <Input
                               type="number"
                               min={4}
-                              value={rule.target_quantity}
+                              value={numericInputValue(rule.target_quantity)}
                               disabled={
                                 !canManage || rule.period_type === "weekday"
                               }
                               onChange={(event) =>
                                 updateRule(rule.period_type, {
-                                  target_quantity: Number(event.target.value),
+                                  target_quantity: parseNumericInput(event.target.value),
                                 })
                               }
                             />
@@ -1078,7 +1200,7 @@ export function OperationsTeamConfiguration({
                 className="rounded-lg border p-2 text-[10px] font-semibold text-slate-600"
                 style={{ backgroundColor: form.median_color }}
               >
-                <span className="block">Mediano</span>
+                <span className="block">Boa</span>
                 <span className="block text-[11px]">
                   {form.median_from_quantity}–{form.good_from_quantity - 1}
                 </span>
@@ -1097,7 +1219,7 @@ export function OperationsTeamConfiguration({
                 className="rounded-lg border p-2 text-[10px] font-semibold text-slate-600"
                 style={{ backgroundColor: form.good_color }}
               >
-                <span className="block">Bom</span>
+                <span className="block">Ótima</span>
                 <span className="block text-[11px]">
                   {form.good_from_quantity}–{form.daily_target - 1}
                 </span>

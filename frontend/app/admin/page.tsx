@@ -481,7 +481,11 @@ export default function AdminPage() {
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-7xl gap-5 px-5 py-6">
+      {/* `grid-cols-1` é essencial aqui: sem uma coluna explícita (`minmax(0,1fr)`), o track
+          implícito do grid herda o min-content do descendente mais largo (ex.: a tabela de
+          usuários) e força a página inteira a ~800px, invisível em qualquer tela menor porque
+          html/body usam overflow-x hidden (não gera scroll, só corta o conteúdo). */}
+      <section className="mx-auto grid grid-cols-1 max-w-7xl gap-5 px-5 py-6">
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -530,7 +534,13 @@ export default function AdminPage() {
           onDismissMessage={() => setMessage(null)}
         />
 
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AdminTab)} className="grid gap-5">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as AdminTab)}
+          // Mesmo racional do <section> acima: sem grid-cols-1, o conteúdo mais largo de
+          // qualquer TabsContent (tabelas, cards) força esta grid além da viewport.
+          className="grid grid-cols-1 gap-5"
+        >
           <TabsContent value="users" className="mt-4">
             <div className="rounded-3xl border border-slate-200 bg-white shadow-sm">
               <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-5">

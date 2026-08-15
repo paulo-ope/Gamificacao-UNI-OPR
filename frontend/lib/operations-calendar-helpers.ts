@@ -36,17 +36,21 @@ export function modelLegend(model: OperationCalendarTeamModel) {
   const target = rule?.target_quantity ?? model.daily_target;
   return [
     { key: "below" as const, label: `Abaixo 1–${median - 1}`, color: model.below_target_color },
-    { key: "median" as const, label: `Mediano ${median}–${good - 1}`, color: model.median_color },
-    { key: "good" as const, label: `Bom ${good}–${target - 1}`, color: model.good_color },
+    { key: "median" as const, label: `Boa ${median}–${good - 1}`, color: model.median_color },
+    { key: "good" as const, label: `Ótima ${good}–${target - 1}`, color: model.good_color },
     { key: "excellent" as const, label: `Excelente ${target}+`, color: model.excellent_color },
   ];
 }
 
+// Nomenclatura de exibição (2026-08-14): "Mediano"→"Boa", "Bom"→"Ótima" - só o texto mostrado ao
+// usuário mudou. As chaves internas (`median`, `good`) continuam as mesmas de sempre de propósito
+// (são o que a API e as configurações já salvas usam) - trocar as chaves quebraria configuração
+// existente sem necessidade nenhuma, já que é só rótulo.
 export const PERFORMANCE_LABEL: Record<OperationPerformanceBand, string> = {
   neutral: "Sem produção",
   below: "Abaixo da meta",
-  median: "Mediano",
-  good: "Bom",
+  median: "Boa",
+  good: "Ótima",
   excellent: "Excelente",
 };
 
