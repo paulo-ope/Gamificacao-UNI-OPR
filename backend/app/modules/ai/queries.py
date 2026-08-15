@@ -391,7 +391,22 @@ def _group_label(db: Session, group_by: str):
             (and_(OperationOrder.latitude.is_not(None), OperationOrder.longitude.is_not(None)), cluster_label),
             else_="Sem coordenadas",
         )
-    field = AGGREGATION_DIMENSIONS.get(group_by, OperationOrder.regional)
+    if group_by not in AGGREGATION_DIMENSIONS:
+        # Bug real encontrado e corrigido em 2026-08-15: antes disto, um `group_by` desconhecido
+        # (ex.: "os_subject" - o nome real da COLUNA no banco, em vez de "subject" - o nome da
+        # DIMENSÃO aceita) caía silenciosamente no fallback `.get(group_by, OperationOrder.regional)`,
+        # devolvendo o rótulo/agrupamento de "regional" sem erro nenhum - reproduzido contra dado
+        # real (Ji-Paraná, 2026-08-10 a 2026-08-14): `group_by="os_subject"` devolvia
+        # [{"label": "UNI - JI PARANA", "quantity": 480, ...}] idêntico a `group_by="regional"`,
+        # em vez de rejeitar ou agrupar por assunto. A rota REST/IA (`AiAggregationRequest.group_by`,
+        # tipo `Literal`) já rejeitava isso com 422 - só a tool MCP (`opr_aggregate_orders`, que
+        # chama `aggregate_orders` direto, sem passar pelo schema Pydantic) não validava. Corrigido
+        # aqui, na função raiz usada por ambos os caminhos, para nunca mais divergir entre API/MCP.
+        raise ValueError(
+            f"group_by inválido: '{group_by}'. Dimensões aceitas: "
+            f"{', '.join(sorted(set(AGGREGATION_DIMENSIONS) | {'team_model', 'scheduled_after_sla', 'sla_expired_before_schedule', 'geo_cluster'}))}."
+        )
+    field = AGGREGATION_DIMENSIONS[group_by]
     return func.coalesce(field, "Não identificado")
 
 
