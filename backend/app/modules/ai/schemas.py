@@ -49,6 +49,24 @@ class AiTextFilter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class DateTimeFilterOp(BaseModel):
+    """Filtro fino por horário exato num campo datetime - item pedido pelo usuário em 2026-08-15
+    ("O.S. abertas nos últimos 30 minutos", "entre 17:30 e 18:00") porque `date_from`/`date_to`
+    (tipo `date`, sem hora) nunca permitiu esse nível de precisão. Aceita qualquer datetime ISO8601
+    com offset (`"2026-08-14T17:30:00-04:00"`) ou "Z"/UTC - o valor é convertido para UTC antes de
+    comparar com a coluna (ver `_as_utc` em `operations/queries.py`), então qualquer timezone de
+    entrada funciona igual. `gte`+`lte` juntos formam um "between"; cada operador sozinho também é
+    válido (ex.: só `gte` = "a partir de")."""
+
+    gte: datetime | None = None
+    lte: datetime | None = None
+    gt: datetime | None = None
+    lt: datetime | None = None
+    eq: datetime | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 # Mesmos nomes de OperationFilters (operations/schemas.py) - a IA já "conhece" esse vocabulário
 # porque é o mesmo usado no resto do sistema, sem inventar sinônimo novo. Só o subconjunto que já
 # cobre o pedido original (localização/empresa, tipo/assunto/diagnóstico, responsável/status);
@@ -73,6 +91,11 @@ class AiOrderFilters(BaseModel):
     sla_statuses: list[str] = Field(default_factory=list, max_length=100)
     projects: list[str] = Field(default_factory=list, max_length=100)
     pops: list[str] = Field(default_factory=list, max_length=100)
+    # Login PPPoE/fibra do cliente (radusuarios.login, mesmo valor usado em opr_login_status) -
+    # pedido do usuário em 2026-08-15 pra fechar o fluxo "login caiu -> buscar O.S. do cliente":
+    # o campo já existia em OperationOrder.customer_login (usado só na busca livre por keyword),
+    # mas não era filtrável de forma exata até agora.
+    customer_logins: list[str] = Field(default_factory=list, max_length=50)
     text_filters: list[AiTextFilter] = Field(default_factory=list, max_length=10)
     # Filtros booleanos exatos de etapa de SLA (ver ai/queries.py:_sla_stage_filter_conditions) -
     # None (padrão) significa "não filtrar por isso", igual ao resto dos filtros deste schema.
@@ -86,6 +109,20 @@ class AiOrderFilters(BaseModel):
     near_latitude: float | None = Field(default=None, ge=-90, le=90)
     near_longitude: float | None = Field(default=None, ge=-180, le=180)
     radius_km: float | None = Field(default=None, gt=0, le=500)
+    # Filtro fino por horário exato (ver DateTimeFilterOp) - um por marco do ciclo de vida da O.S.,
+    # mesmos nomes de `operations_queries.DATE_FIELD_COLUMNS`. Aditivo a `date_from`/`date_to`
+    # (que continuam obrigatórios, com granularidade de dia) - permite recortar dentro do período
+    # já selecionado, ex.: "O.S. abertas hoje" (date_from=date_to=hoje) + opened_at.gte/lte para os
+    # últimos 30 minutos.
+    opened_at: DateTimeFilterOp | None = None
+    closed_at: DateTimeFilterOp | None = None
+    deadline_at: DateTimeFilterOp | None = None
+    scheduled_at: DateTimeFilterOp | None = None
+    assumed_at: DateTimeFilterOp | None = None
+    displacement_started_at: DateTimeFilterOp | None = None
+    execution_started_at: DateTimeFilterOp | None = None
+    finished_at: DateTimeFilterOp | None = None
+    source_updated_at: DateTimeFilterOp | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -452,4 +489,52 @@ class AiLoginStatusRequest(BaseModel):
             self.radius_km is not None and self.near_latitude is None
         ):
             raise ValueError("Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+        return self
+
+
+class AiSearchLoginsRequest(BaseModel):
+    """Busca paginada de login - equivalente a `AiLoginStatusRequest`, mas com paginação real
+    (total_encontrado/page/has_more) e filtros adicionais de PON/transmissor/contrato (via join com
+    telemetria ONU) e datetime completo (gte/gt/lte/lt/eq, não só "a partir de")."""
+
+    logins: list[str] = Field(default_factory=list, max_length=200)
+    login_query: str | None = Field(default=None, max_length=160, description="Busca parcial (contém) pelo login.")
+    login_ids: list[int] = Field(default_factory=list, max_length=200)
+    online_statuses: list[str] = Field(default_factory=list)
+    regionals: list[str] = Field(default_factory=list)
+    pon_ids: list[str] = Field(default_factory=list)
+    transmitter_ids: list[str] = Field(default_factory=list)
+    contract_ids: list[str] = Field(default_factory=list)
+    near_latitude: float | None = Field(default=None, ge=-90, le=90)
+    near_longitude: float | None = Field(default=None, ge=-180, le=180)
+    radius_km: float | None = Field(default=None, gt=0, le=500)
+    status_changed_at: DateTimeFilterOp | None = None
+    last_connected_at: DateTimeFilterOp | None = None
+    last_disconnected_at: DateTimeFilterOp | None = None
+    captured_at: DateTimeFilterOp | None = None
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=500)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _validate_geo_triplet(self) -> "AiSearchLoginsRequest":
+        if (self.near_latitude is None) != (self.near_longitude is None) or (
+            self.radius_km is not None and self.near_latitude is None
+        ):
+            raise ValueError("Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+        return self
+
+
+class AiLoginDetailRequest(BaseModel):
+    login: str | None = Field(default=None, max_length=160)
+    login_id: int | None = None
+    history_hours: int = Field(default=24, ge=1, le=168)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _validate_identifier(self) -> "AiLoginDetailRequest":
+        if self.login is None and self.login_id is None:
+            raise ValueError("Informe login ou login_id.")
         return self

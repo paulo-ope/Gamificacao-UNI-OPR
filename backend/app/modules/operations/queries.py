@@ -65,6 +65,10 @@ FILTER_COLUMNS = {
     "sla_statuses": OperationOrder.sla_status,
     "projects": OperationOrder.project,
     "pops": OperationOrder.pop,
+    # Login PPPoE/fibra do cliente - pedido do usuário em 2026-08-15 pra fechar o fluxo "login caiu
+    # -> buscar O.S. do cliente" (`customer_login` já existia na coluna e em SEARCH_COLUMNS/busca
+    # livre, mas não como filtro exato até agora).
+    "customer_logins": OperationOrder.customer_login,
 }
 
 # Campos de data que podem servir de base para `date_field` (item 7 do pedido de governança

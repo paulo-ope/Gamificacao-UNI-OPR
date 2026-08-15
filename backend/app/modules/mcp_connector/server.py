@@ -36,6 +36,7 @@ from app.modules.ai.schemas import AiOrderFilters
 from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
 from app.modules.operations.login_geo_clusters import query_login_status
+from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.operations.schemas import OperationOrderDetailOut
@@ -55,6 +56,14 @@ Chaves aceitas em `filters` (todas opcionais; listas vazias/None = sem filtro):
 - has_coordinates: bool - só O.S. com (True) ou sem (False) latitude/longitude preenchidas.
 - near_latitude, near_longitude, radius_km: float - só tem efeito com os três juntos; filtra O.S.
   dentro de `radius_km` quilômetros do ponto (near_latitude, near_longitude).
+- customer_logins: list[str] - login PPPoE/fibra do cliente (mesmo valor de opr_login_status) -
+  use para "todas as O.S. deste login".
+- opened_at, closed_at, deadline_at, scheduled_at, assumed_at, displacement_started_at,
+  execution_started_at, finished_at, source_updated_at: {"gte"/"gt"/"lte"/"lt"/"eq": "AAAA-MM-DDTHH:MM:SS±HH:MM"}
+  - filtro fino por HORÁRIO EXATO (não só o dia), aceita qualquer timezone de entrada. Aditivo a
+  date_from/date_to (que continuam obrigatórios, granularidade de dia) - use para "O.S. abertas
+  nos últimos 30 minutos" (date_from=date_to=hoje + opened_at={"gte": "agora-30min"}) ou "entre
+  17:30 e 18:00" (opened_at={"gte": "...17:30:00-04:00", "lte": "...18:00:00-04:00"}).
 """
 
 GROUP_BY_DOC = """
@@ -462,6 +471,121 @@ def build_mcp_server() -> FastMCP:
                     limit=limit,
                 )
             )
+
+    @mcp.tool(
+        name="opr_search_logins",
+        annotations={"title": "Buscar logins (paginado)", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_search_logins(
+        logins: list[str] | None = None,
+        login_query: str | None = None,
+        login_ids: list[int] | None = None,
+        online_statuses: list[str] | None = None,
+        regionals: list[str] | None = None,
+        pon_ids: list[str] | None = None,
+        transmitter_ids: list[str] | None = None,
+        contract_ids: list[str] | None = None,
+        near_latitude: float | None = None,
+        near_longitude: float | None = None,
+        radius_km: float | None = None,
+        status_changed_at: dict[str, str] | None = None,
+        last_connected_at: dict[str, str] | None = None,
+        last_disconnected_at: dict[str, str] | None = None,
+        captured_at: dict[str, str] | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> str:
+        """Busca paginada de login - equivalente de opr_search_orders para logins. Use para
+        "pesquise o login X", "quais logins estão desconectados na regional Y", "quais logins
+        caíram nos últimos N minutos", "quais logins estão numa PON/transmissor específico".
+
+        Args:
+            logins: lista de login exato. login_query: busca parcial (contém).
+            login_ids, online_statuses ("S"/"N"/"SS"), regionals: filtros exatos.
+            pon_ids, transmitter_ids, contract_ids: filtram pela telemetria ONU (join) - só logins
+                com telemetria capturada aparecem quando usados.
+            near_latitude, near_longitude, radius_km: busca geográfica por raio - os três juntos.
+            status_changed_at, last_connected_at, last_disconnected_at, captured_at:
+                {"gte"/"gt"/"lte"/"lt"/"eq": "AAAA-MM-DDTHH:MM:SS±HH:MM"} - ex.: "caiu nos últimos
+                60 minutos" = last_disconnected_at={"gte": "<agora-60min>"}.
+            page, page_size: paginação real (até 500 por página).
+
+        Returns:
+            JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
+            "has_more": bool}. Cada item inclui login_id, login, online, regional,
+            latitude/longitude, last_connected_at, last_disconnected_at, status_changed_at,
+            captured_at, contract_id, pon_id, transmitter_id, last_drop_cause.
+        """
+        if (near_latitude is None) != (near_longitude is None) or (radius_km is not None and near_latitude is None):
+            raise ValueError("Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+        user = _current_user()
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "ai.search_logins", "mcp")
+            if logins or login_query:
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "login", "filterable")
+            if online_statuses:
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "online", "filterable")
+            if regionals:
+                _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "regional", "filterable")
+            if pon_ids:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "pon_id", "filterable")
+            if transmitter_ids:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "transmitter_id", "filterable")
+            if contract_ids:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "contract_id", "filterable")
+            return _dump(
+                search_logins(
+                    db,
+                    logins=logins or [],
+                    login_query=login_query,
+                    login_ids=login_ids or [],
+                    online_statuses=online_statuses or [],
+                    regionals=regionals or [],
+                    pon_ids=pon_ids or [],
+                    transmitter_ids=transmitter_ids or [],
+                    contract_ids=contract_ids or [],
+                    near_latitude=near_latitude,
+                    near_longitude=near_longitude,
+                    radius_km=radius_km,
+                    status_changed_at=status_changed_at,
+                    last_connected_at=last_connected_at,
+                    last_disconnected_at=last_disconnected_at,
+                    captured_at=captured_at,
+                    page=page,
+                    page_size=page_size,
+                )
+            )
+
+    @mcp.tool(
+        name="opr_get_login_detail",
+        annotations={"title": "Detalhe completo de um login", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_get_login_detail(login: str | None = None, login_id: int | None = None, history_hours: int = 24) -> str:
+        """Detalhamento completo de um login - identificação, status de conexão com tempo já
+        calculado no estado atual (ex.: "offline há 47 minutos"), telemetria ONU/PON e histórico
+        recente de eventos de conexão/desconexão. Use depois de achar o login via
+        opr_search_logins/opr_login_status, quando precisar de TODOS os detalhes de um único login.
+
+        Args:
+            login ou login_id: pelo menos um dos dois.
+            history_hours: janela do histórico de eventos recentes (1 a 168, default 24).
+
+        Returns:
+            JSON com identificação, status (`seconds_in_current_state` já calculado), telemetria
+            ONU/PON (`onu_serial`, `signal_rx_dbm`, `signal_tx_dbm`, `last_drop_cause`,
+            `transmitter_id`, `pon_id`, `pon_no`, `slot_no`) e `recent_events`: lista de
+            {"event": "connected"|"disconnected", "at": timestamp} reconstruída do histórico real
+            (horário exato registrado pelo IXC, não o intervalo de captura).
+        """
+        if login is None and login_id is None:
+            raise ValueError("Informe login ou login_id.")
+        user = _current_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_detail", "mcp")
+            detail = get_login_detail(db, login=login, login_id=login_id, history_hours=history_hours)
+            if detail is None:
+                raise ValueError(f"Login não encontrado: {login or login_id}")
+            return _dump(detail)
 
     @mcp.tool(
         name="opr_backlog_aging",

@@ -32,6 +32,7 @@ from app.modules.ai_governance.gate import (
 )
 from app.modules.ai_governance.policy import EffectivePolicy
 from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
+from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.ai.schemas import (
@@ -42,7 +43,9 @@ from app.modules.ai.schemas import (
     AiBacklogHistoryRequest,
     AiFieldCatalogItem,
     AiFilterOptionsRequest,
+    AiLoginDetailRequest,
     AiLoginStatusRequest,
+    AiSearchLoginsRequest,
     AiOfflineLoginClustersRequest,
     AiOnuSignalRequest,
     AiOrderDetailsRequest,
@@ -60,6 +63,8 @@ from app.modules.ai.schemas import (
 from app.modules.operations.schemas import (
     OperationFilters,
     OperationLoginStatusOut,
+    OperationLoginSearchResultOut,
+    OperationLoginDetailOut,
     OperationOfflineLoginClustersOut,
     OperationOnuSignalOut,
     OperationOrderDetailOut,
@@ -339,6 +344,79 @@ def login_status_route(
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return results
+
+
+@router.post("/infra/search-logins", response_model=OperationLoginSearchResultOut)
+def search_logins_route(
+    payload: AiSearchLoginsRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> dict:
+    """Busca paginada de login (item novo, pedido do usuário em 2026-08-15) - equivalente de
+    `search_orders` para logins: paginação real (total_encontrado/page/has_more), filtros de
+    PON/transmissor/contrato (join com telemetria ONU) e datetime completo (gte/gt/lte/lt/eq)."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.search_logins", "api")
+    result = search_logins(
+        db,
+        logins=payload.logins,
+        login_query=payload.login_query,
+        login_ids=payload.login_ids,
+        online_statuses=payload.online_statuses,
+        regionals=payload.regionals,
+        pon_ids=payload.pon_ids,
+        transmitter_ids=payload.transmitter_ids,
+        contract_ids=payload.contract_ids,
+        near_latitude=payload.near_latitude,
+        near_longitude=payload.near_longitude,
+        radius_km=payload.radius_km,
+        status_changed_at=payload.status_changed_at.model_dump() if payload.status_changed_at else None,
+        last_connected_at=payload.last_connected_at.model_dump() if payload.last_connected_at else None,
+        last_disconnected_at=payload.last_disconnected_at.model_dump() if payload.last_disconnected_at else None,
+        captured_at=payload.captured_at.model_dump() if payload.captured_at else None,
+        page=payload.page,
+        page_size=payload.page_size,
+    )
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.search_logins",
+        user=context.user,
+        token_id=context.token_id,
+        filters={"logins": payload.logins, "login_query": payload.login_query, "regionals": payload.regionals},
+        result_count=result["total_encontrado"],
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/infra/login-detail", response_model=OperationLoginDetailOut)
+def login_detail_route(
+    payload: AiLoginDetailRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> dict:
+    """Detalhamento completo de um login (item novo, pedido do usuário em 2026-08-15) -
+    identificação, status de conexão com tempo já calculado no estado atual, telemetria ONU/PON e
+    histórico recente de eventos de conexão/desconexão (reconstruído do histórico append-only)."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.login_detail", "api")
+    detail = get_login_detail(db, login=payload.login, login_id=payload.login_id, history_hours=payload.history_hours)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Login não encontrado.")
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.login_detail",
+        user=context.user,
+        token_id=context.token_id,
+        filters={"login": payload.login, "login_id": payload.login_id},
+        result_count=1,
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return detail
 
 
 @router.post("/infra/onu-signal", response_model=list[OperationOnuSignalOut])

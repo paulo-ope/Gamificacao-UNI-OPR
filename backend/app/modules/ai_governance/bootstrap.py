@@ -61,6 +61,14 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     # e conector remoto), distinto do agregado de cluster acima. Entra desabilitado por padrão,
     # mesmo racional de "operations.network.logins".
     ("ai.login_status", "Status individual de login para IA (POST /ai/infra/login-status)", "api", False),
+    # Novo (pedido do usuário em 2026-08-15) - busca paginada e detalhamento completo de login
+    # (ONU/PON, tempo no estado atual, histórico de eventos). `default_enabled=True` porque é a
+    # continuação direta de uma feature já habilitada explicitamente hoje mesmo (ver migration
+    # 20260815_0058) - não faria sentido a busca nova nascer desligada com o resto já ligado.
+    ("operations.network.login_search", "Busca paginada de login (GET /operations/network/logins/search)", "api", True),
+    ("operations.network.login_detail", "Detalhamento de login (GET /operations/network/login-detail)", "api", True),
+    ("ai.search_logins", "Busca paginada de login para IA/MCP (opr_search_logins)", "mcp", True),
+    ("ai.login_detail", "Detalhamento de login para IA/MCP (opr_get_login_detail)", "mcp", True),
 ]
 
 

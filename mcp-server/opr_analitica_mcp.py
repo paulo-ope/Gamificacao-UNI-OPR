@@ -61,6 +61,14 @@ Chaves aceitas em `filters` (todas opcionais; listas vazias/None = sem filtro):
 - near_latitude, near_longitude, radius_km: float - só tem efeito com os três juntos; filtra O.S.
   dentro de `radius_km` quilômetros do ponto (near_latitude, near_longitude). Útil para achar
   reincidência perto de uma O.S. já conhecida (usando as coordenadas dela como centro).
+- customer_logins: list[str] - login PPPoE/fibra do cliente (mesmo valor de opr_login_status) -
+  use para "todas as O.S. deste login".
+- opened_at, closed_at, deadline_at, scheduled_at, assumed_at, displacement_started_at,
+  execution_started_at, finished_at, source_updated_at: {"gte"/"gt"/"lte"/"lt"/"eq": "AAAA-MM-DDTHH:MM:SS±HH:MM"}
+  - filtro fino por HORÁRIO EXATO (não só o dia), aceita qualquer timezone de entrada. Aditivo a
+  date_from/date_to (que continuam obrigatórios, granularidade de dia) - use para "O.S. abertas
+  nos últimos 30 minutos" (date_from=date_to=hoje + opened_at={"gte": "agora-30min"}) ou "entre
+  17:30 e 18:00" (opened_at={"gte": "...17:30:00-04:00", "lte": "...18:00:00-04:00"}).
 """
 
 GROUP_BY_DOC = """
@@ -473,6 +481,121 @@ def opr_onu_signal(params: OnuSignalInput) -> str:
         "limit": params.limit,
     }
     return _call("infra/onu-signal", payload)
+
+
+DateTimeOpDoc = (
+    'Filtro fino de horário exato: {"gte"/"gt"/"lte"/"lt"/"eq": "AAAA-MM-DDTHH:MM:SS±HH:MM"} - '
+    "aceita qualquer timezone de entrada."
+)
+
+
+class SearchLoginsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    logins: list[str] = Field(default_factory=list, description="Lista de login exato. Vazio = sem filtro.")
+    login_query: str | None = Field(default=None, description="Busca parcial (contém) pelo login.")
+    login_ids: list[int] = Field(default_factory=list)
+    online_statuses: list[str] = Field(default_factory=list, description="'S' (conectado), 'N' (desconectado), 'SS' (sem sinal, crônico).")
+    regionals: list[str] = Field(default_factory=list, description="Ex.: 'UNI - MACHADINHO DOESTE'.")
+    pon_ids: list[str] = Field(default_factory=list, description="Filtra pela telemetria ONU (join) - só logins com telemetria capturada aparecem.")
+    transmitter_ids: list[str] = Field(default_factory=list)
+    contract_ids: list[str] = Field(default_factory=list)
+    near_latitude: float | None = Field(default=None, description="Busca geográfica por raio - use junto com near_longitude e radius_km.")
+    near_longitude: float | None = Field(default=None)
+    radius_km: float | None = Field(default=None)
+    status_changed_at: dict[str, str] | None = Field(default=None, description=DateTimeOpDoc)
+    last_connected_at: dict[str, str] | None = Field(default=None, description=DateTimeOpDoc)
+    last_disconnected_at: dict[str, str] | None = Field(default=None, description=DateTimeOpDoc + ' Ex.: "caiu nos últimos 60 min" = {"gte": "<agora-60min>"}.')
+    captured_at: dict[str, str] | None = Field(default=None, description=DateTimeOpDoc)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=500)
+
+
+@mcp.tool(
+    name="opr_search_logins",
+    annotations={
+        "title": "Buscar logins (paginado)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_search_logins(params: SearchLoginsInput) -> str:
+    """Busca paginada de login - equivalente de opr_search_orders para logins. Use para "pesquise
+    o login X", "quais logins estão desconectados na regional Y", "quais logins caíram nos últimos
+    N minutos", "quais logins estão numa PON/transmissor específico".
+
+    Args:
+        params (SearchLoginsInput): logins/login_query, login_ids, online_statuses, regionals,
+            pon_ids/transmitter_ids/contract_ids (via telemetria ONU),
+            near_latitude/near_longitude/radius_km, filtros de datetime, page/page_size.
+
+    Returns:
+        str: JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
+        "has_more": bool}. Cada item inclui login_id, login, online, regional,
+        latitude/longitude, last_connected_at, last_disconnected_at, status_changed_at,
+        captured_at, contract_id, pon_id, transmitter_id, last_drop_cause.
+    """
+    payload = {
+        "logins": params.logins,
+        "login_query": params.login_query,
+        "login_ids": params.login_ids,
+        "online_statuses": params.online_statuses,
+        "regionals": params.regionals,
+        "pon_ids": params.pon_ids,
+        "transmitter_ids": params.transmitter_ids,
+        "contract_ids": params.contract_ids,
+        "near_latitude": params.near_latitude,
+        "near_longitude": params.near_longitude,
+        "radius_km": params.radius_km,
+        "status_changed_at": params.status_changed_at,
+        "last_connected_at": params.last_connected_at,
+        "last_disconnected_at": params.last_disconnected_at,
+        "captured_at": params.captured_at,
+        "page": params.page,
+        "page_size": params.page_size,
+    }
+    return _call("infra/search-logins", payload)
+
+
+class LoginDetailInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    login: str | None = Field(default=None, description="Login exato. Informe login ou login_id.")
+    login_id: int | None = Field(default=None)
+    history_hours: int = Field(default=24, ge=1, le=168, description="Janela do histórico de eventos recentes.")
+
+
+@mcp.tool(
+    name="opr_get_login_detail",
+    annotations={
+        "title": "Detalhe completo de um login",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_get_login_detail(params: LoginDetailInput) -> str:
+    """Detalhamento completo de um login - identificação, status de conexão com tempo já calculado
+    no estado atual (ex.: "offline há 47 minutos"), telemetria ONU/PON e histórico recente de
+    eventos de conexão/desconexão. Use depois de achar o login via opr_search_logins/
+    opr_login_status, quando precisar de TODOS os detalhes de um único login.
+
+    Args:
+        params (LoginDetailInput): login ou login_id (pelo menos um), history_hours (1-168,
+            default 24).
+
+    Returns:
+        str: JSON com identificação, status (`seconds_in_current_state` já calculado), telemetria
+        ONU/PON e `recent_events`: lista de {"event": "connected"|"disconnected", "at": timestamp}
+        reconstruída do histórico real (horário exato registrado pelo IXC).
+    """
+    if params.login is None and params.login_id is None:
+        return "Erro: informe login ou login_id em params."
+    payload = {"login": params.login, "login_id": params.login_id, "history_hours": params.history_hours}
+    return _call("infra/login-detail", payload)
 
 
 class BacklogAgingInput(BaseModel):

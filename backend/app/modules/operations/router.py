@@ -33,6 +33,7 @@ from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce
 from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
 from .login_geo_clusters import find_offline_login_clusters, query_login_status
+from .login_search import get_login_detail, search_logins
 from .onu_signal_snapshot import query_onu_signal_status
 from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
@@ -84,6 +85,8 @@ from .schemas import (
     OperationSubjectTypeMappingOut,
     OperationOfflineLoginClustersOut,
     OperationLoginStatusOut,
+    OperationLoginSearchResultOut,
+    OperationLoginDetailOut,
     OperationOnuSignalOut,
 )
 
@@ -1189,6 +1192,85 @@ def network_onu_signal(
         transmitter_ids=transmitter_ids,
         limit=limit,
     )
+
+
+@router.get("/network/logins/search", response_model=OperationLoginSearchResultOut)
+def network_login_search(
+    logins: list[str] = Query(default_factory=list),
+    login_query: str | None = Query(default=None, description="Busca parcial (contém) pelo login."),
+    login_ids: list[int] = Query(default_factory=list),
+    online_statuses: list[str] = Query(default_factory=list),
+    regionals: list[str] = Query(default_factory=list),
+    pon_ids: list[str] = Query(default_factory=list),
+    transmitter_ids: list[str] = Query(default_factory=list),
+    contract_ids: list[str] = Query(default_factory=list),
+    near_latitude: float | None = Query(default=None, ge=-90, le=90),
+    near_longitude: float | None = Query(default=None, ge=-180, le=180),
+    radius_km: float | None = Query(default=None, gt=0, le=500),
+    status_changed_since: datetime | None = Query(default=None, description="Só logins cujo status mudou a partir deste horário (ISO8601, qualquer timezone)."),
+    last_disconnected_since: datetime | None = Query(default=None),
+    last_connected_since: datetime | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Busca paginada de login - equivalente de pesquisa geral (`opr_search_logins` no MCP). Filtros
+    de horário aqui são só "a partir de" (gte); o formulário completo gte/lte/gt/lt/eq só existe
+    via IA/MCP (`POST /ai/infra/search-logins`), onde o corpo JSON permite o operador explícito."""
+    policy = enforce_ai_endpoint_for_user(db, user, "operations.network.login_search", "api")
+    if logins or login_query:
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "login", "filterable")
+    if online_statuses:
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "online", "filterable")
+    if regionals:
+        enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "regional", "filterable")
+    if (near_latitude is None) != (near_longitude is None) or (radius_km is not None and near_latitude is None):
+        raise HTTPException(status_code=422, detail="Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
+    if pon_ids:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "pon_id", "filterable")
+    if transmitter_ids:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "transmitter_id", "filterable")
+    if contract_ids:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "contract_id", "filterable")
+    return search_logins(
+        db,
+        logins=logins,
+        login_query=login_query,
+        login_ids=login_ids,
+        online_statuses=online_statuses,
+        regionals=regionals,
+        pon_ids=pon_ids,
+        transmitter_ids=transmitter_ids,
+        contract_ids=contract_ids,
+        near_latitude=near_latitude,
+        near_longitude=near_longitude,
+        radius_km=radius_km,
+        status_changed_at={"gte": status_changed_since} if status_changed_since else None,
+        last_disconnected_at={"gte": last_disconnected_since} if last_disconnected_since else None,
+        last_connected_at={"gte": last_connected_since} if last_connected_since else None,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/network/login-detail", response_model=OperationLoginDetailOut)
+def network_login_detail(
+    login: str | None = Query(default=None),
+    login_id: int | None = Query(default=None),
+    history_hours: int = Query(default=24, ge=1, le=168),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Detalhamento completo de um login - identificação, status de conexão com tempo já calculado
+    no estado atual, telemetria ONU/PON e histórico recente de eventos de conexão/desconexão."""
+    if login is None and login_id is None:
+        raise HTTPException(status_code=422, detail="Informe login ou login_id.")
+    enforce_ai_endpoint_for_user(db, user, "operations.network.login_detail", "api")
+    detail = get_login_detail(db, login=login, login_id=login_id, history_hours=history_hours)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Login não encontrado.")
+    return detail
 
 
 @router.get("/orders", response_model=None, dependencies=[Depends(require_permission("operations:view_order_details"))])

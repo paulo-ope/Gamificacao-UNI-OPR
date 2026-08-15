@@ -1019,6 +1019,64 @@ class OperationOnuSignalOut(BaseModel):
     captured_at: datetime
 
 
+class OperationLoginSearchItemOut(BaseModel):
+    login_id: int
+    login: str
+    online: str
+    regional: str | None
+    latitude: float | None
+    longitude: float | None
+    last_connected_at: datetime | None
+    last_disconnected_at: datetime | None
+    status_changed_at: datetime
+    captured_at: datetime
+    contract_id: str | None
+    pon_id: str | None
+    transmitter_id: str | None
+    last_drop_cause: str | None
+
+
+class OperationLoginSearchResultOut(BaseModel):
+    items: list[OperationLoginSearchItemOut]
+    total_encontrado: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
+class OperationLoginHistoryEventOut(BaseModel):
+    event: str
+    at: datetime
+
+
+class OperationLoginDetailOut(BaseModel):
+    login_id: int
+    login: str
+    regional: str | None
+    latitude: float | None
+    longitude: float | None
+    online: str
+    captured_at: datetime
+    status_changed_at: datetime
+    last_connected_at: datetime | None
+    last_disconnected_at: datetime | None
+    seconds_in_current_state: int
+    onu_serial: str | None
+    onu_model: str | None
+    signal_rx_dbm: float | None
+    signal_tx_dbm: float | None
+    signal_measured_at: datetime | None
+    temperature_c: float | None
+    voltage: float | None
+    last_drop_cause: str | None
+    transmitter_id: str | None
+    pon_id: str | None
+    pon_no: str | None
+    slot_no: str | None
+    contract_id: str | None
+    recent_events: list[OperationLoginHistoryEventOut]
+
+
 class OperationBranchCapacityOut(BaseModel):
     id: int
     regional: str

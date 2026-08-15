@@ -108,12 +108,17 @@ def _operation_order_registry() -> dict[str, FieldDescriptor]:
     return registry
 
 
+_LOGIN_DATETIME_KEYS = {"captured_at", "status_changed_at", "last_connected_at", "last_disconnected_at"}
+
+
 def _login_current_status_registry() -> dict[str, FieldDescriptor]:
     # Capacidade existe (a tabela é indexada e consultável) - `GET /operations/network/logins`
-    # (item 20 do pedido, adicionado depois deste catálogo) já sabe filtrar por login/status/raio
-    # geográfico, mas o ENDPOINT inteiro entra desabilitado por padrão no seed (item 26: capacidade
-    # nova não entra habilitada sozinha), então marcar a capacidade aqui não expõe nada sozinho.
-    filterable_keys = {"login_id", "login", "online", "regional", "latitude", "longitude"}
+    # (item 20 do pedido) e os tools opr_login_status/opr_search_logins já sabem filtrar por
+    # login/status/regional/raio geográfico/datetime. `default_enabled=True` desde 2026-08-15
+    # (pedido explícito do usuário) - o endpoint continua controlando o acesso de fato
+    # (enabled_api/enabled_mcp/enabled_ai em AiEndpoint), então habilitar o campo aqui não expõe
+    # nada sozinho sem o endpoint também estar ligado.
+    filterable_keys = {"login_id", "login", "online", "regional", "latitude", "longitude"} | _LOGIN_DATETIME_KEYS
     registry: dict[str, FieldDescriptor] = {}
     for column in OperationLoginCurrentStatus.__table__.columns:
         key = column.key
@@ -128,18 +133,25 @@ def _login_current_status_registry() -> dict[str, FieldDescriptor]:
             selectable=True,
             detail_available=True,
             sensitive=False,
-            default_enabled=False,
+            default_enabled=True,
         )
     return registry
 
 
+_ONU_DATETIME_KEYS = {"signal_measured_at", "captured_at"}
+
+
 def _onu_signal_current_registry() -> dict[str, FieldDescriptor]:
     # Telemetria óptica/ONU (tabela `radpop_radio_cliente_fibra` do IXC, achada por sondagem manual
-    # em 2026-08-14 - não documentada publicamente) - capacidade nova, nunca exposta antes; o
-    # endpoint inteiro entra desabilitado por padrão no seed (item 26), então marcar a capacidade
-    # aqui não expõe nada sozinho. `onu_serial` (MAC da ONU) não é PII de cliente - é identificador
-    # de equipamento, mesmo racional de latitude/longitude não serem sensíveis em `operations_orders`.
-    filterable_keys = {"login_id", "contract_id", "last_drop_cause", "transmitter_id", "latitude", "longitude"}
+    # em 2026-08-14 - não documentada publicamente). `default_enabled=True` desde 2026-08-15 (pedido
+    # explícito do usuário) - mesmo racional do login_current_status acima: o endpoint (AiEndpoint)
+    # continua sendo o controle de acesso de fato. `onu_serial` (MAC da ONU) não é PII de cliente -
+    # é identificador de equipamento, mesmo racional de latitude/longitude não serem sensíveis em
+    # `operations_orders`.
+    filterable_keys = {
+        "login_id", "contract_id", "last_drop_cause", "transmitter_id", "pon_id", "pon_no", "slot_no",
+        "latitude", "longitude",
+    } | _ONU_DATETIME_KEYS
     registry: dict[str, FieldDescriptor] = {}
     for column in OperationOnuSignalCurrent.__table__.columns:
         key = column.key
@@ -149,12 +161,12 @@ def _onu_signal_current_registry() -> dict[str, FieldDescriptor]:
             type=str(column.type),
             filterable=key in filterable_keys,
             text_filterable=False,
-            groupable=key in {"last_drop_cause", "transmitter_id"},
+            groupable=key in {"last_drop_cause", "transmitter_id", "pon_id", "pon_no", "slot_no"},
             returnable=True,
             selectable=True,
             detail_available=True,
             sensitive=False,
-            default_enabled=False,
+            default_enabled=True,
         )
     return registry
 

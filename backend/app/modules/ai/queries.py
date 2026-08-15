@@ -297,6 +297,32 @@ def _text_filter_conditions(text_filters: list[dict] | None) -> list:
     return conditions
 
 
+def _datetime_filter_conditions(filters: dict) -> list:
+    """Filtro fino por horário exato num campo datetime do ciclo de vida da O.S. (item pedido pelo
+    usuário em 2026-08-15 - `date_from`/`date_to`, tipo `date`, nunca permitiu essa precisão).
+    Reaproveita `operations_queries.DATE_FIELD_COLUMNS` (mesmo dict de `date_field`) como fonte dos
+    nomes/colunas válidos - qualquer campo novo adicionado lá fica automaticamente filtrável aqui
+    também. `_as_utc` normaliza o valor recebido (qualquer timezone de entrada, ex. -04:00) antes de
+    comparar com a coluna - mesma função já usada pelo resto do módulo `operations` para esse tipo
+    de comparação."""
+    conditions = []
+    for field_name, column in operations_queries.DATE_FIELD_COLUMNS.items():
+        op = filters.get(field_name)
+        if not op:
+            continue
+        if op.get("gte") is not None:
+            conditions.append(column >= operations_queries._as_utc(op["gte"]))
+        if op.get("gt") is not None:
+            conditions.append(column > operations_queries._as_utc(op["gt"]))
+        if op.get("lte") is not None:
+            conditions.append(column <= operations_queries._as_utc(op["lte"]))
+        if op.get("lt") is not None:
+            conditions.append(column < operations_queries._as_utc(op["lt"]))
+        if op.get("eq") is not None:
+            conditions.append(column == operations_queries._as_utc(op["eq"]))
+    return conditions
+
+
 def _dimension_conditions_with_text(db: Session, user: User, filters: dict, *, opening: bool = False) -> list:
     """Wrapper fino sobre `operations_queries._dimension_conditions` - aplica os filtros exatos
     de sempre e, além deles, os filtros textuais novos (item 10), que não existem no motor de
@@ -306,6 +332,7 @@ def _dimension_conditions_with_text(db: Session, user: User, filters: dict, *, o
     conditions.extend(_text_filter_conditions(filters.get("text_filters")))
     conditions.extend(_sla_stage_filter_conditions(db, filters))
     conditions.extend(_geo_filter_conditions(filters))
+    conditions.extend(_datetime_filter_conditions(filters))
     return conditions
 
 
@@ -832,6 +859,7 @@ def search_orders(
     conditions.extend(_text_filter_conditions(filters.get("text_filters")))
     conditions.extend(_sla_stage_filter_conditions(db, filters))
     conditions.extend(_geo_filter_conditions(filters))
+    conditions.extend(_datetime_filter_conditions(filters))
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)
     offset = (page - 1) * page_size
 
