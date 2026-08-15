@@ -31,6 +31,7 @@ from app.modules.ai_governance.gate import (
     enforce_requested_fields,
 )
 from app.modules.ai_governance.policy import EffectivePolicy
+from app.modules.operations.login_aggregate import login_aggregate, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
@@ -43,8 +44,11 @@ from app.modules.ai.schemas import (
     AiBacklogHistoryRequest,
     AiFieldCatalogItem,
     AiFilterOptionsRequest,
+    AiLoginAggregateRequest,
     AiLoginDetailRequest,
+    AiLoginOutagesRequest,
     AiLoginStatusRequest,
+    AiLoginTimeseriesRequest,
     AiSearchLoginsRequest,
     AiOfflineLoginClustersRequest,
     AiOnuSignalRequest,
@@ -65,6 +69,9 @@ from app.modules.operations.schemas import (
     OperationLoginStatusOut,
     OperationLoginSearchResultOut,
     OperationLoginDetailOut,
+    OperationLoginAggregateItemOut,
+    OperationLoginOutageItemOut,
+    OperationLoginTimeseriesPointOut,
     OperationOfflineLoginClustersOut,
     OperationOnuSignalOut,
     OperationOrderDetailOut,
@@ -417,6 +424,69 @@ def login_detail_route(
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return detail
+
+
+@router.post("/infra/login-aggregate", response_model=list[OperationLoginAggregateItemOut])
+def login_aggregate_route(
+    payload: AiLoginAggregateRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> list:
+    """Contagem de logins por dimensão (item novo, pedido do usuário em 2026-08-15) - para
+    detecção de incidente coletivo sem baixar registro por registro."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.login_aggregate", "api")
+    try:
+        result = login_aggregate(db, group_by=payload.group_by, regionals=payload.regionals, online_statuses=payload.online_statuses)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    record_ai_access(
+        db, origin="api", endpoint_key="ai.login_aggregate", user=context.user, token_id=context.token_id,
+        filters={"group_by": payload.group_by, "regionals": payload.regionals}, result_count=len(result),
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/infra/login-outages", response_model=list[OperationLoginOutageItemOut])
+def login_outages_route(
+    payload: AiLoginOutagesRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> list:
+    """Logins offline agora que caíram dentro de [since, until] (item novo, pedido do usuário em
+    2026-08-15) - candidatos a incidente coletivo quando concentrados na mesma regional/PON."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.login_outages", "api")
+    result = login_outages(db, since=payload.since, until=payload.until, regionals=payload.regionals, limit=payload.limit)
+    record_ai_access(
+        db, origin="api", endpoint_key="ai.login_outages", user=context.user, token_id=context.token_id,
+        filters={"since": payload.since, "regionals": payload.regionals}, result_count=len(result),
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/infra/login-timeseries", response_model=list[OperationLoginTimeseriesPointOut])
+def login_timeseries_route(
+    payload: AiLoginTimeseriesRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> list:
+    """Série temporal de conectados/desconectados/quedas novas/reconexões novas (item novo, pedido
+    do usuário em 2026-08-15) - um ponto por captura real do snapshot periódico."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.login_timeseries", "api")
+    result = login_timeseries(db, since=payload.since, until=payload.until)
+    record_ai_access(
+        db, origin="api", endpoint_key="ai.login_timeseries", user=context.user, token_id=context.token_id,
+        filters={"since": payload.since}, result_count=len(result),
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
 
 
 @router.post("/infra/onu-signal", response_model=list[OperationOnuSignalOut])

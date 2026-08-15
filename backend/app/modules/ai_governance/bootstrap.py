@@ -69,6 +69,14 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     ("operations.network.login_detail", "Detalhamento de login (GET /operations/network/login-detail)", "api", True),
     ("ai.search_logins", "Busca paginada de login para IA/MCP (opr_search_logins)", "mcp", True),
     ("ai.login_detail", "Detalhamento de login para IA/MCP (opr_get_login_detail)", "mcp", True),
+    # Novo (pedido do usuário em 2026-08-15) - agregação/quedas por período/série temporal de login,
+    # para detecção de incidente coletivo. Mesmo racional de default_enabled=True dos itens acima.
+    ("operations.network.login_aggregate", "Agregação de login (GET /operations/network/login-aggregate)", "api", True),
+    ("operations.network.login_outages", "Quedas por período (GET /operations/network/login-outages)", "api", True),
+    ("operations.network.login_timeseries", "Série temporal de login (GET /operations/network/login-timeseries)", "api", True),
+    ("ai.login_aggregate", "Agregação de login para IA/MCP (opr_login_aggregate)", "mcp", True),
+    ("ai.login_outages", "Quedas por período para IA/MCP (opr_login_outages)", "mcp", True),
+    ("ai.login_timeseries", "Série temporal de login para IA/MCP (opr_login_timeseries)", "mcp", True),
 ]
 
 

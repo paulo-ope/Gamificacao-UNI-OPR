@@ -538,3 +538,27 @@ class AiLoginDetailRequest(BaseModel):
         if self.login is None and self.login_id is None:
             raise ValueError("Informe login ou login_id.")
         return self
+
+
+class AiLoginAggregateRequest(BaseModel):
+    group_by: Literal["regional", "online", "transmitter_id", "pon_id", "last_drop_cause"]
+    regionals: list[str] = Field(default_factory=list)
+    online_statuses: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiLoginOutagesRequest(BaseModel):
+    since: datetime
+    until: datetime | None = None
+    regionals: list[str] = Field(default_factory=list)
+    limit: int = Field(default=200, ge=1, le=1000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiLoginTimeseriesRequest(BaseModel):
+    since: datetime
+    until: datetime | None = None
+
+    model_config = ConfigDict(extra="forbid")

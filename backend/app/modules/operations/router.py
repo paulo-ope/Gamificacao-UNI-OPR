@@ -32,6 +32,7 @@ from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce
 
 from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
+from .login_aggregate import login_aggregate, login_outages, login_timeseries
 from .login_geo_clusters import find_offline_login_clusters, query_login_status
 from .login_search import get_login_detail, search_logins
 from .onu_signal_snapshot import query_onu_signal_status
@@ -87,6 +88,9 @@ from .schemas import (
     OperationLoginStatusOut,
     OperationLoginSearchResultOut,
     OperationLoginDetailOut,
+    OperationLoginAggregateItemOut,
+    OperationLoginOutageItemOut,
+    OperationLoginTimeseriesPointOut,
     OperationOnuSignalOut,
 )
 
@@ -1271,6 +1275,52 @@ def network_login_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail="Login não encontrado.")
     return detail
+
+
+@router.get("/network/login-aggregate", response_model=list[OperationLoginAggregateItemOut])
+def network_login_aggregate(
+    group_by: str = Query(..., description="regional, online, transmitter_id, pon_id ou last_drop_cause."),
+    regionals: list[str] = Query(default_factory=list),
+    online_statuses: list[str] = Query(default_factory=list),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Contagem de logins por dimensão - para detecção de incidente coletivo (ex.: "quantos logins
+    offline por PON", "quantos por regional") sem baixar registro por registro."""
+    enforce_ai_endpoint_for_user(db, user, "operations.network.login_aggregate", "api")
+    try:
+        return login_aggregate(db, group_by=group_by, regionals=regionals, online_statuses=online_statuses)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/network/login-outages", response_model=list[OperationLoginOutageItemOut])
+def network_login_outages(
+    since: datetime = Query(..., description="Início da janela (ISO8601, qualquer timezone)."),
+    until: datetime | None = Query(default=None, description="Fim da janela - default agora."),
+    regionals: list[str] = Query(default_factory=list),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Logins que estão offline agora e caíram dentro da janela [since, until] - candidatos a
+    incidente coletivo quando concentrados na mesma regional/PON. Não pega quedas que já
+    reconectaram (ver `opr_get_login_detail` para histórico completo de um login específico)."""
+    enforce_ai_endpoint_for_user(db, user, "operations.network.login_outages", "api")
+    return login_outages(db, since=since, until=until, regionals=regionals, limit=limit)
+
+
+@router.get("/network/login-timeseries", response_model=list[OperationLoginTimeseriesPointOut])
+def network_login_timeseries(
+    since: datetime = Query(..., description="Início da janela (ISO8601, qualquer timezone)."),
+    until: datetime | None = Query(default=None, description="Fim da janela - default agora."),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Série temporal de conectados/desconectados/quedas novas/reconexões novas - um ponto por
+    captura real do snapshot periódico (a cada ~5-15min em produção)."""
+    enforce_ai_endpoint_for_user(db, user, "operations.network.login_timeseries", "api")
+    return login_timeseries(db, since=since, until=until)
 
 
 @router.get("/orders", response_model=None, dependencies=[Depends(require_permission("operations:view_order_details"))])

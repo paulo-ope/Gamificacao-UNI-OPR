@@ -12,7 +12,7 @@ DESSE usuário (mesma regra de sempre - `effective_managed_regionals`), não um 
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -35,6 +35,7 @@ from app.modules.ai.router import (
 from app.modules.ai.schemas import AiOrderFilters
 from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
+from app.modules.operations.login_aggregate import login_aggregate, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
@@ -86,6 +87,15 @@ def _parse_date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError(f"Data inválida: '{value}' - use o formato AAAA-MM-DD.") from exc
+
+
+def _parse_datetime(value: str) -> datetime:
+    """Converte um datetime ISO8601 (com offset, ex. '2026-08-15T17:30:00-04:00') - aceita
+    qualquer timezone de entrada, mesmo racional de `ai.schemas.DateTimeFilterOp`."""
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"Datetime inválido: '{value}' - use ISO8601, ex. '2026-08-15T17:30:00-04:00'.") from exc
 
 
 def _validated_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
@@ -586,6 +596,89 @@ def build_mcp_server() -> FastMCP:
             if detail is None:
                 raise ValueError(f"Login não encontrado: {login or login_id}")
             return _dump(detail)
+
+    @mcp.tool(
+        name="opr_login_aggregate",
+        annotations={"title": "Agregar logins por dimensão", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_login_aggregate(
+        group_by: str, regionals: list[str] | None = None, online_statuses: list[str] | None = None
+    ) -> str:
+        """Contagem de logins por dimensão - "quantos offline por regional", "quantos por PON",
+        "quantos por transmissor/OLT", "quantos por causa de queda". Use para detectar concentração
+        (incidente coletivo) sem baixar registro por registro.
+
+        Args:
+            group_by: regional, online, transmitter_id, pon_id ou last_drop_cause. Valor inválido
+                levanta erro explícito - nunca cai silenciosamente em outra dimensão.
+            regionals, online_statuses: filtros opcionais antes de agregar.
+
+        Returns:
+            JSON com lista [{"label": str, "quantity": int, "percentage": float}, ...], ordenado
+            por quantidade decrescente.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_aggregate", "mcp")
+            try:
+                return _dump(login_aggregate(db, group_by=group_by, regionals=regionals or [], online_statuses=online_statuses or []))
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+
+    @mcp.tool(
+        name="opr_login_outages",
+        annotations={"title": "Quedas de login por período", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_login_outages(since: str, until: str | None = None, regionals: list[str] | None = None, limit: int = 200) -> str:
+        """Logins que estão OFFLINE agora e caíram dentro de [since, until] - candidatos a
+        incidente coletivo quando concentrados na mesma regional. Não pega quedas que já
+        reconectaram (para isso, use opr_get_login_detail no login específico).
+
+        Args:
+            since: início da janela, ISO8601 (ex.: "2026-08-15T17:00:00-04:00").
+            until: fim da janela - default agora.
+            regionals: filtro opcional.
+            limit: até 1000 (default 200).
+
+        Returns:
+            JSON com lista [{"login_id", "login", "regional", "latitude", "longitude",
+            "status_changed_at", "last_disconnected_at"}, ...], mais recente primeiro.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_outages", "mcp")
+            return _dump(
+                login_outages(
+                    db, since=_parse_datetime(since), until=_parse_datetime(until) if until else None,
+                    regionals=regionals or [], limit=limit,
+                )
+            )
+
+    @mcp.tool(
+        name="opr_login_timeseries",
+        annotations={"title": "Série temporal de conectividade", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_login_timeseries(since: str, until: str | None = None) -> str:
+        """Série temporal de conectados/desconectados/quedas novas/reconexões novas - um ponto por
+        captura real do snapshot periódico (a cada ~5-15min em produção, não bucket fixo). Use para
+        ver a curva de quedas ao longo do tempo (ex.: "17:00 → 15 desconectados, 17:15 → 47" indica
+        incidente coletivo em andamento).
+
+        Args:
+            since: início da janela, ISO8601.
+            until: fim da janela - default agora.
+
+        Returns:
+            JSON com lista [{"captured_at", "connected", "disconnected", "new_drops",
+            "new_reconnects"}, ...], em ordem cronológica. `new_drops`/`new_reconnects` contam só
+            transições NESTA captura (comparado com a captura anterior do mesmo login) - o primeiro
+            ponto da série pode superestimar se não houver captura anterior próxima o bastante
+            (~20min) para comparar.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_timeseries", "mcp")
+            return _dump(login_timeseries(db, since=_parse_datetime(since), until=_parse_datetime(until) if until else None))
 
     @mcp.tool(
         name="opr_backlog_aging",

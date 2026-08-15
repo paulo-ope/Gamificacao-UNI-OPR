@@ -1077,6 +1077,30 @@ class OperationLoginDetailOut(BaseModel):
     recent_events: list[OperationLoginHistoryEventOut]
 
 
+class OperationLoginAggregateItemOut(BaseModel):
+    label: str
+    quantity: int
+    percentage: float
+
+
+class OperationLoginOutageItemOut(BaseModel):
+    login_id: int
+    login: str
+    regional: str | None
+    latitude: float | None
+    longitude: float | None
+    status_changed_at: datetime
+    last_disconnected_at: datetime | None
+
+
+class OperationLoginTimeseriesPointOut(BaseModel):
+    captured_at: datetime
+    connected: int
+    disconnected: int
+    new_drops: int
+    new_reconnects: int
+
+
 class OperationBranchCapacityOut(BaseModel):
     id: int
     regional: str

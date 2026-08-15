@@ -598,6 +598,110 @@ def opr_get_login_detail(params: LoginDetailInput) -> str:
     return _call("infra/login-detail", payload)
 
 
+class LoginAggregateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    group_by: str = Field(..., description="regional, online, transmitter_id, pon_id ou last_drop_cause.")
+    regionals: list[str] = Field(default_factory=list)
+    online_statuses: list[str] = Field(default_factory=list)
+
+
+@mcp.tool(
+    name="opr_login_aggregate",
+    annotations={
+        "title": "Agregar logins por dimensão",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_login_aggregate(params: LoginAggregateInput) -> str:
+    """Contagem de logins por dimensão - "quantos offline por regional", "quantos por PON",
+    "quantos por transmissor/OLT", "quantos por causa de queda". Use para detectar concentração
+    (incidente coletivo) sem baixar registro por registro.
+
+    Args:
+        params (LoginAggregateInput): group_by (regional/online/transmitter_id/pon_id/
+            last_drop_cause - valor inválido rejeitado com erro claro), regionals/online_statuses
+            (filtros opcionais antes de agregar).
+
+    Returns:
+        str: JSON com lista [{"label": str, "quantity": int, "percentage": float}, ...], ordenado
+        por quantidade decrescente.
+    """
+    payload = {"group_by": params.group_by, "regionals": params.regionals, "online_statuses": params.online_statuses}
+    return _call("infra/login-aggregate", payload)
+
+
+class LoginOutagesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    since: str = Field(..., description="Início da janela, ISO8601 (ex.: '2026-08-15T17:00:00-04:00').")
+    until: str | None = Field(default=None, description="Fim da janela - default agora.")
+    regionals: list[str] = Field(default_factory=list)
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
+@mcp.tool(
+    name="opr_login_outages",
+    annotations={
+        "title": "Quedas de login por período",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_login_outages(params: LoginOutagesInput) -> str:
+    """Logins que estão OFFLINE agora e caíram dentro de [since, until] - candidatos a incidente
+    coletivo quando concentrados na mesma regional. Não pega quedas que já reconectaram (para isso,
+    use opr_get_login_detail no login específico).
+
+    Args:
+        params (LoginOutagesInput): since/until (ISO8601), regionals (opcional), limit (até 1000).
+
+    Returns:
+        str: JSON com lista [{"login_id", "login", "regional", "latitude", "longitude",
+        "status_changed_at", "last_disconnected_at"}, ...], mais recente primeiro.
+    """
+    payload = {"since": params.since, "until": params.until, "regionals": params.regionals, "limit": params.limit}
+    return _call("infra/login-outages", payload)
+
+
+class LoginTimeseriesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    since: str = Field(..., description="Início da janela, ISO8601.")
+    until: str | None = Field(default=None, description="Fim da janela - default agora.")
+
+
+@mcp.tool(
+    name="opr_login_timeseries",
+    annotations={
+        "title": "Série temporal de conectividade",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_login_timeseries(params: LoginTimeseriesInput) -> str:
+    """Série temporal de conectados/desconectados/quedas novas/reconexões novas - um ponto por
+    captura real do snapshot periódico. Use para ver a curva de quedas ao longo do tempo (ex.:
+    "17:00 → 15 desconectados, 17:15 → 47" indica incidente coletivo em andamento).
+
+    Args:
+        params (LoginTimeseriesInput): since/until (ISO8601).
+
+    Returns:
+        str: JSON com lista [{"captured_at", "connected", "disconnected", "new_drops",
+        "new_reconnects"}, ...], em ordem cronológica.
+    """
+    payload = {"since": params.since, "until": params.until}
+    return _call("infra/login-timeseries", payload)
+
+
 class BacklogAgingInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
