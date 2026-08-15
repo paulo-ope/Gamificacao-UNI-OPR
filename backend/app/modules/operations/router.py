@@ -35,7 +35,19 @@ from .ixc_ingestion import import_current_month_period
 from .login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from .login_geo_clusters import find_offline_login_clusters, query_login_status
 from .login_search import get_login_detail, search_logins
-from .onu_signal_snapshot import query_onu_signal_status
+from .login_status_snapshot import (
+    LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES,
+    LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY,
+    LOGIN_STATUS_SYNC_MAX_INTERVAL_MINUTES,
+    LOGIN_STATUS_SYNC_MIN_INTERVAL_MINUTES,
+)
+from .onu_signal_snapshot import (
+    ONU_SIGNAL_SYNC_DEFAULT_INTERVAL_MINUTES,
+    ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY,
+    ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES,
+    ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES,
+    query_onu_signal_status,
+)
 from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
@@ -198,6 +210,18 @@ def _sync_settings_response(db: Session) -> dict:
         "sector_ids": sector_ids,
         "sector_scope_label": ixc_sector_scope_label(sector_ids),
         "available_sectors": [{"id": sector_id, "name": name} for sector_id, name in IXC_SECTORS],
+        "login_status_interval_minutes": _int_setting(
+            get_setting(db, LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY, ""),
+            LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES,
+            minimum=LOGIN_STATUS_SYNC_MIN_INTERVAL_MINUTES,
+            maximum=LOGIN_STATUS_SYNC_MAX_INTERVAL_MINUTES,
+        ),
+        "onu_signal_interval_minutes": _int_setting(
+            get_setting(db, ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY, ""),
+            ONU_SIGNAL_SYNC_DEFAULT_INTERVAL_MINUTES,
+            minimum=ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES,
+            maximum=ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES,
+        ),
     }
 
 
@@ -475,6 +499,20 @@ def update_ixc_sync_settings(
             IXC_SYNC_BACKLOG_SWEEP_INTERVAL_MINUTES_KEY,
             str(payload.backlog_sweep_interval_minutes),
             description="Intervalo em minutos da varredura de backlog aberto do IXC.",
+        )
+    if payload.login_status_interval_minutes is not None:
+        upsert_setting(
+            db,
+            LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY,
+            str(payload.login_status_interval_minutes),
+            description="Intervalo em minutos da captura de status de conexao de login (radusuarios).",
+        )
+    if payload.onu_signal_interval_minutes is not None:
+        upsert_setting(
+            db,
+            ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY,
+            str(payload.onu_signal_interval_minutes),
+            description="Intervalo em minutos da captura de sinal optico/ONU (radpop_radio_cliente_fibra).",
         )
     if payload.lookback_days is not None:
         upsert_setting(

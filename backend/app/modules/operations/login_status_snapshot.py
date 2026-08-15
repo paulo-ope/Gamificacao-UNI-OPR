@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.services.calculation import get_setting
 from app.services.ixc_client import IxcClient, fetch_login_status_snapshot, get_ixc_client
 from app.services.regional import normalize_regional
 
@@ -117,16 +118,37 @@ def capture_login_status_snapshot(db: Session, client: IxcClient) -> int:
     return len(parsed)
 
 
+# Configurável pela tela (AppSetting), lido a cada ciclo - mesmo padrão já usado por
+# `ixc_scheduler.IXC_SYNC_INTERVAL_MINUTES_KEY`. Pedido do usuário em 2026-08-15 (receio de
+# sobrecarregar a API do IXC): antes disso, o intervalo era fixo em código, sem como ajustar sem
+# reiniciar o backend.
+LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY = "login_status_sync_interval_minutes"
+LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES = 5
+LOGIN_STATUS_SYNC_MIN_INTERVAL_MINUTES = 2
+LOGIN_STATUS_SYNC_MAX_INTERVAL_MINUTES = 120
+
+
+def _current_login_status_interval_seconds() -> float:
+    with SessionLocal() as db:
+        raw = get_setting(db, LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY, "")
+    try:
+        minutes = int(raw)
+    except (TypeError, ValueError):
+        minutes = LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES
+    minutes = min(max(minutes, LOGIN_STATUS_SYNC_MIN_INTERVAL_MINUTES), LOGIN_STATUS_SYNC_MAX_INTERVAL_MINUTES)
+    return minutes * 60.0
+
+
 async def run_login_status_snapshot_loop() -> None:
-    """Loop infinito: captura o status de conexão de todos os logins periodicamente. Intervalo fixo
-    em código (não configurável pela tela, ao contrário de `ixc_scheduler`) porque essa captura é
-    read-only e independente da sincronização de O.S. - não compartilha o mesmo botão de
-    liga/desliga. Uma falha numa rodada não derruba o loop, só é logada."""
-    POLL_SECONDS = 300.0
+    """Loop infinito: captura o status de conexão de todos os logins periodicamente. Intervalo
+    configurável pela tela (`LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY`, lido a cada ciclo - uma
+    mudança feita na configuração passa a valer no próximo ciclo, sem reiniciar o backend). Uma
+    falha numa rodada não derruba o loop, só é logada."""
+    IDLE_POLL_SECONDS = 60.0
     while True:
         settings = get_settings()
         if not settings.ixc_api_base_url or not settings.ixc_api_token:
-            await asyncio.sleep(POLL_SECONDS)
+            await asyncio.sleep(IDLE_POLL_SECONDS)
             continue
         try:
             client = get_ixc_client()
@@ -136,4 +158,4 @@ async def run_login_status_snapshot_loop() -> None:
                 logger.info("Snapshot de status de login capturado: %d linhas.", captured)
         except Exception:
             logger.exception("Falha ao capturar snapshot de status de login.")
-        await asyncio.sleep(POLL_SECONDS)
+        await asyncio.sleep(_current_login_status_interval_seconds())

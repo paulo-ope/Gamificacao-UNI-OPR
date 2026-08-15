@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.services.calculation import get_setting
 from app.services.ixc_client import IxcClient, fetch_onu_signal_by_login_ids, get_ixc_client
 
 from .models import OperationLoginCurrentStatus, OperationOnuSignalCurrent
@@ -163,17 +164,35 @@ def query_onu_signal_status(
     ]
 
 
+# Configurável pela tela (AppSetting), lido a cada ciclo - mesmo racional de
+# `login_status_snapshot.LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY` (pedido do usuário em 2026-08-15,
+# receio de sobrecarregar a API do IXC).
+ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY = "onu_signal_sync_interval_minutes"
+ONU_SIGNAL_SYNC_DEFAULT_INTERVAL_MINUTES = 15
+ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES = 5
+ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES = 180
+
+
+def _current_onu_signal_interval_seconds() -> float:
+    with SessionLocal() as db:
+        raw = get_setting(db, ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY, "")
+    try:
+        minutes = int(raw)
+    except (TypeError, ValueError):
+        minutes = ONU_SIGNAL_SYNC_DEFAULT_INTERVAL_MINUTES
+    minutes = min(max(minutes, ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES), ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES)
+    return minutes * 60.0
+
+
 async def run_onu_signal_snapshot_loop() -> None:
     """Loop infinito: captura telemetria óptica/ONU periodicamente, só dos logins já monitorados -
-    intervalo mais espaçado que `run_login_status_snapshot_loop` (900s vs 300s) porque cada linha
-    aqui exige uma chamada adicional à API do IXC (uma tabela diferente de `radusuarios`), e essa
-    telemetria muda mais devagar que o status online/offline em si. Uma falha numa rodada não
-    derruba o loop, só é logada."""
-    POLL_SECONDS = 900.0
+    intervalo configurável pela tela (`ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY`, lido a cada ciclo,
+    sem precisar reiniciar o backend). Uma falha numa rodada não derruba o loop, só é logada."""
+    IDLE_POLL_SECONDS = 60.0
     while True:
         settings = get_settings()
         if not settings.ixc_api_base_url or not settings.ixc_api_token:
-            await asyncio.sleep(POLL_SECONDS)
+            await asyncio.sleep(IDLE_POLL_SECONDS)
             continue
         try:
             client = get_ixc_client()
@@ -183,4 +202,4 @@ async def run_onu_signal_snapshot_loop() -> None:
                 logger.info("Snapshot de sinal ONU capturado: %d linhas.", captured)
         except Exception:
             logger.exception("Falha ao capturar snapshot de sinal ONU.")
-        await asyncio.sleep(POLL_SECONDS)
+        await asyncio.sleep(_current_onu_signal_interval_seconds())

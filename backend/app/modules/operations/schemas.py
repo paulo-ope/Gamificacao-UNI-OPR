@@ -102,11 +102,19 @@ class OperationIxcSyncSettings(BaseModel):
     sector_ids: list[str] = Field(default_factory=list, max_length=100)
     sector_scope_label: str
     available_sectors: list[OperationIxcSectorOut] = Field(default_factory=list)
+    # Intervalos dos loops de monitoramento de rede (status de login/sinal ONU) - separados do
+    # sync de O.S. acima porque batem em tabelas diferentes do IXC (radusuarios/
+    # radpop_radio_cliente_fibra) com cadência própria. Pedido do usuário em 2026-08-15 (receio de
+    # sobrecarregar a API do IXC): antes, esses dois eram fixos em código.
+    login_status_interval_minutes: int = Field(default=5, ge=2, le=120)
+    onu_signal_interval_minutes: int = Field(default=15, ge=5, le=180)
 
 
 class OperationIxcSyncSettingsUpdate(BaseModel):
     enabled: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=5, le=1440)
+    login_status_interval_minutes: int | None = Field(default=None, ge=2, le=120)
+    onu_signal_interval_minutes: int | None = Field(default=None, ge=5, le=180)
     backlog_sweep_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
     lookback_days: int | None = Field(default=None, ge=1, le=30)
     sector_ids: list[str] | None = Field(default=None, max_length=100)
