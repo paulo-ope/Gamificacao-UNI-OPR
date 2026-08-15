@@ -167,6 +167,7 @@ def query_onu_signal_status(
 # Configurável pela tela (AppSetting), lido a cada ciclo - mesmo racional de
 # `login_status_snapshot.LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY` (pedido do usuário em 2026-08-15,
 # receio de sobrecarregar a API do IXC).
+ONU_SIGNAL_SYNC_ENABLED_KEY = "onu_signal_sync_enabled"
 ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY = "onu_signal_sync_interval_minutes"
 ONU_SIGNAL_SYNC_DEFAULT_INTERVAL_MINUTES = 15
 ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES = 5
@@ -184,14 +185,26 @@ def _current_onu_signal_interval_seconds() -> float:
     return minutes * 60.0
 
 
+def _onu_signal_sync_enabled(default: bool) -> bool:
+    with SessionLocal() as db:
+        raw = get_setting(db, ONU_SIGNAL_SYNC_ENABLED_KEY, "")
+    if not raw:
+        return default
+    return raw.strip().lower() in {"true", "1", "sim", "yes"}
+
+
 async def run_onu_signal_snapshot_loop() -> None:
     """Loop infinito: captura telemetria óptica/ONU periodicamente, só dos logins já monitorados -
-    intervalo configurável pela tela (`ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY`, lido a cada ciclo,
-    sem precisar reiniciar o backend). Uma falha numa rodada não derruba o loop, só é logada."""
+    intervalo e liga/desliga configuráveis pela tela (`ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY`/
+    `ONU_SIGNAL_SYNC_ENABLED_KEY`, lidos a cada ciclo, sem precisar reiniciar o backend). Uma falha
+    numa rodada não derruba o loop, só é logada."""
     IDLE_POLL_SECONDS = 60.0
     while True:
         settings = get_settings()
         if not settings.ixc_api_base_url or not settings.ixc_api_token:
+            await asyncio.sleep(IDLE_POLL_SECONDS)
+            continue
+        if not _onu_signal_sync_enabled(default=True):
             await asyncio.sleep(IDLE_POLL_SECONDS)
             continue
         try:

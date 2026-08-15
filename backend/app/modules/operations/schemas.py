@@ -108,6 +108,11 @@ class OperationIxcSyncSettings(BaseModel):
     # sobrecarregar a API do IXC): antes, esses dois eram fixos em código.
     login_status_interval_minutes: int = Field(default=5, ge=2, le=120)
     onu_signal_interval_minutes: int = Field(default=15, ge=5, le=180)
+    # Liga/desliga independente do sync de O.S. (`enabled` acima) - pedido do usuário em
+    # 2026-08-15: poder desligar o monitoramento de rede quando não estiver usando, mantendo só a
+    # sincronização de O.S. rodando.
+    login_status_enabled: bool = True
+    onu_signal_enabled: bool = True
 
 
 class OperationIxcSyncSettingsUpdate(BaseModel):
@@ -115,6 +120,8 @@ class OperationIxcSyncSettingsUpdate(BaseModel):
     interval_minutes: int | None = Field(default=None, ge=5, le=1440)
     login_status_interval_minutes: int | None = Field(default=None, ge=2, le=120)
     onu_signal_interval_minutes: int | None = Field(default=None, ge=5, le=180)
+    login_status_enabled: bool | None = None
+    onu_signal_enabled: bool | None = None
     backlog_sweep_interval_minutes: int | None = Field(default=None, ge=15, le=1440)
     lookback_days: int | None = Field(default=None, ge=1, le=30)
     sector_ids: list[str] | None = Field(default=None, max_length=100)

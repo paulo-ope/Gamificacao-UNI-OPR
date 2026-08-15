@@ -119,9 +119,12 @@ def capture_login_status_snapshot(db: Session, client: IxcClient) -> int:
 
 
 # Configurável pela tela (AppSetting), lido a cada ciclo - mesmo padrão já usado por
-# `ixc_scheduler.IXC_SYNC_INTERVAL_MINUTES_KEY`. Pedido do usuário em 2026-08-15 (receio de
-# sobrecarregar a API do IXC): antes disso, o intervalo era fixo em código, sem como ajustar sem
-# reiniciar o backend.
+# `ixc_scheduler.IXC_SYNC_INTERVAL_MINUTES_KEY`/`IXC_SYNC_ENABLED_KEY`. Pedido do usuário em
+# 2026-08-15 (receio de sobrecarregar a API do IXC, e poder desligar o monitoramento de rede
+# quando não estiver usando, mantendo só a sincronização de O.S.): antes disso, o intervalo era
+# fixo em código e o loop rodava sempre que o IXC estivesse configurado, sem chave própria de
+# liga/desliga.
+LOGIN_STATUS_SYNC_ENABLED_KEY = "login_status_sync_enabled"
 LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY = "login_status_sync_interval_minutes"
 LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES = 5
 LOGIN_STATUS_SYNC_MIN_INTERVAL_MINUTES = 2
@@ -139,15 +142,28 @@ def _current_login_status_interval_seconds() -> float:
     return minutes * 60.0
 
 
+def _login_status_sync_enabled(default: bool) -> bool:
+    with SessionLocal() as db:
+        raw = get_setting(db, LOGIN_STATUS_SYNC_ENABLED_KEY, "")
+    if not raw:
+        return default
+    return raw.strip().lower() in {"true", "1", "sim", "yes"}
+
+
 async def run_login_status_snapshot_loop() -> None:
-    """Loop infinito: captura o status de conexão de todos os logins periodicamente. Intervalo
-    configurável pela tela (`LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY`, lido a cada ciclo - uma
-    mudança feita na configuração passa a valer no próximo ciclo, sem reiniciar o backend). Uma
-    falha numa rodada não derruba o loop, só é logada."""
+    """Loop infinito: captura o status de conexão de todos os logins periodicamente. Intervalo e
+    liga/desliga configuráveis pela tela (`LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY`/
+    `LOGIN_STATUS_SYNC_ENABLED_KEY`, lidos a cada ciclo - uma mudança feita na configuração vale no
+    próximo ciclo, sem reiniciar o backend). Desligado, o backend continua sincronizando O.S.
+    normalmente (loop independente) - só este monitoramento de rede para. Uma falha numa rodada não
+    derruba o loop, só é logada."""
     IDLE_POLL_SECONDS = 60.0
     while True:
         settings = get_settings()
         if not settings.ixc_api_base_url or not settings.ixc_api_token:
+            await asyncio.sleep(IDLE_POLL_SECONDS)
+            continue
+        if not _login_status_sync_enabled(default=True):
             await asyncio.sleep(IDLE_POLL_SECONDS)
             continue
         try:

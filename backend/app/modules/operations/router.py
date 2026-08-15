@@ -37,12 +37,14 @@ from .login_geo_clusters import find_offline_login_clusters, query_login_status
 from .login_search import get_login_detail, search_logins
 from .login_status_snapshot import (
     LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES,
+    LOGIN_STATUS_SYNC_ENABLED_KEY,
     LOGIN_STATUS_SYNC_INTERVAL_MINUTES_KEY,
     LOGIN_STATUS_SYNC_MAX_INTERVAL_MINUTES,
     LOGIN_STATUS_SYNC_MIN_INTERVAL_MINUTES,
 )
 from .onu_signal_snapshot import (
     ONU_SIGNAL_SYNC_DEFAULT_INTERVAL_MINUTES,
+    ONU_SIGNAL_SYNC_ENABLED_KEY,
     ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY,
     ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES,
     ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES,
@@ -222,6 +224,8 @@ def _sync_settings_response(db: Session) -> dict:
             minimum=ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES,
             maximum=ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES,
         ),
+        "login_status_enabled": _bool_setting(get_setting(db, LOGIN_STATUS_SYNC_ENABLED_KEY, ""), True),
+        "onu_signal_enabled": _bool_setting(get_setting(db, ONU_SIGNAL_SYNC_ENABLED_KEY, ""), True),
     }
 
 
@@ -513,6 +517,20 @@ def update_ixc_sync_settings(
             ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY,
             str(payload.onu_signal_interval_minutes),
             description="Intervalo em minutos da captura de sinal optico/ONU (radpop_radio_cliente_fibra).",
+        )
+    if payload.login_status_enabled is not None:
+        upsert_setting(
+            db,
+            LOGIN_STATUS_SYNC_ENABLED_KEY,
+            "true" if payload.login_status_enabled else "false",
+            description="Liga ou desliga a captura de status de conexao de login.",
+        )
+    if payload.onu_signal_enabled is not None:
+        upsert_setting(
+            db,
+            ONU_SIGNAL_SYNC_ENABLED_KEY,
+            "true" if payload.onu_signal_enabled else "false",
+            description="Liga ou desliga a captura de sinal optico/ONU.",
         )
     if payload.lookback_days is not None:
         upsert_setting(
