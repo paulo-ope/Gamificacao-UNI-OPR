@@ -562,3 +562,12 @@ class AiLoginTimeseriesRequest(BaseModel):
     until: datetime | None = None
 
     model_config = ConfigDict(extra="forbid")
+
+
+class AiLoginIncidentAnalysisRequest(BaseModel):
+    window_minutes: int = Field(default=90, ge=5, le=1440)
+    regionals: list[str] = Field(default_factory=list)
+    cluster_radius_meters: float = Field(default=300.0, ge=10.0, le=5000.0)
+    cluster_min_size: int = Field(default=3, ge=2, le=100)
+
+    model_config = ConfigDict(extra="forbid")

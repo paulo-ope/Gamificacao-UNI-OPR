@@ -1101,6 +1101,27 @@ class OperationLoginTimeseriesPointOut(BaseModel):
     new_reconnects: int
 
 
+class OperationLoginIncidentGeoClusterOut(BaseModel):
+    center_latitude: float
+    center_longitude: float
+    radius_meters: float
+    size: int
+    logins: list[str]
+
+
+class OperationLoginIncidentAnalysisOut(BaseModel):
+    window_minutes: int
+    since: datetime
+    new_drops: int
+    still_offline: int
+    reconnects: int
+    by_regional: list[OperationLoginAggregateItemOut]
+    by_transmitter: list[OperationLoginAggregateItemOut]
+    by_pon: list[OperationLoginAggregateItemOut]
+    by_drop_cause: list[OperationLoginAggregateItemOut]
+    geo_clusters: list[OperationLoginIncidentGeoClusterOut]
+
+
 class OperationBranchCapacityOut(BaseModel):
     id: int
     regional: str

@@ -32,7 +32,7 @@ from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce
 
 from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
-from .login_aggregate import login_aggregate, login_outages, login_timeseries
+from .login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from .login_geo_clusters import find_offline_login_clusters, query_login_status
 from .login_search import get_login_detail, search_logins
 from .onu_signal_snapshot import query_onu_signal_status
@@ -91,6 +91,7 @@ from .schemas import (
     OperationLoginAggregateItemOut,
     OperationLoginOutageItemOut,
     OperationLoginTimeseriesPointOut,
+    OperationLoginIncidentAnalysisOut,
     OperationOnuSignalOut,
 )
 
@@ -1321,6 +1322,25 @@ def network_login_timeseries(
     captura real do snapshot periódico (a cada ~5-15min em produção)."""
     enforce_ai_endpoint_for_user(db, user, "operations.network.login_timeseries", "api")
     return login_timeseries(db, since=since, until=until)
+
+
+@router.get("/network/login-incident-analysis", response_model=OperationLoginIncidentAnalysisOut)
+def network_login_incident_analysis(
+    window_minutes: int = Query(default=90, ge=5, le=1440),
+    regionals: list[str] = Query(default_factory=list),
+    cluster_radius_meters: float = Query(default=300.0, ge=10.0, le=5000.0),
+    cluster_min_size: int = Query(default=3, ge=2, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Funil de incidente coletivo numa única chamada: quedas novas, ainda offline, reconexões,
+    quebra por regional/transmissor/PON/causa de queda e clusters geográficos - tudo já agregado
+    no backend, sem baixar registro por registro."""
+    enforce_ai_endpoint_for_user(db, user, "operations.network.login_incident_analysis", "api")
+    return login_incident_analysis(
+        db, window_minutes=window_minutes, regionals=regionals,
+        cluster_radius_meters=cluster_radius_meters, cluster_min_size=cluster_min_size,
+    )
 
 
 @router.get("/orders", response_model=None, dependencies=[Depends(require_permission("operations:view_order_details"))])

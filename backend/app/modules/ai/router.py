@@ -31,7 +31,7 @@ from app.modules.ai_governance.gate import (
     enforce_requested_fields,
 )
 from app.modules.ai_governance.policy import EffectivePolicy
-from app.modules.operations.login_aggregate import login_aggregate, login_outages, login_timeseries
+from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
@@ -46,6 +46,7 @@ from app.modules.ai.schemas import (
     AiFilterOptionsRequest,
     AiLoginAggregateRequest,
     AiLoginDetailRequest,
+    AiLoginIncidentAnalysisRequest,
     AiLoginOutagesRequest,
     AiLoginStatusRequest,
     AiLoginTimeseriesRequest,
@@ -72,6 +73,7 @@ from app.modules.operations.schemas import (
     OperationLoginAggregateItemOut,
     OperationLoginOutageItemOut,
     OperationLoginTimeseriesPointOut,
+    OperationLoginIncidentAnalysisOut,
     OperationOfflineLoginClustersOut,
     OperationOnuSignalOut,
     OperationOrderDetailOut,
@@ -481,6 +483,30 @@ def login_timeseries_route(
         db, origin="api", endpoint_key="ai.login_timeseries", user=context.user, token_id=context.token_id,
         filters={"since": payload.since}, result_count=len(result),
         duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/infra/login-incident-analysis", response_model=OperationLoginIncidentAnalysisOut)
+def login_incident_analysis_route(
+    payload: AiLoginIncidentAnalysisRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> dict:
+    """Funil de incidente coletivo numa única chamada (item novo, pedido do usuário em 2026-08-15)
+    - quedas novas, ainda offline, reconexões, quebra por regional/transmissor/PON/causa de queda e
+    clusters geográficos, já agregados no backend."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.login_incident_analysis", "api")
+    result = login_incident_analysis(
+        db, window_minutes=payload.window_minutes, regionals=payload.regionals,
+        cluster_radius_meters=payload.cluster_radius_meters, cluster_min_size=payload.cluster_min_size,
+    )
+    record_ai_access(
+        db, origin="api", endpoint_key="ai.login_incident_analysis", user=context.user, token_id=context.token_id,
+        filters={"window_minutes": payload.window_minutes, "regionals": payload.regionals},
+        result_count=result["still_offline"], duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
 

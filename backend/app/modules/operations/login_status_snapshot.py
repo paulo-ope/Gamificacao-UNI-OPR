@@ -14,21 +14,18 @@ from app.services.ixc_client import IxcClient, fetch_login_status_snapshot, get_
 from app.services.regional import normalize_regional
 
 from .models import OperationLoginCurrentStatus, OperationLoginStatusSnapshot
+from .period import parse_ixc_local_datetime
 
 logger = logging.getLogger(__name__)
 
-# O IXC usa "0000-00-00 00:00:00" pra "nunca conectado" (não NULL) - visto direto na resposta real
-# de `radusuarios` pra logins de fibra monitorados por sinal óptico, que não abrem sessão PPPoE.
-_IXC_EMPTY_DATETIME_PREFIX = "0000-00-00"
-
-
-def _parse_ixc_datetime(value: str | None) -> datetime | None:
-    if not value or value.startswith(_IXC_EMPTY_DATETIME_PREFIX):
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+# Achado real 2026-08-15: o IXC grava datetime em horário LOCAL (America/Porto_Velho, UTC-4), não
+# UTC - confirmado comparando `radusuarios.ultima_atualizacao` de logins online AGORA contra o
+# relógio UTC real (diferença de ~4h, batendo com o fuso, não com um clock divergente). Uma versão
+# anterior deste parser fazia `.replace(tzinfo=timezone.utc)` direto, rotulando hora local como UTC
+# sem deslocar - `last_connected_at`/`last_disconnected_at` ficavam 4h adiantados. Corrigido
+# reaproveitando `parse_ixc_local_datetime` (já usado pela importação de O.S. desde sempre - mesma
+# fonte, mesmo fuso, nunca deveria ter sido reimplementado errado aqui).
+_parse_ixc_datetime = parse_ixc_local_datetime
 
 
 def _parse_ixc_float(value: str | None) -> float | None:

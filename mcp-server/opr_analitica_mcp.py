@@ -702,6 +702,51 @@ def opr_login_timeseries(params: LoginTimeseriesInput) -> str:
     return _call("infra/login-timeseries", payload)
 
 
+class LoginIncidentAnalysisInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    window_minutes: int = Field(default=90, ge=5, le=1440, description="Janela de análise.")
+    regionals: list[str] = Field(default_factory=list, description="Filtro opcional - não se aplica aos geo_clusters de propósito.")
+    cluster_radius_meters: float = Field(default=300.0, ge=10.0, le=5000.0)
+    cluster_min_size: int = Field(default=3, ge=2, le=100)
+
+
+@mcp.tool(
+    name="opr_login_incident_analysis",
+    annotations={
+        "title": "Funil de incidente coletivo",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_login_incident_analysis(params: LoginIncidentAnalysisInput) -> str:
+    """Funil de incidente coletivo numa única chamada - quedas novas, ainda offline, reconexões,
+    quebra por regional/transmissor/PON/causa de queda e clusters geográficos, já agregados no
+    backend. Use esta tool PRIMEIRO ao investigar um possível incidente (evita várias chamadas
+    separadas de opr_login_outages/opr_login_aggregate/opr_login_timeseries).
+
+    Args:
+        params (LoginIncidentAnalysisInput): window_minutes (5-1440, default 90), regionals
+            (opcional), cluster_radius_meters/cluster_min_size (parâmetros do agrupamento
+            geográfico).
+
+    Returns:
+        str: JSON {"window_minutes", "since", "new_drops", "still_offline", "reconnects",
+        "by_regional", "by_transmitter", "by_pon", "by_drop_cause": [{"label", "quantity",
+        "percentage"}, ...], "geo_clusters": [{"center_latitude", "center_longitude",
+        "radius_meters", "size", "logins": [...]}, ...]}.
+    """
+    payload = {
+        "window_minutes": params.window_minutes,
+        "regionals": params.regionals,
+        "cluster_radius_meters": params.cluster_radius_meters,
+        "cluster_min_size": params.cluster_min_size,
+    }
+    return _call("infra/login-incident-analysis", payload)
+
+
 class BacklogAgingInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

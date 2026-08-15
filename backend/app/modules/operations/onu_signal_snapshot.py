@@ -13,21 +13,15 @@ from app.db.session import SessionLocal
 from app.services.ixc_client import IxcClient, fetch_onu_signal_by_login_ids, get_ixc_client
 
 from .models import OperationLoginCurrentStatus, OperationOnuSignalCurrent
+from .period import parse_ixc_local_datetime
 
 logger = logging.getLogger(__name__)
 
-# Mesmo marcador de "nunca aconteceu" do IXC usado em login_status_snapshot.py - "0000-00-00
-# 00:00:00" em vez de NULL.
-_IXC_EMPTY_DATETIME_PREFIX = "0000-00-00"
-
-
-def _parse_ixc_datetime(value: str | None) -> datetime | None:
-    if not value or value.startswith(_IXC_EMPTY_DATETIME_PREFIX):
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+# Achado real 2026-08-15: o IXC grava datetime em horário LOCAL (America/Porto_Velho, UTC-4), não
+# UTC (ver login_status_snapshot.py para a evidência) - `signal_measured_at` ficava 4h adiantado
+# com o parser anterior (`.replace(tzinfo=timezone.utc)` direto, sem deslocar). Corrigido
+# reaproveitando `parse_ixc_local_datetime` (mesma fonte/fuso da importação de O.S.).
+_parse_ixc_datetime = parse_ixc_local_datetime
 
 
 def _parse_ixc_float(value: str | None) -> float | None:

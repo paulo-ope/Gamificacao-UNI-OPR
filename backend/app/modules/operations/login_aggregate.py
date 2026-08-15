@@ -9,6 +9,7 @@ from typing import Literal
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from .login_geo_clusters import find_offline_login_clusters
 from .models import OperationLoginCurrentStatus, OperationLoginStatusSnapshot, OperationOnuSignalCurrent
 
 LoginAggregateDimension = Literal["regional", "online", "transmitter_id", "pon_id", "last_drop_cause"]
@@ -31,11 +32,14 @@ def login_aggregate(
     group_by: LoginAggregateDimension,
     regionals: list[str] | None = None,
     online_statuses: list[str] | None = None,
+    status_changed_since: datetime | None = None,
 ) -> list[dict]:
     """Contagem de logins por dimensão (regional/status/transmissor/PON/causa de queda) - mesmo
     formato de `ai.queries.aggregate_orders` (label/quantity/percentage), mas sobre o estado ATUAL
     de conectividade, não sobre O.S. `group_by` desconhecido levanta erro explícito (mesma correção
-    aplicada em `_group_label` - nunca cai num fallback silencioso)."""
+    aplicada em `_group_label` - nunca cai num fallback silencioso). `status_changed_since` restringe
+    a quem TRANSICIONOU de estado dentro da janela (ex.: combinado com `online_statuses=["N"]`,
+    responde "quem caiu E continua caído nos últimos N minutos, por dimensão")."""
     if group_by not in LoginAggregateDimension.__args__:
         raise ValueError(f"group_by inválido: '{group_by}'. Dimensões aceitas: {', '.join(LoginAggregateDimension.__args__)}.")
 
@@ -44,6 +48,8 @@ def login_aggregate(
         conditions.append(OperationLoginCurrentStatus.regional.in_(regionals))
     if online_statuses:
         conditions.append(OperationLoginCurrentStatus.online.in_(online_statuses))
+    if status_changed_since is not None:
+        conditions.append(OperationLoginCurrentStatus.status_changed_at >= status_changed_since)
 
     if group_by in _ONU_DIMENSIONS:
         label_column = func.coalesce(getattr(OperationOnuSignalCurrent, group_by), "Não identificado")
@@ -169,3 +175,65 @@ def login_timeseries(db: Session, *, since: datetime, until: datetime | None = N
         }
         for row in rows
     ]
+
+
+MAX_INCIDENT_GEO_CLUSTER_LOGINS = 50
+
+
+def login_incident_analysis(
+    db: Session,
+    *,
+    window_minutes: int = 90,
+    regionals: list[str] | None = None,
+    cluster_radius_meters: float = 300.0,
+    cluster_min_size: int = 3,
+) -> dict:
+    """Funil de incidente coletivo numa única chamada (pedido do usuário em 2026-08-15, pra não
+    precisar de várias idas ao banco/rede pra montar o mesmo quadro manualmente) - compõe as
+    funções já existentes e testadas deste módulo, nenhuma lógica nova de consulta:
+
+    - `new_drops`/`reconnects`: somados a partir de `login_timeseries` (janela inteira, não série).
+    - `still_offline`: de `login_outages` - quem caiu na janela e CONTINUA offline agora.
+    - `by_regional`/`by_transmitter`/`by_pon`/`by_drop_cause`: `login_aggregate` restrito a quem
+      está offline E caiu dentro da janela (`status_changed_since`).
+    - `geo_clusters`: de `find_offline_login_clusters` - concentração física (independe de
+      regional administrativa, propositalmente, porque um rompimento físico pode atravessar
+      fronteira de regional)."""
+    since = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+
+    timeseries_points = login_timeseries(db, since=since)
+    new_drops = sum(point["new_drops"] for point in timeseries_points)
+    reconnects = sum(point["new_reconnects"] for point in timeseries_points)
+
+    still_offline_items = login_outages(db, since=since, regionals=regionals, limit=MAX_LOGIN_OUTAGES_RESULTS)
+
+    def _breakdown(dimension: LoginAggregateDimension) -> list[dict]:
+        return login_aggregate(
+            db, group_by=dimension, regionals=regionals, online_statuses=["N"], status_changed_since=since
+        )
+
+    clusters = find_offline_login_clusters(
+        db, radius_meters=cluster_radius_meters, min_cluster_size=cluster_min_size, window_minutes=window_minutes
+    )
+
+    return {
+        "window_minutes": window_minutes,
+        "since": since,
+        "new_drops": new_drops,
+        "still_offline": len(still_offline_items),
+        "reconnects": reconnects,
+        "by_regional": _breakdown("regional"),
+        "by_transmitter": _breakdown("transmitter_id"),
+        "by_pon": _breakdown("pon_id"),
+        "by_drop_cause": _breakdown("last_drop_cause"),
+        "geo_clusters": [
+            {
+                "center_latitude": cluster.center_latitude,
+                "center_longitude": cluster.center_longitude,
+                "radius_meters": cluster.radius_meters,
+                "size": cluster.size,
+                "logins": [point.login for point in cluster.logins[:MAX_INCIDENT_GEO_CLUSTER_LOGINS]],
+            }
+            for cluster in clusters
+        ],
+    }

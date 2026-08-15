@@ -77,6 +77,9 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     ("ai.login_aggregate", "Agregação de login para IA/MCP (opr_login_aggregate)", "mcp", True),
     ("ai.login_outages", "Quedas por período para IA/MCP (opr_login_outages)", "mcp", True),
     ("ai.login_timeseries", "Série temporal de login para IA/MCP (opr_login_timeseries)", "mcp", True),
+    # Novo (pedido do usuário em 2026-08-15) - funil de incidente coletivo numa unica chamada.
+    ("operations.network.login_incident_analysis", "Funil de incidente (GET /operations/network/login-incident-analysis)", "api", True),
+    ("ai.login_incident_analysis", "Funil de incidente para IA/MCP (opr_login_incident_analysis)", "mcp", True),
 ]
 
 

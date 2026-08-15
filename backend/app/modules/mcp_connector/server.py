@@ -35,7 +35,7 @@ from app.modules.ai.router import (
 from app.modules.ai.schemas import AiOrderFilters
 from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
-from app.modules.operations.login_aggregate import login_aggregate, login_outages, login_timeseries
+from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
@@ -679,6 +679,44 @@ def build_mcp_server() -> FastMCP:
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_timeseries", "mcp")
             return _dump(login_timeseries(db, since=_parse_datetime(since), until=_parse_datetime(until) if until else None))
+
+    @mcp.tool(
+        name="opr_login_incident_analysis",
+        annotations={"title": "Funil de incidente coletivo", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_login_incident_analysis(
+        window_minutes: int = 90,
+        regionals: list[str] | None = None,
+        cluster_radius_meters: float = 300.0,
+        cluster_min_size: int = 3,
+    ) -> str:
+        """Funil de incidente coletivo numa única chamada - quedas novas, ainda offline,
+        reconexões, quebra por regional/transmissor/PON/causa de queda e clusters geográficos, já
+        agregados no backend. Use esta tool PRIMEIRO ao investigar um possível incidente (evita
+        várias chamadas separadas de opr_login_outages/opr_login_aggregate/opr_login_timeseries).
+
+        Args:
+            window_minutes: janela de análise (5 a 1440, default 90).
+            regionals: filtro opcional - não se aplica aos geo_clusters de propósito (um
+                rompimento físico pode atravessar fronteira administrativa de regional).
+            cluster_radius_meters, cluster_min_size: parâmetros do agrupamento geográfico (default
+                300m, mínimo 3 logins).
+
+        Returns:
+            JSON {"window_minutes", "since", "new_drops", "still_offline", "reconnects",
+            "by_regional", "by_transmitter", "by_pon", "by_drop_cause": [{"label", "quantity",
+            "percentage"}, ...], "geo_clusters": [{"center_latitude", "center_longitude",
+            "radius_meters", "size", "logins": [...]}, ...]}.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_incident_analysis", "mcp")
+            return _dump(
+                login_incident_analysis(
+                    db, window_minutes=window_minutes, regionals=regionals or [],
+                    cluster_radius_meters=cluster_radius_meters, cluster_min_size=cluster_min_size,
+                )
+            )
 
     @mcp.tool(
         name="opr_backlog_aging",
