@@ -185,10 +185,6 @@ export function OperationsTeamConfiguration({
   const [syncBacklogIntervalMinutes, setSyncBacklogIntervalMinutes] = useState(60);
   const [syncLookbackDays, setSyncLookbackDays] = useState(1);
   const [syncSectorIds, setSyncSectorIds] = useState<string[]>([]);
-  const [loginStatusEnabled, setLoginStatusEnabled] = useState(true);
-  const [onuSignalEnabled, setOnuSignalEnabled] = useState(true);
-  const [loginStatusIntervalMinutes, setLoginStatusIntervalMinutes] = useState(5);
-  const [onuSignalIntervalMinutes, setOnuSignalIntervalMinutes] = useState(15);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -228,10 +224,6 @@ export function OperationsTeamConfiguration({
     setSyncBacklogIntervalMinutes(ixcSyncSettings.backlog_sweep_interval_minutes);
     setSyncLookbackDays(ixcSyncSettings.lookback_days);
     setSyncSectorIds(ixcSyncSettings.sector_ids);
-    setLoginStatusEnabled(ixcSyncSettings.login_status_enabled);
-    setOnuSignalEnabled(ixcSyncSettings.onu_signal_enabled);
-    setLoginStatusIntervalMinutes(ixcSyncSettings.login_status_interval_minutes);
-    setOnuSignalIntervalMinutes(ixcSyncSettings.onu_signal_interval_minutes);
   }, [ixcSyncSettings]);
 
   const regionals = useMemo(
@@ -534,10 +526,6 @@ export function OperationsTeamConfiguration({
           : 60,
         lookback_days: Number.isFinite(syncLookbackDays) ? syncLookbackDays : 1,
         sector_ids: syncSectorIds,
-        login_status_enabled: loginStatusEnabled,
-        onu_signal_enabled: onuSignalEnabled,
-        login_status_interval_minutes: Number.isFinite(loginStatusIntervalMinutes) ? loginStatusIntervalMinutes : 5,
-        onu_signal_interval_minutes: Number.isFinite(onuSignalIntervalMinutes) ? onuSignalIntervalMinutes : 15,
       });
       onIxcSyncSettingsChange(saved);
       setMessage(`Sincronização IXC atualizada: ${saved.sector_scope_label}.`);
@@ -793,93 +781,6 @@ export function OperationsTeamConfiguration({
                 Atual: {ixcSyncSettings?.sector_scope_label || "3 setores principais"}.
                 Se nada for selecionado, o backend usa o escopo seguro dos 3 setores.
               </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-3">
-              <p className="mb-1 text-xs font-semibold text-slate-900">
-                Monitoramento de rede (status de login e sinal ONU)
-              </p>
-              <p className="mb-3 text-[11px] text-slate-500">
-                Loops independentes da sincronização de O.S. acima - desligue
-                quando não estiver acompanhando incidentes, mantendo só a
-                atualização de O.S. rodando.
-              </p>
-              <div className="grid gap-3 lg:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold text-slate-900">
-                    Status de login
-                  </p>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    Conectividade (online/offline) de todos os logins ativos.
-                  </p>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={loginStatusEnabled}
-                    onClick={() => setLoginStatusEnabled((current) => !current)}
-                    className={`mt-3 inline-flex h-9 items-center rounded-full border px-1 transition ${loginStatusEnabled ? "border-blue-600 bg-blue-600" : "border-slate-300 bg-white"}`}
-                  >
-                    <span
-                      className={`inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-[10px] font-bold shadow transition ${loginStatusEnabled ? "translate-x-14 text-blue-700" : "translate-x-0 text-slate-500"}`}
-                    >
-                      {loginStatusEnabled ? "ON" : "OFF"}
-                    </span>
-                    <span className="w-14 text-center text-xs font-semibold text-white">
-                      {loginStatusEnabled ? "" : "OFF"}
-                    </span>
-                  </button>
-                  <label className="mt-3 grid gap-1.5 text-xs font-medium text-slate-700">
-                    Intervalo (minutos)
-                    <Input
-                      type="number"
-                      min={2}
-                      max={120}
-                      value={numericInputValue(loginStatusIntervalMinutes)}
-                      onChange={(event) => setLoginStatusIntervalMinutes(parseNumericInput(event.target.value))}
-                    />
-                    <span className="text-[10px] font-normal text-slate-500">
-                      Mínimo 2 min. Padrão: 5 min.
-                    </span>
-                  </label>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-semibold text-slate-900">
-                    Sinal ONU/PON
-                  </p>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    Telemetria óptica só de quem está offline, mudou de status
-                    recentemente, ou nunca foi capturado - não a base inteira.
-                  </p>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={onuSignalEnabled}
-                    onClick={() => setOnuSignalEnabled((current) => !current)}
-                    className={`mt-3 inline-flex h-9 items-center rounded-full border px-1 transition ${onuSignalEnabled ? "border-blue-600 bg-blue-600" : "border-slate-300 bg-white"}`}
-                  >
-                    <span
-                      className={`inline-flex h-7 w-7 items-center justify-center rounded-full bg-white text-[10px] font-bold shadow transition ${onuSignalEnabled ? "translate-x-14 text-blue-700" : "translate-x-0 text-slate-500"}`}
-                    >
-                      {onuSignalEnabled ? "ON" : "OFF"}
-                    </span>
-                    <span className="w-14 text-center text-xs font-semibold text-white">
-                      {onuSignalEnabled ? "" : "OFF"}
-                    </span>
-                  </button>
-                  <label className="mt-3 grid gap-1.5 text-xs font-medium text-slate-700">
-                    Intervalo (minutos)
-                    <Input
-                      type="number"
-                      min={5}
-                      max={180}
-                      value={numericInputValue(onuSignalIntervalMinutes)}
-                      onChange={(event) => setOnuSignalIntervalMinutes(parseNumericInput(event.target.value))}
-                    />
-                    <span className="text-[10px] font-normal text-slate-500">
-                      Mínimo 5 min. Padrão: 15 min.
-                    </span>
-                  </label>
-                </div>
-              </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
               <p className="text-xs text-blue-900">
