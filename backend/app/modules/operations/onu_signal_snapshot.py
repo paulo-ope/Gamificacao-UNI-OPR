@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,37 @@ def _parse_ixc_text(value: str | None) -> str | None:
 _UPSERT_CHUNK_SIZE = 3000
 
 
+# Auditoria feita pelo usuario em 2026-08-15: consultar sinal optico das ~88 mil ONUs monitoradas
+# a cada ciclo era desperdicio real (confirmado: so ~4 mil estao offline/mudaram de estado nas
+# ultimas 2h num instante qualquer) - a imensa maioria fica saudavel por horas/dias sem que o sinal
+# mude o suficiente pra importar. Passa a consultar so uma "fila de diagnostico": offline agora,
+# transicionou recentemente (ainda pode estar oscilando), ou nunca foi capturado (baseline unica -
+# essa parte da fila encolhe pra zero apos a primeira volta completa). Item da auditoria: NAO inclui
+# "teve causa de queda no passado" como criterio isolado - um login que teve "Link Loss" ha 3 dias
+# mas esta saudavel e estavel desde entao nao precisa de nova consulta so por isso (isso ia diluir
+# a reducao quase de volta ao tamanho antigo, dado que causa de queda fica gravada permanentemente
+# no ultimo valor conhecido, nao "problema em aberto").
+ONU_SIGNAL_RECENT_TRANSITION_HOURS = 2
+
+
+def _onu_signal_watchlist_login_ids(db: Session) -> list[int]:
+    since = datetime.now(timezone.utc) - timedelta(hours=ONU_SIGNAL_RECENT_TRANSITION_HOURS)
+    needs_diagnosis = db.scalars(
+        select(OperationLoginCurrentStatus.login_id).where(
+            or_(
+                OperationLoginCurrentStatus.online == "N",
+                OperationLoginCurrentStatus.status_changed_at >= since,
+            )
+        )
+    )
+    never_captured = db.scalars(
+        select(OperationLoginCurrentStatus.login_id).where(
+            OperationLoginCurrentStatus.login_id.not_in(select(OperationOnuSignalCurrent.login_id))
+        )
+    )
+    return list({*needs_diagnosis, *never_captured})
+
+
 def upsert_onu_signal_current(db: Session, rows: list[dict]) -> None:
     for offset in range(0, len(rows), _UPSERT_CHUNK_SIZE):
         chunk = rows[offset : offset + _UPSERT_CHUNK_SIZE]
@@ -60,12 +91,13 @@ def upsert_onu_signal_current(db: Session, rows: list[dict]) -> None:
 
 
 def capture_onu_signal_snapshot(db: Session, client: IxcClient) -> int:
-    """Busca telemetria óptica/ONU só para os logins já presentes em
-    `OperationLoginCurrentStatus` (decisão do usuário: não varrer a tabela inteira do IXC, ~90 mil
-    ONUs, para não sobrecarregar a API deles). Upsert simples (1 linha por login) - sem histórico
-    append-only por enquanto (pode ser adicionado depois se análise de tendência de sinal ao longo
-    do tempo for necessária)."""
-    login_ids = list(db.scalars(select(OperationLoginCurrentStatus.login_id)))
+    """Busca telemetria óptica/ONU só para a fila de diagnóstico (ver `_onu_signal_watchlist_login_ids`)
+    - logins offline, que transicionaram recentemente, ou nunca capturados - não a base inteira de
+    logins monitorados (auditoria do usuário em 2026-08-15: confirmado que consultar todo mundo a
+    cada ciclo era desperdício real; a fila típica é ~5% do tamanho da base inteira). Upsert simples
+    (1 linha por login) - sem histórico append-only por enquanto (pode ser adicionado depois se
+    análise de tendência de sinal ao longo do tempo for necessária)."""
+    login_ids = _onu_signal_watchlist_login_ids(db)
     if not login_ids:
         return 0
 
