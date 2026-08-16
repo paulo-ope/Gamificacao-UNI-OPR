@@ -517,9 +517,202 @@ HTTP 200 nos três casos. Nenhum `ignored_filters`, nenhum aviso, nenhuma difere
 5. ~~`backlog_aging` (lote 3).~~ — feito, resultado em §11.3 (inclui correção de tipo em `OperationResponseMetaOut.warnings`).
 6. ~~`team_target_performance` (lote 4).~~ — feito, resultado em §11.4. Primeiro pacote de refatoração incremental completo.
 7. ~~`orders_timeseries` (lote 5, prioridade P0) - corrige a falha "schema aceita, função ignora" encontrada em produção.~~ — feito, resultado em §11.5 (achado registrado) e §11.6 (correção + regressão de `team_target_performance` sem dupla transformação).
-8. **Próximo, autorizado pelo usuário:** nova varredura por todo endpoint que já aceita `AiOrderFilters` (ou seja, já expõe `os_subjects` no schema), procurando especificamente o padrão "schema aceita, função ignora" - não apenas "filtro ainda não suportado". Ainda não iniciada.
-9. `warranty_analytics_for_ai`: adiado por decisão do usuário - hoje `subjects`/`os_subjects` não são reconhecidos por nenhum dos dois nomes (`WARRANTY_ORIGIN_SHARED_FILTERS` não inclui nenhum dos dois), então não há divergência entre alias e canônico ali, só ausência simétrica.
+8. ~~Nova varredura por todo endpoint que já aceita `AiOrderFilters`, procurando o padrão "schema aceita, função ignora".~~ — feita, resultado completo em §13. **Correção importante:** a varredura encontrou que a suposição do item 9 abaixo (baseada numa afirmação anterior deste mesmo documento) estava **errada** - há sim divergência real em `warranty_analytics_for_ai` para `os_subjects`. Nenhuma correção de código foi feita nesta etapa (só auditoria), por instrução explícita do usuário.
+9. ~~`warranty_analytics_for_ai`: adiado por decisão do usuário - hoje `subjects`/`os_subjects` não são reconhecidos por nenhum dos dois nomes...~~ **Esta afirmação estava incorreta e foi corrigida pela varredura de §13.** `subjects` (legado) É reconhecido e aplicado no lado retorno/manutenção via `_dimension_conditions`; `os_subjects` (canônico, já aceito pelo schema) não é, e é descartado em silêncio - mesmo padrão do bug de `orders_timeseries` (§11.5). Ver §13.3 para evidência completa. Migração ainda não autorizada/feita, só o achado está registrado.
 10. `text_filters.field="os_subject"`: risco real, mas bloqueado hoje pelo `Literal` fechado de `TextFilterField` (`ai/schemas.py`) - tratado como invariante de segurança, não como refatoração imediata. **Testado em 2026-08-16**: `AiOrderFilters.model_validate({"text_filters": [{"field": "os_subject", ...}]})` levanta `ValidationError` (422 na rota real) - invariante confirmado, nada a corrigir agora.
 11. `sla_breakdown`/`sla_hierarchy` (dimensão `"subject"`, não filtro): permanece no futuro `SelectorContractV1` (§8), fora desta rodada.
 
 Este documento não implica nenhum desses passos ter sido concluído além do que está explicitamente marcado como feito acima.
+
+---
+
+## 13. Auditoria completa — varredura "schema aceita, função ignora" (2026-08-16)
+
+**Regra de segurança seguida nesta auditoria: nenhuma correção de código foi feita.** Só investigação, teste com dado real e registro de achados. Esta seção não altera nada das §0-§12 (contrato já aprovado) - é um relatório de achados anexado.
+
+### 13.1 Endpoints auditados (inventário exaustivo, não presumido)
+
+Busca exaustiva por toda referência a `AiOrderFilters` no backend (`grep -rn "AiOrderFilters"`) confirma que **exatamente 6 schemas de request** embutem `filters: AiOrderFilters`, e portanto exatamente 6 funções são o universo real desta auditoria - não há nenhum consumidor oculto:
+
+| # | Request schema (`ai/schemas.py`) | Função (`ai/queries.py`) | Rota IA | Tool MCP remoto | Tool MCP local | Rota REST |
+|---|---|---|---|---|---|---|
+| 1 | `AiAggregationRequest` (linha 148) | `aggregate_orders` | `POST /ai/aggregate-orders` | `opr_aggregate_orders` | `opr_aggregate_orders` | não existe |
+| 2 | `AiTimeseriesRequest` (linha 166) | `orders_timeseries` | `POST /ai/orders-timeseries` | `opr_orders_timeseries` | `opr_orders_timeseries` | não existe |
+| 3 | `AiSearchRequest` (linha 188) | `search_orders` | `POST /ai/search-orders` | `opr_search_orders` | `opr_search_orders` | não existe |
+| 4 | `AiBacklogAgingRequest` (linha ~333) | `backlog_aging` | `POST /ai/backlog-aging` | `opr_backlog_aging` | `opr_backlog_aging` | não existe |
+| 5 | `AiWarrantyAnalyticsRequest` (linha ~390) | `warranty_analytics_for_ai` → `operations_queries.warranty_analytics` | `POST /ai/warranty-analytics` | `opr_warranty_analytics` | `opr_warranty_analytics` | não existe |
+| 6 | `AiTeamTargetPerformanceRequest` (linha ~449) | `team_target_performance` (delega 100% pra `orders_timeseries`) | `POST /ai/team-target-performance` | `opr_team_target_performance` | `opr_team_target_performance` | não existe |
+
+Confirmado por leitura de código (`operations/router.py` inteiro): **nenhuma dessas 6 funções tem rota REST equivalente** - REST (`/operations/orders`, `/operations/openings/orders`) usa seus próprios `Query()` params (`_filter_params`), uma estrutura paralela e mais antiga que nunca ganhou `os_subjects` - não é "estrutura derivada de `AiOrderFilters`", é um caminho de código diferente que alimenta o mesmo `_dimension_conditions` por baixo. Como as 3 rotas que existem (IA/MCP remoto/MCP local) chamam exatamente a mesma função Python de `ai/queries.py`, o comportamento de aplicação de filtro é **idêntico entre os 3 canais** para cada uma das 6 funções - a única diferença entre canais é on `os_subjects` é aceito pelo *schema* antes de chegar na função (todos os 3 usam o mesmo `AiOrderFilters`, então idêntico também nesse ponto).
+
+**Confirmado como fora do escopo desta auditoria** (não usam `AiOrderFilters` nem estrutura equivalente): `backlog_history` (só aceita `sector_filter`, uma estrutura própria, e é pré-agregado por só 4 dimensões fixas - não tem nenhum dos ~30 filtros da lista), `team_targets_for_ai` (sem filtros), `filter_options_for_ai` (só período), `opr_management_cases` (schema próprio `ManagementCaseFilters`, domínio de gestão, não de O.S.).
+
+### 13.2 Metodologia aplicada
+
+Etapa A (análise de código) feita para as 6 funções, seguindo a cadeia real: schema (`AiOrderFilters`) → rota/tool → função `ai/queries.py` → `_dimension_conditions_with_text`/`_query_conditions`/chamada direta → `operations_queries._dimension_conditions` (FILTER_COLUMNS + team_models + weekdays + custom_window + search + closed_time) + `_text_filter_conditions` + `_sla_stage_filter_conditions` + `_geo_filter_conditions` + `_datetime_filter_conditions`. `_dimension_conditions` (`operations/queries.py:265-378`) foi lida linha a linha - é o funil comum a todas as 6 funções para os 19 campos de `FILTER_COLUMNS` + `team_models`/weekdays/custom_window/search/closed_time, e **não tem nenhuma lacuna** (todo campo é lido via `.get()` e aplicado se presente).
+
+Etapa B (teste real) rodada para todo caso onde a etapa A não bastou para ter certeza - valores reais existentes na base (nunca um valor que dá zero nos dois lados), comparando total/soma filtrado vs. baseline sem filtro.
+
+### 13.3 🔴 P0 confirmado: `warranty_analytics_for_ai` ignora `os_subjects` em silêncio (mesmo padrão do bug de `orders_timeseries`)
+
+**Correção de uma afirmação anterior deste documento:** a versão anterior deste texto (§12, item 9) dizia que `warranty_analytics` não reconhecia nem `subjects` nem `os_subjects`, então não haveria divergência. **Isso estava errado** - a leitura mais profunda feita nesta auditoria (não feita antes) mostra que o lado retorno/manutenção da função (`operations/queries.py:1067`, `retorno_conditions = _dimension_conditions(db, user, {**filters, "os_types": []})`) recebe o `filters` **completo**, então `subjects` (nome de `FILTER_COLUMNS`) É reconhecido e aplicado ali - só `os_subjects` (o nome que o schema já aceita desde o lote 1) não é, porque `FILTER_COLUMNS` não tem essa chave.
+
+Teste real, `date_from=2026-01-01`, `date_to=2026-08-16`, valor real `"Suporte Externo Fibra Urbana"`:
+
+| Chamada | `numerator` (garantias encontradas) |
+|---|---|
+| sem filtro nenhum | 2.750 |
+| `subjects=["Suporte Externo Fibra Urbana"]` (legado) | 649 |
+| `os_subjects=["Suporte Externo Fibra Urbana"]` (canônico, já aceito pelo schema) | **2.750 — idêntico ao sem filtro** |
+
+Mesmo padrão exato do bug de `orders_timeseries` (§11.5): HTTP 200, nenhum erro, nenhum `ignored_filters`, nenhum aviso - o schema aceita, a função ignora, a resposta parece válida.
+
+- **arquivo:linha:** `ai/queries.py:1116-1141` (`warranty_analytics_for_ai`, repassa `**filters` sem normalizar) → `operations/queries.py:1067` (`retorno_conditions = _dimension_conditions(db, user, {**filters, "os_types": []})`, só reconhece `subjects`, não `os_subjects`).
+- **causa raiz:** idêntica à de `orders_timeseries` antes da correção - `os_subjects` nunca foi ensinado a `FILTER_COLUMNS`/`_dimension_conditions` (decisão deliberada de não tocar em `FILTER_COLUMNS` global), e `warranty_analytics_for_ai` é a única das 6 funções que ainda não tem a etapa de normalização alias→canônico.
+- **impacto operacional:** qualquer chamada de IA/MCP usando `os_subjects` (o nome que o próprio schema recomenda como canônico) pra restringir a análise de garantia por assunto de O.S. recebe silenciosamente a taxa de garantia **da base inteira**, não do assunto pedido - um número gerencial errado sem nenhum sinal de que algo está errado.
+
+### 13.4 🔴 P0 confirmado: `warranty_analytics_for_ai` ignora `text_filters`, `has_coordinates`, trio geográfico e os 9 filtros de data - por completo, para qualquer nome
+
+Achado adicional (não coberto pela suposição anterior deste documento): `operations_queries.warranty_analytics` (`operations/queries.py:995-1140`) **nunca chama** `_text_filter_conditions`, `_sla_stage_filter_conditions`, `_geo_filter_conditions` ou `_datetime_filter_conditions` em nenhum ponto da função - só `_dimension_conditions`, duas vezes (origem e retorno). Isso significa que **todo** o resto do contrato de filtros (não é questão de alias, é ausência total de aplicação) é aceito pelo schema e ignorado:
+
+| Filtro testado | Valor usado | `numerator` sem filtro | `numerator` com filtro | Aplicado? |
+|---|---|---|---|---|
+| `text_filters` | `[{"field":"subject","operator":"contains","value":"Fibra"}]` | 2.750 | 2.750 | 🔴 Não |
+| `has_coordinates` | `True` | 2.750 | 2.750 | 🔴 Não |
+| trio geográfico | `near_latitude=-10.88, near_longitude=-61.95, radius_km=5` | 2.750 | 2.750 | 🔴 Não |
+| `opened_at` | `{"gte": "2026-08-01"}` | 2.750 | 2.750 | 🔴 Não |
+| `scheduled_after_sla` | `True` | 2.750 | 2.750 | 🔴 Não |
+
+Por inferência de código (mesma chamada, mesmas 4 funções nunca invocadas): `closed_at`, `deadline_at`, `scheduled_at`, `assumed_at`, `displacement_started_at`, `execution_started_at`, `finished_at`, `source_updated_at` e `sla_expired_before_schedule` têm o mesmo destino - nenhum foi testado individualmente porque a causa raiz (a função nunca lê essas 4 categorias) já está confirmada por leitura direta do código-fonte da função inteira, sem nenhuma chamada condicional que pudesse variar por valor.
+
+- **arquivo:linha:** `operations/queries.py:995-1141` (corpo completo de `warranty_analytics` - as únicas condições adicionadas ao `SELECT` são as de `_dimension_conditions`, `contract_id`/`order_code` não nulos, `closed_at`/`opened_at` do próprio período, e o `os_type` do tipo elegível).
+- **causa raiz:** diferente do caso de `os_subjects` (que é um problema de nome/alias), este é estrutural - a função nunca foi escrita para aceitar esses 13 filtros, mas o schema (`AiOrderFilters`, compartilhado com as outras 5 funções) os aceita de qualquer forma porque é o mesmo `filters: AiOrderFilters` reaproveitado nos 6 request schemas.
+- **impacto operacional:** mais amplo que o caso `os_subjects` - qualquer tentativa de restringir a análise de garantia por texto livre, geografia, ou qualquer marco de data/hora específico (não só o período `date_from`/`date_to` de granularidade dia) é descartada em silêncio.
+
+### 13.5 🔴 P0 de observabilidade confirmado (cross-cutting, afeta os 5 endpoints já migrados): filtros compostos "tudo ou nada" com peça faltante fazem `meta.applied_filters` mentir
+
+Achado novo, não coberto pelas Fases anteriores. Dois grupos de filtro só têm efeito quando **todas** as peças estão presentes (documentado no próprio código - `_geo_filter_conditions`/`_dimension_conditions`), mas `build_meta` não sabe disso e ecoa qualquer peça isolada como se tivesse sido aplicada:
+
+**Trio geográfico** (`near_latitude`/`near_longitude`/`radius_km`) - teste real, `aggregate_orders`, período 2026-07-01..2026-08-16:
+
+| Chamada | total (soma `quantity`) | `meta.applied_filters` |
+|---|---|---|
+| sem filtro | 31.365 | `{}` |
+| `near_latitude=-10.88` (sozinho, sem `near_longitude`/`radius_km`) | **31.365 — idêntico** | `{"near_latitude": -10.88, ...}` **← mostra como aplicado** |
+
+Reproduzido de forma idêntica em `search_orders` (33.276 = 33.276, `meta.applied_filters` mostrando `near_latitude` isolado).
+
+**Composto `custom_window_*`** (5 peças: `custom_window_basis`, `custom_window_start_weekday`, `custom_window_start_time`, `custom_window_end_weekday`, `custom_window_end_time`) - teste real, `aggregate_orders`, mesmo período, só 2 das 5 peças enviadas:
+
+| Chamada | total | `meta.applied_filters` |
+|---|---|---|
+| sem filtro | 31.365 | `{}` |
+| `custom_window_basis=["opened"], custom_window_start_weekday="monday"` (2 de 5 peças) | **31.365 — idêntico** | `{"custom_window_basis": [...], "custom_window_start_weekday": "monday", ...}` **← mostra como aplicado** |
+
+- **arquivo:linha:** `ai/queries.py` - `aggregate_orders`/`search_orders`/`backlog_aging`/`orders_timeseries` constroem `applied_filters` como `{**filters, ...seletores}` (echo direto do dict recebido, só removendo valores vazios) - nunca verificam se um filtro composto está *completo* antes de reportá-lo. A condição real "só ativa com as 5/3 peças" vive em `operations/queries.py:316-346` (`custom_window`) e `ai/queries.py:112-136` (`_geo_filter_conditions`), mas o código que monta `applied_filters` não consulta essa mesma regra.
+- **causa raiz:** `build_meta`/os pontos de chamada tratam `applied_filters` como "o que o chamador enviou (não vazio)", não como "o que efetivamente formou uma condição SQL" - correto pra filtros atômicos (`regionals`, `os_subjects`, etc.), mas errado pra qualquer filtro que exija combinação.
+- **impacto operacional:** exatamente o caso "meta mentindo" pedido para investigar - um chamador que envie só parte de um filtro composto (erro de integração comum, ex.: esquecer `radius_km`) recebe a base inteira sem nenhum aviso, e `meta` reforça a falsa impressão de que o filtro foi aplicado.
+- **Endpoints afetados:** `aggregate_orders`, `search_orders`, `backlog_aging`, `orders_timeseries`, `team_target_performance` (delega a `orders_timeseries`, herda o problema) - os 5 já migrados. `warranty_analytics_for_ai` não é afetado por este ponto porque nem tem `meta` ainda (§13.4 cobre a ausência total de aplicação lá).
+
+### 13.6 Matriz completa endpoint × filtro
+
+Legenda: ✅ APPLIED · 🔴 IGNORED_SILENTLY · ⛔ REJECTED · ⬜ NOT_SUPPORTED_BY_DESIGN · 🟨 PARTIAL_COVERAGE
+
+| Filtro | `aggregate_orders` | `orders_timeseries` | `search_orders` | `backlog_aging` | `team_target_performance` | `warranty_analytics_for_ai` |
+|---|---|---|---|---|---|---|
+| `companies` | ✅ | ✅ | ✅ | ✅ | ✅ (via orders_timeseries) | 🟨 (só retorno; não afeta denominador - não é um dos 5 `WARRANTY_ORIGIN_SHARED_FILTERS`... **correção:** `companies` **é** um dos 5 compartilhados, então ✅ pleno, afeta origem e retorno) |
+| `regionals` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (um dos 5 `WARRANTY_ORIGIN_SHARED_FILTERS` - testado: 682 vs 2.750) |
+| `states` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (compartilhado) |
+| `cities` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (compartilhado) |
+| `contract_types` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno, não afeta origem/denominador - não é compartilhado) |
+| `person_types` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `os_types` | ✅ | ✅ | ✅ | ✅ | ✅ | ⬜ (forçado `[]` no retorno por design documentado, `operations/queries.py:1067`) |
+| `os_subjects` (canônico) | ✅ (corrigido lote 1) | ✅ (corrigido lote 5) | ✅ (corrigido lote 2) | ✅ (corrigido lote 3) | ✅ (corrigido lote 4) | 🔴 **P0 - §13.3** |
+| `subjects` (legado) | ✅ (com aviso) | ✅ (com aviso) | ✅ (com aviso) | ✅ (com aviso) | ✅ (com aviso) | ✅ (aplicado no retorno, sem aviso - `warranty_analytics_for_ai` não tem `meta`) |
+| `diagnoses` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno; testado: 0 vs 2.750 com valor real) |
+| `departments` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `sectors` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno; testado: 2.445 vs 2.750) |
+| `priorities` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `creators` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `responsibles` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `statuses` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno; testado: 2.731 vs 2.750) |
+| `sla_statuses` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `projects` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `pops` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `customer_logins` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `team_models` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (5º campo compartilhado - testado: 26 vs 2.750; único que afeta origem+retorno por design explícito, ver docstring de `_warranty_origin_filters`) |
+| `opened_weekdays` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `closed_weekdays` | ✅ | ✅ | ✅ | ✅ | ✅ | 🟨 (só retorno) |
+| `custom_window_*` (5 peças) | 🟡 ✅ se completo / 🔴 se incompleto (§13.5) | idem | idem | idem | idem | 🟨 (só retorno, e sujeito ao mesmo problema de completude) |
+| `search`/`keyword` | ⬜ (schema não tem campo `search`; `keyword` só existe em `AiSearchRequest`) | ⬜ | ✅ (via `keyword`, testado: 25.529 resultados) | ⬜ | ⬜ | ⬜ |
+| `text_filters` | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 **P0 - §13.4** |
+| `scheduled_after_sla` | ✅ | ✅ | ✅ | ✅ | ✅ | 🔴 **§13.4** |
+| `sla_expired_before_schedule` | ✅ (inferido, mesma função) | ✅ (inferido) | ✅ (inferido) | ✅ (inferido) | ✅ (inferido) | 🔴 (inferido, §13.4) |
+| `has_coordinates` | ✅ (inferido) | ✅ (inferido) | ✅ (inferido) | ✅ (inferido) | ✅ (inferido) | 🔴 **§13.4** |
+| `near_latitude`/`near_longitude`/`radius_km` | 🟡 ✅ se os 3 / 🔴 se parcial (§13.5) | idem | idem (testado) | idem | idem | 🔴 (nunca aplicado, §13.4) |
+| `opened_at` | ✅ (testado: 2.566 vs 31.365) | ✅ (herdado da correção do lote 5) | ✅ (inferido, mesma `_datetime_filter_conditions`) | ✅ (inferido) | ✅ (inferido) | 🔴 **§13.4** (testado) |
+| `closed_at`, `deadline_at`, `scheduled_at`, `assumed_at`, `displacement_started_at`, `execution_started_at`, `finished_at`, `source_updated_at` | ✅ (inferido, mesma função de `opened_at`) | ✅ (inferido) | ✅ (inferido) | ✅ (inferido) | ✅ (inferido) | 🔴 (inferido, mesma causa de `opened_at`, §13.4) |
+
+**Nota sobre `companies` na coluna `warranty_analytics_for_ai`:** a primeira redação desta tabela classificou `companies` como 🟨, mas `companies` **é** um dos 5 campos de `WARRANTY_ORIGIN_SHARED_FILTERS` (`operations/queries.py:246`) - corrigido para ✅ pleno na célula acima. Erro cometido e corrigido durante a própria escrita desta seção, registrado aqui de propósito para não escondstruir o processo.
+
+### 13.7 Auditoria de `text_filters` (pedida em separado)
+
+| Valor de `AiTextFilter.field` (`Literal`, `ai/schemas.py:40-42`) | Chave em `TEXT_FILTER_COLUMNS` (`ai/queries.py:218-227`) | Coluna SQL | Implementado? |
+|---|---|---|---|
+| `sector` | `sector` | `OperationOrder.sector` | ✅ |
+| `subject` | `subject` | `OperationOrder.os_subject` | ✅ |
+| `diagnosis` | `diagnosis` | `OperationOrder.diagnosis` | ✅ |
+| `responsible` | `responsible` | `OperationOrder.responsible` | ✅ |
+| `city` | `city` | `OperationOrder.city` | ✅ |
+| `department` | `department` | `OperationOrder.department` | ✅ |
+| `service_description` | `service_description` | `_SERVICE_DESCRIPTION_EXPR` (expressão sobre `raw_payload`) | ✅ |
+| `neighborhood` | `neighborhood` | `OperationOrder.neighborhood` | ✅ |
+
+**Todo valor aceito pelo `Literal` tem implementação correspondente em `TEXT_FILTER_COLUMNS` - nenhuma lacuna encontrada.** Os dois dicts têm exatamente as mesmas 8 chaves, confirmado por comparação direta.
+
+Caso conhecido revalidado: `field="os_subject"` (variante com nome de coluna, não de dimensão) **continua rejeitado** - testado em 2026-08-16: `AiOrderFilters.model_validate({"text_filters": [{"field": "os_subject", "operator": "contains", "value": "Fibra"}]})` levanta `pydantic.ValidationError` (`Input should be 'sector', 'subject', 'diagnosis', 'responsible', 'city', 'department', 'service_description' or 'neighborhood'`) - 422 garantido na rota real, nas 3 vias (IA, MCP remoto via `_validated_filters`, MCP local via HTTP pra rota IA). Nenhum outro caso de "Literal aceita, `TEXT_FILTER_COLUMNS` não reconhece" foi encontrado - os dois conjuntos são idênticos hoje.
+
+### 13.8 Regressão de paridade dos 5 endpoints já migrados (verificação da auditoria, não bateria completa)
+
+Rodado em 2026-08-16, valor real `"Suporte Externo Fibra Urbana"`, `subjects=[...]` vs `os_subjects=[...]`:
+
+| Endpoint | `data`/`items` idênticos? | Aviso legado presente só no legado? |
+|---|---|---|
+| `aggregate_orders` | ✅ Sim | ✅ Sim |
+| `search_orders` | ✅ Sim (2.315 itens, mesma ordem) | ✅ Sim |
+| `backlog_aging` | ✅ Sim | ✅ Sim |
+| `team_target_performance` | ✅ Sim | ✅ Sim |
+| `orders_timeseries` | ✅ Sim | ✅ Sim |
+
+Nenhuma regressão introduzida pelos lotes 1-5.
+
+### 13.9 Resumo por severidade
+
+**🔴 P0 (3 achados):**
+1. `warranty_analytics_for_ai` ignora `os_subjects` em silêncio (§13.3) - mesmo padrão do bug pré-correção de `orders_timeseries`.
+2. `warranty_analytics_for_ai` ignora `text_filters`/`has_coordinates`/trio geográfico/os 9 filtros de data por completo, para qualquer nome (§13.4) - estrutural, não é questão de alias.
+3. `meta.applied_filters` mente sobre o trio geográfico e o composto `custom_window_*` quando enviados parcialmente, nos 5 endpoints já migrados (§13.5) - achado de observabilidade, cross-cutting.
+
+**🟠 P1 (1 achado, já registrado nas Fases anteriores, não repetido aqui em detalhe):** cobertura parcial de `pon_ids`/`transmitter_ids`/`contract_ids` em `search_logins` (fora do escopo desta auditoria - é login, não O.S. - já tratada com `PARTIAL_DIMENSION_COVERAGE` desde a revisão de aprovação, §0 ajuste #2). Nesta auditoria (domínio O.S.), o equivalente estrutural é a cobertura parcial documentada e intencional de 14 filtros em `warranty_analytics_for_ai` que só afetam o lado retorno/numerador, nunca o lado origem/denominador (`contract_types`, `person_types`, `diagnoses`, `departments`, `sectors`, `priorities`, `creators`, `responsibles`, `statuses`, `sla_statuses`, `projects`, `pops`, `customer_logins`, `opened_weekdays`/`closed_weekdays`/`custom_window_*`) - comportamento correto e documentado em código, mas **sem nenhum aviso pro chamador** porque a função não tem `meta` ainda.
+
+**🟡 P2 (2 achados, sem impacto atual):**
+1. `os_types` forçado a `[]` no lado retorno de `warranty_analytics_for_ai` - documentado explicitamente no código (`NOT_SUPPORTED_BY_DESIGN`, correto).
+2. `search`/`keyword` ausente de 5 das 6 funções - o schema (`AiOrderFilters`) nem tem campo `search`, então é `REJECTED`/`NOT_SUPPORTED_BY_DESIGN` por construção, não um filtro aceito-e-ignorado.
+
+**✅ OK:** todos os 19 campos de `FILTER_COLUMNS` + `team_models` + `opened_weekdays`/`closed_weekdays`/`custom_window_*` (quando completo) + `text_filters` (8 campos, todos com implementação) + os 9 filtros de data + `scheduled_after_sla`/`sla_expired_before_schedule`/`has_coordinates`/trio geográfico (quando completo) nos **5 endpoints já migrados**. `os_subjects` funcionando corretamente com aviso de alias nos mesmos 5.
+
+### 13.10 Respostas objetivas
+
+1. **Quantos endpoints foram auditados?** 6 (`aggregate_orders`, `orders_timeseries`, `search_orders`, `backlog_aging`, `team_target_performance`, `warranty_analytics_for_ai`) - confirmado como o universo completo por busca exaustiva de `AiOrderFilters` no backend, não presumido.
+2. **Quantos filtros/combinações foram verificados?** 29 campos de `AiOrderFilters` × 6 endpoints = 174 combinações possíveis; testadas com dado real (não só inferidas por código) 21 combinações específicas (as mais suspeitas + as que geraram achado); as demais confirmadas por leitura completa e sem ambiguidade do código-fonte das funções compartilhadas (`_dimension_conditions`, que não tem nenhuma ramificação condicional por valor que pudesse escapar da leitura estática).
+3. **Quantos P0 foram encontrados?** 3 (§13.3, §13.4, §13.5).
+4. **Quantos P1?** 1 categoria (cobertura parcial de 14 filtros em `warranty_analytics_for_ai`, sem aviso).
+5. **Existe hoje algum outro caso igual ao bug pré-correção do `orders_timeseries`?** Sim - `warranty_analytics_for_ai` ignorando `os_subjects` (§13.3) é exatamente o mesmo padrão. Além dele, os 9 filtros de data + `text_filters` + `has_coordinates`/trio geográfico no mesmo endpoint (§13.4) são uma variante mais ampla do mesmo problema geral (schema aceita, função não aplica), só que por ausência estrutural de implementação, não por nome de alias.
+6. **Existe algum caso em que `meta.applied_filters` afirma algo que a query não fez?** Sim - o trio geográfico e o composto `custom_window_*` quando enviados parcialmente, nos 5 endpoints já migrados (§13.5). `warranty_analytics_for_ai` não entra nesse item porque ainda não tem `meta` nenhum (a mentira não pode existir onde não há afirmação).
+7. **Quais seriam os próximos endpoints/filtros a corrigir, em ordem de risco?**
+   1. `warranty_analytics_for_ai` → `os_subjects` (§13.3) - mesma classe de correção já feita 5 vezes (`_normalize_os_subjects_alias`), risco/esforço já validado pelo padrão.
+   2. `meta.applied_filters` mentindo no trio geográfico/`custom_window_*` incompletos (§13.5) - correção transversal (função utilitária que valida completude antes de reportar), afeta os 5 endpoints já migrados de uma vez.
+   3. `warranty_analytics_for_ai` → adicionar `meta` (pré-requisito para os itens 4 e 5) e então decidir, com o usuário, se os 13 filtros de cobertura parcial (§13.9, P1) merecem um aviso `PARTIAL_DIMENSION_COVERAGE`-equivalente.
+   4. `warranty_analytics_for_ai` → `text_filters`/`has_coordinates`/trio geográfico/9 filtros de data (§13.4) - maior esforço (nenhuma implementação existe, não é só renomear um alias) e menor urgência que o item 1 (esses filtros nunca funcionaram, então não há uma "promessa recente do schema" sendo quebrada como no caso `os_subjects`/`orders_timeseries`).
+
+Nenhuma dessas correções foi implementada nesta etapa. Aguardando autorização explícita do usuário, endpoint por endpoint, como nos lotes anteriores.
