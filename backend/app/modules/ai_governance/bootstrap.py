@@ -55,7 +55,10 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     # Novo (pedido do usuário em 2026-08-14) - telemetria óptica/ONU (sinal RX/TX, causa da última
     # queda, transmissor) nunca foi capturada nem exposta antes - entra desabilitado por padrão.
     ("operations.network.onu_signal", "Telemetria óptica/ONU (GET /operations/network/onu-signal)", "api", False),
-    ("ai.offline_login_clusters", "Clusters de login offline para IA (POST /ai/infra/offline-login-clusters)", "api", False),
+    # default_enabled=True desde 2026-08-15 (achado real: a tool MCP nunca existiu, so agora
+    # exposta - a versao REST equivalente, operations.network.offline_login_clusters, ja e True;
+    # nao fazia sentido a mesma capacidade ficar inconsistente entre origem api/mcp).
+    ("ai.offline_login_clusters", "Clusters de login offline para IA (POST /ai/infra/offline-login-clusters)", "api", True),
     ("ai.onu_signal", "Telemetria óptica/ONU para IA (POST /ai/infra/onu-signal)", "api", False),
     # Novo (pedido do usuário em 2026-08-14) - status individual de login para IA/MCP (chave de API
     # e conector remoto), distinto do agregado de cluster acima. Entra desabilitado por padrão,

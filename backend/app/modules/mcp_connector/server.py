@@ -36,7 +36,7 @@ from app.modules.ai.schemas import AiOrderFilters
 from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
-from app.modules.operations.login_geo_clusters import query_login_status
+from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
@@ -679,6 +679,66 @@ def build_mcp_server() -> FastMCP:
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_timeseries", "mcp")
             return _dump(login_timeseries(db, since=_parse_datetime(since), until=_parse_datetime(until) if until else None))
+
+    @mcp.tool(
+        name="opr_offline_login_clusters",
+        annotations={"title": "Clusters geográficos de queda de login", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_offline_login_clusters(
+        radius_meters: float = 300.0, min_cluster_size: int = 3, window_minutes: int = 30
+    ) -> str:
+        """Agrupa logins que caíram nos últimos `window_minutes` e estão geograficamente próximos -
+        candidato a rompimento de fibra num trecho (distinto de uma queda isolada de um único
+        cliente). Já faz o agrupamento espacial no backend (DBSCAN sobre grade), em vez de você
+        baixar `opr_login_status`/`opr_login_outages` e agrupar manualmente. Só considera
+        proximidade e tempo de desconexão - não filtra por regional/setor/assunto de O.S.
+
+        Args:
+            radius_meters: raio de vizinhança entre dois logins pra contarem como próximos
+                (10-5000, default 300).
+            min_cluster_size: mínimo de logins vizinhos pra formar um cluster (2-100, default 3).
+            window_minutes: janela de detecção - só considera quedas dentro desse intervalo (5-1440,
+                default 30).
+
+        Returns:
+            JSON {"radius_meters", "min_cluster_size", "window_minutes", "clusters": [{
+            "center_latitude", "center_longitude", "radius_meters", "size", "logins": [{"login_id",
+            "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...]},
+            ordenado do maior cluster pro menor.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.offline_login_clusters", "mcp")
+            clusters = find_offline_login_clusters(
+                db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+            )
+            return _dump(
+                {
+                    "radius_meters": radius_meters,
+                    "min_cluster_size": min_cluster_size,
+                    "window_minutes": window_minutes,
+                    "clusters": [
+                        {
+                            "center_latitude": cluster.center_latitude,
+                            "center_longitude": cluster.center_longitude,
+                            "radius_meters": cluster.radius_meters,
+                            "size": cluster.size,
+                            "logins": [
+                                {
+                                    "login_id": point.login_id,
+                                    "login": point.login,
+                                    "online": point.online,
+                                    "latitude": point.latitude,
+                                    "longitude": point.longitude,
+                                    "last_disconnected_at": point.last_disconnected_at,
+                                }
+                                for point in cluster.logins
+                            ],
+                        }
+                        for cluster in clusters
+                    ],
+                }
+            )
 
     @mcp.tool(
         name="opr_login_incident_analysis",

@@ -702,6 +702,49 @@ def opr_login_timeseries(params: LoginTimeseriesInput) -> str:
     return _call("infra/login-timeseries", payload)
 
 
+class OfflineLoginClustersInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    radius_meters: float = Field(default=300.0, ge=10.0, le=5000.0, description="Raio de vizinhança entre dois logins pra contarem como próximos.")
+    min_cluster_size: int = Field(default=3, ge=2, le=100, description="Mínimo de logins vizinhos pra formar um cluster.")
+    window_minutes: int = Field(default=30, ge=5, le=1440, description="Janela de detecção - só considera quedas dentro desse intervalo.")
+
+
+@mcp.tool(
+    name="opr_offline_login_clusters",
+    annotations={
+        "title": "Clusters geográficos de queda de login",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_offline_login_clusters(params: OfflineLoginClustersInput) -> str:
+    """Agrupa logins que caíram nos últimos `window_minutes` e estão geograficamente próximos -
+    candidato a rompimento de fibra num trecho (distinto de uma queda isolada de um único cliente).
+    Já faz o agrupamento espacial no backend (DBSCAN sobre grade), em vez de baixar
+    opr_login_status/opr_login_outages e agrupar manualmente. Só considera proximidade e tempo de
+    desconexão - não filtra por regional/setor/assunto de O.S.
+
+    Args:
+        params (OfflineLoginClustersInput): radius_meters (10-5000, default 300),
+            min_cluster_size (2-100, default 3), window_minutes (5-1440, default 30).
+
+    Returns:
+        str: JSON {"radius_meters", "min_cluster_size", "window_minutes", "clusters": [{
+        "center_latitude", "center_longitude", "radius_meters", "size", "logins": [{"login_id",
+        "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...]}, ordenado
+        do maior cluster pro menor.
+    """
+    payload = {
+        "radius_meters": params.radius_meters,
+        "min_cluster_size": params.min_cluster_size,
+        "window_minutes": params.window_minutes,
+    }
+    return _call("infra/offline-login-clusters", payload)
+
+
 class LoginIncidentAnalysisInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
