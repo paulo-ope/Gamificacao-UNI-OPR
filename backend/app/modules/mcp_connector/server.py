@@ -273,7 +273,10 @@ def build_mcp_server() -> FastMCP:
             page_size: itens por página (10-200).
             keyword: busca livre opcional.
             filters: """ + FILTERS_DOC + """ (inclui o filtro geográfico de raio, útil para "O.S.
-                perto deste ponto/desta O.S.").
+                perto deste ponto/desta O.S."). Piloto do FilterContractV1
+                (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro
+                de assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa
+                a gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
             date_field: opened_at, closed_at, scheduled_at, assumed_at, displacement_started_at,
                 execution_started_at, finished_at ou deadline_at - default (None) mantém a regra
                 "abriu OU fechou no período" acima.
@@ -285,11 +288,11 @@ def build_mcp_server() -> FastMCP:
 
         Returns:
             JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-            "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, sector,
-            latitude, longitude, distance_km (só com filtro de raio), service_description,
-            technical_report, service_address, datas do ciclo de vida, indicadores de etapa de
-            SLA e a meta de equipe vigente na O.S. - recortado por `fields`/`response_mode` quando
-            informados.
+            "has_more": bool, "meta": {...}}. Cada item inclui order_code, regional, city,
+            neighborhood, sector, latitude, longitude, distance_km (só com filtro de raio),
+            service_description, technical_report, service_address, datas do ciclo de vida,
+            indicadores de etapa de SLA e a meta de equipe vigente na O.S. - recortado por
+            `fields`/`response_mode` quando informados.
         """
         user = _current_user()
         with SessionLocal() as db:

@@ -439,14 +439,26 @@ Esse teste roda **antes** de qualquer commit do piloto, com dado real de produç
 | `group_by` inválido (ex.: `"os_subject"`, o nome da coluna em vez da dimensão) | Continua levantando `ValueError` explícito — **não** virou `ignored_filters`, confirmando o ajuste #1 |
 | Tool MCP remota `opr_aggregate_orders` | Continua registrada (22 tools no total) após a mudança |
 
-**Conclusão do piloto: aprovado.** Nenhuma diferença numérica entre nome legado e canônico; `meta` reflete exatamente o que a especificação pede. Autorizado avançar para o próximo lote (`search_orders`, `backlog_aging`, `team_target_performance`) mediante nova aprovação do usuário, por lote.
+**Conclusão do piloto: aprovado.** Nenhuma diferença numérica entre nome legado e canônico; `meta` reflete exatamente o que a especificação pede. Usuário aprovou em 2026-08-16 ("FilterContractV1: aprovado e validado por piloto real. Refatoração incremental autorizada por endpoint, com teste de paridade obrigatório.") — refatoração segue endpoint por endpoint, cada um com seu próprio teste de paridade antes do commit.
+
+### 11.2 Resultado do lote 2 (`search_orders`) — executado em produção, 2026-08-16
+
+| Verificação | Resultado |
+|---|---|
+| `subjects=["Suporte Externo Fibra Urbana"]` vs `os_subjects=[mesmo valor]`, período 2026-07-01..2026-08-16, page_size=50 | Itens idênticos (mesma ordem, mesmo `order_code` no topo: `IXC-1355271`) — 2315 O.S. em ambos, dict inteiro igual exceto `meta` |
+| `meta.warnings` legado vs canônico | `DEPRECATED_FILTER_ALIAS` só no legado, ausente no canônico — igual ao piloto |
+| Combinação `os_subjects` + `regionals` via schema real `AiSearchRequest` (`extra="forbid"`) | 551 O.S., `applied_filters` mostrando `os_subjects` e `regionals` juntos |
+| Regressão de `keyword` (alias de `search`, mecanismo confirmado idêntico ao REST no ajuste #3) | 25529 O.S. encontradas com `keyword="fibra"`, `applied_filters` reportando `keyword` corretamente |
+
+**Conclusão do lote 2: aprovado.** Mesmo padrão do piloto - `meta` adicionado como campo irmão de `items`/`total_encontrado` (não um wrapper `data`), consistente com `search_logins` já implementado na Fase 1.
 
 ## 12. Próximos passos
 
 1. ~~Usuário aprova (ou ajusta) os nomes canônicos e as regras de `ignored_filters`/`warnings` deste documento.~~ — feito: aprovado com os 4 ajustes de §0.
 2. ~~Implementar o piloto único (`aggregate_orders`, §10.1) com o teste de paridade (§11) rodado e reportado antes do commit.~~ — feito, resultado em §11.1.
-3. **Aguardando autorização explícita do usuário para o próximo lote** (§10.2: `search_orders`, `backlog_aging`, `team_target_performance`) — nenhum lote adicional começa automaticamente, mesmo com o piloto aprovado.
-4. Replicar, lote a lote, só com autorização a cada lote.
-5. `SelectorContractV1` (§8) como proposta separada, se o usuário quiser continuar por essa linha depois.
+3. ~~Aguardar autorização explícita do usuário para o próximo lote.~~ — feito: aprovado em 2026-08-16, refatoração incremental autorizada por endpoint.
+4. ~~`search_orders` (lote 2).~~ — feito, resultado em §11.2.
+5. Próximos: `backlog_aging`, depois `team_target_performance` — mesmo padrão, mesmo teste de paridade a cada um.
+6. `SelectorContractV1` (§8) como proposta separada, se o usuário quiser continuar por essa linha depois.
 
 Este documento não implica nenhum desses passos ter sido concluído além do que está explicitamente marcado como feito acima.

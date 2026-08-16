@@ -453,13 +453,13 @@ def _sla_risk_bucket(elapsed_hours: float | None, sla_target_hours: float | None
     return "on_track"
 
 
-def _normalize_aggregate_orders_filters(filters: dict) -> tuple[dict, list[str] | None, dict | None]:
-    """FilterContractV1 piloto (docs/proposta-filter-contract-v1.md) - só `aggregate_orders` nesta
-    etapa. Traduz o alias legado `subjects` pro nome canônico `os_subjects` sem tocar em
-    `FILTER_COLUMNS`/`_dimension_conditions` (compartilhados com `search_orders`/`backlog_aging`/
-    `orders_timeseries`/`warranty_analytics`/`team_target_performance` - fora do escopo deste
-    piloto único). `subjects` continua funcionando sem prazo de remoção (§6 do documento) - só
-    passa a gerar um aviso `DEPRECATED_FILTER_ALIAS` em vez de ficar silencioso.
+def _normalize_os_subjects_alias(filters: dict) -> tuple[dict, list[str] | None, dict | None]:
+    """FilterContractV1 (docs/proposta-filter-contract-v1.md) - traduz o alias legado `subjects`
+    pro nome canônico `os_subjects` sem tocar em `FILTER_COLUMNS`/`_dimension_conditions`
+    (compartilhados por várias funções deste módulo - a normalização fica aqui, chamada
+    explicitamente por cada função migrada, uma por vez, com teste de paridade a cada lote, em vez
+    de embutida no ponto compartilhado). `subjects` continua funcionando sem prazo de remoção (§6
+    do documento) - só passa a gerar um aviso `DEPRECATED_FILTER_ALIAS` em vez de ficar silencioso.
 
     Retorna (filters com `subjects` já resolvido pra uso interno de `_dimension_conditions`, valor
     efetivo aplicado ou None, aviso de alias depreciado ou None)."""
@@ -498,7 +498,7 @@ def aggregate_orders(
     conectores configurados). Com 2+ dimensões, `label` some e cada dimensão pedida aparece como
     sua própria chave (ex.: `{"regional": "...", "subject": "...", "quantity": ...}`) - aditivo,
     não quebra quem já chama com 1 dimensão só."""
-    filters, effective_os_subjects, alias_warning = _normalize_aggregate_orders_filters(filters)
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     dims = _group_labels(group_by)
     labels = [_group_label(db, dim) for dim in dims]
     start, end = local_period_utc_bounds(date_from, date_to)
@@ -902,6 +902,7 @@ def search_orders(
     `fields` já deve chegar validado/autorizado pelo chamador (ver `AI_SEARCH_GOVERNED_FIELDS`
     acima) - esta função só filtra o dict de saída, não decide o que é permitido."""
     page_size = min(page_size, AI_SEARCH_MAX_PAGE_SIZE)
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     if keyword:
         filters = {**filters, "search": keyword}
 
@@ -951,12 +952,21 @@ def search_orders(
             team_target = _resolve_team_target(target_versions, team_model, period_type, order.closed_at)
         item = _build_search_item(order, team_model, team_target, reference_point=reference_point)
         items.append(_shape_search_item(item, fields))
+
+    applied_filters = {**filters, "date_from": date_from, "date_to": date_to, "date_field": date_field}
+    applied_filters.pop("subjects", None)
+    applied_filters.pop("search", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    if keyword:
+        applied_filters["keyword"] = keyword
     return {
         "items": items,
         "total_encontrado": total,
         "page": page,
         "page_size": page_size,
         "has_more": total > page * page_size,
+        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
     }
 
 

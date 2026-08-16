@@ -300,11 +300,14 @@ def opr_search_orders(params: SearchOrdersInput) -> str:
     Args:
         params (SearchOrdersInput): date_from, date_to, page (default 1), page_size (10-200,
             default 50), keyword (busca livre opcional), filters (ver FILTERS_DOC - incluindo o
-            filtro geográfico de raio, útil para "O.S. perto deste ponto/desta O.S.").
+            filtro geográfico de raio, útil para "O.S. perto deste ponto/desta O.S."). Piloto do
+            FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome
+            canônico do filtro de assunto da O.S. - `subjects` continua funcionando (alias
+            depreciado), só passa a gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
         str: JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-        "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, sector,
+        "has_more": bool, "meta": {...}}. Cada item inclui order_code, regional, city, neighborhood, sector,
         latitude, longitude, distance_km (só quando o filtro de raio foi usado), service_description,
         technical_report, service_address, datas do ciclo de vida (opened_at, scheduled_at,
         execution_started_at, closed_at, sla_deadline_at...), indicadores de etapa de SLA
