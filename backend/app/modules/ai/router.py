@@ -39,7 +39,7 @@ from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.ai.schemas import (
     AiAggregationRequest,
-    AiBacklogAgingItem,
+    AiBacklogAgingResponse,
     AiBacklogAgingRequest,
     AiBacklogHistoryPoint,
     AiBacklogHistoryRequest,
@@ -548,12 +548,12 @@ def onu_signal_route(
     return results
 
 
-@router.post("/backlog-aging", response_model=list[AiBacklogAgingItem])
+@router.post("/backlog-aging", response_model=AiBacklogAgingResponse)
 def backlog_aging_route(
     payload: AiBacklogAgingRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return backlog_aging(db, user, group_by=payload.group_by, date_to=payload.date_to, **payload.filters.model_dump())
 
 

@@ -452,13 +452,27 @@ Esse teste roda **antes** de qualquer commit do piloto, com dado real de produç
 
 **Conclusão do lote 2: aprovado.** Mesmo padrão do piloto - `meta` adicionado como campo irmão de `items`/`total_encontrado` (não um wrapper `data`), consistente com `search_logins` já implementado na Fase 1.
 
+### 11.3 Resultado do lote 3 (`backlog_aging`) — executado em produção, 2026-08-16
+
+| Verificação | Resultado |
+|---|---|
+| `subjects=["Suporte Externo Fibra Urbana"]` vs `os_subjects=[mesmo valor]`, `group_by="regional"`, `date_to=2026-08-16` | `data` idêntico — 11 grupos em ambos, mesmos valores de `avg_age_days`/`median_age_days`/`oldest_order_code` |
+| `meta.warnings` legado vs canônico | `DEPRECATED_FILTER_ALIAS` só no legado |
+| Via schema real `AiBacklogAgingRequest` + `group_by="sector"` | 1 grupo, `applied_filters` correto |
+| Tool MCP remota `opr_backlog_aging` | Continua registrada (22 tools) |
+
+**Bug real encontrado e corrigido neste lote:** `OperationResponseMetaOut.warnings` (schema Pydantic) estava tipado como `list[str]`, mas `build_meta`/o próprio `DEPRECATED_FILTER_ALIAS` sempre produziram um `dict` (`{"code": ..., "received": ..., "canonical": ...}`). Isso já valia para `aggregate_orders`/`search_orders` (lotes 1 e 2), mas passou batido porque nenhuma das duas rotas tinha `response_model` estrito - `backlog_aging` foi a primeira desta série a validar a saída contra um schema Pydantic (`AiBacklogAgingResponse`, criado neste lote), e a validação falhou exatamente por isso. Corrigido em dois arquivos: `operations/schemas.py::OperationResponseMetaOut.warnings` e `ai_governance/response_meta.py::ResponseMeta.warnings`, ambos de `list[str]` para `list[dict]` - refletindo o que já era a realidade em produção, sem mudar nenhum dado retornado. Revalidado depois da correção: todos os 7 endpoints já enviados na Fase 1 (`login_aggregate`, `login_outages`, `login_timeseries`, `login_incident_analysis`, `search_logins`, `offline_login_clusters_response`, `coordinate_quality_audit`) continuam validando OK contra seus schemas.
+
+**Conclusão do lote 3: aprovado**, com a correção de tipo acima incluída no mesmo commit.
+
 ## 12. Próximos passos
 
 1. ~~Usuário aprova (ou ajusta) os nomes canônicos e as regras de `ignored_filters`/`warnings` deste documento.~~ — feito: aprovado com os 4 ajustes de §0.
 2. ~~Implementar o piloto único (`aggregate_orders`, §10.1) com o teste de paridade (§11) rodado e reportado antes do commit.~~ — feito, resultado em §11.1.
 3. ~~Aguardar autorização explícita do usuário para o próximo lote.~~ — feito: aprovado em 2026-08-16, refatoração incremental autorizada por endpoint.
 4. ~~`search_orders` (lote 2).~~ — feito, resultado em §11.2.
-5. Próximos: `backlog_aging`, depois `team_target_performance` — mesmo padrão, mesmo teste de paridade a cada um.
-6. `SelectorContractV1` (§8) como proposta separada, se o usuário quiser continuar por essa linha depois.
+5. ~~`backlog_aging` (lote 3).~~ — feito, resultado em §11.3 (inclui correção de tipo em `OperationResponseMetaOut.warnings`).
+6. Próximo: `team_target_performance` — mesmo padrão, mesmo teste de paridade.
+7. `SelectorContractV1` (§8) como proposta separada, se o usuário quiser continuar por essa linha depois.
 
 Este documento não implica nenhum desses passos ter sido concluído além do que está explicitamente marcado como feito acima.

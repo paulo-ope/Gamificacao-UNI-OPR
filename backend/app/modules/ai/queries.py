@@ -970,11 +970,12 @@ def search_orders(
     }
 
 
-def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **filters) -> list[dict]:
+def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **filters) -> dict:
     """Idade do backlog (O.S. ainda abertas em `date_to`), por dimensão: quantidade, idade média
     e mediana em dias, a O.S. mais antiga, e quantas passam de 1/3/5/7/15 dias. Calculado em
     Python (não em SQL) porque o volume é do tamanho do backlog atual - milhares, não a base toda
     - e mediana não é portável entre Postgres/SQLite sem depender de extensão específica."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     label = _group_label(db, group_by)
     conditions = _dimension_conditions_with_text(db, user, filters)
     _, reference_at = local_period_utc_bounds(date_to, date_to)
@@ -1011,7 +1012,15 @@ def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **fi
             }
         )
     results.sort(key=lambda item: -item["quantity"])
-    return results
+
+    applied_filters = {**filters, "group_by": group_by, "date_to": date_to}
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    return {
+        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "data": results,
+    }
 
 
 def filter_options_for_ai(db: Session, user: User, date_from: date, date_to: date) -> OperationFilters:

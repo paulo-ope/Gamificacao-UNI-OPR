@@ -20,7 +20,10 @@ class IgnoredFilter(TypedDict):
 class ResponseMeta(TypedDict):
     applied_filters: dict[str, Any]
     ignored_filters: list[IgnoredFilter]
-    warnings: list[str]
+    # dict, não str - todo warning é estruturado com um "code" (ex.: DEPRECATED_FILTER_ALIAS,
+    # PARTIAL_DIMENSION_COVERAGE, ver docs/proposta-filter-contract-v1.md §5) e campos extras que
+    # variam por code - por isso dict[str, Any] livre em vez de um TypedDict fixo por warning.
+    warnings: list[dict[str, Any]]
     generated_at: datetime
     source_last_sync: datetime | None
 
@@ -29,7 +32,7 @@ def build_meta(
     *,
     applied_filters: dict[str, Any] | None = None,
     ignored_filters: list[IgnoredFilter] | None = None,
-    warnings: list[str] | None = None,
+    warnings: list[dict[str, Any]] | None = None,
     source_last_sync: datetime | None = None,
 ) -> ResponseMeta:
     # Remove filtros vazios (list vazia, None, "") de `applied_filters` - um filtro que o chamador

@@ -865,13 +865,16 @@ def opr_backlog_aging(params: BacklogAgingInput) -> str:
 
     Args:
         params (BacklogAgingInput): date_to (AAAA-MM-DD), group_by (uma dimensão, default
-            "regional", ver GROUP_BY_DOC), filters (ver FILTERS_DOC).
+            "regional", ver GROUP_BY_DOC), filters (ver FILTERS_DOC). Piloto do FilterContractV1
+            (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro de
+            assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com lista [{"label": str, "quantity": int, "avg_age_days": float,
+        str: JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "avg_age_days": float,
         "median_age_days": float, "oldest_order_code": str, "oldest_age_days": float,
-        "over_1d": int, "over_3d": int, "over_5d": int, "over_7d": int, "over_15d": int}, ...],
-        ordenado por quantidade decrescente.
+        "over_1d": int, "over_3d": int, "over_5d": int, "over_7d": int, "over_15d": int}, ...]},
+        `data` ordenado por quantidade decrescente.
 
     Exemplos de uso:
         - "Qual bairro tem o backlog mais velho?" -> group_by="neighborhood", ordenar por avg_age_days

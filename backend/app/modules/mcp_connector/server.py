@@ -813,11 +813,15 @@ def build_mcp_server() -> FastMCP:
             date_to: AAAA-MM-DD.
             group_by: uma dimensão, default "regional". """ + GROUP_BY_DOC + """
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. - `subjects` continua funcionando
+                (alias depreciado), só passa a gerar um aviso DEPRECATED_FILTER_ALIAS em
+                `meta.warnings`.
 
         Returns:
-            JSON com lista [{"label": str, "quantity": int, "avg_age_days": float,
+            JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "avg_age_days": float,
             "median_age_days": float, "oldest_order_code": str, "oldest_age_days": float,
-            "over_1d"/"over_3d"/"over_5d"/"over_7d"/"over_15d": int}, ...].
+            "over_1d"/"over_3d"/"over_5d"/"over_7d"/"over_15d": int}, ...]}.
         """
         user = _current_user()
         with SessionLocal() as db:

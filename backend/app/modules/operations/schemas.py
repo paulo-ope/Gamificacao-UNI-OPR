@@ -83,7 +83,11 @@ class OperationIgnoredFilterOut(BaseModel):
 class OperationResponseMetaOut(BaseModel):
     applied_filters: dict
     ignored_filters: list[OperationIgnoredFilterOut]
-    warnings: list[str]
+    # dict, não str - todo warning até hoje é estruturado (ex.: {"code": "DEPRECATED_FILTER_ALIAS",
+    # "received": ..., "canonical": ...} ou {"code": "PARTIAL_DIMENSION_COVERAGE", "dimension": ...},
+    # ver docs/proposta-filter-contract-v1.md §5) - cada `code` carrega campos extras diferentes,
+    # por isso `dict` livre em vez de um schema fixo por warning.
+    warnings: list[dict]
     generated_at: datetime
     source_last_sync: datetime | None
 

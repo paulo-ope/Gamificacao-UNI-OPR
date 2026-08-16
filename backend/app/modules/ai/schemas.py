@@ -10,6 +10,7 @@ from app.modules.operations.schemas import (
     OperationBreakdownItem,
     OperationFilters,
     OperationOfflineLoginClustersOut,
+    OperationResponseMetaOut,
     OperationWarrantyOriginTypeItem,
     OperationWarrantyRegionalRankingItem,
 )
@@ -341,6 +342,11 @@ class AiBacklogAgingItem(BaseModel):
     over_5d: int
     over_7d: int
     over_15d: int
+
+
+class AiBacklogAgingResponse(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[AiBacklogAgingItem]
 
 
 class AiBacklogSectorFilter(BaseModel):
