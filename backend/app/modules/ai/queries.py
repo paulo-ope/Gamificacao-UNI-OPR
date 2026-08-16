@@ -478,6 +478,51 @@ def _normalize_os_subjects_alias(filters: dict) -> tuple[dict, list[str] | None,
     return normalized, effective, warning
 
 
+# FilterContractV1 lote 7 (docs/proposta-filter-contract-v1.md §13.5) - `near_latitude`/
+# `near_longitude`/`radius_km` (`_geo_filter_conditions`) e as 5 peças de `custom_window_*`
+# (`operations_queries._dimension_conditions:316-346`) só formam condição SQL quando TODAS as
+# peças de um grupo estão presentes - a query em si já respeita essa regra hoje (nenhuma peça
+# isolada nunca gerou SQL parcial). O bug era só de observabilidade: `meta.applied_filters`
+# ecoava qualquer peça isolada como se tivesse formado uma condição real.
+_COMPOSITE_FILTERS = {
+    "geo_radius": ("near_latitude", "near_longitude", "radius_km"),
+    "custom_window": (
+        "custom_window_basis", "custom_window_start_weekday", "custom_window_start_time",
+        "custom_window_end_weekday", "custom_window_end_time",
+    ),
+}
+
+
+def _composite_filter_report(filters: dict) -> tuple[dict, list[dict]]:
+    """Verifica os grupos de `_COMPOSITE_FILTERS` contra `filters` (o mesmo dict que já alimenta
+    a query - ver módulo acima). Um grupo com só ALGUMAS peças (não todas, não nenhuma) nunca gera
+    condição SQL, então não deve aparecer em `applied_filters` como se tivesse sido aplicado -
+    em vez disso, gera um aviso `INCOMPLETE_COMPOSITE_FILTER` com as peças recebidas e as que
+    faltam. Grupo completo (todas as peças) ou totalmente ausente (nenhuma peça) não gera aviso -
+    nesses dois casos o `applied_filters` de sempre já está correto.
+
+    Retorna (dict pra usar como base de `applied_filters`, com as peças de grupo incompleto já
+    removidas, warnings de grupo incompleto - 0 a 2 itens)."""
+    cleaned = dict(filters)
+    warnings: list[dict] = []
+    for filter_name, fields in _COMPOSITE_FILTERS.items():
+        received = [field for field in fields if cleaned.get(field) not in (None, "", [])]
+        if not received or len(received) == len(fields):
+            continue
+        missing = [field for field in fields if field not in received]
+        for field in received:
+            cleaned.pop(field, None)
+        warnings.append(
+            {
+                "code": "INCOMPLETE_COMPOSITE_FILTER",
+                "filter": filter_name,
+                "received_fields": received,
+                "missing_fields": missing,
+            }
+        )
+    return cleaned, warnings
+
+
 def aggregate_orders(
     db: Session,
     user: User,
@@ -604,12 +649,14 @@ def aggregate_orders(
             item.update({"quantity": count, "metric_value": metric_value, "percentage": percentage})
         results.append(item)
 
-    applied_filters = {**filters, "group_by": group_by, "metric": metric}
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({"group_by": group_by, "metric": metric})
     applied_filters.pop("subjects", None)
     if effective_os_subjects:
         applied_filters["os_subjects"] = effective_os_subjects
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
     return {
-        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
         "data": results,
     }
 
@@ -688,15 +735,17 @@ def orders_timeseries(
             item["group"] = group
         results.append(item)
 
-    applied_filters = {
-        **filters, "metric": metric, "granularity": granularity,
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({
+        "metric": metric, "granularity": granularity,
         "date_from": date_from, "date_to": date_to, "group_by": group_by,
-    }
+    })
     applied_filters.pop("subjects", None)
     if effective_os_subjects:
         applied_filters["os_subjects"] = effective_os_subjects
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
     return {
-        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
         "data": results,
     }
 
@@ -972,20 +1021,22 @@ def search_orders(
         item = _build_search_item(order, team_model, team_target, reference_point=reference_point)
         items.append(_shape_search_item(item, fields))
 
-    applied_filters = {**filters, "date_from": date_from, "date_to": date_to, "date_field": date_field}
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({"date_from": date_from, "date_to": date_to, "date_field": date_field})
     applied_filters.pop("subjects", None)
     applied_filters.pop("search", None)
     if effective_os_subjects:
         applied_filters["os_subjects"] = effective_os_subjects
     if keyword:
         applied_filters["keyword"] = keyword
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
     return {
         "items": items,
         "total_encontrado": total,
         "page": page,
         "page_size": page_size,
         "has_more": total > page * page_size,
-        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
     }
 
 
@@ -1032,12 +1083,14 @@ def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **fi
         )
     results.sort(key=lambda item: -item["quantity"])
 
-    applied_filters = {**filters, "group_by": group_by, "date_to": date_to}
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({"group_by": group_by, "date_to": date_to})
     applied_filters.pop("subjects", None)
     if effective_os_subjects:
         applied_filters["os_subjects"] = effective_os_subjects
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
     return {
-        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
         "data": results,
     }
 
