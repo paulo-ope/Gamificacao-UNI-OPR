@@ -188,11 +188,15 @@ def build_mcp_server() -> FastMCP:
                 quantidade_atrasada, quantidade_backlog, horas_abertura_agenda,
                 horas_agenda_execucao, horas_execucao_fechamento, horas_abertura_fechamento.
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. neste endpoint - `subjects` continua
+                funcionando (alias depreciado, sem prazo de remoção), só passa a gerar um aviso
+                DEPRECATED_FILTER_ALIAS em `meta.warnings` em vez de ficar silencioso.
 
         Returns:
-            JSON com lista de grupos: [{"label": str, "quantity": int, "metric_value": float,
-            "percentage": float}, ...] (ou uma chave por dimensão em vez de "label", com 2-3
-            dimensões), ordenado por quantidade decrescente.
+            JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "metric_value": float,
+            "percentage": float}, ...]} (ou uma chave por dimensão em vez de "label" dentro de
+            `data`, com 2-3 dimensões), `data` ordenado por quantidade decrescente.
         """
         user = _current_user()
         with SessionLocal() as db:

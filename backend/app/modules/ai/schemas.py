@@ -81,6 +81,11 @@ class AiOrderFilters(BaseModel):
     person_types: list[str] = Field(default_factory=list, max_length=100)
     os_types: list[str] = Field(default_factory=list, max_length=100)
     subjects: list[str] = Field(default_factory=list, max_length=100)
+    # Nome canônico proposto em docs/proposta-filter-contract-v1.md (FilterContractV1, piloto
+    # aggregate_orders) para o mesmo filtro de `subjects` acima - os dois convivem, `subjects`
+    # continua funcionando (alias depreciado, sem prazo de remoção), só passa a gerar um aviso em
+    # `meta.warnings`. Só `aggregate_orders` normaliza os dois nesta etapa (piloto único aprovado).
+    os_subjects: list[str] = Field(default_factory=list, max_length=100)
     diagnoses: list[str] = Field(default_factory=list, max_length=100)
     departments: list[str] = Field(default_factory=list, max_length=100)
     sectors: list[str] = Field(default_factory=list, max_length=100)

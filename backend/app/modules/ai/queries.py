@@ -10,6 +10,7 @@ from sqlalchemy import Numeric, String, and_, case, cast, func, literal, or_, se
 from sqlalchemy.orm import Session
 
 from app.models import User
+from app.modules.ai_governance.response_meta import build_meta
 from app.modules.operations import queries as operations_queries
 from app.modules.operations.models import (
     OperationBacklogSnapshot,
@@ -452,6 +453,31 @@ def _sla_risk_bucket(elapsed_hours: float | None, sla_target_hours: float | None
     return "on_track"
 
 
+def _normalize_aggregate_orders_filters(filters: dict) -> tuple[dict, list[str] | None, dict | None]:
+    """FilterContractV1 piloto (docs/proposta-filter-contract-v1.md) - só `aggregate_orders` nesta
+    etapa. Traduz o alias legado `subjects` pro nome canônico `os_subjects` sem tocar em
+    `FILTER_COLUMNS`/`_dimension_conditions` (compartilhados com `search_orders`/`backlog_aging`/
+    `orders_timeseries`/`warranty_analytics`/`team_target_performance` - fora do escopo deste
+    piloto único). `subjects` continua funcionando sem prazo de remoção (§6 do documento) - só
+    passa a gerar um aviso `DEPRECATED_FILTER_ALIAS` em vez de ficar silencioso.
+
+    Retorna (filters com `subjects` já resolvido pra uso interno de `_dimension_conditions`, valor
+    efetivo aplicado ou None, aviso de alias depreciado ou None)."""
+    normalized = dict(filters)
+    os_subjects = normalized.pop("os_subjects", None) or None
+    legacy_subjects = normalized.get("subjects") or None
+    warning = None
+    if os_subjects:
+        effective = os_subjects
+        normalized["subjects"] = os_subjects
+    elif legacy_subjects:
+        effective = legacy_subjects
+        warning = {"code": "DEPRECATED_FILTER_ALIAS", "received": "subjects", "canonical": "os_subjects"}
+    else:
+        effective = None
+    return normalized, effective, warning
+
+
 def aggregate_orders(
     db: Session,
     user: User,
@@ -472,6 +498,7 @@ def aggregate_orders(
     conectores configurados). Com 2+ dimensões, `label` some e cada dimensão pedida aparece como
     sua própria chave (ex.: `{"regional": "...", "subject": "...", "quantity": ...}`) - aditivo,
     não quebra quem já chama com 1 dimensão só."""
+    filters, effective_os_subjects, alias_warning = _normalize_aggregate_orders_filters(filters)
     dims = _group_labels(group_by)
     labels = [_group_label(db, dim) for dim in dims]
     start, end = local_period_utc_bounds(date_from, date_to)
@@ -576,7 +603,15 @@ def aggregate_orders(
             item = {dim: str(value) for dim, value in zip(dims, label_values)}
             item.update({"quantity": count, "metric_value": metric_value, "percentage": percentage})
         results.append(item)
-    return results
+
+    applied_filters = {**filters, "group_by": group_by, "metric": metric}
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    return {
+        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "data": results,
+    }
 
 
 def orders_timeseries(

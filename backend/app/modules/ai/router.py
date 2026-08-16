@@ -99,7 +99,7 @@ def aggregate_orders_route(
     payload: AiAggregationRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return aggregate_orders(
         db,
         user,

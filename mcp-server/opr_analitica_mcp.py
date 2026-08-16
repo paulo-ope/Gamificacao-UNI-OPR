@@ -176,12 +176,16 @@ def opr_aggregate_orders(params: AggregateOrdersInput) -> str:
     Args:
         params (AggregateOrdersInput): date_from, date_to (AAAA-MM-DD), group_by (uma dimensão ou
             lista de até 3, ver GROUP_BY_DOC), metric (ver descrição do campo), filters (ver
-            FILTERS_DOC).
+            FILTERS_DOC). Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md):
+            `os_subjects` é o nome canônico do filtro de assunto da O.S. neste endpoint -
+            `subjects` continua funcionando (alias depreciado), só passa a gerar um aviso
+            DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com uma lista de grupos. Com 1 dimensão: [{"label": str, "quantity": int,
-        "metric_value": float, "percentage": float}, ...], ordenado por quantidade decrescente.
-        Com 2-3 dimensões: cada item troca "label" por uma chave por dimensão pedida
+        str: JSON {"meta": {...}, "data": [...]}. Com 1 dimensão, cada item de `data`:
+        [{"label": str, "quantity": int, "metric_value": float, "percentage": float}, ...],
+        ordenado por quantidade decrescente. Com 2-3 dimensões: cada item troca "label" por uma
+        chave por dimensão pedida
         (ex.: {"regional": ..., "subject": ..., "quantity": ..., "metric_value": ..., "percentage": ...}).
 
     Exemplos de uso:
