@@ -104,8 +104,11 @@ from .schemas import (
     OperationLoginSearchResultOut,
     OperationLoginDetailOut,
     OperationLoginAggregateItemOut,
+    OperationLoginAggregateResponseOut,
     OperationLoginOutageItemOut,
+    OperationLoginOutagesResponseOut,
     OperationLoginTimeseriesPointOut,
+    OperationLoginTimeseriesResponseOut,
     OperationLoginIncidentAnalysisOut,
     OperationCoordinateQualityItemOut,
     OperationOnuSignalOut,
@@ -1336,7 +1339,7 @@ def network_login_detail(
     return detail
 
 
-@router.get("/network/login-aggregate", response_model=list[OperationLoginAggregateItemOut])
+@router.get("/network/login-aggregate", response_model=OperationLoginAggregateResponseOut)
 def network_login_aggregate(
     group_by: str = Query(..., description="regional, online, transmitter_id, pon_id ou last_drop_cause."),
     regionals: list[str] = Query(default_factory=list),
@@ -1353,7 +1356,7 @@ def network_login_aggregate(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.get("/network/login-outages", response_model=list[OperationLoginOutageItemOut])
+@router.get("/network/login-outages", response_model=OperationLoginOutagesResponseOut)
 def network_login_outages(
     since: datetime = Query(..., description="Início da janela (ISO8601, qualquer timezone)."),
     until: datetime | None = Query(default=None, description="Fim da janela - default agora."),
@@ -1369,7 +1372,7 @@ def network_login_outages(
     return login_outages(db, since=since, until=until, regionals=regionals, limit=limit)
 
 
-@router.get("/network/login-timeseries", response_model=list[OperationLoginTimeseriesPointOut])
+@router.get("/network/login-timeseries", response_model=OperationLoginTimeseriesResponseOut)
 def network_login_timeseries(
     since: datetime = Query(..., description="Início da janela (ISO8601, qualquer timezone)."),
     until: datetime | None = Query(default=None, description="Fim da janela - default agora."),

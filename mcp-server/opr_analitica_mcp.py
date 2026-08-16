@@ -627,8 +627,9 @@ def opr_login_aggregate(params: LoginAggregateInput) -> str:
             (filtros opcionais antes de agregar).
 
     Returns:
-        str: JSON com lista [{"label": str, "quantity": int, "percentage": float}, ...], ordenado
-        por quantidade decrescente.
+        str: JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "percentage": float},
+        ...]}, `data` ordenado por quantidade decrescente. `meta.applied_filters` mostra o que de
+        fato foi usado; `meta.source_last_sync` indica há quanto tempo o snapshot é real.
     """
     payload = {"group_by": params.group_by, "regionals": params.regionals, "online_statuses": params.online_statuses}
     return _call("infra/login-aggregate", payload)
@@ -662,8 +663,9 @@ def opr_login_outages(params: LoginOutagesInput) -> str:
         params (LoginOutagesInput): since/until (ISO8601), regionals (opcional), limit (até 1000).
 
     Returns:
-        str: JSON com lista [{"login_id", "login", "regional", "latitude", "longitude",
-        "status_changed_at", "last_disconnected_at"}, ...], mais recente primeiro.
+        str: JSON {"meta": {...}, "data": [{"login_id", "login", "regional", "latitude",
+        "longitude", "status_changed_at", "last_disconnected_at"}, ...]}, `data` mais recente
+        primeiro. `meta.warnings` avisa se o resultado foi truncado pelo teto do endpoint.
     """
     payload = {"since": params.since, "until": params.until, "regionals": params.regionals, "limit": params.limit}
     return _call("infra/login-outages", payload)
@@ -695,8 +697,8 @@ def opr_login_timeseries(params: LoginTimeseriesInput) -> str:
         params (LoginTimeseriesInput): since/until (ISO8601).
 
     Returns:
-        str: JSON com lista [{"captured_at", "connected", "disconnected", "new_drops",
-        "new_reconnects"}, ...], em ordem cronológica.
+        str: JSON {"meta": {...}, "data": [{"captured_at", "connected", "disconnected",
+        "new_drops", "new_reconnects"}, ...]}, `data` em ordem cronológica.
     """
     payload = {"since": params.since, "until": params.until}
     return _call("infra/login-timeseries", payload)
@@ -779,7 +781,7 @@ def opr_login_incident_analysis(params: LoginIncidentAnalysisInput) -> str:
         str: JSON {"window_minutes", "since", "new_drops", "still_offline", "reconnects",
         "by_regional", "by_transmitter", "by_pon", "by_drop_cause": [{"label", "quantity",
         "percentage"}, ...], "geo_clusters": [{"center_latitude", "center_longitude",
-        "radius_meters", "size", "logins": [...]}, ...]}.
+        "radius_meters", "size", "logins": [...]}, ...], "meta": {...}}.
     """
     payload = {
         "window_minutes": params.window_minutes,

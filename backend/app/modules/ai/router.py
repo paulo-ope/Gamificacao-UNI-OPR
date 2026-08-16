@@ -73,8 +73,11 @@ from app.modules.operations.schemas import (
     OperationLoginSearchResultOut,
     OperationLoginDetailOut,
     OperationLoginAggregateItemOut,
+    OperationLoginAggregateResponseOut,
     OperationLoginOutageItemOut,
+    OperationLoginOutagesResponseOut,
     OperationLoginTimeseriesPointOut,
+    OperationLoginTimeseriesResponseOut,
     OperationLoginIncidentAnalysisOut,
     OperationCoordinateQualityItemOut,
     OperationOfflineLoginClustersOut,
@@ -427,12 +430,12 @@ def login_detail_route(
     return detail
 
 
-@router.post("/infra/login-aggregate", response_model=list[OperationLoginAggregateItemOut])
+@router.post("/infra/login-aggregate", response_model=OperationLoginAggregateResponseOut)
 def login_aggregate_route(
     payload: AiLoginAggregateRequest,
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
-) -> list:
+) -> dict:
     """Contagem de logins por dimensão (item novo, pedido do usuário em 2026-08-15) - para
     detecção de incidente coletivo sem baixar registro por registro."""
     started_at = perf_counter()
@@ -444,18 +447,18 @@ def login_aggregate_route(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_aggregate", user=context.user, token_id=context.token_id,
-        filters={"group_by": payload.group_by, "regionals": payload.regionals}, result_count=len(result),
+        filters={"group_by": payload.group_by, "regionals": payload.regionals}, result_count=len(result["data"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
 
 
-@router.post("/infra/login-outages", response_model=list[OperationLoginOutageItemOut])
+@router.post("/infra/login-outages", response_model=OperationLoginOutagesResponseOut)
 def login_outages_route(
     payload: AiLoginOutagesRequest,
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
-) -> list:
+) -> dict:
     """Logins offline agora que caíram dentro de [since, until] (item novo, pedido do usuário em
     2026-08-15) - candidatos a incidente coletivo quando concentrados na mesma regional/PON."""
     started_at = perf_counter()
@@ -464,18 +467,18 @@ def login_outages_route(
     result = login_outages(db, since=payload.since, until=payload.until, regionals=payload.regionals, limit=payload.limit)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_outages", user=context.user, token_id=context.token_id,
-        filters={"since": payload.since, "regionals": payload.regionals}, result_count=len(result),
+        filters={"since": payload.since, "regionals": payload.regionals}, result_count=len(result["data"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
 
 
-@router.post("/infra/login-timeseries", response_model=list[OperationLoginTimeseriesPointOut])
+@router.post("/infra/login-timeseries", response_model=OperationLoginTimeseriesResponseOut)
 def login_timeseries_route(
     payload: AiLoginTimeseriesRequest,
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
-) -> list:
+) -> dict:
     """Série temporal de conectados/desconectados/quedas novas/reconexões novas (item novo, pedido
     do usuário em 2026-08-15) - um ponto por captura real do snapshot periódico."""
     started_at = perf_counter()
@@ -484,7 +487,7 @@ def login_timeseries_route(
     result = login_timeseries(db, since=payload.since, until=payload.until)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_timeseries", user=context.user, token_id=context.token_id,
-        filters={"since": payload.since}, result_count=len(result),
+        filters={"since": payload.since}, result_count=len(result["data"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result

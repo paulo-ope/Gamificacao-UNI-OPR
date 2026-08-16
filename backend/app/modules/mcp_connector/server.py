@@ -615,8 +615,9 @@ def build_mcp_server() -> FastMCP:
             regionals, online_statuses: filtros opcionais antes de agregar.
 
         Returns:
-            JSON com lista [{"label": str, "quantity": int, "percentage": float}, ...], ordenado
-            por quantidade decrescente.
+            JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "percentage": float}, ...]},
+            `data` ordenado por quantidade decrescente. `meta.applied_filters` mostra o que de fato
+            foi usado; `meta.source_last_sync` indica há quanto tempo o snapshot de login é real.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -642,8 +643,9 @@ def build_mcp_server() -> FastMCP:
             limit: até 1000 (default 200).
 
         Returns:
-            JSON com lista [{"login_id", "login", "regional", "latitude", "longitude",
-            "status_changed_at", "last_disconnected_at"}, ...], mais recente primeiro.
+            JSON {"meta": {...}, "data": [{"login_id", "login", "regional", "latitude",
+            "longitude", "status_changed_at", "last_disconnected_at"}, ...]}, `data` mais recente
+            primeiro. `meta.warnings` avisa se o resultado foi truncado pelo teto do endpoint.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -670,11 +672,11 @@ def build_mcp_server() -> FastMCP:
             until: fim da janela - default agora.
 
         Returns:
-            JSON com lista [{"captured_at", "connected", "disconnected", "new_drops",
-            "new_reconnects"}, ...], em ordem cronológica. `new_drops`/`new_reconnects` contam só
-            transições NESTA captura (comparado com a captura anterior do mesmo login) - o primeiro
-            ponto da série pode superestimar se não houver captura anterior próxima o bastante
-            (~20min) para comparar.
+            JSON {"meta": {...}, "data": [{"captured_at", "connected", "disconnected", "new_drops",
+            "new_reconnects"}, ...]}, `data` em ordem cronológica. `new_drops`/`new_reconnects`
+            contam só transições NESTA captura (comparado com a captura anterior do mesmo login) -
+            o primeiro ponto da série pode superestimar se não houver captura anterior próxima o
+            bastante (~20min) para comparar.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -767,7 +769,7 @@ def build_mcp_server() -> FastMCP:
             JSON {"window_minutes", "since", "new_drops", "still_offline", "reconnects",
             "by_regional", "by_transmitter", "by_pon", "by_drop_cause": [{"label", "quantity",
             "percentage"}, ...], "geo_clusters": [{"center_latitude", "center_longitude",
-            "radius_meters", "size", "logins": [...]}, ...]}.
+            "radius_meters", "size", "logins": [...]}, ...], "meta": {...}}.
         """
         user = _current_user()
         with SessionLocal() as db:

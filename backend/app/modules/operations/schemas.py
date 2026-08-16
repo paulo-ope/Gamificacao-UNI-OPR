@@ -75,6 +75,19 @@ def _sanitize_raw_payload(value):
     return value
 
 
+class OperationIgnoredFilterOut(BaseModel):
+    field: str
+    reason: str
+
+
+class OperationResponseMetaOut(BaseModel):
+    applied_filters: dict
+    ignored_filters: list[OperationIgnoredFilterOut]
+    warnings: list[str]
+    generated_at: datetime
+    source_last_sync: datetime | None
+
+
 class OperationPeriod(BaseModel):
     date_from: date
     date_to: date
@@ -998,6 +1011,7 @@ class OperationOfflineLoginClustersOut(BaseModel):
     min_cluster_size: int
     window_minutes: int
     clusters: list[OperationOfflineLoginClusterOut]
+    meta: OperationResponseMetaOut
 
 
 class OperationLoginStatusOut(BaseModel):
@@ -1057,6 +1071,7 @@ class OperationLoginSearchResultOut(BaseModel):
     page: int
     page_size: int
     has_more: bool
+    meta: OperationResponseMetaOut
 
 
 class OperationLoginHistoryEventOut(BaseModel):
@@ -1116,6 +1131,21 @@ class OperationLoginTimeseriesPointOut(BaseModel):
     new_reconnects: int
 
 
+class OperationLoginAggregateResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationLoginAggregateItemOut]
+
+
+class OperationLoginOutagesResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationLoginOutageItemOut]
+
+
+class OperationLoginTimeseriesResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationLoginTimeseriesPointOut]
+
+
 class OperationCoordinateQualityItemOut(BaseModel):
     entity: str
     regional: str
@@ -1127,6 +1157,11 @@ class OperationCoordinateQualityItemOut(BaseModel):
     outside_region: int
     suspicious_duplicates: int
     valid_coverage_pct: float
+
+
+class OperationCoordinateQualityResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationCoordinateQualityItemOut]
 
 
 class OperationLoginIncidentGeoClusterOut(BaseModel):
@@ -1148,6 +1183,7 @@ class OperationLoginIncidentAnalysisOut(BaseModel):
     by_pon: list[OperationLoginAggregateItemOut]
     by_drop_cause: list[OperationLoginAggregateItemOut]
     geo_clusters: list[OperationLoginIncidentGeoClusterOut]
+    meta: OperationResponseMetaOut
 
 
 class OperationBranchCapacityOut(BaseModel):
