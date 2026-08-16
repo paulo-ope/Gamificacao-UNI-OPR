@@ -9,12 +9,13 @@ para quando o contrato único de filtros for definido e aprovado."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class IgnoredFilter(TypedDict):
     field: str
     reason: str
+    detail: NotRequired[str]
 
 
 class ResponseMeta(TypedDict):

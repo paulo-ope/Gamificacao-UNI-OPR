@@ -78,6 +78,7 @@ def _sanitize_raw_payload(value):
 class OperationIgnoredFilterOut(BaseModel):
     field: str
     reason: str
+    detail: str | None = None
 
 
 class OperationResponseMetaOut(BaseModel):

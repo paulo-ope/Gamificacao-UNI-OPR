@@ -1166,6 +1166,87 @@ def backlog_history(
     return results
 
 
+# FilterContractV1 lote 8 (docs/proposta-filter-contract-v1.md §13.4/§14.3) - listas confirmadas
+# por leitura direta de `operations_queries.warranty_analytics` (`operations/queries.py:995-1141`).
+# A função só chama `_dimension_conditions` (2x: origem restrita a `_warranty_origin_filters` -
+# WARRANTY_ORIGIN_SHARED_FILTERS = regionals/companies/states/cities/team_models -, e retorno com
+# `{**filters, "os_types": []}`) - nunca chama `_text_filter_conditions`/
+# `_sla_stage_filter_conditions`/`_geo_filter_conditions`/`_datetime_filter_conditions`. Por isso:
+_WARRANTY_NOT_SUPPORTED_FIELDS = (
+    "text_filters", "scheduled_after_sla", "sla_expired_before_schedule", "has_coordinates",
+    "near_latitude", "near_longitude", "radius_km",
+    "opened_at", "closed_at", "deadline_at", "scheduled_at", "assumed_at",
+    "displacement_started_at", "execution_started_at", "finished_at", "source_updated_at",
+)
+
+# Campos de `FILTER_COLUMNS`/`_dimension_conditions` que SÃO aplicados, mas só no lado
+# retorno/manutenção (`_dimension_conditions(db, user, {**filters, "os_types": []})`) - nunca no
+# lado origem/denominador (que só recebe os 5 campos de `WARRANTY_ORIGIN_SHARED_FILTERS`, mais
+# `team_models`). Não inclui `subjects`/`os_subjects` (tratado à parte, alias já corrigido no
+# lote 6 - não mexido aqui) nem `os_types` (forçado `[]`, tratado como não suportado abaixo).
+_WARRANTY_RETURN_ONLY_FIELDS = (
+    "contract_types", "person_types", "diagnoses", "departments", "sectors", "priorities",
+    "creators", "responsibles", "statuses", "sla_statuses", "projects", "pops", "customer_logins",
+    "opened_weekdays", "closed_weekdays",
+    "custom_window_basis", "custom_window_start_weekday", "custom_window_start_time",
+    "custom_window_end_weekday", "custom_window_end_time",
+)
+
+
+def _warranty_filter_report(filters: dict) -> tuple[dict, list[dict], list[dict]]:
+    """Classifica os filtros de `warranty_analytics_for_ai` antes de montar `meta` - não muda
+    nenhuma condição de consulta (`filters` segue intocado, é só o relatório pro `meta` que muda).
+
+    - Campo de `_WARRANTY_NOT_SUPPORTED_FIELDS` recebido (não vazio) -> sai de `applied_filters`,
+      entra em `ignored_filters` com `reason: "NOT_SUPPORTED_BY_ENDPOINT"`. `os_types` recebe o
+      mesmo tratamento (a função força `[]` no lado retorno por design, então o valor enviado
+      nunca tem efeito).
+    - Campo de `_WARRANTY_RETURN_ONLY_FIELDS` recebido -> continua em `applied_filters` (foi de
+      fato aplicado), mas ganha um aviso `PARTIAL_FILTER_SCOPE` (nunca em `ignored_filters` -
+      não foi ignorado, só tem alcance parcial).
+
+    Retorna (dict base pra `applied_filters`, já sem os campos não suportados; lista de
+    `ignored_filters`; lista de warnings de escopo parcial)."""
+    applied = dict(filters)
+    ignored: list[dict] = []
+    warnings: list[dict] = []
+
+    for field in _WARRANTY_NOT_SUPPORTED_FIELDS:
+        if applied.get(field) not in (None, "", []):
+            applied.pop(field, None)
+            ignored.append(
+                {
+                    "field": field,
+                    "reason": "NOT_SUPPORTED_BY_ENDPOINT",
+                    "detail": "warranty_analytics_for_ai não aplica este filtro atualmente",
+                }
+            )
+    if applied.get("os_types") not in (None, "", []):
+        applied.pop("os_types", None)
+        ignored.append(
+            {
+                "field": "os_types",
+                "reason": "NOT_SUPPORTED_BY_ENDPOINT",
+                "detail": (
+                    "warranty_analytics_for_ai força os_types=[] no lado retorno por design "
+                    "(o tipo de retorno é sempre manutenção, nunca um dos tipos de origem) - o "
+                    "valor enviado não tem efeito"
+                ),
+            }
+        )
+    for field in _WARRANTY_RETURN_ONLY_FIELDS:
+        if applied.get(field) not in (None, "", []):
+            warnings.append(
+                {
+                    "code": "PARTIAL_FILTER_SCOPE",
+                    "field": field,
+                    "applies_to": "warranty_return_orders",
+                    "does_not_apply_to": "origin_orders",
+                }
+            )
+    return applied, ignored, warnings
+
+
 def warranty_analytics_for_ai(
     db: Session,
     user: User,
@@ -1189,9 +1270,15 @@ def warranty_analytics_for_ai(
     reconhece `subjects` (nome de `FILTER_COLUMNS`), então era descartado em silêncio. A
     normalização acontece aqui, não em `operations_queries.warranty_analytics` - essa função é
     compartilhada com a aba Garantias da tela (REST), que não deve ganhar `meta`/mudança de
-    contrato por este lote. Escopo estritamente limitado a `os_subjects`/`subjects` - os demais
-    filtros ainda não aplicados por `warranty_analytics` (text_filters, geografia, datas -
-    §13.4 do documento) permanecem de fora nesta etapa, por decisão explícita do usuário."""
+    contrato por este lote.
+
+    Fase 1 lote 8 (docs/proposta-filter-contract-v1.md §14.3-§14.4): `_warranty_filter_report`
+    classifica os demais filtros de `AiOrderFilters` que esta função ainda não aplica de fato -
+    saem de `applied_filters` e entram em `ignored_filters` (`NOT_SUPPORTED_BY_ENDPOINT`), em vez
+    de aparecer como aplicados sem terem tido efeito nenhum na consulta. Os que são aplicados só
+    no lado retorno/manutenção (nunca no lado origem/denominador) continuam em `applied_filters`,
+    mas ganham aviso `PARTIAL_FILTER_SCOPE`. Nenhum filtro novo foi implementado - só a
+    observabilidade do que já era (ou não era) aplicado."""
     filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     result = operations_queries.warranty_analytics(
         db,
@@ -1207,14 +1294,16 @@ def warranty_analytics_for_ai(
         {key: value for key, value in item.items() if key not in ("origin_order", "return_order")}
         for item in result["items"]
     ]
-    applied_filters = {
-        **filters, "date_from": date_from, "date_to": date_to, "period_basis": period_basis,
+    applied_filters, ignored_filters, scope_warnings = _warranty_filter_report(filters)
+    applied_filters.update({
+        "date_from": date_from, "date_to": date_to, "period_basis": period_basis,
         "denominator": denominator, "origin_excluded_diagnoses": origin_excluded_diagnoses,
-    }
+    })
     applied_filters.pop("subjects", None)
     if effective_os_subjects:
         applied_filters["os_subjects"] = effective_os_subjects
-    result["meta"] = build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else [])
+    warnings = ([alias_warning] if alias_warning else []) + scope_warnings
+    result["meta"] = build_meta(applied_filters=applied_filters, ignored_filters=ignored_filters, warnings=warnings)
     return result
 
 
