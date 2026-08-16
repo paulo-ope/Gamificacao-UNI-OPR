@@ -83,6 +83,10 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     # Novo (pedido do usuário em 2026-08-15) - funil de incidente coletivo numa unica chamada.
     ("operations.network.login_incident_analysis", "Funil de incidente (GET /operations/network/login-incident-analysis)", "api", True),
     ("ai.login_incident_analysis", "Funil de incidente para IA/MCP (opr_login_incident_analysis)", "mcp", True),
+    # Novo (Fase 1 do plano de confiabilidade de dado, pedido do usuario em 2026-08-15) - auditoria
+    # de qualidade de coordenadas, so leitura/classificacao, sem correcao automatica.
+    ("operations.network.coordinate_quality", "Auditoria de coordenadas (GET /operations/network/coordinate-quality)", "api", True),
+    ("ai.coordinate_quality", "Auditoria de coordenadas para IA/MCP (opr_coordinate_quality_audit)", "mcp", True),
 ]
 
 

@@ -32,6 +32,7 @@ from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce
 
 from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
+from .coordinate_quality import coordinate_quality_audit
 from .login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from .login_geo_clusters import find_offline_login_clusters, query_login_status
 from .login_search import get_login_detail, search_logins
@@ -106,6 +107,7 @@ from .schemas import (
     OperationLoginOutageItemOut,
     OperationLoginTimeseriesPointOut,
     OperationLoginIncidentAnalysisOut,
+    OperationCoordinateQualityItemOut,
     OperationOnuSignalOut,
 )
 
@@ -1397,6 +1399,24 @@ def network_login_incident_analysis(
         db, window_minutes=window_minutes, regionals=regionals,
         cluster_radius_meters=cluster_radius_meters, cluster_min_size=cluster_min_size,
     )
+
+
+@router.get("/network/coordinate-quality", response_model=list[OperationCoordinateQualityItemOut])
+def network_coordinate_quality(
+    entity: str = Query(..., description="operations_orders, operations_login_current_status ou operations_onu_signal_current."),
+    outlier_km: float = Query(default=300.0, gt=0, le=2000),
+    duplicate_threshold: int = Query(default=20, ge=1, le=10000),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Auditoria de qualidade de latitude/longitude, quebrada por regional - SÓ classifica e conta,
+    nenhuma correção automática (Fase 1 do plano de confiabilidade de dado, item 2, pedido do
+    usuário em 2026-08-15). Use antes de confiar em qualquer cluster geográfico."""
+    enforce_ai_endpoint_for_user(db, user, "operations.network.coordinate_quality", "api")
+    try:
+        return coordinate_quality_audit(db, entity=entity, outlier_km=outlier_km, duplicate_threshold=duplicate_threshold)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/orders", response_model=None, dependencies=[Depends(require_permission("operations:view_order_details"))])

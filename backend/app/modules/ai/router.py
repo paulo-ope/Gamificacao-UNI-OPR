@@ -31,6 +31,7 @@ from app.modules.ai_governance.gate import (
     enforce_requested_fields,
 )
 from app.modules.ai_governance.policy import EffectivePolicy
+from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
@@ -46,6 +47,7 @@ from app.modules.ai.schemas import (
     AiFilterOptionsRequest,
     AiLoginAggregateRequest,
     AiLoginDetailRequest,
+    AiCoordinateQualityRequest,
     AiLoginIncidentAnalysisRequest,
     AiLoginOutagesRequest,
     AiLoginStatusRequest,
@@ -74,6 +76,7 @@ from app.modules.operations.schemas import (
     OperationLoginOutageItemOut,
     OperationLoginTimeseriesPointOut,
     OperationLoginIncidentAnalysisOut,
+    OperationCoordinateQualityItemOut,
     OperationOfflineLoginClustersOut,
     OperationOnuSignalOut,
     OperationOrderDetailOut,
@@ -507,6 +510,29 @@ def login_incident_analysis_route(
         db, origin="api", endpoint_key="ai.login_incident_analysis", user=context.user, token_id=context.token_id,
         filters={"window_minutes": payload.window_minutes, "regionals": payload.regionals},
         result_count=result["still_offline"], duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/infra/coordinate-quality", response_model=list[OperationCoordinateQualityItemOut])
+def coordinate_quality_route(
+    payload: AiCoordinateQualityRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> list:
+    """Auditoria de qualidade de latitude/longitude, quebrada por regional (item novo, Fase 1 do
+    plano de confiabilidade de dado, pedido do usuário em 2026-08-15) - SÓ classifica e conta,
+    nenhuma correção automática. Use antes de confiar em qualquer cluster geográfico."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.coordinate_quality", "api")
+    result = coordinate_quality_audit(
+        db, entity=payload.entity, outlier_km=payload.outlier_km, duplicate_threshold=payload.duplicate_threshold
+    )
+    record_ai_access(
+        db, origin="api", endpoint_key="ai.coordinate_quality", user=context.user, token_id=context.token_id,
+        filters={"entity": payload.entity}, result_count=len(result),
+        duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
 

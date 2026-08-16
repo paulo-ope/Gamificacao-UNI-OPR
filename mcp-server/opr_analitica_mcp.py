@@ -790,6 +790,48 @@ def opr_login_incident_analysis(params: LoginIncidentAnalysisInput) -> str:
     return _call("infra/login-incident-analysis", payload)
 
 
+class CoordinateQualityInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity: str = Field(..., description="operations_orders, operations_login_current_status ou operations_onu_signal_current.")
+    outlier_km: float = Field(default=300.0, gt=0, le=2000)
+    duplicate_threshold: int = Field(default=20, ge=1, le=10000)
+
+
+@mcp.tool(
+    name="opr_coordinate_quality_audit",
+    annotations={
+        "title": "Auditoria de qualidade de coordenadas",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_coordinate_quality_audit(params: CoordinateQualityInput) -> str:
+    """Auditoria de qualidade de latitude/longitude, quebrada por regional - SÓ classifica e conta,
+    nenhuma correção automática. Use ANTES de confiar em qualquer cluster geográfico
+    (opr_offline_login_clusters, opr_login_incident_analysis) - coordenada ruim produz cluster
+    sofisticado e errado sem nenhum aviso.
+
+    Args:
+        params (CoordinateQualityInput): entity (operations_orders/
+            operations_login_current_status/operations_onu_signal_current), outlier_km (default
+            300), duplicate_threshold (default 20).
+
+    Returns:
+        str: JSON com lista por regional: [{"entity", "regional", "total", "validated", "missing",
+        "invalid_range", "zero_zero", "outside_region", "suspicious_duplicates",
+        "valid_coverage_pct"}, ...].
+    """
+    payload = {
+        "entity": params.entity,
+        "outlier_km": params.outlier_km,
+        "duplicate_threshold": params.duplicate_threshold,
+    }
+    return _call("infra/coordinate-quality", payload)
+
+
 class BacklogAgingInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

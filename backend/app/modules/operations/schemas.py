@@ -1116,6 +1116,19 @@ class OperationLoginTimeseriesPointOut(BaseModel):
     new_reconnects: int
 
 
+class OperationCoordinateQualityItemOut(BaseModel):
+    entity: str
+    regional: str
+    total: int
+    validated: int
+    missing: int
+    invalid_range: int
+    zero_zero: int
+    outside_region: int
+    suspicious_duplicates: int
+    valid_coverage_pct: float
+
+
 class OperationLoginIncidentGeoClusterOut(BaseModel):
     center_latitude: float
     center_longitude: float

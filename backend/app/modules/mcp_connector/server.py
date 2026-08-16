@@ -35,6 +35,7 @@ from app.modules.ai.router import (
 from app.modules.ai.schemas import AiOrderFilters
 from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
+from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
@@ -777,6 +778,43 @@ def build_mcp_server() -> FastMCP:
                     cluster_radius_meters=cluster_radius_meters, cluster_min_size=cluster_min_size,
                 )
             )
+
+    @mcp.tool(
+        name="opr_coordinate_quality_audit",
+        annotations={"title": "Auditoria de qualidade de coordenadas", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_coordinate_quality_audit(
+        entity: str, outlier_km: float = 300.0, duplicate_threshold: int = 20
+    ) -> str:
+        """Auditoria de qualidade de latitude/longitude, quebrada por regional - SÓ classifica e
+        conta, nenhuma correção automática. Use ANTES de confiar em qualquer cluster geográfico
+        (opr_offline_login_clusters, opr_login_incident_analysis) - coordenada ruim produz cluster
+        sofisticado e errado sem nenhum aviso.
+
+        Args:
+            entity: operations_orders, operations_login_current_status ou
+                operations_onu_signal_current.
+            outlier_km: distância do centróide dos próprios registros válidos da regional acima da
+                qual uma coordenada (dentro do intervalo geográfico possível) é considerada fora de
+                lugar (default 300km).
+            duplicate_threshold: quantos registros compartilhando a mesma coordenada exata (~1m)
+                fazem ela ser "suspeita de valor chumbado" (default 20).
+
+        Returns:
+            JSON com lista por regional: [{"entity", "regional", "total", "validated", "missing",
+            "invalid_range", "zero_zero", "outside_region", "suspicious_duplicates",
+            "valid_coverage_pct"}, ...]. `validated` = passou todas as checagens; os demais
+            campos são mutuamente exclusivos entre si e com `validated`.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.coordinate_quality", "mcp")
+            try:
+                return _dump(
+                    coordinate_quality_audit(db, entity=entity, outlier_km=outlier_km, duplicate_threshold=duplicate_threshold)
+                )
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
 
     @mcp.tool(
         name="opr_backlog_aging",

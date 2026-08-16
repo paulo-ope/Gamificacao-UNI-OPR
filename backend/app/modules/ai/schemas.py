@@ -564,6 +564,14 @@ class AiLoginTimeseriesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AiCoordinateQualityRequest(BaseModel):
+    entity: Literal["operations_orders", "operations_login_current_status", "operations_onu_signal_current"]
+    outlier_km: float = Field(default=300.0, gt=0, le=2000)
+    duplicate_threshold: int = Field(default=20, ge=1, le=10000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AiLoginIncidentAnalysisRequest(BaseModel):
     window_minutes: int = Field(default=90, ge=5, le=1440)
     regionals: list[str] = Field(default_factory=list)
