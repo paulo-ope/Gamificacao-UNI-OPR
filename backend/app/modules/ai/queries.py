@@ -1188,9 +1188,15 @@ _WARRANTY_RETURN_ONLY_FIELDS = (
     "contract_types", "person_types", "diagnoses", "departments", "sectors", "priorities",
     "creators", "responsibles", "statuses", "sla_statuses", "projects", "pops", "customer_logins",
     "opened_weekdays", "closed_weekdays",
-    "custom_window_basis", "custom_window_start_weekday", "custom_window_start_time",
-    "custom_window_end_weekday", "custom_window_end_time",
 )
+
+# `custom_window_*` é tratado à parte dos demais campos de `_WARRANTY_RETURN_ONLY_FIELDS` porque é
+# um filtro composto (5 peças, ver `_COMPOSITE_FILTERS` - lote 7) - reaproveita a MESMA tupla de
+# campos de lá, pra não duplicar a lista. Sem isso, uma versão anterior deste código marcava cada
+# peça isolada como `PARTIAL_FILTER_SCOPE` sem checar se o grupo estava completo, reproduzindo
+# exatamente o bug do lote 7 (`meta` afirmando aplicação de um filtro incompleto que nunca gerou
+# condição SQL nenhuma) - só que dentro de `warranty_analytics_for_ai`.
+_WARRANTY_RETURN_ONLY_COMPOSITE_FILTERS = {"custom_window": _COMPOSITE_FILTERS["custom_window"]}
 
 
 def _warranty_filter_report(filters: dict) -> tuple[dict, list[dict], list[dict]]:
@@ -1204,9 +1210,12 @@ def _warranty_filter_report(filters: dict) -> tuple[dict, list[dict], list[dict]
     - Campo de `_WARRANTY_RETURN_ONLY_FIELDS` recebido -> continua em `applied_filters` (foi de
       fato aplicado), mas ganha um aviso `PARTIAL_FILTER_SCOPE` (nunca em `ignored_filters` -
       não foi ignorado, só tem alcance parcial).
+    - `custom_window_*` (composto) só ganha `PARTIAL_FILTER_SCOPE` quando as 5 peças estão
+      completas (só aí gera condição SQL de verdade, mesma regra do lote 7); incompleto gera
+      `INCOMPLETE_COMPOSITE_FILTER` e sai de `applied_filters`, igual aos demais endpoints.
 
-    Retorna (dict base pra `applied_filters`, já sem os campos não suportados; lista de
-    `ignored_filters`; lista de warnings de escopo parcial)."""
+    Retorna (dict base pra `applied_filters`, já sem os campos não suportados/compostos
+    incompletos; lista de `ignored_filters`; lista de warnings de escopo parcial/composto)."""
     applied = dict(filters)
     ignored: list[dict] = []
     warnings: list[dict] = []
@@ -1242,6 +1251,32 @@ def _warranty_filter_report(filters: dict) -> tuple[dict, list[dict], list[dict]
                     "field": field,
                     "applies_to": "warranty_return_orders",
                     "does_not_apply_to": "origin_orders",
+                }
+            )
+    for filter_name, fields in _WARRANTY_RETURN_ONLY_COMPOSITE_FILTERS.items():
+        received = [f for f in fields if applied.get(f) not in (None, "", [])]
+        if not received:
+            continue
+        if len(received) == len(fields):
+            for f in received:
+                warnings.append(
+                    {
+                        "code": "PARTIAL_FILTER_SCOPE",
+                        "field": f,
+                        "applies_to": "warranty_return_orders",
+                        "does_not_apply_to": "origin_orders",
+                    }
+                )
+        else:
+            missing = [f for f in fields if f not in received]
+            for f in received:
+                applied.pop(f, None)
+            warnings.append(
+                {
+                    "code": "INCOMPLETE_COMPOSITE_FILTER",
+                    "filter": filter_name,
+                    "received_fields": received,
+                    "missing_fields": missing,
                 }
             )
     return applied, ignored, warnings
