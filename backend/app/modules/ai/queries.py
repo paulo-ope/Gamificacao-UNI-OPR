@@ -1179,12 +1179,17 @@ def team_target_performance(
     date_to: date,
     granularity: TeamTargetGranularity = "day",
     **filters,
-) -> list[dict]:
+) -> dict:
     """Produção realizada (fechadas) x meta prevista, por bucket e por modelo de equipe - a meta
     usada é a que era VIGENTE naquele bucket (ver `_team_target_for_bucket`), não a de hoje.
     Reaproveita `orders_timeseries` (metric="fechadas", group_by="team_model") pro lado realizado
     - só cobre os modelos de equipe que aparecem com produção real no período, não todo modelo
-    cadastrado (evita gerar linha zerada pra modelo sem nenhuma atividade)."""
+    cadastrado (evita gerar linha zerada pra modelo sem nenhuma atividade).
+
+    Normaliza o alias `subjects`->`os_subjects` (FilterContractV1) aqui, antes de repassar pra
+    `orders_timeseries` - essa função em si não é um dos endpoints migrados nesta rodada, só
+    recebe o filtro já resolvido."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     actual_points = orders_timeseries(
         db, user, metric="fechadas", granularity=granularity, date_from=date_from, date_to=date_to,
         group_by="team_model", **filters,
@@ -1206,4 +1211,12 @@ def team_target_performance(
                 "percentage_of_target": round(actual / target * 100, 1) if target else None,
             }
         )
-    return results
+
+    applied_filters = {**filters, "date_from": date_from, "date_to": date_to, "granularity": granularity}
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    return {
+        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "data": results,
+    }

@@ -59,7 +59,7 @@ from app.modules.ai.schemas import (
     AiOrderDetailsResponse,
     AiSearchRequest,
     AiTeamTargetItem,
-    AiTeamTargetPerformanceItem,
+    AiTeamTargetPerformanceResponse,
     AiTeamTargetPerformanceRequest,
     AiTeamTargetsRequest,
     AiTimeseriesPoint,
@@ -647,7 +647,7 @@ def team_targets_route(
 
 @router.post(
     "/team-target-performance",
-    response_model=list[AiTeamTargetPerformanceItem],
+    response_model=AiTeamTargetPerformanceResponse,
     description=(
         "Produção realizada (fechadas) x meta prevista, por modelo de equipe. Usa a meta que "
         "era vigente em cada bucket, não a de hoje. Só cobre modelos com produção real no "
@@ -658,7 +658,7 @@ def team_target_performance_route(
     payload: AiTeamTargetPerformanceRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return team_target_performance(
         db,
         user,

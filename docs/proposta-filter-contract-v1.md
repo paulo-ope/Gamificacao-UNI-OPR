@@ -465,6 +465,20 @@ Esse teste roda **antes** de qualquer commit do piloto, com dado real de produç
 
 **Conclusão do lote 3: aprovado**, com a correção de tipo acima incluída no mesmo commit.
 
+### 11.4 Resultado do lote 4 (`team_target_performance`) — executado em produção, 2026-08-16
+
+| Verificação | Resultado |
+|---|---|
+| `subjects=["Suporte Externo Fibra Urbana"]` vs `os_subjects=[mesmo valor]`, `granularity="week"`, período 2026-07-01..2026-08-16 | `data` idêntico — 56 linhas (bucket×modelo de equipe) em ambos |
+| `meta.warnings` legado vs canônico | `DEPRECATED_FILTER_ALIAS` só no legado |
+| Filtro vs baseline sem filtro (mesma função) | Confirmado que o filtro reduz de fato o resultado (soma de `actual`: 2256 filtrado vs 29927 sem filtro) - o número de linhas coincidir (56=56) era só o número de combinações bucket×modelo, não evidência de filtro inerte |
+| Via schema real `AiTeamTargetPerformanceRequest` | 56 linhas, `applied_filters` correto |
+| Tool MCP remota `opr_team_target_performance` | Continua registrada (22 tools) |
+
+**Nota de escopo:** `team_target_performance` não filtra por si só - delega 100% pra `orders_timeseries` (não migrada nesta rodada). A normalização do alias foi implementada dentro de `team_target_performance`, antes de repassar os filtros já resolvidos pra `orders_timeseries` - a função interna em si permanece sem alteração, mantendo o escopo estritamente no endpoint autorizado.
+
+**Conclusão do lote 4: aprovado.** Com este lote, os 4 endpoints do primeiro pacote de refatoração incremental (`aggregate_orders`, `search_orders`, `backlog_aging`, `team_target_performance`) estão completos.
+
 ## 12. Próximos passos
 
 1. ~~Usuário aprova (ou ajusta) os nomes canônicos e as regras de `ignored_filters`/`warnings` deste documento.~~ — feito: aprovado com os 4 ajustes de §0.
@@ -472,7 +486,8 @@ Esse teste roda **antes** de qualquer commit do piloto, com dado real de produç
 3. ~~Aguardar autorização explícita do usuário para o próximo lote.~~ — feito: aprovado em 2026-08-16, refatoração incremental autorizada por endpoint.
 4. ~~`search_orders` (lote 2).~~ — feito, resultado em §11.2.
 5. ~~`backlog_aging` (lote 3).~~ — feito, resultado em §11.3 (inclui correção de tipo em `OperationResponseMetaOut.warnings`).
-6. Próximo: `team_target_performance` — mesmo padrão, mesmo teste de paridade.
-7. `SelectorContractV1` (§8) como proposta separada, se o usuário quiser continuar por essa linha depois.
+6. ~~`team_target_performance` (lote 4).~~ — feito, resultado em §11.4. Primeiro pacote de refatoração incremental completo.
+7. Endpoints com `os_subjects`/`subjects` ainda não migrados: `orders_timeseries`, `warranty_analytics_for_ai`, `search_logins`'s `text_filters` (campo "subject", não a lista) - aguardando nova rodada de autorização, endpoint por endpoint, se o usuário quiser continuar.
+8. `SelectorContractV1` (§8) como proposta separada, se o usuário quiser continuar por essa linha depois.
 
 Este documento não implica nenhum desses passos ter sido concluído além do que está explicitamente marcado como feito acima.

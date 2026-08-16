@@ -1074,11 +1074,15 @@ def opr_team_target_performance(params: TeamTargetPerformanceInput) -> str:
 
     Args:
         params (TeamTargetPerformanceInput): date_from, date_to, granularity (day/week/month,
-            default day), filters (ver FILTERS_DOC).
+            default day), filters (ver FILTERS_DOC). Piloto do FilterContractV1
+            (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro de
+            assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com lista [{"period_start": "AAAA-MM-DD", "team_model": str, "actual": int,
-        "target": int|null, "delta": int|null, "percentage_of_target": float|null}, ...].
+        str: JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "team_model": str,
+        "actual": int, "target": int|null, "delta": int|null,
+        "percentage_of_target": float|null}, ...]}.
     """
     payload = {
         "date_from": params.date_from,

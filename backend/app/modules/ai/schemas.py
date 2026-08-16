@@ -455,6 +455,11 @@ class AiTeamTargetPerformanceItem(BaseModel):
     percentage_of_target: float | None
 
 
+class AiTeamTargetPerformanceResponse(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[AiTeamTargetPerformanceItem]
+
+
 class AiOfflineLoginClustersRequest(BaseModel):
     """Item 19 do pedido ("consulta de Infra" no monitor de incidentes) - mesmos parâmetros de
     `GET /operations/network/offline-login-clusters`, agora acessível para IA/MCP."""
