@@ -1,7 +1,7 @@
 # Proposta: FilterContractV1
 
-**Status:** **Aprovado com ajustes** (revisão do usuário em 2026-08-16) — os 4 ajustes abaixo (§0) já incorporados ao texto. Nenhum código de endpoint foi alterado por este documento; a implementação começa pelo piloto único descrito em §10.
-**Data:** 2026-08-16 (v1.1 — incorpora ajustes da revisão)
+**Status:** **FASE 1 DE CONFIABILIDADE CONCLUÍDA** (2026-08-16, ver §15) — 8 lotes implementados e testados com dado real (`aggregate_orders`, `search_orders`, `backlog_aging`, `team_target_performance`, `orders_timeseries`, `warranty_analytics_for_ai`). Zero casos remanescentes de "schema aceita, query ignora, sem aviso" e zero casos de "`meta` afirma aplicação que a query não fez". P1/P2 remanescentes são dívida técnica de escopo de produto, listados em §15.4, não iniciados.
+**Data:** 2026-08-16 (v1.2 — Fase 1 encerrada, §14-§15)
 **Autor:** levantamento assistido (Claude Code), a partir de inventário exaustivo do código real (arquivo:linha).
 **Depende de:** [Fase 1, item 1 do plano de confiabilidade de dado](#) — envelope `meta` (`applied_filters`/`ignored_filters`/`warnings`), já implementado e em produção nos endpoints de login/coordenadas.
 **Não altera:** `ixc_importer.py::parse_ixc_datetime`, Gamificação, pagamentos, metas históricas, cobertura ONU percentual. Nenhum desses aparece neste documento.
@@ -793,3 +793,65 @@ Isto **não é a mesma causa raiz** do achado do lote 7 (que era especificamente
 - **P2 restantes:** 2 (`os_types` forçado por design; `search`/`keyword` ausente por design).
 
 Nenhuma correção adicional foi implementada nesta etapa além dos lotes 6 e 7 explicitamente autorizados. Próximo passo (implementar os 13 filtros faltantes em `warranty_analytics_for_ai`, ou fazer a função reconhecer e avisar sobre eles) aguarda autorização explícita, como todos os lotes anteriores.
+
+---
+
+## 15. Lote 8 (último P0) e encerramento da Fase 1 (2026-08-16)
+
+Autorizado pelo usuário para fechar a Fase 1: corrigir só o `meta` de `warranty_analytics_for_ai` (achado de §14.3), sem implementar nenhum filtro novo.
+
+### 15.1 Lote 8 — classificação dos filtros de `warranty_analytics_for_ai`
+
+**Listas confirmadas por leitura de código** (`operations_queries.warranty_analytics`, `operations/queries.py:995-1141`) antes de qualquer alteração:
+
+- **`NOT_SUPPORTED_BY_ENDPOINT` (16 campos + `os_types`):** `text_filters`, `scheduled_after_sla`, `sla_expired_before_schedule`, `has_coordinates`, `near_latitude`, `near_longitude`, `radius_km`, `opened_at`, `closed_at`, `deadline_at`, `scheduled_at`, `assumed_at`, `displacement_started_at`, `execution_started_at`, `finished_at`, `source_updated_at` - confirmado que a função nunca chama `_text_filter_conditions`/`_sla_stage_filter_conditions`/`_geo_filter_conditions`/`_datetime_filter_conditions`. `os_types` incluído à parte: é forçado a `[]` no lado retorno por design (`operations/queries.py:1067`) - o valor enviado nunca tem efeito, mesmo padrão de "aceito, sem efeito", então recebe o mesmo tratamento.
+- **`PARTIAL_FILTER_SCOPE` (20 campos):** `contract_types`, `person_types`, `diagnoses`, `departments`, `sectors`, `priorities`, `creators`, `responsibles`, `statuses`, `sla_statuses`, `projects`, `pops`, `customer_logins`, `opened_weekdays`, `closed_weekdays`, mais o composto `custom_window_*` (5 peças) - todos aplicados via `_dimension_conditions(db, user, {**filters, "os_types": []})`, mas nunca no lado origem/denominador (que só recebe os 5 campos de `WARRANTY_ORIGIN_SHARED_FILTERS`).
+- **`os_subjects`/`subjects`:** não alterado - só revalidado.
+
+**Implementação:** `_warranty_filter_report()` (`ai/queries.py`) classifica os filtros antes de montar `meta`, sem tocar em nenhuma condição de consulta. Campo `detail: str | None` adicionado a `OperationIgnoredFilterOut`/`IgnoredFilter` (aditivo, revalidado que não quebra nenhum schema já em produção).
+
+**Autocorreção durante o próprio lote:** a primeira versão deste lote tratou as 5 peças de `custom_window_*` peça por peça (`PARTIAL_FILTER_SCOPE` individual), sem checar completude do grupo - reproduzindo dentro de `warranty_analytics_for_ai` o mesmo bug que o lote 7 já tinha corrigido nos outros 5 endpoints. Corrigido antes de declarar a Fase 1 encerrada, reaproveitando `_COMPOSITE_FILTERS["custom_window"]` (mesma tupla do lote 7): grupo completo → `PARTIAL_FILTER_SCOPE`; incompleto → `INCOMPLETE_COMPOSITE_FILTER`, fora de `applied_filters`.
+
+### 15.2 Testes obrigatórios (dado real, `date_from=2026-01-01`, `date_to=2026-08-16`)
+
+| Teste | `numerator` | `applied_filters` | `ignored_filters` | `warnings` |
+|---|---|---|---|---|
+| Baseline (sem filtro) | 2.750 | - | - | - |
+| **A) `regionals` (pleno)** | 682 (≠ baseline) | contém `regionals` | `[]` | `[]` |
+| **B) `subjects` (legado)** | 649 | contém `os_subjects` | `[]` | `DEPRECATED_FILTER_ALIAS` |
+| **B) `os_subjects` (canônico)** | 649 (= legado) | contém `os_subjects` | `[]` | `[]` |
+| **C) `opened_at`+`text_filters` (não suportados)** | 2.750 (= baseline) | **não contém nenhum dos dois** | 2 entradas, `NOT_SUPPORTED_BY_ENDPOINT` | `[]` |
+| **`os_types` (forçado)** | 2.750 (= baseline) | não contém `os_types` | 1 entrada, `NOT_SUPPORTED_BY_ENDPOINT` | `[]` |
+| **D) `sectors` (escopo parcial)** | 2.445 (≠ baseline) | contém `sectors` | `[]` | `PARTIAL_FILTER_SCOPE` |
+| **`custom_window_*` incompleto (2 de 5)** | 2.750 (= baseline) | **não contém as 2 peças** | `[]` | `INCOMPLETE_COMPOSITE_FILTER` |
+| **`custom_window_*` completo (5 de 5)** | 2.283 (≠ baseline) | contém as 5 peças | `[]` | 5x `PARTIAL_FILTER_SCOPE` |
+
+Todos os 8 cenários batem exatamente com o esperado. Validado via schema real `AiWarrantyAnalyticsRequest` (incluindo um teste combinado `os_subjects`+`sectors`+`opened_at` na mesma chamada, com os 3 comportamentos corretos simultaneamente). Regressão dos 5 endpoints anteriores confirmada sem quebra. Tool MCP remota `opr_warranty_analytics` confirmada registrada (22 tools, inalterado). `operations_queries.warranty_analytics`/`FILTER_COLUMNS` global não foram tocados.
+
+**Commits:** [dbf832a](https://github.com/paulo-ope/Gamificacao-UNI-OPR/commit/dbf832a) (classificação inicial) + [0ef7e8f](https://github.com/paulo-ope/Gamificacao-UNI-OPR/commit/0ef7e8f) (correção do `custom_window_*` incompleto).
+
+### 15.3 Reauditoria final dos 6 endpoints
+
+1. **Existe algum caso "schema aceita → query ignora → sem aviso"?** **Não.** Os 16+1 campos de `warranty_analytics_for_ai` que a função não aplica agora saem de `applied_filters` e entram em `ignored_filters` com `NOT_SUPPORTED_BY_ENDPOINT`. Os 29 campos dos 5 endpoints já migrados continuam todos aplicados (confirmado em §13.6, sem regressão).
+2. **Existe algum caso "`meta.applied_filters` diz aplicado → SQL não aplicou"?** **Não.** Composto incompleto (`near_latitude`/`near_longitude`/`radius_km`, `custom_window_*`) corrigido nos 5 endpoints migrados (lote 7) e em `warranty_analytics_for_ai` (lote 8 + autocorreção de §15.1). Filtro de escopo parcial (`PARTIAL_FILTER_SCOPE`) permanece em `applied_filters` porque **foi de fato aplicado** - a ressalva é só sobre onde, não uma mentira sobre se.
+3. **Quantos P0 restam?** **Zero.**
+4. **P1/P2 restantes (dívida técnica, não implementados nesta fase):**
+   - **P1:** nenhum P0/P1 de "mentira" remanescente - o que resta é escopo de produto, não confiabilidade: os 20 campos de `PARTIAL_FILTER_SCOPE` em `warranty_analytics_for_ai` continuam sem afetar o lado origem/denominador (design documentado, agora com aviso claro).
+   - **P2:** `os_types` forçado por design (documentado); `search`/`keyword` ausente do schema em 5 das 6 funções (não é filtro aceito-e-ignorado, o campo nem existe ali); os 16 filtros de `warranty_analytics_for_ai` continuam **não implementados de fato** (só corretamente declarados como não suportados) - se algum dia quiserem funcionar, é trabalho de implementação nova, fora desta fase.
+   - Diferenças REST vs IA/MCP (REST nunca ganhou `os_subjects`, `_since` vs `{gte,...}` em login-search) - registradas em §2/§9, não tocadas.
+   - `SelectorContractV1` (§8) - não iniciado.
+
+### 15.4 Backlog para fase futura (somente listado, não implementado)
+
+- Implementar de fato os 16 filtros hoje `NOT_SUPPORTED_BY_ENDPOINT` em `warranty_analytics_for_ai` (`text_filters`, geografia, os 9 filtros de data, `scheduled_after_sla`/`sla_expired_before_schedule`) - se o produto decidir que valem a pena.
+- Decidir se os 20 campos de `PARTIAL_FILTER_SCOPE` deveriam também afetar o lado origem/denominador (mudança de semântica de negócio, não de confiabilidade - precisa de decisão de produto, não é bug).
+- Alinhar REST aos nomes canônicos (`os_subjects`, filtros de data completos em vez de só `_since`) - REST nunca foi migrado, só IA/MCP.
+- `SelectorContractV1` (`group_by`/`metric`/`entity`/`granularity`/`date_field` com `Literal` consistente nos 4 canais).
+- Migração escalar→lista em `opr_management_cases` (`regional`→`regionals` etc.) - condicionada à prova de segurança/índice já registrada em §4.3/§6.1.
+- Qualquer expansão funcional de `warranty_analytics_for_ai` além do que já existe hoje.
+
+Nenhum destes itens foi iniciado. Ficam para outra fase, mediante nova autorização.
+
+---
+
+**FASE 1 DE CONFIABILIDADE: CONCLUÍDA**
