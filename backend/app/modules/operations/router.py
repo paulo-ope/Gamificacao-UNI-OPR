@@ -111,6 +111,7 @@ from .schemas import (
     OperationLoginTimeseriesResponseOut,
     OperationLoginIncidentAnalysisOut,
     OperationCoordinateQualityItemOut,
+    OperationCoordinateQualityResponseOut,
     OperationOnuSignalOut,
 )
 
@@ -1404,7 +1405,7 @@ def network_login_incident_analysis(
     )
 
 
-@router.get("/network/coordinate-quality", response_model=list[OperationCoordinateQualityItemOut])
+@router.get("/network/coordinate-quality", response_model=OperationCoordinateQualityResponseOut)
 def network_coordinate_quality(
     entity: str = Query(..., description="operations_orders, operations_login_current_status ou operations_onu_signal_current."),
     outlier_km: float = Query(default=300.0, gt=0, le=2000),

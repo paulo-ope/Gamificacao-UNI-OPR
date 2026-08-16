@@ -822,9 +822,9 @@ def opr_coordinate_quality_audit(params: CoordinateQualityInput) -> str:
             300), duplicate_threshold (default 20).
 
     Returns:
-        str: JSON com lista por regional: [{"entity", "regional", "total", "validated", "missing",
+        str: JSON {"meta": {...}, "data": [{"entity", "regional", "total", "validated", "missing",
         "invalid_range", "zero_zero", "outside_region", "suspicious_duplicates",
-        "valid_coverage_pct"}, ...].
+        "valid_coverage_pct"}, ...]}, um item de `data` por regional.
     """
     payload = {
         "entity": params.entity,

@@ -803,10 +803,11 @@ def build_mcp_server() -> FastMCP:
                 fazem ela ser "suspeita de valor chumbado" (default 20).
 
         Returns:
-            JSON com lista por regional: [{"entity", "regional", "total", "validated", "missing",
+            JSON {"meta": {...}, "data": [{"entity", "regional", "total", "validated", "missing",
             "invalid_range", "zero_zero", "outside_region", "suspicious_duplicates",
-            "valid_coverage_pct"}, ...]. `validated` = passou todas as checagens; os demais
-            campos são mutuamente exclusivos entre si e com `validated`.
+            "valid_coverage_pct"}, ...]}, um item de `data` por regional. `validated` = passou
+            todas as checagens; os demais campos são mutuamente exclusivos entre si e com
+            `validated`.
         """
         user = _current_user()
         with SessionLocal() as db:
