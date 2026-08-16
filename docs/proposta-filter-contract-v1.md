@@ -716,3 +716,80 @@ Nenhuma regressão introduzida pelos lotes 1-5.
    4. `warranty_analytics_for_ai` → `text_filters`/`has_coordinates`/trio geográfico/9 filtros de data (§13.4) - maior esforço (nenhuma implementação existe, não é só renomear um alias) e menor urgência que o item 1 (esses filtros nunca funcionaram, então não há uma "promessa recente do schema" sendo quebrada como no caso `os_subjects`/`orders_timeseries`).
 
 Nenhuma dessas correções foi implementada nesta etapa. Aguardando autorização explícita do usuário, endpoint por endpoint, como nos lotes anteriores.
+
+---
+
+## 14. Lotes 6 e 7 (correção dos P0 da auditoria) + reauditoria final (2026-08-16)
+
+Autorizado pelo usuário na ordem de risco definida em §13.10, item 7: lote 6 (`os_subjects` em `warranty_analytics_for_ai`) primeiro, lote 7 (`meta` mentindo em filtro composto) depois. Escopo estrito - nenhuma expansão funcional além do autorizado.
+
+### 14.1 Lote 6 — `warranty_analytics_for_ai` reconhece `os_subjects`
+
+**Correção:** `_normalize_os_subjects_alias` (mesmo helper dos 5 lotes anteriores) chamada dentro de `warranty_analytics_for_ai` (`ai/queries.py`), antes de repassar `**filters` pra `operations_queries.warranty_analytics`. **`operations_queries.warranty_analytics` (compartilhada com a aba Garantias da tela, REST) não foi tocada** - continua sem `meta`, sem normalização, exatamente como estava. Novo campo `meta: OperationResponseMetaOut` em `AiWarrantyAnalyticsResponse` (sibling aos campos existentes).
+
+**Teste de paridade (dado real, `date_from=2026-01-01`, `date_to=2026-08-16`, valor `"Suporte Externo Fibra Urbana"`):**
+
+| Chamada | `numerator` |
+|---|---|
+| sem filtro (baseline) | 2.750 |
+| `subjects=[...]` (legado) | 649 |
+| `os_subjects=[...]` (canônico) | **649 - idêntico ao legado, não mais 2.750** |
+
+`data` idêntico entre legado e canônico (exceto `meta`); `meta.warnings` do legado traz `DEPRECATED_FILTER_ALIAS`, canônico não traz nada. Validado via schema real `AiWarrantyAnalyticsRequest`. REST/UI (`operations_queries.warranty_analytics` chamada direta, sem passar pela camada de IA) confirmado inalterado: `numerator=649` com `subjects`, sem `meta` no retorno. Regressão dos 5 endpoints anteriores confirmada sem quebra. Tool MCP remota `opr_warranty_analytics` confirmada registrada (22 tools).
+
+**Commit:** [f656980](https://github.com/paulo-ope/Gamificacao-UNI-OPR/commit/f656980).
+
+### 14.2 Lote 7 — `meta.applied_filters` não ecoa mais filtro composto incompleto
+
+**Correção:** nova função `_composite_filter_report(filters)` (`ai/queries.py`) - verifica os 2 grupos (`geo_radius`: `near_latitude`/`near_longitude`/`radius_km`; `custom_window`: as 5 peças de `custom_window_*`) contra o `filters` recebido. Grupo com **algumas mas não todas** as peças: remove essas peças de `applied_filters` e gera `{"code": "INCOMPLETE_COMPOSITE_FILTER", "filter": "geo_radius"|"custom_window", "received_fields": [...], "missing_fields": [...]}`. Grupo completo ou totalmente ausente: comportamento inalterado. Aplicada aos 4 pontos que constroem `applied_filters` (`aggregate_orders`, `orders_timeseries`, `search_orders`, `backlog_aging`) - `team_target_performance` herda automaticamente (reaproveita o `meta` de `orders_timeseries` por completo). **`warranty_analytics_for_ai` não recebeu esta correção** - não suporta esses filtros de forma alguma (§13.4), aplicar a função ali sem implementar o filtro em si seria expandir comportamento só pra participar do teste (explicitamente vedado pelo usuário).
+
+**Teste completo/incompleto/baseline (dado real, `aggregate_orders`, período 2026-07-01..2026-08-16):**
+
+| Cenário | total (`quantity`) | em `applied_filters`? | warning? |
+|---|---|---|---|
+| sem filtro (baseline) | 31.366 | - | - |
+| `near_latitude` sozinho (incompleto) | **31.366 - idêntico ao baseline** | Não | `INCOMPLETE_COMPOSITE_FILTER`, `received_fields: ["near_latitude"]`, `missing_fields: ["near_longitude", "radius_km"]` |
+| trio completo | 10.466 (diferente) | Sim, os 3 campos | Nenhum |
+| `custom_window_basis`+`custom_window_start_weekday` sozinhos (2 de 5) | **31.366 - idêntico** | Não | `INCOMPLETE_COMPOSITE_FILTER`, `filter: "custom_window"`, 2 recebidos, 3 faltando |
+| `custom_window_*` completo (5 peças) | 27.868 (diferente) | Sim, as 5 peças | Nenhum |
+
+Mesmo padrão confirmado com dado real em `search_orders` (33.277 baseline = 33.277 incompleto ≠ 11.008 completo), `backlog_aging` (15.449 = 15.449 ≠ 4.901), `orders_timeseries` (29.938 = 29.938) e `team_target_performance` (herdado, mesmo `meta` de `orders_timeseries`). Regressão de `os_subjects`/`subjects` (lotes 1-6) confirmada sem quebra nos 5. Validado via schema real `AiAggregationRequest`. Tool MCP remota confirmada com as 22 tools intactas.
+
+**Commit:** [c404749](https://github.com/paulo-ope/Gamificacao-UNI-OPR/commit/c404749).
+
+### 14.3 Reauditoria dos 6 endpoints pós-lotes 6 e 7
+
+**🔴 Achado novo, efeito colateral do lote 6 - `warranty_analytics_for_ai` ganhou uma NOVA instância de "`meta` mentindo" ao ganhar `meta`.**
+
+Antes do lote 6, `warranty_analytics_for_ai` não tinha `meta` - a ausência de `meta` não é uma mentira (não havia afirmação nenhuma). Ao adicionar `meta` no lote 6 (necessário pra reportar `os_subjects`/`subjects` corretamente), `applied_filters` passou a ecoar **qualquer** campo de `filters` recebido, incluindo os 13 filtros que a função nunca aplica de verdade (`text_filters`, `has_coordinates`, trio geográfico, os 9 filtros de data, `scheduled_after_sla`, `sla_expired_before_schedule` - ver §13.4). Teste real, 2026-08-16, mesmo período de sempre:
+
+```
+text_filters=[{"field":"subject","operator":"contains","value":"Fibra"}] + opened_at={"gte":"2026-08-01"} + near_latitude=-10.88
+numerator = 2.750 (idêntico ao baseline sem filtro nenhum)
+meta.applied_filters = {"text_filters": [...], "opened_at": {...}, "near_latitude": -10.88, ...}  <- ecoando os 3 como aplicados
+meta.warnings = []
+```
+
+Isto **não é a mesma causa raiz** do achado do lote 7 (que era especificamente sobre completude de filtro composto) - é o problema mais amplo e original do §13.4 (função não implementa o filtro, ponto), agora visível através de um `meta` que antes não existia. Classificado como **🔴 P0 de observabilidade, não corrigido nesta etapa** - corrigir exigiria ou (a) implementar de fato os 13 filtros em `warranty_analytics_for_ai` (era o item 4 do plano de risco de §13.10, deliberadamente fora do escopo dos lotes 6/7), ou (b) fazer `warranty_analytics_for_ai` reconhecer esses campos como não suportados e não ecoá-los/gerar `ignored_filters`/aviso próprio - qualquer uma das duas é uma mudança de comportamento nova, não autorizada nesta rodada. **Registrado, não corrigido, aguardando autorização.**
+
+**Estado dos 3 P0 originais (§13.3, §13.4, §13.5):**
+
+| P0 original | Status |
+|---|---|
+| §13.3 - `warranty_analytics_for_ai` ignora `os_subjects` | ✅ Corrigido (lote 6, §14.1) |
+| §13.4 - `warranty_analytics_for_ai` nunca aplica `text_filters`/geo/9 filtros de data | 🔴 **Ainda existe** - deliberadamente não corrigido nesta rodada (fora do escopo autorizado para os lotes 6/7); e agora tem uma manifestação adicional em `meta` (achado acima) |
+| §13.5 - `meta` mentindo no trio geo/`custom_window_*` incompletos | ✅ Corrigido (lote 7, §14.2) nos 5 endpoints já migrados. Não se aplica a `warranty_analytics_for_ai` (nunca aplicou esses filtros, completo ou não). |
+
+**P1 (§13.9) - inalterado:** os 14 filtros de cobertura parcial em `warranty_analytics_for_ai` (afetam só o lado retorno/numerador, nunca o lado origem/denominador, exceto os 5 `WARRANTY_ORIGIN_SHARED_FILTERS`) continuam sem nenhum aviso equivalente a `PARTIAL_DIMENSION_COVERAGE`. Não corrigido nesta rodada, por instrução explícita do usuário.
+
+**P2 (§13.9) - inalterado:** `os_types` forçado a `[]` no lado retorno (documentado, correto por design); `search`/`keyword` ausente de 5 das 6 funções (schema nem tem o campo, `NOT_SUPPORTED_BY_DESIGN`/`REJECTED` por construção).
+
+### 14.4 Confirmação objetiva final
+
+- **Existe algum caso "schema aceita → query ignora → 200 OK" remanescente?** Sim - os 13 filtros de `warranty_analytics_for_ai` cobertos em §13.4 (`text_filters`, `has_coordinates`, trio geográfico, 9 filtros de data, `scheduled_after_sla`, `sla_expired_before_schedule`). `os_subjects` (o caso que motivou o lote 6) está corrigido nos 6 endpoints.
+- **Existe algum caso "`meta.applied_filters` diz aplicado → SQL não aplicou" remanescente?** Sim - a mesma lista de 13 filtros acima, em `warranty_analytics_for_ai`, agora visível porque o lote 6 deu `meta` à função (achado §14.3). Nos 5 endpoints já migrados (`aggregate_orders`, `search_orders`, `backlog_aging`, `orders_timeseries`, `team_target_performance`), este problema está **zerado** para todos os 29 campos de `AiOrderFilters`, incluindo os compostos.
+- **P0 restantes:** 1 (o achado de §14.3, que é a mesma causa raiz de §13.4 - não são 2 P0 novos, é 1 causa com 2 manifestações: função não aplica E agora `meta` também não avisa).
+- **P1 restantes:** 1 categoria (cobertura parcial sem aviso em `warranty_analytics_for_ai`, §13.9).
+- **P2 restantes:** 2 (`os_types` forçado por design; `search`/`keyword` ausente por design).
+
+Nenhuma correção adicional foi implementada nesta etapa além dos lotes 6 e 7 explicitamente autorizados. Próximo passo (implementar os 13 filtros faltantes em `warranty_analytics_for_ai`, ou fazer a função reconhecer e avisar sobre eles) aguarda autorização explícita, como todos os lotes anteriores.
