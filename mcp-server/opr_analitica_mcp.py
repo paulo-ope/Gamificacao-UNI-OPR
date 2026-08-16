@@ -533,7 +533,7 @@ def opr_search_logins(params: SearchLoginsInput) -> str:
 
     Returns:
         str: JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-        "has_more": bool}. Cada item inclui login_id, login, online, regional,
+        "has_more": bool, "meta": {...}}. Cada item inclui login_id, login, online, regional,
         latitude/longitude, last_connected_at, last_disconnected_at, status_changed_at,
         captured_at, contract_id, pon_id, transmitter_id, last_drop_cause.
     """
@@ -736,8 +736,8 @@ def opr_offline_login_clusters(params: OfflineLoginClustersInput) -> str:
     Returns:
         str: JSON {"radius_meters", "min_cluster_size", "window_minutes", "clusters": [{
         "center_latitude", "center_longitude", "radius_meters", "size", "logins": [{"login_id",
-        "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...]}, ordenado
-        do maior cluster pro menor.
+        "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...],
+        "meta": {...}}, `clusters` ordenado do maior pro menor.
     """
     payload = {
         "radius_meters": params.radius_meters,

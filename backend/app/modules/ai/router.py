@@ -33,7 +33,7 @@ from app.modules.ai_governance.gate import (
 from app.modules.ai_governance.policy import EffectivePolicy
 from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
-from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
+from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
@@ -279,37 +279,12 @@ def offline_login_clusters_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.offline_login_clusters", "api")
-    clusters = find_offline_login_clusters(
+    result = offline_login_clusters_response(
         db,
         radius_meters=payload.radius_meters,
         min_cluster_size=payload.min_cluster_size,
         window_minutes=payload.window_minutes,
     )
-    result = {
-        "radius_meters": payload.radius_meters,
-        "min_cluster_size": payload.min_cluster_size,
-        "window_minutes": payload.window_minutes,
-        "clusters": [
-            {
-                "center_latitude": cluster.center_latitude,
-                "center_longitude": cluster.center_longitude,
-                "radius_meters": cluster.radius_meters,
-                "size": cluster.size,
-                "logins": [
-                    {
-                        "login_id": point.login_id,
-                        "login": point.login,
-                        "online": point.online,
-                        "latitude": point.latitude,
-                        "longitude": point.longitude,
-                        "last_disconnected_at": point.last_disconnected_at,
-                    }
-                    for point in cluster.logins
-                ],
-            }
-            for cluster in clusters
-        ],
-    }
     record_ai_access(
         db,
         origin="api",
@@ -317,7 +292,7 @@ def offline_login_clusters_route(
         user=context.user,
         token_id=context.token_id,
         filters={"radius_meters": payload.radius_meters, "min_cluster_size": payload.min_cluster_size, "window_minutes": payload.window_minutes},
-        result_count=len(clusters),
+        result_count=len(result["clusters"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result

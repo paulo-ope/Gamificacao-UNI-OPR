@@ -8,8 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
+
+from app.modules.ai_governance.response_meta import build_meta
 
 from .login_geo_clusters import _geo_radius_condition
 from .models import OperationLoginCurrentStatus, OperationLoginStatusSnapshot, OperationOnuSignalCurrent
@@ -34,6 +36,14 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _login_source_last_sync(db: Session) -> datetime | None:
+    """Mesmo racional de `login_aggregate._login_source_last_sync` (duplicado aqui, não importado,
+    pra não criar dependência cruzada entre os dois módulos por um helper de uma linha) - horário
+    da última captura de status de login concluída, usado como `source_last_sync` no envelope
+    `meta` (Fase 1, item 1 do plano de confiabilidade de dado)."""
+    return db.scalar(select(func.max(OperationLoginCurrentStatus.captured_at)))
 
 
 def _datetime_op_conditions(column, op: dict | None) -> list:
@@ -156,6 +166,17 @@ def search_logins(
         "page": page,
         "page_size": page_size,
         "has_more": offset + len(items) < total,
+        "meta": build_meta(
+            applied_filters={
+                "logins": logins, "login_query": login_query, "login_ids": login_ids,
+                "online_statuses": online_statuses, "regionals": regionals,
+                "pon_ids": pon_ids, "transmitter_ids": transmitter_ids, "contract_ids": contract_ids,
+                "near_latitude": near_latitude, "near_longitude": near_longitude, "radius_km": radius_km,
+                "status_changed_at": status_changed_at, "last_connected_at": last_connected_at,
+                "last_disconnected_at": last_disconnected_at, "captured_at": captured_at,
+            },
+            source_last_sync=_login_source_last_sync(db),
+        ),
     }
 
 

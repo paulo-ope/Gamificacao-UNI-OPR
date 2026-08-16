@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
+from app.modules.ai_governance.response_meta import build_meta
+
 from .models import OperationLoginCurrentStatus
 
 EARTH_RADIUS_METERS = 6_371_000.0
@@ -265,3 +267,49 @@ def find_offline_login_clusters(
     ]
     clusters.sort(key=lambda cluster: cluster.size, reverse=True)
     return clusters
+
+
+def offline_login_clusters_response(
+    db: Session,
+    *,
+    radius_meters: float = 300.0,
+    min_cluster_size: int = 3,
+    window_minutes: int = 30,
+) -> dict:
+    """Envelope de resposta de `find_offline_login_clusters` (dict pronto pra serializar), pra não
+    duplicar a mesma construção nos 3 call sites que existiam antes (REST, IA, MCP remoto - Fase 1,
+    item 1 do plano de confiabilidade de dado). `find_offline_login_clusters` continua existindo à
+    parte porque `login_incident_analysis` a usa direto sobre os dataclasses, sem passar por JSON."""
+    clusters = find_offline_login_clusters(
+        db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+    )
+    return {
+        "radius_meters": radius_meters,
+        "min_cluster_size": min_cluster_size,
+        "window_minutes": window_minutes,
+        "clusters": [
+            {
+                "center_latitude": cluster.center_latitude,
+                "center_longitude": cluster.center_longitude,
+                "radius_meters": cluster.radius_meters,
+                "size": cluster.size,
+                "logins": [
+                    {
+                        "login_id": point.login_id,
+                        "login": point.login,
+                        "online": point.online,
+                        "latitude": point.latitude,
+                        "longitude": point.longitude,
+                        "last_disconnected_at": point.last_disconnected_at,
+                    }
+                    for point in cluster.logins
+                ],
+            }
+            for cluster in clusters
+        ],
+        "meta": build_meta(
+            applied_filters={
+                "radius_meters": radius_meters, "min_cluster_size": min_cluster_size, "window_minutes": window_minutes,
+            },
+        ),
+    }

@@ -34,7 +34,7 @@ from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
 from .coordinate_quality import coordinate_quality_audit
 from .login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
-from .login_geo_clusters import find_offline_login_clusters, query_login_status
+from .login_geo_clusters import offline_login_clusters_response, query_login_status
 from .login_search import get_login_detail, search_logins
 from .login_status_snapshot import (
     LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES,
@@ -1162,34 +1162,9 @@ def network_offline_login_clusters(
     recebe filtro de regional/setor de propósito: proximidade geográfica é a única dimensão
     relevante aqui, e os mesmos filtros do resto do módulo (que operam sobre O.S., não sobre
     login) não se aplicam a este dado."""
-    clusters = find_offline_login_clusters(
+    return offline_login_clusters_response(
         db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
     )
-    return {
-        "radius_meters": radius_meters,
-        "min_cluster_size": min_cluster_size,
-        "window_minutes": window_minutes,
-        "clusters": [
-            {
-                "center_latitude": cluster.center_latitude,
-                "center_longitude": cluster.center_longitude,
-                "radius_meters": cluster.radius_meters,
-                "size": cluster.size,
-                "logins": [
-                    {
-                        "login_id": point.login_id,
-                        "login": point.login,
-                        "online": point.online,
-                        "latitude": point.latitude,
-                        "longitude": point.longitude,
-                        "last_disconnected_at": point.last_disconnected_at,
-                    }
-                    for point in cluster.logins
-                ],
-            }
-            for cluster in clusters
-        ],
-    }
 
 
 @router.get("/network/logins", response_model=list[OperationLoginStatusOut])

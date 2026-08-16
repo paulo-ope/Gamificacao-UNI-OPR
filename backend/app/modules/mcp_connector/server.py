@@ -37,7 +37,7 @@ from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
 from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
-from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
+from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
 from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
@@ -523,7 +523,7 @@ def build_mcp_server() -> FastMCP:
 
         Returns:
             JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-            "has_more": bool}. Cada item inclui login_id, login, online, regional,
+            "has_more": bool, "meta": {...}}. Cada item inclui login_id, login, online, regional,
             latitude/longitude, last_connected_at, last_disconnected_at, status_changed_at,
             captured_at, contract_id, pon_id, transmitter_id, last_drop_cause.
         """
@@ -706,41 +706,16 @@ def build_mcp_server() -> FastMCP:
         Returns:
             JSON {"radius_meters", "min_cluster_size", "window_minutes", "clusters": [{
             "center_latitude", "center_longitude", "radius_meters", "size", "logins": [{"login_id",
-            "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...]},
-            ordenado do maior cluster pro menor.
+            "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...],
+            "meta": {...}}, `clusters` ordenado do maior pro menor.
         """
         user = _current_user()
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.offline_login_clusters", "mcp")
-            clusters = find_offline_login_clusters(
-                db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
-            )
             return _dump(
-                {
-                    "radius_meters": radius_meters,
-                    "min_cluster_size": min_cluster_size,
-                    "window_minutes": window_minutes,
-                    "clusters": [
-                        {
-                            "center_latitude": cluster.center_latitude,
-                            "center_longitude": cluster.center_longitude,
-                            "radius_meters": cluster.radius_meters,
-                            "size": cluster.size,
-                            "logins": [
-                                {
-                                    "login_id": point.login_id,
-                                    "login": point.login,
-                                    "online": point.online,
-                                    "latitude": point.latitude,
-                                    "longitude": point.longitude,
-                                    "last_disconnected_at": point.last_disconnected_at,
-                                }
-                                for point in cluster.logins
-                            ],
-                        }
-                        for cluster in clusters
-                    ],
-                }
+                offline_login_clusters_response(
+                    db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+                )
             )
 
     @mcp.tool(
