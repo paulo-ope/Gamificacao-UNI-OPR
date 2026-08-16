@@ -1128,7 +1128,18 @@ def warranty_analytics_for_ai(
     Garantias da tela - sem nenhuma lógica nova. Só troca os itens individuais: a versão da tela
     embute o objeto completo de 2 O.S. (origem e retorno) por item, pro drill clicável; aqui isso
     seria pesado demais pra IA (mesmo motivo de `search_orders` ser paginado) - fica só os campos
-    planos de cada garantia encontrada."""
+    planos de cada garantia encontrada.
+
+    Normaliza o alias `subjects`->`os_subjects` (FilterContractV1, lote 6,
+    docs/proposta-filter-contract-v1.md §13.3) - achado de auditoria: `os_subjects` já era
+    aceito pelo schema (`AiOrderFilters`) mas `operations_queries.warranty_analytics` só
+    reconhece `subjects` (nome de `FILTER_COLUMNS`), então era descartado em silêncio. A
+    normalização acontece aqui, não em `operations_queries.warranty_analytics` - essa função é
+    compartilhada com a aba Garantias da tela (REST), que não deve ganhar `meta`/mudança de
+    contrato por este lote. Escopo estritamente limitado a `os_subjects`/`subjects` - os demais
+    filtros ainda não aplicados por `warranty_analytics` (text_filters, geografia, datas -
+    §13.4 do documento) permanecem de fora nesta etapa, por decisão explícita do usuário."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     result = operations_queries.warranty_analytics(
         db,
         date_from,
@@ -1143,6 +1154,14 @@ def warranty_analytics_for_ai(
         {key: value for key, value in item.items() if key not in ("origin_order", "return_order")}
         for item in result["items"]
     ]
+    applied_filters = {
+        **filters, "date_from": date_from, "date_to": date_to, "period_basis": period_basis,
+        "denominator": denominator, "origin_excluded_diagnoses": origin_excluded_diagnoses,
+    }
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    result["meta"] = build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else [])
     return result
 
 

@@ -1003,13 +1003,18 @@ def opr_warranty_analytics(params: WarrantyAnalyticsInput) -> str:
     Args:
         params (WarrantyAnalyticsInput): date_from, date_to, period_basis (opened/closed, default
             opened), denominator (closed_origins/active_origins/maintenance_total/activation_closed,
-            default active_origins), origin_excluded_diagnoses (opcional), filters (ver FILTERS_DOC).
+            default active_origins), origin_excluded_diagnoses (opcional), filters (ver
+            FILTERS_DOC). Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md):
+            `os_subjects` é o nome canônico do filtro de assunto da O.S. no lado
+            retorno/manutenção - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`. Os demais filtros de texto
+            livre/geografia/datas específicas ainda não têm efeito nesta ferramenta.
 
     Returns:
         str: JSON com numerator, denominator_count, percentage, contracts_with_warranty,
         customers_with_warranty, breakdown por diversas dimensões (by_regional, by_diagnosis,
-        by_subject, by_origin_type), items (lista plana de cada garantia encontrada) e
-        items_truncated (bool, se a lista de items foi cortada por volume).
+        by_subject, by_origin_type), items (lista plana de cada garantia encontrada),
+        items_truncated (bool, se a lista de items foi cortada por volume) e meta.
     """
     payload = {
         "date_from": params.date_from,

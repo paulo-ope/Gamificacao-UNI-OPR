@@ -901,10 +901,18 @@ def build_mcp_server() -> FastMCP:
             denominator: closed_origins, active_origins, maintenance_total ou activation_closed.
             origin_excluded_diagnoses: diagnósticos de origem a excluir, opcional.
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. no lado retorno/manutenção -
+                `subjects` continua funcionando (alias depreciado), só passa a gerar um aviso
+                DEPRECATED_FILTER_ALIAS em `meta.warnings`. Os demais filtros de `filters` (texto
+                livre, geografia, datas específicas) ainda não têm efeito nesta ferramenta - só os
+                mesmos filtros já suportados pela aba Garantias da tela (regional, empresa,
+                estado, cidade, modelo de equipe no lado origem+retorno; os demais campos de
+                `FILTER_COLUMNS` só no lado retorno).
 
         Returns:
             JSON com numerator, denominator_count, percentage, contracts_with_warranty,
-            customers_with_warranty, breakdown por dimensão, items e items_truncated.
+            customers_with_warranty, breakdown por dimensão, items, items_truncated e meta.
         """
         user = _current_user()
         with SessionLocal() as db:

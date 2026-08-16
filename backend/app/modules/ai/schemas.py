@@ -422,6 +422,7 @@ class AiWarrantyAnalyticsResponse(BaseModel):
     by_origin_type: list[OperationWarrantyOriginTypeItem]
     items: list[AiWarrantyItem]
     items_truncated: bool
+    meta: OperationResponseMetaOut
 
 
 class AiTeamTargetsRequest(BaseModel):
