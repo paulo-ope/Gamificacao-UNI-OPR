@@ -230,11 +230,14 @@ def opr_orders_timeseries(params: OrdersTimeseriesInput) -> str:
     Args:
         params (OrdersTimeseriesInput): date_from, date_to, metric (abertas/fechadas/saldo),
             granularity (day/week/month, default day), group_by (opcional, ver GROUP_BY_DOC),
-            filters (ver FILTERS_DOC).
+            filters (ver FILTERS_DOC). Piloto do FilterContractV1
+            (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro de
+            assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com lista de pontos [{"period_start": "AAAA-MM-DD", "quantity": int,
-        "group": str|null}, ...]. "group" só aparece quando group_by foi informado.
+        str: JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "quantity": int,
+        "group": str|null}, ...]}. "group" só aparece quando group_by foi informado.
 
     Exemplos de uso:
         - "Evolução diária de O.S. abertas em agosto" -> metric="abertas", granularity="day"

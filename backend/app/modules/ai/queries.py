@@ -624,13 +624,21 @@ def orders_timeseries(
     date_to: date,
     group_by: str | None = None,
     **filters,
-) -> list[dict]:
+) -> dict:
     """Série temporal (dia/semana/mês) de abertas, fechadas, ou saldo (abertas - fechadas) por
     bucket - mesma lógica de bucketing de `operations_queries._period_group_start`.
 
     `group_by` é opcional: sem ele, cada ponto é `{period_start, quantity}` (formato já em uso).
     Com ele, cada ponto ganha `group` com o valor da dimensão naquele bucket (ex.: "quantidade
-    fechada por dia por modelo de equipe") - aditivo, não muda a chamada sem `group_by`."""
+    fechada por dia por modelo de equipe") - aditivo, não muda a chamada sem `group_by`.
+
+    Normaliza o alias `subjects`->`os_subjects` (FilterContractV1,
+    docs/proposta-filter-contract-v1.md) - achado real de produção antes desta correção:
+    `os_subjects` já era aceito pelo schema (`AiOrderFilters`), mas esta função não o
+    reconhecia e o descartava em silêncio, devolvendo a base sem filtro nenhum com HTTP 200
+    (nenhum erro, nenhum `ignored_filters` - só o número errado). `subjects` continua
+    funcionando sem prazo de remoção, agora com aviso em vez de ambiguidade."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     start, end = local_period_utc_bounds(date_from, date_to)
     opened_day = operations_queries._local_date(db, OperationOrder.opened_at)
     closed_day = operations_queries._local_date(db, OperationOrder.closed_at)
@@ -679,7 +687,18 @@ def orders_timeseries(
         if label is not None:
             item["group"] = group
         results.append(item)
-    return results
+
+    applied_filters = {
+        **filters, "metric": metric, "granularity": granularity,
+        "date_from": date_from, "date_to": date_to, "group_by": group_by,
+    }
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    return {
+        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
+        "data": results,
+    }
 
 
 def _team_target_versions_for_names(db: Session, team_model_names: set[str]) -> list[OperationTeamTargetVersion]:
@@ -1186,16 +1205,20 @@ def team_target_performance(
     - só cobre os modelos de equipe que aparecem com produção real no período, não todo modelo
     cadastrado (evita gerar linha zerada pra modelo sem nenhuma atividade).
 
-    Normaliza o alias `subjects`->`os_subjects` (FilterContractV1) aqui, antes de repassar pra
-    `orders_timeseries` - essa função em si não é um dos endpoints migrados nesta rodada, só
-    recebe o filtro já resolvido."""
-    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
-    actual_points = orders_timeseries(
+    `orders_timeseries` já normaliza o alias `subjects`->`os_subjects` (FilterContractV1) e
+    devolve seu próprio `meta` - esta função reaproveita esse `meta` sem reprocessar (repassa
+    `**filters` intocado). Antes, esta função tinha sua PRÓPRIA normalização, redundante com a de
+    `orders_timeseries` - removida nesta correção porque produzia dupla transformação: o filtro
+    chegava aqui já resolvido pra `subjects` internamente e `orders_timeseries` interpretava isso
+    como se o alias legado tivesse sido usado pelo chamador original, gerando um aviso
+    `DEPRECATED_FILTER_ALIAS` incorreto (inofensivo porque nunca chegava a ser exposto - esta
+    função descartava o `meta` de `orders_timeseries` por completo - mas errado internamente)."""
+    timeseries = orders_timeseries(
         db, user, metric="fechadas", granularity=granularity, date_from=date_from, date_to=date_to,
         group_by="team_model", **filters,
     )
     results = []
-    for point in actual_points:
+    for point in timeseries["data"]:
         team_model = point.get("group")
         if not team_model:
             continue
@@ -1211,12 +1234,4 @@ def team_target_performance(
                 "percentage_of_target": round(actual / target * 100, 1) if target else None,
             }
         )
-
-    applied_filters = {**filters, "date_from": date_from, "date_to": date_to, "granularity": granularity}
-    applied_filters.pop("subjects", None)
-    if effective_os_subjects:
-        applied_filters["os_subjects"] = effective_os_subjects
-    return {
-        "meta": build_meta(applied_filters=applied_filters, warnings=[alias_warning] if alias_warning else []),
-        "data": results,
-    }
+    return {"meta": timeseries["meta"], "data": results}

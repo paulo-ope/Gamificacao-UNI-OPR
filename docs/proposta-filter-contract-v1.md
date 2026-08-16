@@ -479,6 +479,35 @@ Esse teste roda **antes** de qualquer commit do piloto, com dado real de produç
 
 **Conclusão do lote 4: aprovado.** Com este lote, os 4 endpoints do primeiro pacote de refatoração incremental (`aggregate_orders`, `search_orders`, `backlog_aging`, `team_target_performance`) estão completos.
 
+### 11.5 Falha de produção confirmada pré-migração (`orders_timeseries`) — 2026-08-16
+
+**Este achado é a própria justificativa de existência do FilterContractV1.** Antes da correção deste lote, `orders_timeseries` (`POST /ai/orders-timeseries`, `opr_orders_timeseries`) já aceitava `os_subjects` no schema (`AiOrderFilters.os_subjects`, adicionado no lote 1) sem erro de validação - mas a função não sabia reconhecer esse nome e descartava o filtro em silêncio, devolvendo a base inteira como se o filtro tivesse sido aplicado. Medido em produção antes da correção:
+
+| Chamada | Resultado (`quantity` somado) |
+|---|---|
+| `subjects=["Suporte Externo Fibra Urbana"]` (nome legado) | 2.257 |
+| `os_subjects=["Suporte Externo Fibra Urbana"]` (nome canônico, já aceito pelo schema) | 29.931 |
+| sem filtro nenhum | 29.931 |
+
+HTTP 200 nos três casos. Nenhum `ignored_filters`, nenhum aviso, nenhuma diferença visível na resposta que indicasse que o segundo caso era diferente do terceiro - a única forma de descobrir era comparar os números. Este é exatamente o padrão "schema aceita, função ignora" que o contrato existe para eliminar: mais perigoso que simplesmente não suportar um filtro, porque a resposta parece válida.
+
+### 11.6 Resultado do lote 5 (`orders_timeseries`) — executado em produção, 2026-08-16
+
+| Verificação | Resultado |
+|---|---|
+| `subjects=[...]` vs `os_subjects=[...]` depois da correção, `metric="fechadas"`, `granularity="week"` | `data` idêntico - soma de `quantity` = 2.258 em ambos (a pequena diferença de 2.257→2.258 frente à medição de §11.5 é drift natural do IXC entre as duas capturas, não uma divergência da correção) |
+| `os_subjects` vs baseline sem filtro, depois da correção | 2.258 (filtrado) vs 29.934 (sem filtro) - confirma que o filtro canônico agora reduz de fato o resultado, ao contrário do comportamento pré-correção |
+| `meta.warnings` legado vs canônico | `DEPRECATED_FILTER_ALIAS` só no legado |
+| Via schema real `AiTimeseriesRequest` (`os_subjects` + `group_by="regional"`) | 90 pontos, `applied_filters` correto |
+| Schema Pydantic (`AiTimeseriesResponse`, novo) | Validado OK |
+| Tool MCP remota `opr_orders_timeseries` | Continua registrada (22 tools) |
+| **Regressão pedida explicitamente: `team_target_performance` depois da mudança** | `data` idêntico à mesma chamada antes desta correção (56 linhas, soma de `actual` = 2.258) - **nenhuma dupla transformação** |
+| Regressão dos 4 endpoints do pacote anterior (`aggregate_orders`, `search_orders`, `backlog_aging`) com `os_subjects` | Sem erro, contagens coerentes (13/2315/11 grupos respectivamente) |
+
+**Simplificação aplicada em `team_target_performance` neste lote:** antes, `team_target_performance` tinha sua própria chamada a `_normalize_os_subjects_alias`, redundante com a de `orders_timeseries` (que ela chama internamente). Isso produzia uma dupla transformação silenciosa e inofensiva-mas-errada: o filtro chegava a `orders_timeseries` já resolvido para `subjects` (porque `team_target_performance` já tinha normalizado), e `orders_timeseries` interpretava isso como se o *chamador original* tivesse usado o alias legado, gerando um aviso `DEPRECATED_FILTER_ALIAS` incorreto dentro do `meta` que `orders_timeseries` retornava - nunca exposto ao usuário porque `team_target_performance` descartava esse `meta` por completo e construía o seu próprio. Corrigido removendo a normalização redundante de `team_target_performance`: agora ela repassa os filtros como recebeu e **reaproveita o `meta` de `orders_timeseries` diretamente**, sem reprocessar. `applied_filters` de `team_target_performance` ganhou 2 chaves novas como efeito colateral positivo (`metric: "fechadas"`, `group_by: "team_model"`) - mais transparente sobre o que de fato aconteceu por baixo, consistente com a regra 4-bis de seletores em `applied_filters` (§5).
+
+**Conclusão do lote 5: aprovado.** P0 de confiabilidade corrigido, sem regressão em nenhum dos 4 endpoints anteriores, sem dupla transformação em `team_target_performance`. `FILTER_COLUMNS` global não foi tocado.
+
 ## 12. Próximos passos
 
 1. ~~Usuário aprova (ou ajusta) os nomes canônicos e as regras de `ignored_filters`/`warnings` deste documento.~~ — feito: aprovado com os 4 ajustes de §0.
@@ -487,7 +516,10 @@ Esse teste roda **antes** de qualquer commit do piloto, com dado real de produç
 4. ~~`search_orders` (lote 2).~~ — feito, resultado em §11.2.
 5. ~~`backlog_aging` (lote 3).~~ — feito, resultado em §11.3 (inclui correção de tipo em `OperationResponseMetaOut.warnings`).
 6. ~~`team_target_performance` (lote 4).~~ — feito, resultado em §11.4. Primeiro pacote de refatoração incremental completo.
-7. Endpoints com `os_subjects`/`subjects` ainda não migrados: `orders_timeseries`, `warranty_analytics_for_ai`, `search_logins`'s `text_filters` (campo "subject", não a lista) - aguardando nova rodada de autorização, endpoint por endpoint, se o usuário quiser continuar.
-8. `SelectorContractV1` (§8) como proposta separada, se o usuário quiser continuar por essa linha depois.
+7. ~~`orders_timeseries` (lote 5, prioridade P0) - corrige a falha "schema aceita, função ignora" encontrada em produção.~~ — feito, resultado em §11.5 (achado registrado) e §11.6 (correção + regressão de `team_target_performance` sem dupla transformação).
+8. **Próximo, autorizado pelo usuário:** nova varredura por todo endpoint que já aceita `AiOrderFilters` (ou seja, já expõe `os_subjects` no schema), procurando especificamente o padrão "schema aceita, função ignora" - não apenas "filtro ainda não suportado". Ainda não iniciada.
+9. `warranty_analytics_for_ai`: adiado por decisão do usuário - hoje `subjects`/`os_subjects` não são reconhecidos por nenhum dos dois nomes (`WARRANTY_ORIGIN_SHARED_FILTERS` não inclui nenhum dos dois), então não há divergência entre alias e canônico ali, só ausência simétrica.
+10. `text_filters.field="os_subject"`: risco real, mas bloqueado hoje pelo `Literal` fechado de `TextFilterField` (`ai/schemas.py`) - tratado como invariante de segurança, não como refatoração imediata. **Testado em 2026-08-16**: `AiOrderFilters.model_validate({"text_filters": [{"field": "os_subject", ...}]})` levanta `ValidationError` (422 na rota real) - invariante confirmado, nada a corrigir agora.
+11. `sla_breakdown`/`sla_hierarchy` (dimensão `"subject"`, não filtro): permanece no futuro `SelectorContractV1` (§8), fora desta rodada.
 
 Este documento não implica nenhum desses passos ter sido concluído além do que está explicitamente marcado como feito acima.

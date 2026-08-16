@@ -228,10 +228,14 @@ def build_mcp_server() -> FastMCP:
             granularity: day, week ou month.
             group_by: dimensão opcional. """ + GROUP_BY_DOC + """
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. - `subjects` continua funcionando
+                (alias depreciado), só passa a gerar um aviso DEPRECATED_FILTER_ALIAS em
+                `meta.warnings`.
 
         Returns:
-            JSON com lista de pontos [{"period_start": "AAAA-MM-DD", "quantity": int,
-            "group": str|null}, ...].
+            JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "quantity": int,
+            "group": str|null}, ...]}.
         """
         user = _current_user()
         with SessionLocal() as db:

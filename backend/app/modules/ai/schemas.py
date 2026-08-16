@@ -174,6 +174,11 @@ class AiTimeseriesPoint(BaseModel):
     group: str | None = None
 
 
+class AiTimeseriesResponse(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[AiTimeseriesPoint]
+
+
 class AiSearchRequest(BaseModel):
     date_from: date
     date_to: date

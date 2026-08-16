@@ -62,7 +62,7 @@ from app.modules.ai.schemas import (
     AiTeamTargetPerformanceResponse,
     AiTeamTargetPerformanceRequest,
     AiTeamTargetsRequest,
-    AiTimeseriesPoint,
+    AiTimeseriesResponse,
     AiTimeseriesRequest,
     AiWarrantyAnalyticsRequest,
     AiWarrantyAnalyticsResponse,
@@ -111,12 +111,12 @@ def aggregate_orders_route(
     )
 
 
-@router.post("/orders-timeseries", response_model=list[AiTimeseriesPoint])
+@router.post("/orders-timeseries", response_model=AiTimeseriesResponse)
 def orders_timeseries_route(
     payload: AiTimeseriesRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return orders_timeseries(
         db,
         user,
