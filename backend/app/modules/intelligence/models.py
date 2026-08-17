@@ -73,13 +73,21 @@ class IntelligenceAlert(Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     alert_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     monitor_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
-    dedupe_key: Mapped[str] = mapped_column(String(300), nullable=False, unique=True, index=True)
+    dedupe_key: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
 
     # Materializados para índice/filtro direto; o detalhe completo de escopo vive em scope_json
     # (pode incluir cidade, setor, modelo de equipe etc., conforme o monitor).
     regional: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     scope_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # dedupe_key: correção pós-Lote A (ver migration 20260816_0066). NÃO é unique() na coluna: um
+    # alerta RESOLVED/DISMISSED não pode ocupar a chave para sempre - reincidência (item 7 dos
+    # testes obrigatórios) precisa poder criar uma linha NOVA com a mesma dedupe_key depois que a
+    # anterior foi encerrada. A unicidade real é aplicada em `alerts.py`, restrita aos alertas
+    # ATIVOS (_active_alerts_for_monitor) - o scheduler é sequencial (um monitor por vez, nunca
+    # duas execuções do mesmo monitor em paralelo), então não há corrida real a proteger no banco
+    # nesta fase. Debt documentado para F2+: se o scheduler virar multi-worker, adicionar índice
+    # único parcial (WHERE status NOT IN (...)) por dialeto.
 
     # LOW | MEDIUM | HIGH | CRITICAL
     severity: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
