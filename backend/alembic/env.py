@@ -9,9 +9,11 @@ from app.core.config import get_settings
 from app.db.base import Base
 import app.models  # noqa: F401
 import app.modules.ai.models  # noqa: F401
+import app.modules.intelligence.models  # noqa: F401
 import app.modules.management.models  # noqa: F401
 import app.modules.operations.models  # noqa: F401
 import app.modules.scheduling.models  # noqa: F401
+import app.modules.support.models  # noqa: F401
 
 
 config = context.config
