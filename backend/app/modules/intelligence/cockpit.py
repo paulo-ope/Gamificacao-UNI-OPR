@@ -21,6 +21,7 @@ from app.modules.ai_governance.response_meta import build_meta
 from app.modules.operations import queries as ops_queries
 from app.modules.operations import services as ops_services
 from app.modules.operations.period import OPERATIONS_TIMEZONE
+from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 
 from . import scheduler as intelligence_scheduler
 from .alerts import ACTIVE_STATUSES
@@ -69,6 +70,12 @@ SLA_CRITICAL_PCT = 50.0
 BACKLOG_GT15D_CRITICAL = 50
 BACKLOG_GT7D_ATTENTION = 30
 
+# Quantas regionais distintas com incidente/alerta CRITICAL simultâneo caracterizam um problema
+# sistêmico (não mais "um problema local") - usado só quando o PROFILE tem escopo global (ver
+# compute_overall_status). Um profile regional (ex.: machadinho-operacional) não usa este número:
+# para ele, qualquer incidente crítico na sua própria regional já é 100% do escopo que ele mostra.
+MULTI_REGIONAL_CRITICAL_THRESHOLD = 2
+
 _SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
 
@@ -83,35 +90,71 @@ def get_profile(db: Session, key: str) -> IntelligenceDashboardProfile | None:
     return db.scalar(select(IntelligenceDashboardProfile).where(IntelligenceDashboardProfile.key == key))
 
 
-_DEFAULT_PROFILE_KEY = "uni-geral"
+_STANDARD_WIDGETS = [
+    "overall_status",
+    "active_alerts",
+    "active_incidents",
+    "production",
+    "backlog",
+    "sla",
+    "cockpit_content",
+    "monitor_health",
+]
+
+# Profile executivo: menos widgets de propósito (sem alertas/incidentes/saúde de monitor - isso é
+# operacional, não executivo) e refresh mais espaçado - visão de tendência, não de operação minuto
+# a minuto. Mesmo frontend, profile diferente decide o que aparece (widgets_json).
+_EXECUTIVE_WIDGETS = ["overall_status", "production", "backlog", "sla", "cockpit_content"]
+
+# Seed default dos profiles desta rodada (F3). Não é CRUD - só os 3 profiles pedidos nascem
+# prontos; edição/criação de profile fica para uma fase futura de administração.
+_DEFAULT_PROFILES: tuple[dict, ...] = (
+    {
+        "key": "uni-geral",
+        "name": "UNI Geral",
+        "purpose": "MATRIX_TV",
+        "scope_json": {"regionals": []},
+        "widgets_json": _STANDARD_WIDGETS,
+        "refresh_seconds": 60,
+    },
+    {
+        "key": "machadinho-operacional",
+        "name": "Machadinho Operacional",
+        "purpose": "REGIONAL_TV",
+        "scope_json": {"regionals": ["UNI - MACHADINHO DOESTE"]},
+        "widgets_json": _STANDARD_WIDGETS,
+        "refresh_seconds": 45,
+    },
+    {
+        "key": "executivo-uni",
+        "name": "Executivo UNI",
+        "purpose": "EXECUTIVE",
+        "scope_json": {"regionals": []},
+        "widgets_json": _EXECUTIVE_WIDGETS,
+        "refresh_seconds": 120,
+    },
+)
 
 
 def ensure_default_dashboard_profile(db: Session) -> None:
-    """Seed idempotente do profile 'UNI Geral' - mesmo padrão de `ensure_ai_governance_seed`
-    (só insere se não existir, nunca sobrescreve configuração já feita pela Administração)."""
-    if get_profile(db, _DEFAULT_PROFILE_KEY) is not None:
-        return
-    db.add(
-        IntelligenceDashboardProfile(
-            key=_DEFAULT_PROFILE_KEY,
-            name="UNI Geral",
-            purpose="MATRIX_TV",
-            scope_json={"regionals": []},
-            widgets_json=[
-                "overall_status",
-                "active_alerts",
-                "active_incidents",
-                "production",
-                "backlog",
-                "sla",
-                "cockpit_content",
-                "monitor_health",
-            ],
-            display_config_json={},
-            refresh_seconds=60,
-            active=True,
+    """Seed idempotente dos profiles default (uni-geral, machadinho-operacional, executivo-uni) -
+    mesmo padrão de `ensure_ai_governance_seed`: só insere o que ainda não existe por `key`, nunca
+    sobrescreve configuração já feita pela Administração em um profile já existente."""
+    for spec in _DEFAULT_PROFILES:
+        if get_profile(db, spec["key"]) is not None:
+            continue
+        db.add(
+            IntelligenceDashboardProfile(
+                key=spec["key"],
+                name=spec["name"],
+                purpose=spec["purpose"],
+                scope_json=spec["scope_json"],
+                widgets_json=spec["widgets_json"],
+                display_config_json={},
+                refresh_seconds=spec["refresh_seconds"],
+                active=True,
+            )
         )
-    )
     db.commit()
 
 
@@ -157,20 +200,32 @@ def _alert_to_summary(alert: IntelligenceAlert) -> dict:
     }
 
 
-def _content_query(db: Session, profile_key: str) -> list[IntelligenceCockpitContent]:
+def _content_query(db: Session, profile: IntelligenceDashboardProfile, scope_regionals: list[str]) -> list[IntelligenceCockpitContent]:
     now = datetime.now(timezone.utc)
     rows = list(
         db.scalars(
             select(IntelligenceCockpitContent)
             .where(
                 IntelligenceCockpitContent.status == "ACTIVE",
-                (IntelligenceCockpitContent.profile_key == profile_key) | (IntelligenceCockpitContent.profile_key.is_(None)),
+                (IntelligenceCockpitContent.profile_key == profile.key) | (IntelligenceCockpitContent.profile_key.is_(None)),
             )
             .order_by(IntelligenceCockpitContent.created_at.desc())
         )
     )
-    # conteúdo expirado não aparece na TV, mesmo que ninguém tenha rodado a expiração em lote ainda
-    return [row for row in rows if row.valid_until is None or row.valid_until > now]
+    filtered = []
+    for row in rows:
+        # conteúdo expirado não aparece na TV, mesmo que ninguém tenha rodado a expiração em lote ainda
+        if row.valid_until is not None and row.valid_until <= now:
+            continue
+        # achado F3: conteúdo global (profile_key=None) com um `regional` próprio não pode
+        # "vazar" para um profile de escopo regional diferente - ex.: um AI_INSIGHT publicado
+        # sem profile_key mas com regional="UNI - JI PARANA" não deve aparecer em
+        # machadinho-operacional. Profile de escopo global (scope_regionals vazio) continua vendo
+        # tudo, exatamente como um alerta/incidente regional também aparece na visão UNI inteira.
+        if scope_regionals and row.regional and row.regional not in scope_regionals:
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def _content_to_summary(content: IntelligenceCockpitContent) -> dict:
@@ -213,6 +268,17 @@ def _monitor_health_summary(db: Session) -> list[dict]:
     return rows
 
 
+def _uni_wide_critical_incident(incidents: list[dict]) -> bool:
+    """Um incidente CRITICAL é "de fato UNI-wide" quando não tem regional (achado genuinamente
+    global, ex.: MONITOR_UNHEALTHY) OU quando atinge múltiplas regionais ao mesmo tempo
+    (indício de problema sistêmico, não um rompimento físico local isolado)."""
+    critical = [item for item in incidents if item["severity"] == "CRITICAL"]
+    if any(item["regional"] is None for item in critical):
+        return True
+    affected_regionals = {item["regional"] for item in critical if item["regional"]}
+    return len(affected_regionals) >= MULTI_REGIONAL_CRITICAL_THRESHOLD
+
+
 def compute_overall_status(
     *,
     alerts: list[dict],
@@ -221,20 +287,33 @@ def compute_overall_status(
     backlog_gt_7d: int,
     sla_current: float | None,
     any_monitor_unhealthy: bool,
+    is_global_scope: bool,
 ) -> dict:
     """Regra determinística e centralizada (nunca IA, nunca hardcoded no frontend) - ver item
     "Status geral" do processo aprovado. Combina alertas ativos, incidentes, severidade,
-    monitor_unhealthy, SLA e backlog."""
+    monitor_unhealthy, SLA e backlog.
+
+    Escopo importa (achado F3): um profile de escopo GLOBAL (ex.: uni-geral, `regionals: []`) não
+    pode virar CRITICAL só porque UMA regional específica tem um incidente crítico local - isso
+    inflaria toda leitura da UNI por um problema pontual de uma cidade. Um profile de escopo
+    REGIONAL (ex.: machadinho-operacional) já enxerga só a própria regional, então qualquer
+    incidente crítico ali É, por definição, 100% do escopo dele - vira CRITICAL normalmente."""
     max_incident_severity = max((item["severity"] for item in incidents), key=lambda sev: _SEVERITY_RANK.get(sev, -1), default=None)
     max_alert_severity = max((item["severity"] for item in alerts), key=lambda sev: _SEVERITY_RANK.get(sev, -1), default=None)
+    has_critical_incident = max_incident_severity == "CRITICAL"
+    uni_wide_critical = _uni_wide_critical_incident(incidents) if has_critical_incident else False
 
-    if max_incident_severity == "CRITICAL":
-        return {"status": "CRITICAL", "reason": "Incidente crítico ativo."}
+    if has_critical_incident and (not is_global_scope or uni_wide_critical):
+        return {"status": "CRITICAL", "reason": "Incidente crítico ativo no escopo desta tela."}
     if sla_current is not None and sla_current < SLA_CRITICAL_PCT:
         return {"status": "CRITICAL", "reason": f"SLA em {sla_current}%, muito abaixo da meta ({SLA_TARGET_PCT}%)."}
     if backlog_gt_15d > BACKLOG_GT15D_CRITICAL:
         return {"status": "CRITICAL", "reason": f"{backlog_gt_15d} O.S. no backlog há mais de 15 dias."}
 
+    if has_critical_incident:
+        # CRITICAL real, mas local e isolado (só 1 regional) dentro de um profile de escopo
+        # global - a UNI inteira não está crítica, mas o assunto pesa mais que "atenção".
+        return {"status": "RISK", "reason": "Incidente crítico localizado em uma regional específica."}
     if max_incident_severity == "HIGH" or max_alert_severity == "CRITICAL":
         return {"status": "RISK", "reason": "Alerta ou incidente de alta severidade ativo."}
     if any_monitor_unhealthy:
@@ -260,7 +339,17 @@ def _display_mode(overall_status: str, incidents: list[dict]) -> str:
 
 def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) -> dict:
     regionals = _scope_regionals(profile)
-    filters: dict[str, Any] = {"regionals": regionals} if regionals else {}
+    # Achado real (F3): sem filtro de setor, overview/backlog_aging/collaborator_sla contam TODA
+    # operations_orders - inclui Cobrança, Comercial, Estoque, Financeiro etc, que não são backlog
+    # operacional de campo. O restante da Operação Analítica já teria esse problema se não fosse o
+    # próprio frontend aplicar por padrão os "3 setores principais" (ver
+    # frontend/app/operacao/page.tsx::DEFAULT_PRIORITY_SECTORS, espelho de
+    # operations/scope.py::PRIMARY_SECTOR_NAMES). O cockpit precisa do mesmo default - profile pode
+    # sobrescrever via scope_json["sectors"] no futuro, mas nasce sempre escopado por padrão.
+    sectors = list((profile.scope_json or {}).get("sectors") or PRIMARY_SECTOR_NAMES)
+    filters: dict[str, Any] = {"sectors": sectors}
+    if regionals:
+        filters["regionals"] = regionals
     user = system_user()
     today = datetime.now(OPERATIONS_TIMEZONE).date()
     week_ago = today - timedelta(days=6)
@@ -306,7 +395,7 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
 
     active_alerts = [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "ALERT"]
     active_incidents = [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "INCIDENT"]
-    content = [_content_to_summary(c) for c in _content_query(db, profile.key)]
+    content = [_content_to_summary(c) for c in _content_query(db, profile, regionals)]
     monitor_health = _monitor_health_summary(db)
     any_monitor_unhealthy = any(item["alert_type"] == "MONITOR_UNHEALTHY" for item in active_alerts)
 
@@ -317,14 +406,18 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
         backlog_gt_7d=backlog_gt_7d,
         sla_current=sla_current,
         any_monitor_unhealthy=any_monitor_unhealthy,
+        is_global_scope=not regionals,
     )
     display_mode = _display_mode(overall_status["status"], active_incidents)
 
     if freshness.get("last_successful_import_at") is None:
         warnings.append({"code": "NO_SUCCESSFUL_IMPORT_YET"})
 
+    applied_filters: dict[str, Any] = {"sectors": sectors}
+    if regionals:
+        applied_filters["regionals"] = regionals
     meta = build_meta(
-        applied_filters={"regionals": regionals} if regionals else {},
+        applied_filters=applied_filters,
         warnings=warnings,
         source_last_sync=freshness.get("last_successful_import_at"),
     )

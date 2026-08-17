@@ -24,7 +24,7 @@ def _seed_orders(db_session, *, regional: str, count_open: int = 3, count_closed
             OperationOrder(
                 source="ixc", source_order_id=_next_code(), order_code=_next_code(),
                 regional=regional, os_type="Manutencao", os_subject="Reparo",
-                sla_status="unidentified", is_closed=False,
+                sector="Suporte Externo", sla_status="unidentified", is_closed=False,
                 opened_at=now - timedelta(hours=2),
             )
         )
@@ -33,7 +33,7 @@ def _seed_orders(db_session, *, regional: str, count_open: int = 3, count_closed
             OperationOrder(
                 source="ixc", source_order_id=_next_code(), order_code=_next_code(),
                 regional=regional, os_type="Manutencao", os_subject="Reparo",
-                sla_status="on_time", is_closed=True,
+                sector="Suporte Externo", sla_status="on_time", is_closed=True,
                 opened_at=now - timedelta(hours=4), closed_at=now - timedelta(hours=1), elapsed_hours=3.0,
             )
         )
@@ -319,3 +319,129 @@ def test_publish_endpoint_valid_creates_content(client, db_session):
     assert cockpit_response.status_code == 200
     titles = [item["title"] for item in cockpit_response.json()["content"]]
     assert "Teste UNI Intelligence" in titles
+
+
+# --- F3: escopo de setores (achado real - backlog contava Cobranca/Comercial/Estoque/etc) -----
+
+
+def _make_order_with_sector(db_session, counter, *, sector: str, regional: str = "UNI - JI PARANA", is_closed: bool = False) -> None:
+    db_session.add(
+        OperationOrder(
+            source="ixc", source_order_id=f"SECTOR-{counter}", order_code=f"SECTOR-{counter}",
+            regional=regional, os_type="Manutencao", os_subject="Reparo", sector=sector,
+            sla_status="unidentified", is_closed=is_closed,
+            opened_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+    )
+
+
+def test_backlog_only_counts_primary_operational_sectors(db_session):
+    """F3 - achado real: sem filtro de setor, o backlog contava Cobranca/Comercial/Estoque/
+    Financeiro (não é fila de campo). Default deve ser só os 3 setores de operação real."""
+    profile = _make_profile(db_session, "uni-geral")
+    for i in range(5):
+        _make_order_with_sector(db_session, f"billing-{i}", sector="Cobrança")
+    for i in range(2):
+        _make_order_with_sector(db_session, f"field-{i}", sector="Suporte Externo")
+    db_session.commit()
+
+    payload = cockpit.build_cockpit_payload(db_session, profile)
+
+    assert payload["backlog"]["total"] == 2, "Cobranca nao pode contar como backlog operacional"
+    assert set(payload["meta"]["applied_filters"]["sectors"]) == {"Suporte Externo", "Suporte Externo Rádio", "Suporte Externo Fibra"}
+
+
+def test_backlog_sector_filter_is_applied_and_visible_in_meta(db_session):
+    profile = _make_profile(db_session, "uni-geral")
+    payload = cockpit.build_cockpit_payload(db_session, profile)
+    assert set(payload["meta"]["applied_filters"]["sectors"]) == {"Suporte Externo", "Suporte Externo Rádio", "Suporte Externo Fibra"}
+
+
+# --- F3: overall_status considera escopo/impacto, nao so severidade global ---------------------
+
+
+def test_local_critical_incident_is_risk_not_critical_on_global_profile(db_session):
+    profile = _make_profile(db_session, "uni-geral")  # regionals: [] (escopo global)
+    _seed_alert(db_session, kind="INCIDENT", alert_type="COLLECTIVE_OUTAGE", severity="CRITICAL", regional="UNI - JI PARANA")
+
+    payload = cockpit.build_cockpit_payload(db_session, profile)
+
+    assert payload["overall_status"]["status"] == "RISK", "1 incidente critico LOCAL nao pode deixar a UNI inteira CRITICAL"
+
+
+def test_critical_incident_is_critical_on_matching_regional_profile(db_session):
+    profile = _make_profile(db_session, "machadinho", regionals=["UNI - JI PARANA"])
+    _seed_alert(db_session, kind="INCIDENT", alert_type="COLLECTIVE_OUTAGE", severity="CRITICAL", regional="UNI - JI PARANA")
+
+    payload = cockpit.build_cockpit_payload(db_session, profile)
+
+    assert payload["overall_status"]["status"] == "CRITICAL", "incidente critico na propria regional do profile regional deve ser CRITICAL"
+
+
+def test_multi_regional_critical_incidents_are_critical_on_global_profile(db_session):
+    profile = _make_profile(db_session, "uni-geral")
+    _seed_alert(db_session, dedupe_key="a", kind="INCIDENT", severity="CRITICAL", regional="UNI - JI PARANA")
+    _seed_alert(db_session, dedupe_key="b", kind="INCIDENT", severity="CRITICAL", regional="UNI - MACHADINHO DOESTE")
+
+    payload = cockpit.build_cockpit_payload(db_session, profile)
+
+    assert payload["overall_status"]["status"] == "CRITICAL", "2+ regionais criticas ao mesmo tempo e sistemico, nao local"
+
+
+def test_global_incident_without_regional_is_critical_on_global_profile(db_session):
+    profile = _make_profile(db_session, "uni-geral")
+    _seed_alert(db_session, kind="INCIDENT", severity="CRITICAL", regional=None)
+
+    payload = cockpit.build_cockpit_payload(db_session, profile)
+
+    assert payload["overall_status"]["status"] == "CRITICAL", "incidente sem regional (achado global) deve ser CRITICAL mesmo na visao UNI"
+
+
+# --- F3: conteudo regional nao vaza entre profiles ----------------------------------------------
+
+
+def test_regional_content_does_not_leak_to_other_regional_profile(db_session):
+    uni_geral = _make_profile(db_session, "uni-geral2")
+    machadinho = _make_profile(db_session, "machadinho2", regionals=["UNI - MACHADINHO DOESTE"])
+    jipa = _make_profile(db_session, "jipa2", regionals=["UNI - JI PARANA"])
+
+    cockpit.publish_cockpit_content(
+        db_session, content_type="AI_INSIGHT", profile_key=None, scope={"regional": "UNI - JI PARANA"},
+        severity="INFO", title="Insight de Ji-Parana", body="corpo", evidence=None, confidence=None,
+        valid_until=None, source_type="AI", source_key="test", author_user_id=None,
+    )
+
+    assert len(cockpit.build_cockpit_payload(db_session, uni_geral)["content"]) == 1, "escopo global deve ver conteudo de qualquer regional"
+    assert len(cockpit.build_cockpit_payload(db_session, jipa)["content"]) == 1, "profile da propria regional deve ver o conteudo"
+    assert len(cockpit.build_cockpit_payload(db_session, machadinho)["content"]) == 0, "conteudo de Ji-Parana nao pode vazar para Machadinho"
+
+
+# --- F3: os 3 profiles default ------------------------------------------------------------------
+
+
+def test_three_default_profiles_are_seeded(db_session):
+    cockpit.ensure_default_dashboard_profile(db_session)
+
+    uni_geral = cockpit.get_profile(db_session, "uni-geral")
+    machadinho = cockpit.get_profile(db_session, "machadinho-operacional")
+    executivo = cockpit.get_profile(db_session, "executivo-uni")
+
+    assert uni_geral is not None and uni_geral.purpose == "MATRIX_TV" and uni_geral.scope_json == {"regionals": []}
+    assert machadinho is not None and machadinho.purpose == "REGIONAL_TV"
+    assert machadinho.scope_json == {"regionals": ["UNI - MACHADINHO DOESTE"]}
+    assert executivo is not None and executivo.purpose == "EXECUTIVE" and executivo.scope_json == {"regionals": []}
+    # profiles realmente diferentes: executivo tem MENOS widgets que os operacionais
+    assert len(executivo.widgets_json) < len(uni_geral.widgets_json)
+    assert "active_alerts" not in executivo.widgets_json
+
+
+def test_three_default_profiles_seed_is_idempotent_per_profile(db_session):
+    cockpit.ensure_default_dashboard_profile(db_session)
+    machadinho = cockpit.get_profile(db_session, "machadinho-operacional")
+    machadinho.name = "Renomeado"
+    db_session.commit()
+
+    cockpit.ensure_default_dashboard_profile(db_session)  # roda de novo
+
+    assert cockpit.get_profile(db_session, "machadinho-operacional").name == "Renomeado"
+    assert cockpit.get_profile(db_session, "executivo-uni") is not None
