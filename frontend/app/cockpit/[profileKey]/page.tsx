@@ -187,11 +187,15 @@ function SeverityDot({ tone, label }: { tone: Tone; label: string }) {
   );
 }
 
+// Mesmo padrão neutro do Operação Analítica (operations-control-tower.tsx::SummaryMetric): valor
+// SEMPRE neutro (slate-950) por padrão - cor só entra quando o número em si é um problema real
+// (ex.: saldo positivo, SLA abaixo da meta), nunca "decoração" por métrica (achado do ajuste
+// visual: a TV tinha um arco-íris de azul/verde/âmbar sem relação com bom/ruim).
 function KpiCard({ label, value, suffix, tone = "slate" }: { label: string; value: number | null; suffix?: string; tone?: Tone }) {
   const TONE_TEXT: Record<Tone, string> = {
     emerald: "text-emerald-700",
     amber: "text-amber-700",
-    red: "text-red-700",
+    red: "text-red-600",
     blue: "text-blue-700",
     violet: "text-violet-700",
     slate: "text-slate-950"
@@ -199,7 +203,7 @@ function KpiCard({ label, value, suffix, tone = "slate" }: { label: string; valu
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-center shadow-sm">
       <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
-      <p className={cn("mt-1 text-4xl font-black tabular-nums", TONE_TEXT[tone])}>
+      <p className={cn("mt-1 text-4xl font-bold tabular-nums", TONE_TEXT[tone])}>
         {formatNumber(value)}
         {value !== null && suffix ? suffix : ""}
       </p>
@@ -437,15 +441,17 @@ export default function CockpitPage() {
         {/* SECUNDÁRIO + SUPORTE: KPIs, tendências, incidentes compactos, saúde dos monitores */}
         <section className={cn("flex min-h-0 flex-col gap-3 overflow-y-auto pr-1", !showContent && "col-span-2")}>
           <div className="grid flex-shrink-0 grid-cols-5 gap-3">
-            <KpiCard label="Abertas" value={payload.production.opened_today} tone="blue" />
-            <KpiCard label="Finalizadas" value={payload.production.closed_today} tone="emerald" />
-            <KpiCard label="Saldo" value={payload.production.balance_today} tone={payload.production.balance_today > 0 ? "amber" : "slate"} />
-            <KpiCard label="Backlog" value={payload.backlog.total} tone="slate" />
+            <KpiCard label="Abertas" value={payload.production.opened_today} />
+            <KpiCard label="Finalizadas" value={payload.production.closed_today} />
+            {/* Saldo positivo (abriu mais do que fechou) é o único sinal de problema real aqui -
+                mesma semântica de operations-control-tower.tsx (net_flow > 0 = vermelho). */}
+            <KpiCard label="Saldo" value={payload.production.balance_today} tone={payload.production.balance_today > 0 ? "red" : "slate"} />
+            <KpiCard label="Backlog" value={payload.backlog.total} />
             <KpiCard
               label="SLA"
               value={payload.sla.current !== null ? Math.round(payload.sla.current) : null}
               suffix="%"
-              tone={payload.sla.current !== null && payload.sla.current < payload.sla.target ? "amber" : "emerald"}
+              tone={payload.sla.current !== null && payload.sla.current < payload.sla.target ? "red" : "slate"}
             />
           </div>
 

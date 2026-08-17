@@ -30,7 +30,10 @@ def _local_now() -> datetime:
 _order_counter = {"n": 0}
 
 
-def _seed_order(db_session, *, regional, latitude=None, longitude=None, sector="Suporte Externo", os_subject="Reparo", opened_at=None, is_closed=False) -> OperationOrder:
+def _seed_order(
+    db_session, *, regional, latitude=None, longitude=None, sector="Suporte Externo", os_subject="Reparo",
+    opened_at=None, is_closed=False, neighborhood=None, address=None,
+) -> OperationOrder:
     opened_at = opened_at or _local_now().astimezone(timezone.utc)
     _order_counter["n"] += 1
     unique_id = f"RULE-{_order_counter['n']}-{regional}-{opened_at.timestamp()}"
@@ -47,6 +50,8 @@ def _seed_order(db_session, *, regional, latitude=None, longitude=None, sector="
         opened_at=opened_at,
         latitude=latitude,
         longitude=longitude,
+        neighborhood=neighborhood,
+        raw_payload={"endereco": address} if address else {},
     )
     db_session.add(order)
     db_session.commit()
@@ -121,6 +126,29 @@ def test_os_concentration_rule_detects_cluster_from_real_coordinates(db_session)
     assert len(detections) == 1
     assert detections[0].evidence["os_count"] == 4
     assert detections[0].regional == "UNI - JI PARANA"
+
+
+def test_os_concentration_evidence_identifies_orders_by_code_and_address(db_session):
+    """Achado real (feedback do usuário): a evidência precisa deixar claro QUAIS O.S. formam o
+    agrupamento - código real da O.S. e endereço/bairro, nunca só o id interno do banco."""
+    rule = alert_rules.create_alert_rule(
+        db_session, key="teste-cluster-endereco", name="Teste", rule_type="OS_CONCENTRATION_AREA",
+        scope={}, params={"min_count": 3, "window_minutes": 120, "radius_meters": 300},
+    )
+    base_lat, base_lng = -10.9, -61.9
+    for offset in range(3):
+        _seed_order(
+            db_session, regional="UNI - JI PARANA", latitude=base_lat + offset * 0.0005, longitude=base_lng,
+            neighborhood="Setor Chacareiro", address=f"Rua Travessão B, {offset}",
+        )
+
+    detections = rules_engine._run_os_concentration_rule(db_session, rule)
+    assert len(detections) == 1
+    sample = detections[0].evidence["os_sample"]
+    assert len(sample) == 3
+    assert all(item["neighborhood"] == "Setor Chacareiro" for item in sample)
+    assert all(item["address"] and item["address"].startswith("Rua Travessão B") for item in sample)
+    assert all(item["order_code"] for item in sample)
 
 
 def test_os_concentration_historical_comparison_uses_same_area_not_whole_regional(db_session):

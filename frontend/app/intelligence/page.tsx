@@ -248,6 +248,55 @@ function CockpitTab({ canManage }: { canManage: boolean }) {
   );
 }
 
+function prettifyEvidenceKey(key: string): string {
+  return key.replace(/_/g, " ").replace(/^\w/, (char) => char.toUpperCase());
+}
+
+function formatEvidenceValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "boolean") return value ? "Sim" : "Não";
+  if (Array.isArray(value)) return value.length ? value.map((item) => String(item)).join(", ") : "-";
+  return String(value);
+}
+
+// Evidência do alerta - pedido explícito do usuário: dá pra ver o que sustenta o alerta (ex.:
+// quais O.S. por código/endereço formam um agrupamento) sem precisar consultar o banco na mão.
+// Genérico: `os_sample` (array de {order_code, address, neighborhood}) ganha um cartão por O.S.;
+// qualquer outro campo escalar vira uma linha rótulo/valor.
+function EvidenceView({ evidence }: { evidence: Record<string, unknown> }) {
+  const entries = Object.entries(evidence ?? {}).filter(([key]) => key !== "os_sample");
+  const sample = Array.isArray(evidence?.os_sample) ? (evidence.os_sample as Array<Record<string, unknown>>) : [];
+  if (!entries.length && !sample.length) return null;
+  return (
+    <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Evidência</p>
+      {entries.length > 0 ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-600">
+          {entries.map(([key, value]) => (
+            <span key={key} className="truncate" title={`${prettifyEvidenceKey(key)}: ${formatEvidenceValue(value)}`}>
+              <span className="text-slate-400">{prettifyEvidenceKey(key)}: </span>
+              {formatEvidenceValue(value)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {sample.length > 0 ? (
+        <div>
+          <p className="mb-1 mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">O.S. envolvidas</p>
+          <div className="grid gap-1">
+            {sample.map((item, index) => (
+              <div key={index} className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs">
+                <span className="font-semibold text-slate-800">{String(item.order_code ?? "-")}</span>
+                <span className="text-slate-500"> · {[item.address, item.neighborhood].filter(Boolean).join(" · ") || "endereço não disponível"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AlertasTab({
   canManage,
   onError,
@@ -418,6 +467,7 @@ function AlertasTab({
                   <strong>Ação recomendada:</strong> {detail.recommended_action}
                 </p>
               ) : null}
+              <EvidenceView evidence={detail.evidence} />
               <div className="grid grid-cols-2 gap-3 text-xs text-slate-600">
                 <span>Regional: {detail.regional ?? "-"}</span>
                 <span>Confiança: {detail.confidence != null ? `${Math.round(detail.confidence * 100)}%` : "-"}</span>

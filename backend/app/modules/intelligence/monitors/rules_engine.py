@@ -38,6 +38,7 @@ from app.modules.operations.login_geo_clusters import _cluster_points
 from app.modules.operations.login_aggregate import login_incident_analysis
 from app.modules.operations.models import OperationLoginCurrentStatus, OperationOrder
 from app.modules.operations.period import OPERATIONS_TIMEZONE
+from app.modules.operations.schemas import _service_address_from_payload
 from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 from app.services.calculation import get_setting, upsert_setting
 
@@ -52,10 +53,24 @@ MIN_BASELINE_SAMPLES = 3
 
 
 class _OrderPoint:
-    __slots__ = ("order_id", "latitude", "longitude", "regional", "city", "os_subject")
+    __slots__ = ("order_id", "order_code", "address", "neighborhood", "latitude", "longitude", "regional", "city", "os_subject")
 
-    def __init__(self, order_id: int, latitude: float, longitude: float, regional: str | None, city: str | None, os_subject: str | None) -> None:
+    def __init__(
+        self,
+        order_id: int,
+        order_code: str,
+        address: str | None,
+        neighborhood: str | None,
+        latitude: float,
+        longitude: float,
+        regional: str | None,
+        city: str | None,
+        os_subject: str | None,
+    ) -> None:
         self.order_id = order_id
+        self.order_code = order_code
+        self.address = address
+        self.neighborhood = neighborhood
         self.latitude = latitude
         self.longitude = longitude
         self.regional = regional
@@ -169,10 +184,24 @@ def _run_os_concentration_rule(db: Session, rule: IntelligenceAlertRule) -> list
         OperationOrder.latitude.is_not(None),
         OperationOrder.longitude.is_not(None),
     ]
-    rows = db.execute(
-        select(OperationOrder.id, OperationOrder.latitude, OperationOrder.longitude, OperationOrder.regional, OperationOrder.city, OperationOrder.os_subject).where(*conditions)
-    ).all()
-    points = [_OrderPoint(order_id=r[0], latitude=r[1], longitude=r[2], regional=r[3], city=r[4], os_subject=r[5]) for r in rows]
+    # Objeto completo (não só colunas soltas) porque `service_address` é uma property calculada
+    # em cima de `raw_payload` (ver operations/schemas.py::_service_address_from_payload) - é a
+    # mesma fonte de endereço já usada no restante do app, não um campo novo.
+    orders = list(db.scalars(select(OperationOrder).where(*conditions)))
+    points = [
+        _OrderPoint(
+            order_id=order.id,
+            order_code=order.order_code,
+            address=_service_address_from_payload(order.raw_payload),
+            neighborhood=order.neighborhood,
+            latitude=order.latitude,
+            longitude=order.longitude,
+            regional=order.regional,
+            city=order.city,
+            os_subject=order.os_subject,
+        )
+        for order in orders
+    ]
 
     groups = _cluster_points(points, radius_meters=radius_meters, min_samples=min_count)
     detections: list[MonitorDetection] = []
@@ -227,7 +256,18 @@ def _run_os_concentration_rule(db: Session, rule: IntelligenceAlertRule) -> list
                 city=group[0].city,
                 scope={"regional": regional, "center_latitude": center_lat, "center_longitude": center_lng, "rule_key": rule.key},
                 recommended_action="validar causa comum na área antes de despachar equipe individualmente",
-                evidence={"os_count": len(group), "radius_meters": radius_meters, "window_minutes": window_minutes, "order_ids_sample": [p.order_id for p in group[:10]]},
+                evidence={
+                    "os_count": len(group),
+                    "radius_meters": radius_meters,
+                    "window_minutes": window_minutes,
+                    # Amostra identificável (código real da O.S. + endereço/bairro, não o id interno
+                    # do banco) - pedido explícito: dá pra saber QUAIS O.S./endereços formam o
+                    # agrupamento sem precisar consultar o banco na mão.
+                    "os_sample": [
+                        {"order_code": p.order_code, "address": p.address, "neighborhood": p.neighborhood}
+                        for p in group[:10]
+                    ],
+                },
                 confidence=confidence,
                 warnings=warnings,
             )
