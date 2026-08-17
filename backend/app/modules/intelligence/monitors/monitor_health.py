@@ -11,10 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import IntelligenceMonitorRun
 from ..types import MonitorDetection, MonitorRunResult
 
 MONITOR_HEALTH_KEY = "monitor_health"
@@ -24,33 +22,10 @@ TOLERANCE_INTERVALS = 2
 # Runs falhas consecutivas (mais recentes) até subir a severidade.
 CONSECUTIVE_FAILURES_FOR_CRITICAL = 3
 
-_RECENT_RUNS_LOOKBACK = 20
-
-
-def _recent_runs(db: Session, monitor_key: str) -> list[IntelligenceMonitorRun]:
-    return list(
-        db.scalars(
-            select(IntelligenceMonitorRun)
-            .where(IntelligenceMonitorRun.monitor_key == monitor_key)
-            .order_by(IntelligenceMonitorRun.started_at.desc())
-            .limit(_RECENT_RUNS_LOOKBACK)
-        )
-    )
-
-
-def _consecutive_failures(runs: list[IntelligenceMonitorRun]) -> int:
-    count = 0
-    for run in runs:
-        if run.status in ("FAILED", "INTERRUPTED"):
-            count += 1
-        else:
-            break
-    return count
-
 
 def run_monitor_health_monitor(db: Session) -> MonitorRunResult:
     from ..registry import list_monitors
-    from ..scheduler import get_monitor_enabled, get_monitor_interval_minutes
+    from ..scheduler import count_consecutive_failures, get_monitor_enabled, get_monitor_interval_minutes, recent_runs
 
     now = datetime.now(timezone.utc)
     detections: list[MonitorDetection] = []
@@ -66,9 +41,9 @@ def run_monitor_health_monitor(db: Session) -> MonitorRunResult:
         monitors_checked += 1
         interval_minutes = get_monitor_interval_minutes(db, monitor)
         tolerance = timedelta(minutes=interval_minutes * TOLERANCE_INTERVALS)
-        runs = _recent_runs(db, monitor.key)
+        runs = recent_runs(db, monitor.key)
         last_run = runs[0] if runs else None
-        consecutive_failures = _consecutive_failures(runs)
+        consecutive_failures = count_consecutive_failures(runs)
 
         is_stale = False
         expected_next_at = None

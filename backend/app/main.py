@@ -14,6 +14,8 @@ from app.modules.admin.router import router as admin_router
 from app.modules.ai.router import public_router as ai_public_router, router as ai_router
 from app.modules.ai_governance.bootstrap import ensure_ai_governance_seed
 from app.modules.ai_governance.router import router as ai_governance_router
+from app.modules.intelligence.router import router as intelligence_router
+from app.modules.intelligence.scheduler import run_intelligence_scheduler_loop
 from app.modules.management.router import router as management_router
 from app.modules.mcp_connector.router import router as mcp_connector_router
 from app.modules.mcp_connector.server import build_mcp_server
@@ -22,8 +24,10 @@ from app.modules.operations.login_status_snapshot import run_login_status_snapsh
 from app.modules.operations.onu_signal_snapshot import run_onu_signal_snapshot_loop
 from app.modules.operations.router import router as operations_router
 from app.modules.scheduling.router import router as scheduling_router
+from app.modules.support.router import router as support_router
 from app.modules.workspace.router import router as workspace_router
 from app.services.ixc_scheduler import run_ixc_sync_loop
+from app.services.opa_scheduler import run_opa_sync_loop
 
 
 settings_obj = get_settings()
@@ -57,9 +61,22 @@ async def lifespan(app: FastAPI):
             run_ixc_sync_loop(settings_.ixc_sync_interval_minutes, initial_enabled=settings_.ixc_sync_enabled)
         )
 
+    opa_sync_task = None
+    if settings_.opa_api_base_url and settings_.opa_api_token:
+        opa_sync_task = asyncio.create_task(
+            run_opa_sync_loop(settings_.opa_sync_interval_minutes, initial_enabled=settings_.opa_sync_enabled)
+        )
+
     # Sem dependência de configuração externa (ao contrário do IXC) - sempre roda, é só uma
     # leitura do próprio banco de O.S. já sincronizado.
     backlog_snapshot_task = asyncio.create_task(run_backlog_snapshot_loop())
+
+    # UNI Intelligence: motor de monitores (incidente coletivo, deterioração de SLA, pressão
+    # operacional, saúde dos próprios monitores) - lê dados já sincronizados por operations, sem
+    # dependência de configuração externa, mesma condição do backlog_snapshot_task acima. Cada
+    # monitor liga/desliga e tem seu intervalo próprio via app_settings (ver
+    # modules/intelligence/scheduler.py), não uma task asyncio por monitor.
+    intelligence_scheduler_task = asyncio.create_task(run_intelligence_scheduler_loop())
 
     # Histórico de status de conexão dos logins (para detecção de queda de fibra por proximidade
     # geográfica) - só roda quando o IXC está configurado, mesma condição do `ixc_sync_task`.
@@ -89,9 +106,18 @@ async def lifespan(app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             await ixc_sync_task
 
+    if opa_sync_task:
+        opa_sync_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await opa_sync_task
+
     backlog_snapshot_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await backlog_snapshot_task
+
+    intelligence_scheduler_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await intelligence_scheduler_task
 
     if login_status_snapshot_task:
         login_status_snapshot_task.cancel()
@@ -134,9 +160,11 @@ app.include_router(portal.router, prefix=settings_obj.api_prefix)
 app.include_router(workspace_router, prefix=settings_obj.api_prefix)
 app.include_router(admin_router, prefix=settings_obj.api_prefix)
 app.include_router(ai_governance_router, prefix=settings_obj.api_prefix)
+app.include_router(intelligence_router, prefix=settings_obj.api_prefix)
 app.include_router(management_router, prefix=settings_obj.api_prefix)
 app.include_router(operations_router, prefix=settings_obj.api_prefix)
 app.include_router(scheduling_router, prefix=settings_obj.api_prefix)
+app.include_router(support_router, prefix=settings_obj.api_prefix)
 app.include_router(ai_router, prefix=settings_obj.api_prefix)
 app.include_router(ai_public_router, prefix=settings_obj.api_prefix)
 

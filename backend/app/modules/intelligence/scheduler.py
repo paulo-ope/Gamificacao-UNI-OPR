@@ -91,6 +91,46 @@ def _set_next_allowed_at(db: Session, monitor_key: str, when: datetime) -> None:
     upsert_setting(db, _setting_key(monitor_key, "next_allowed_at"), when.isoformat())
 
 
+RECENT_RUNS_LOOKBACK = 20
+
+
+def recent_runs(db: Session, monitor_key: str, limit: int = RECENT_RUNS_LOOKBACK) -> list[IntelligenceMonitorRun]:
+    """Runs mais recentes de um monitor, mais nova primeiro - usado tanto pelo meta-monitor de
+    saúde quanto pelo router (GET /monitors) para avaliar saúde sem duplicar a consulta."""
+    return list(
+        db.scalars(
+            select(IntelligenceMonitorRun)
+            .where(IntelligenceMonitorRun.monitor_key == monitor_key)
+            .order_by(IntelligenceMonitorRun.started_at.desc())
+            .limit(limit)
+        )
+    )
+
+
+def count_consecutive_failures(runs: list[IntelligenceMonitorRun]) -> int:
+    """Quantas das runs mais recentes (em ordem decrescente) falharam em sequência, parando na
+    primeira que não falhou. `runs` deve já vir ordenado por started_at desc (ver recent_runs)."""
+    count = 0
+    for run in runs:
+        if run.status in ("FAILED", "INTERRUPTED"):
+            count += 1
+        else:
+            break
+    return count
+
+
+def last_success_run(db: Session, monitor_key: str) -> IntelligenceMonitorRun | None:
+    return db.scalar(
+        select(IntelligenceMonitorRun)
+        .where(
+            IntelligenceMonitorRun.monitor_key == monitor_key,
+            IntelligenceMonitorRun.status.in_(("COMPLETED", "COMPLETED_WITH_WARNINGS")),
+        )
+        .order_by(IntelligenceMonitorRun.started_at.desc())
+        .limit(1)
+    )
+
+
 def mark_interrupted_runs_on_startup(db: Session) -> int:
     """Ao subir o processo, qualquer run que ainda esta RUNNING so pode ser porque o processo
     anterior caiu no meio da execucao (nunca chegou ao ponto que finaliza a run). Marca como
