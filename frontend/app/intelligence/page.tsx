@@ -40,7 +40,9 @@ import {
   GROUP_BY_LABELS,
   MONITOR_RUN_STATUS_LABELS,
   PROFILE_PURPOSE_LABELS,
+  RULE_PARAM_HELP,
   RULE_PARAM_LABELS,
+  RULE_TOP_LEVEL_HELP,
   RULE_TYPE_LABELS,
   SEVERITY_LABELS,
   SOURCE_TYPE_LABELS,
@@ -1206,8 +1208,11 @@ function AlertRulesTab({
         </div>
         <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
           <p className="text-[11px] font-semibold text-slate-500">Nova regra</p>
-          <Input value={newKey} onChange={(event) => setNewKey(event.target.value)} placeholder="key (ex.: aglomeracao-urbana)" />
-          <Input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Nome de exibição" />
+          <p className="text-[10px] leading-snug text-slate-400">
+            Escolha um tipo, dê um nome e clique em Criar - os detalhes (quantidade, janela, raio etc.) você ajusta depois, na tela ao lado.
+          </p>
+          <Input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Nome (ex.: Aglomeração de O.S. urbana)" />
+          <Input value={newKey} onChange={(event) => setNewKey(event.target.value)} placeholder="Identificador único, sem espaços (ex.: aglomeracao-urbana)" />
           <select
             className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
             value={newType}
@@ -1245,48 +1250,55 @@ function AlertRulesTab({
                     <option key={severity} value={severity}>{labelFor(SEVERITY_LABELS, severity)}</option>
                   ))}
                 </select>
+                <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_TOP_LEVEL_HELP.severity}</p>
               </div>
               <div>
-                <p className="mb-1 text-[11px] font-semibold text-slate-500">Cooldown (minutos)</p>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Esperar depois de encerrar (minutos)</p>
                 <Input
                   type="number"
                   min={0}
                   value={draft.cooldown_minutes}
                   onChange={(event) => setDraft((current) => (current ? { ...current, cooldown_minutes: Number(event.target.value) } : current))}
                 />
+                <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_TOP_LEVEL_HELP.cooldown_minutes}</p>
               </div>
               <div>
-                <p className="mb-1 text-[11px] font-semibold text-slate-500">Ciclos para confirmar</p>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Repetições para confirmar</p>
                 <Input
                   type="number"
                   min={1}
                   value={draft.confirm_cycles}
                   onChange={(event) => setDraft((current) => (current ? { ...current, confirm_cycles: Number(event.target.value) } : current))}
                 />
+                <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_TOP_LEVEL_HELP.confirm_cycles}</p>
               </div>
               <div>
-                <p className="mb-1 text-[11px] font-semibold text-slate-500">Ciclos para resolver</p>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Repetições sem ocorrer para encerrar</p>
                 <Input
                   type="number"
                   min={1}
                   value={draft.resolve_cycles}
                   onChange={(event) => setDraft((current) => (current ? { ...current, resolve_cycles: Number(event.target.value) } : current))}
                 />
+                <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_TOP_LEVEL_HELP.resolve_cycles}</p>
               </div>
-              <div className="flex items-center gap-2 pt-6">
-                <input
-                  type="checkbox"
-                  id="rule-active"
-                  checked={draft.active}
-                  onChange={(event) => setDraft((current) => (current ? { ...current, active: event.target.checked } : current))}
-                />
-                <label htmlFor="rule-active" className="text-sm text-slate-700">Regra ativa</label>
+              <div className="sm:col-span-2">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    id="rule-active"
+                    checked={draft.active}
+                    onChange={(event) => setDraft((current) => (current ? { ...current, active: event.target.checked } : current))}
+                  />
+                  Regra ativa
+                </label>
+                <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_TOP_LEVEL_HELP.active}</p>
               </div>
             </div>
           </SectionCard>
 
           {draftTypeCatalog.allowed_scope.length ? (
-            <SectionCard eyebrow="Escopo" title="Escopo da regra" subtitle="Só a população que a regra avalia - nomes canônicos do FilterContractV1.">
+            <SectionCard eyebrow="Escopo" title="Onde a regra vale" subtitle="Deixe em branco (Todos) para considerar a UNI inteira nesse campo.">
               <div className="grid gap-3 sm:grid-cols-2">
                 {draftTypeCatalog.allowed_scope.map((field) => (
                   <div key={field}>
@@ -1304,8 +1316,8 @@ function AlertRulesTab({
           ) : null}
 
           {draftTypeCatalog.allowed_params.length ? (
-            <SectionCard eyebrow="Parâmetros" title="Parâmetros da regra" subtitle="Cada tipo de regra só aceita os parâmetros que o detector por trás realmente usa.">
-              <div className="grid gap-3 sm:grid-cols-2">
+            <SectionCard eyebrow="Parâmetros" title="Como a regra decide disparar" subtitle="Cada campo tem uma explicação abaixo dele - só aparecem os que fazem sentido para este tipo de regra.">
+              <div className="grid gap-4 sm:grid-cols-2">
                 {draftTypeCatalog.allowed_params.map((field) => (
                   <div key={field}>
                     <p className="mb-1 text-[11px] font-semibold text-slate-500">{labelFor(RULE_PARAM_LABELS, field)}</p>
@@ -1315,6 +1327,7 @@ function AlertRulesTab({
                       groupByOptions={catalog?.group_by_values ?? []}
                       onChange={(value) => updateParamField(field, value)}
                     />
+                    <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_PARAM_HELP[field]}</p>
                   </div>
                 ))}
               </div>

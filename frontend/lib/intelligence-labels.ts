@@ -123,17 +123,41 @@ export const RULE_TYPE_LABELS: Record<string, string> = {
 };
 
 export const RULE_PARAM_LABELS: Record<string, string> = {
-  min_count: "Quantidade mínima",
-  window_minutes: "Janela (minutos)",
-  radius_meters: "Raio (metros)",
-  historical_comparison: "Comparação histórica",
-  min_multiplier_over_average: "Mínimo acima da média (x)",
-  baseline_days: "Dias de histórico (baseline)",
-  threshold_value: "Limite",
-  window_days: "Janela (dias)",
-  group_by: "Agrupar por",
-  target_monitor_key: "Monitor alvo",
-  max_consecutive_failures: "Falhas consecutivas máximas",
+  min_count: "Quantas O.S. no mínimo",
+  window_minutes: "Em quantos minutos",
+  radius_meters: "Distância máxima entre elas (metros)",
+  historical_comparison: "Só alertar se for acima do normal",
+  min_multiplier_over_average: "Quanto acima do normal (vezes)",
+  baseline_days: "Dias de histórico usados para comparar",
+  threshold_value: "A partir de qual valor",
+  window_days: "Nos últimos quantos dias",
+  group_by: "Separar por",
+  target_monitor_key: "Qual monitor observar",
+  max_consecutive_failures: "Quantas falhas seguidas",
+};
+
+// Frase curta em linguagem simples, sempre visível abaixo do campo - pedido explícito do usuário
+// ("falta explicação do que cada campo faz"). Sem jargão de raio/DBSCAN/multiplicador cru.
+export const RULE_PARAM_HELP: Record<string, string> = {
+  min_count: "Quantidade de O.S. juntas necessária para considerar isso um agrupamento.",
+  window_minutes: "Período observado para contar as O.S. - só conta o que abriu dentro desse tempo.",
+  radius_meters: "O.S. mais perto umas das outras do que essa distância entram no mesmo agrupamento.",
+  historical_comparison: "Se ligado, só cria o alerta quando o volume também estiver maior que o normal para esse local/horário - não só pela quantidade mínima.",
+  min_multiplier_over_average: "Ex.: 1,5 dispara quando o volume estiver 50% acima do normal. Só usado se \"Só alertar se for acima do normal\" estiver ligado.",
+  baseline_days: "Quantos dias anteriores olhar para calcular o que é \"normal\" nesse local/horário.",
+  threshold_value: "Número (ou %, no caso de SLA) que precisa ser ultrapassado para o alerta disparar.",
+  window_days: "Período (em dias) usado para calcular o SLA que será comparado ao limite.",
+  group_by: "Em vez de olhar a UNI inteira de uma vez, compara o volume separadamente para cada regional/cidade/assunto.",
+  target_monitor_key: "Nome interno do monitor a acompanhar, ex.: collective_outage, sla_deterioration.",
+  max_consecutive_failures: "Quantidade de execuções seguidas com erro para considerar esse monitor com problema.",
+};
+
+export const RULE_TOP_LEVEL_HELP: Record<string, string> = {
+  severity: "Nível mostrado no alerta quando a regra dispara - não muda a chance de disparar, só a urgência exibida.",
+  cooldown_minutes: "Depois que um alerta desta regra for encerrado, espera esse tempo antes de poder abrir outro igual - evita alerta piscando.",
+  confirm_cycles: "Quantas vezes seguidas a condição precisa se repetir antes do alerta ser criado - use 2 ou mais para evitar alarme de pico isolado.",
+  resolve_cycles: "Quantas execuções seguidas sem a condição acontecer para o alerta ser encerrado automaticamente.",
+  active: "Regra desligada não é avaliada - fica salva, mas não gera alerta.",
 };
 
 export const GROUP_BY_LABELS: Record<string, string> = {
