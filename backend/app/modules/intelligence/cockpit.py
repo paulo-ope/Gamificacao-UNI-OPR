@@ -461,6 +461,40 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
     }
 
 
+# --- contexto para consulta horária (F4 - ChatGPT agendado) --------------------------------------
+
+
+def _last_active_content_by_type(content: list[dict], content_type: str) -> dict | None:
+    # `content` já vem ordenado por created_at desc (ver _content_query) - o primeiro que bate o
+    # tipo é o mais recente ativo.
+    for item in content:
+        if item["content_type"] == content_type:
+            return {
+                "id": item["id"],
+                "title": item["title"],
+                "summary": item["body"][:280],
+                "created_at": item["created_at"],
+                "source_type": item["source_type"],
+                "source_key": item["source_key"],
+            }
+    return None
+
+
+def build_cockpit_context(db: Session, profile: IntelligenceDashboardProfile) -> dict:
+    """Contexto compacto para a consulta horária do ChatGPT (`opr_get_cockpit_context`) - reusa
+    INTEIRAMENTE `build_cockpit_payload` (mesmo cálculo da TV, nenhuma consulta nova) e só
+    acrescenta o escopo bruto do profile e o último AI_INSIGHT ativo. O objetivo do
+    `last_ai_insight` é dar pra quem consome (a análise horária) decidir "nada relevante mudou,
+    não preciso publicar outro insight" sem precisar de um mecanismo de hash/versionamento à
+    parte - o `id`/`created_at` do último insight já bastam pra essa comparação."""
+    payload = build_cockpit_payload(db, profile)
+    return {
+        **payload,
+        "scope": profile.scope_json,
+        "last_ai_insight": _last_active_content_by_type(payload["content"], "AI_INSIGHT"),
+    }
+
+
 # --- publicação de conteúdo -----------------------------------------------------------------------
 
 

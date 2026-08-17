@@ -1063,6 +1063,40 @@ def build_mcp_server() -> FastMCP:
             )
 
     @mcp.tool(
+        name="opr_get_cockpit_context",
+        annotations={"title": "Contexto do cockpit para análise", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_get_cockpit_context(profile_key: str) -> str:
+        """Contexto operacional completo de um profile do cockpit, numa única chamada - pensado
+        para uma análise periódica (ex.: ChatGPT agendado de hora em hora) decidir se vale
+        publicar um AI_INSIGHT novo via `opr_publish_cockpit_content`. Reusa o MESMO cálculo da
+        TV (nenhuma consulta nova, nenhum número recalculado) - os valores aqui são idênticos
+        aos que aparecem no cockpit no momento da chamada.
+
+        Args:
+            profile_key: profile do cockpit a consultar - "uni-geral", "machadinho-operacional",
+                "executivo-uni" ou outro profile configurado.
+
+        Returns:
+            JSON com profile, scope, generated_at, overall_status, production (abertas/
+            finalizadas/saldo/médias 7d), backlog (total e aging), sla (atual, meta, regionais
+            críticas), alerts, incidents, content (conteúdo ativo do profile), monitor_health,
+            data_freshness, meta (coverage/warnings/applied_filters) e last_ai_insight (último
+            AI_INSIGHT ativo deste profile - use para decidir "nada relevante mudou, não preciso
+            publicar outro insight" antes de chamar opr_publish_cockpit_content de novo).
+        """
+        from app.modules.intelligence.cockpit import build_cockpit_context, get_profile
+
+        user = _current_user()
+        if "intelligence:read" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para consultar o cockpit (intelligence:read).")
+        with SessionLocal() as db:
+            profile = get_profile(db, profile_key)
+            if profile is None or not profile.active:
+                raise ValueError(f"Profile '{profile_key}' não encontrado ou inativo.")
+            return _dump(build_cockpit_context(db, profile))
+
+    @mcp.tool(
         name="opr_publish_cockpit_content",
         annotations={"title": "Publicar conteúdo no cockpit", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
     )

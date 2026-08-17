@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.operations.period import OPERATIONS_TIMEZONE
 from app.modules.operations.queries import data_freshness
+from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 from app.modules.operations.services import control_tower
 
 from ..scope import system_user
@@ -60,6 +61,10 @@ def run_operational_pressure_monitor(db: Session) -> MonitorRunResult:
         recent_days=RECENT_DAYS,
         baseline_weeks=BASELINE_WEEKS,
         timeline_days=TIMELINE_DAYS,
+        # F4 - achado F3: mesma correcao do backlog/SLA - sem isso, a torre de controle mede
+        # pressao sobre TODA operations_orders (Cobranca/Comercial/Estoque etc), nao so a
+        # operacao de campo. Fonte canonica unica (operations/scope.py), sem duplicar a lista.
+        sectors=list(PRIMARY_SECTOR_NAMES),
     )
     source_last_sync = data_freshness(db).get("last_successful_import_at")
 

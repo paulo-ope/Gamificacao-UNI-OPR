@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.operations.period import OPERATIONS_TIMEZONE
 from app.modules.operations.queries import data_freshness, sla_breakdown
+from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 from app.services.regional import REGIONAL_CODE_MAP
 
 from ..scope import system_user
@@ -39,7 +40,10 @@ def _windows(reference_date: date) -> tuple[tuple[date, date], tuple[date, date]
 
 
 def _aggregate_sla(db: Session, date_from: date, date_to: date, user, regional: str) -> tuple[float | None, int]:
-    rows = sla_breakdown(db, date_from, date_to, user, group_by="os_type", regionals=[regional])
+    # F4 - achado F3: sem filtro de setor, sla_breakdown conta Cobranca/Comercial/Estoque/
+    # Financeiro etc junto com O.S. de campo, distorcendo o SLA "operacional" que este monitor
+    # quer vigiar. Mesma fonte canonica que cockpit.py usa (nao duplicar a lista de setores).
+    rows = sla_breakdown(db, date_from, date_to, user, group_by="os_type", regionals=[regional], sectors=list(PRIMARY_SECTOR_NAMES))
     on_time = sum(row["on_time"] for row in rows)
     out_of_time = sum(row["out_of_time"] for row in rows)
     measurable = on_time + out_of_time

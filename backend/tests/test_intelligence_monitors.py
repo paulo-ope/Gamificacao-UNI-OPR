@@ -48,6 +48,7 @@ def _make_order(db_session, source_order_id: str, *, regional: str, sla_status: 
             regional=regional,
             os_type="Manutencao",
             os_subject="Reparo",
+            sector="Suporte Externo",
             sla_status=sla_status,
             is_closed=True,
             opened_at=closed_at - timedelta(hours=2),
@@ -231,3 +232,74 @@ def test_monitor_health_resolves_when_monitor_recovers(db_session):
 
     assert alert.status == "RESOLVED"
     assert alert.resolved_at is not None
+
+
+# --- F4: monitores usam o mesmo escopo de setor operacional validado na F3 ----------------------
+
+
+def test_sla_deterioration_monitor_ignores_non_operational_sector_orders(db_session):
+    """F4 - achado F3 propagado: sem o filtro de setor, uma queda de SLA em Cobranca/Comercial
+    entraria na mesma conta do SLA "operacional" que este monitor vigia."""
+    regional = "UNI - JI PARANA"
+    reference = datetime.now(OPERATIONS_TIMEZONE).date()
+    (recent_from, recent_to), (baseline_from, baseline_to) = sla_deterioration_module._windows(reference)
+
+    counter = 0
+    # Suporte Externo (operacional real): baseline bom, recente ruim - deve detectar.
+    for _ in range(18):
+        counter += 1
+        _make_order(db_session, f"OPS-BASE-{counter}", regional=regional, sla_status="on_time", closed_at=_utc_noon(baseline_from))
+    for _ in range(2):
+        counter += 1
+        _make_order(db_session, f"OPS-BASE-{counter}", regional=regional, sla_status="out_of_time", closed_at=_utc_noon(baseline_from))
+    for _ in range(2):
+        counter += 1
+        _make_order(db_session, f"OPS-RECENT-{counter}", regional=regional, sla_status="on_time", closed_at=_utc_noon(recent_to))
+    for _ in range(8):
+        counter += 1
+        _make_order(db_session, f"OPS-RECENT-{counter}", regional=regional, sla_status="out_of_time", closed_at=_utc_noon(recent_to))
+
+    # Cobranca (nao-operacional): SLA perfeito o tempo todo - se o monitor nao filtrar por
+    # setor, essas O.S. diluiriam (melhorariam) o SLA medido, mascarando a deterioracao real.
+    for i in range(50):
+        db_session.add(
+            OperationOrder(
+                source="ixc", source_order_id=f"BILLING-{i}", order_code=f"BILLING-{i}",
+                regional=regional, os_type="Cobranca", os_subject="Fatura", sector="Cobrança",
+                sla_status="on_time", is_closed=True,
+                opened_at=_utc_noon(recent_to) - timedelta(hours=1), closed_at=_utc_noon(recent_to), elapsed_hours=1.0,
+            )
+        )
+    db_session.commit()
+
+    result = run_sla_deterioration_monitor(db_session)
+
+    matches = [d for d in result.detections if d.regional == regional]
+    assert matches, "deterioracao real de SLA operacional nao pode ser mascarada por O.S. de Cobranca"
+    # a amostra medida deve refletir só as 10 O.S. operacionais recentes, nao 60 (10 + 50 de Cobranca)
+    assert matches[0].evidence["recent_measurable_count"] == 10
+
+
+def test_operational_pressure_monitor_ignores_non_operational_sector_orders(db_session):
+    regional = "UNI - JI PARANA"
+    today = datetime.now(OPERATIONS_TIMEZONE).date()
+    for offset in range(7):
+        _make_order(db_session, f"OPS-PRESSURE-{offset}", regional=regional, sla_status="on_time", closed_at=_utc_noon(today - timedelta(days=offset)))
+    # Volume grande de Cobranca no mesmo periodo - nao pode contaminar a pressao operacional medida.
+    for i in range(200):
+        db_session.add(
+            OperationOrder(
+                source="ixc", source_order_id=f"BILLING-PRESSURE-{i}", order_code=f"BILLING-PRESSURE-{i}",
+                regional=regional, os_type="Cobranca", os_subject="Fatura", sector="Cobrança",
+                sla_status="on_time", is_closed=False,
+                opened_at=_utc_noon(today) - timedelta(hours=1),
+            )
+        )
+    db_session.commit()
+
+    result = run_operational_pressure_monitor(db_session)
+
+    # backlog contabilizado pela torre de controle nao pode incluir as 200 O.S. de Cobranca
+    for detection in result.detections:
+        if detection.regional == regional:
+            assert detection.evidence["backlog"] < 200, "backlog de Cobranca vazou pra pressao operacional"
