@@ -31,6 +31,19 @@ import { MultiSelect } from "@/components/ui/multi-select";
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import {
+  ALERT_STATUS_LABELS,
+  CONTENT_STATUS_LABELS,
+  CONTENT_TYPE_LABELS,
+  FILTER_FIELD_LABELS,
+  MONITOR_RUN_STATUS_LABELS,
+  PROFILE_PURPOSE_LABELS,
+  SEVERITY_LABELS,
+  SOURCE_TYPE_LABELS,
+  STATUS_WORD_LABELS,
+  WIDGET_LABELS,
+  labelFor,
+} from "@/lib/intelligence-labels";
 import type { Tone } from "@/lib/tones";
 import {
   intelligenceCockpitApi,
@@ -51,21 +64,14 @@ const FALLBACK_PROFILES = [
 
 const SCOPE_FIELDS = ["regionals", "cities", "sectors", "os_subjects", "team_models", "responsibles"] as const;
 
-const FIELD_LABELS: Record<string, string> = {
-  regionals: "Regionais",
-  cities: "Cidades",
-  sectors: "Setores",
-  os_subjects: "Assuntos de O.S.",
-  team_models: "Modelos de equipe",
-  responsibles: "Responsáveis",
-  content_type: "Tipo de conteúdo",
-  severity: "Severidade",
-  status: "Status",
-};
+// Rótulos de filtro reaproveitados daqui (nunca duplicados por componente) - ver
+// lib/intelligence-labels.ts.
+const FIELD_LABELS = FILTER_FIELD_LABELS;
 
 const CONTENT_TYPES = ["AI_INSIGHT", "MANUAL_MESSAGE", "ANNOUNCEMENT", "OPERATIONAL_PRIORITY", "INCIDENT_UPDATE", "MAINTENANCE_NOTICE", "INFO"];
 const SEVERITIES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
 const ALERT_STATUSES = ["ACTIVE", "ACKNOWLEDGED", "RESOLVED", "DISMISSED"];
+const ALERT_KINDS = ["ALERT", "INCIDENT"];
 
 function severityTone(severity: string): Tone {
   if (severity === "CRITICAL") return "red";
@@ -300,15 +306,33 @@ function AlertasTab({
         <div className="grid gap-3 sm:grid-cols-3">
           <div>
             <p className="mb-1 text-[11px] font-semibold text-slate-500">Status</p>
-            <MultiSelect values={statuses} options={ALERT_STATUSES} ariaLabel="Status" onChange={setStatuses} />
+            <MultiSelect
+              values={statuses}
+              options={ALERT_STATUSES}
+              ariaLabel="Status"
+              formatOption={(value) => labelFor(ALERT_STATUS_LABELS, value)}
+              onChange={setStatuses}
+            />
           </div>
           <div>
             <p className="mb-1 text-[11px] font-semibold text-slate-500">Severidade</p>
-            <MultiSelect values={severities} options={SEVERITIES.filter((value) => value !== "INFO")} ariaLabel="Severidade" onChange={setSeverities} />
+            <MultiSelect
+              values={severities}
+              options={SEVERITIES.filter((value) => value !== "INFO")}
+              ariaLabel="Severidade"
+              formatOption={(value) => labelFor(SEVERITY_LABELS, value)}
+              onChange={setSeverities}
+            />
           </div>
           <div>
             <p className="mb-1 text-[11px] font-semibold text-slate-500">Tipo</p>
-            <MultiSelect values={kinds} options={["ALERT", "INCIDENT"]} ariaLabel="Tipo" onChange={setKinds} />
+            <MultiSelect
+              values={kinds}
+              options={ALERT_KINDS}
+              ariaLabel="Tipo"
+              formatOption={(value) => labelFor(STATUS_WORD_LABELS, value)}
+              onChange={setKinds}
+            />
           </div>
         </div>
         <Button type="button" className="mt-3" onClick={() => void load()} disabled={loading}>
@@ -335,8 +359,8 @@ function AlertasTab({
                   <TableCell className="whitespace-nowrap text-xs">{new Date(alert.first_detected_at).toLocaleString("pt-BR")}</TableCell>
                   <TableCell className="max-w-72 truncate font-medium text-slate-900" title={alert.title}>{alert.title}</TableCell>
                   <TableCell>{alert.regional ?? "-"}</TableCell>
-                  <TableCell><StatusBadge tone={severityTone(alert.severity)}>{alert.severity}</StatusBadge></TableCell>
-                  <TableCell>{alert.status}</TableCell>
+                  <TableCell><StatusBadge tone={severityTone(alert.severity)}>{labelFor(SEVERITY_LABELS, alert.severity)}</StatusBadge></TableCell>
+                  <TableCell>{labelFor(ALERT_STATUS_LABELS, alert.status)}</TableCell>
                   <TableCell className="text-right">
                     <Button
                       type="button"
@@ -497,7 +521,7 @@ function PublicacoesTab({
                 value={form.content_type}
                 onChange={(event) => setForm((current) => ({ ...current, content_type: event.target.value }))}
               >
-                {CONTENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                {CONTENT_TYPES.map((type) => <option key={type} value={type}>{labelFor(CONTENT_TYPE_LABELS, type)}</option>)}
               </select>
             </div>
             <div>
@@ -507,7 +531,7 @@ function PublicacoesTab({
                 value={form.severity}
                 onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value }))}
               >
-                {SEVERITIES.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
+                {SEVERITIES.map((severity) => <option key={severity} value={severity}>{labelFor(SEVERITY_LABELS, severity)}</option>)}
               </select>
             </div>
             <div>
@@ -561,10 +585,12 @@ function PublicacoesTab({
               <div key={content.id} className="flex items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge className="border-slate-200 bg-slate-50 text-slate-600">{content.content_type}</Badge>
-                    <StatusBadge tone={severityTone(content.severity)}>{content.severity}</StatusBadge>
-                    <span className="text-[11px] text-slate-500">{content.status}{expired && content.status === "ACTIVE" ? " (expirado)" : ""}</span>
-                    <span className="text-[11px] text-slate-400">{content.source_type}</span>
+                    <Badge className="border-slate-200 bg-slate-50 text-slate-600">{labelFor(CONTENT_TYPE_LABELS, content.content_type)}</Badge>
+                    <StatusBadge tone={severityTone(content.severity)}>{labelFor(SEVERITY_LABELS, content.severity)}</StatusBadge>
+                    <span className="text-[11px] text-slate-500">
+                      {expired && content.status === "ACTIVE" ? "Expirado" : labelFor(CONTENT_STATUS_LABELS, content.status)}
+                    </span>
+                    <span className="text-[11px] text-slate-400">{labelFor(SOURCE_TYPE_LABELS, content.source_type)}</span>
                   </div>
                   <p className="mt-1 font-semibold text-slate-900">{content.title}</p>
                   <p className="mt-1 text-sm text-slate-600">{content.body}</p>
@@ -769,7 +795,9 @@ function ProfilesTab({
                   value={draft.purpose}
                   onChange={(event) => setDraft((current) => (current ? { ...current, purpose: event.target.value } : current))}
                 >
-                  {(catalog?.profile_purposes ?? [draft.purpose]).map((purpose) => <option key={purpose} value={purpose}>{purpose}</option>)}
+                  {(catalog?.profile_purposes ?? [draft.purpose]).map((purpose) => (
+                    <option key={purpose} value={purpose}>{labelFor(PROFILE_PURPOSE_LABELS, purpose)}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -820,7 +848,7 @@ function ProfilesTab({
                     <div className="flex items-center justify-between gap-2">
                       <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
                         <input type="checkbox" checked={enabled} onChange={(event) => toggleWidget(widgetCatalog.key, event.target.checked)} />
-                        {widgetCatalog.key}
+                        {labelFor(WIDGET_LABELS, widgetCatalog.key)}
                       </label>
                       {enabled ? (
                         <div className="flex items-center gap-1">
@@ -960,7 +988,7 @@ function MonitoresTab({
                 <TableCell className="whitespace-nowrap text-xs">
                   {monitor.last_run_at ? new Date(monitor.last_run_at).toLocaleString("pt-BR") : "nunca"}
                 </TableCell>
-                <TableCell className="text-xs">{monitor.last_run_status ?? "-"}</TableCell>
+                <TableCell className="text-xs">{labelFor(MONITOR_RUN_STATUS_LABELS, monitor.last_run_status)}</TableCell>
                 <TableCell className="text-right tabular-nums">{monitor.consecutive_failures}</TableCell>
               </TableRow>
             ))}

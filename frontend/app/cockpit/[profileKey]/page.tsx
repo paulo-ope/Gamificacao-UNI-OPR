@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { buildBacklogChartOption, buildProductionChartOption, buildSlaChartOption } from "@/lib/cockpit-chart-options";
+import { SEVERITY_LABELS, SOURCE_TYPE_LABELS, STATUS_WORD_LABELS, labelFor } from "@/lib/intelligence-labels";
 import { type Tone } from "@/lib/tones";
 import { cn } from "@/lib/utils";
 import {
@@ -28,15 +29,17 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), {
 // Mesmo padrão de "barra de acento de 4px no topo do card" já usado em
 // operations-openings-analytics.tsx::MetricCard - cor comunica status sem pintar o card inteiro.
 // Vermelho reservado só para CRITICAL (severidade real), nunca como moldura estrutural padrão.
+// Rótulos vêm de lib/intelligence-labels.ts (nunca duplicados aqui) - só o estilo visual
+// (tom/acento/maiúsculas do badge) é próprio desta tela.
 const STATUS_META: Record<CockpitPayload["overall_status"]["status"], { label: string; tone: Tone; accent: string }> = {
-  NORMAL: { label: "NORMAL", tone: "emerald", accent: "bg-emerald-500" },
-  ATTENTION: { label: "ATENÇÃO", tone: "amber", accent: "bg-amber-500" },
-  RISK: { label: "RISCO", tone: "amber", accent: "bg-amber-600" },
-  CRITICAL: { label: "CRÍTICO", tone: "red", accent: "bg-red-600" }
+  NORMAL: { label: labelFor(STATUS_WORD_LABELS, "NORMAL").toUpperCase(), tone: "emerald", accent: "bg-emerald-500" },
+  ATTENTION: { label: labelFor(STATUS_WORD_LABELS, "ATTENTION").toUpperCase(), tone: "amber", accent: "bg-amber-500" },
+  RISK: { label: labelFor(STATUS_WORD_LABELS, "RISK").toUpperCase(), tone: "amber", accent: "bg-amber-600" },
+  CRITICAL: { label: labelFor(STATUS_WORD_LABELS, "CRITICAL").toUpperCase(), tone: "red", accent: "bg-red-600" }
 };
 
 const SEVERITY_TONE: Record<string, Tone> = { CRITICAL: "red", HIGH: "amber", MEDIUM: "amber", LOW: "slate", INFO: "blue" };
-const SEVERITY_LABEL: Record<string, string> = { CRITICAL: "Crítico", HIGH: "Alto", MEDIUM: "Médio", LOW: "Baixo", INFO: "Info" };
+const SEVERITY_LABEL = SEVERITY_LABELS;
 // Tinta de linha bem discreta (opacidade baixa), mesmo padrão de operations-control-tower.tsx -
 // nunca fundo sólido colorido em lista densa.
 const SEVERITY_ROW_TINT: Record<string, string> = {
@@ -48,12 +51,13 @@ const SEVERITY_ROW_TINT: Record<string, string> = {
 
 // IA aparece como ANÁLISE (violeta, mesmo tom de "revisão/análise" já usado em scoringStatusTone),
 // nunca como se fosse dado medido - distinta de gestão (azul da marca) e sistema/monitor (neutros).
+// Rótulo vem de SOURCE_TYPE_LABELS; tom/legenda são próprios desta tela.
 const SOURCE_META: Record<string, { label: string; tone: Tone; caption: string }> = {
-  AI: { label: "IA", tone: "violet", caption: "Análise gerada por IA" },
-  MCP: { label: "IA", tone: "violet", caption: "Análise gerada por IA" },
-  USER: { label: "GESTÃO", tone: "blue", caption: "Publicado pela gestão" },
-  SYSTEM: { label: "SISTEMA", tone: "slate", caption: "Gerado pelo sistema" },
-  MONITOR: { label: "MONITOR", tone: "amber", caption: "Detectado por monitor" }
+  AI: { label: labelFor(SOURCE_TYPE_LABELS, "AI").toUpperCase(), tone: "violet", caption: "Análise gerada por IA" },
+  MCP: { label: labelFor(SOURCE_TYPE_LABELS, "MCP").toUpperCase(), tone: "violet", caption: "Análise gerada por IA" },
+  USER: { label: labelFor(SOURCE_TYPE_LABELS, "USER").toUpperCase(), tone: "blue", caption: "Publicado pela gestão" },
+  SYSTEM: { label: labelFor(SOURCE_TYPE_LABELS, "SYSTEM").toUpperCase(), tone: "slate", caption: "Gerado pelo sistema" },
+  MONITOR: { label: labelFor(SOURCE_TYPE_LABELS, "MONITOR").toUpperCase(), tone: "amber", caption: "Detectado por monitor" }
 };
 
 // Painel de destaque compartilhado entre o problema principal e a publicação da UNI Intelligence
@@ -154,7 +158,7 @@ function FeaturedProblem({ item }: { item: CockpitAlertSummary }) {
     <div className={cn("rounded-xl border p-3", SPOTLIGHT_PANEL_CLASS[tone])}>
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge tone={tone} icon={Icon}>
-          {item.kind === "INCIDENT" ? "Incidente" : "Alerta"} · {SEVERITY_LABEL[item.severity] ?? item.severity}
+          {labelFor(STATUS_WORD_LABELS, item.kind)} · {labelFor(SEVERITY_LABEL, item.severity)}
         </StatusBadge>
         <span className="text-[11px] text-slate-500">{formatAge(item.age_seconds)}</span>
         {item.regional ? <span className="text-[11px] text-slate-500">· {item.regional}</span> : null}
