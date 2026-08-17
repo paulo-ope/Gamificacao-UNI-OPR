@@ -27,8 +27,18 @@ CLUSTER_MIN_SIZE = 3
 _COORD_GRID_PRECISION = 3
 
 
-def _regional_for_login(db: Session, login_id: int) -> str | None:
-    return db.scalar(select(OperationLoginCurrentStatus.regional).where(OperationLoginCurrentStatus.login_id == login_id))
+def _regional_for_login(db: Session, login: str) -> str | None:
+    return db.scalar(select(OperationLoginCurrentStatus.regional).where(OperationLoginCurrentStatus.login == login))
+
+
+def _login_ids_for_logins(db: Session, logins: list[str]) -> list[int]:
+    """`login_incident_analysis` devolve `geo_clusters[i]['logins']` como lista de CÓDIGOS de
+    login (str), não de login_id - `OperationOnuSignalCurrent` é chaveada por login_id (int), daí
+    esse lookup intermediário antes de buscar o transmissor dominante."""
+    if not logins:
+        return []
+    rows = db.execute(select(OperationLoginCurrentStatus.login_id).where(OperationLoginCurrentStatus.login.in_(logins))).all()
+    return [row[0] for row in rows]
 
 
 def _dominant_transmitter(db: Session, login_ids: list[int]) -> tuple[str | None, float]:
@@ -96,16 +106,16 @@ def run_collective_outage_monitor(db: Session) -> MonitorRunResult:
     detections: list[MonitorDetection] = []
     for cluster in analysis.get("geo_clusters", []):
         size = cluster["size"]
-        logins = cluster.get("logins", [])
-        login_ids = [item["login_id"] for item in logins if item.get("login_id") is not None]
-        regional = _regional_for_login(db, login_ids[0]) if login_ids else None
+        logins = cluster.get("logins", [])  # list[str] - códigos de login, não login_id
+        regional = _regional_for_login(db, logins[0]) if logins else None
+        login_ids = _login_ids_for_logins(db, logins)
         transmitter_id, transmitter_share = _dominant_transmitter(db, login_ids)
 
         lat_key = round(cluster["center_latitude"], _COORD_GRID_PRECISION)
         lng_key = round(cluster["center_longitude"], _COORD_GRID_PRECISION)
         dedupe_key = f"collective_outage:{regional or 'sem_regional'}:{lat_key}:{lng_key}"
 
-        sample_logins = [item.get("login") for item in logins[:5] if item.get("login")]
+        sample_logins = logins[:5]
         summary = (
             f"{size} logins offline concentrados em um raio de {cluster['radius_meters']:.0f}m "
             f"nos ultimos {WINDOW_MINUTES} minutos"
