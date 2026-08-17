@@ -180,6 +180,7 @@ class CockpitAlertSummaryOut(BaseModel):
     confidence: float | None
     coverage: dict
     warnings: list[dict]
+    evidence: dict
     first_detected_at: datetime
     last_seen_at: datetime
     age_seconds: int

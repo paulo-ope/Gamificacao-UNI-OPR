@@ -342,6 +342,7 @@ def _alert_to_summary(alert: IntelligenceAlert) -> dict:
         "confidence": alert.confidence,
         "coverage": alert.coverage_json,
         "warnings": alert.warnings_json,
+        "evidence": alert.evidence_json,
         "first_detected_at": alert.first_detected_at,
         "last_seen_at": alert.last_seen_at,
         "age_seconds": round(age_seconds),

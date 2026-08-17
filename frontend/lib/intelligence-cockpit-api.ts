@@ -51,6 +51,7 @@ export type CockpitAlertSummary = {
   confidence: number | null;
   coverage: Record<string, unknown>;
   warnings: Array<Record<string, unknown>>;
+  evidence: Record<string, unknown>;
   first_detected_at: string;
   last_seen_at: string;
   age_seconds: number;

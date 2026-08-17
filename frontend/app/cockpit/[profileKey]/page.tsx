@@ -4,8 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import type { EChartsOption } from "echarts";
-import { Activity, AlertTriangle, ShieldAlert } from "lucide-react";
-
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
@@ -38,15 +36,26 @@ const STATUS_META: Record<CockpitPayload["overall_status"]["status"], { label: s
   CRITICAL: { label: labelFor(STATUS_WORD_LABELS, "CRITICAL").toUpperCase(), tone: "red", accent: "bg-red-600" }
 };
 
-const SEVERITY_TONE: Record<string, Tone> = { CRITICAL: "red", HIGH: "amber", MEDIUM: "amber", LOW: "slate", INFO: "blue" };
+// Regra explícita (ajuste visual pedido pelo usuário): CRÍTICA = vermelho, ALTA = âmbar,
+// MÉDIA/BAIXA = neutro. Cor nunca pinta o card inteiro - só um indicador pequeno (ver
+// SeverityDot/DOT_COLOR_CLASS abaixo) - "excesso de vermelho" incluía MEDIUM usando âmbar antes.
+const SEVERITY_TONE: Record<string, Tone> = { CRITICAL: "red", HIGH: "amber", MEDIUM: "slate", LOW: "slate", INFO: "blue" };
 const SEVERITY_LABEL = SEVERITY_LABELS;
-// Tinta de linha bem discreta (opacidade baixa), mesmo padrão de operations-control-tower.tsx -
-// nunca fundo sólido colorido em lista densa.
-const SEVERITY_ROW_TINT: Record<string, string> = {
-  CRITICAL: "bg-red-50/40",
-  HIGH: "bg-amber-50/30",
-  MEDIUM: "",
-  LOW: ""
+const DOT_COLOR_CLASS: Record<Tone, string> = {
+  red: "bg-red-500",
+  amber: "bg-amber-500",
+  emerald: "bg-emerald-500",
+  blue: "bg-blue-500",
+  violet: "bg-violet-500",
+  slate: "bg-slate-400"
+};
+const LEFT_BORDER_CLASS: Record<Tone, string> = {
+  red: "border-l-red-500",
+  amber: "border-l-amber-500",
+  emerald: "border-l-emerald-500",
+  blue: "border-l-blue-500",
+  violet: "border-l-violet-500",
+  slate: "border-l-slate-300"
 };
 
 // IA aparece como ANÁLISE (violeta, mesmo tom de "revisão/análise" já usado em scoringStatusTone),
@@ -92,6 +101,90 @@ function formatNumber(value: number | null): string {
 
 function widgetEnabled(payload: CockpitPayload, key: string): boolean {
   return payload.profile.widgets.includes(key);
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+// Evidência curta para ler o alerta sem abrir - só monta a partir de campos REAIS de
+// `evidence`/`payload` (nunca inventa dado); cai para um recorte do `summary` já gerado pelo
+// monitor quando o alert_type não tem um formato dedicado ou os campos esperados não vieram.
+function evidenceLine(item: CockpitAlertSummary, slaTarget: number): string {
+  const ev = item.evidence ?? {};
+  const count = asNumber(ev.cluster_size) ?? asNumber(ev.os_count);
+  const radius = asNumber(ev.radius_meters);
+  const window = asNumber(ev.window_minutes);
+
+  switch (item.alert_type) {
+    case "COLLECTIVE_OUTAGE":
+      if (count !== null && radius !== null && window !== null) {
+        return `${count} logins offline · ${Math.round(radius)} m · últimos ${window} min`;
+      }
+      break;
+    case "OS_CONCENTRATION_AREA":
+    case "OS_CONCENTRATION_LINEAR":
+      if (count !== null && radius !== null && window !== null) {
+        return `${count} O.S. · raio ${Math.round(radius)} m · ${window} min`;
+      }
+      break;
+    case "SLA_DETERIORATION": {
+      const recent = asNumber(ev.sla_recent_pct);
+      const drop = asNumber(ev.drop_percentage_points);
+      if (recent !== null && drop !== null) {
+        return `SLA ${recent}% · meta ${slaTarget}% · queda de ${drop} p.p.`;
+      }
+      break;
+    }
+    case "OPERATIONAL_PRESSURE": {
+      const deviation = asNumber(ev.deviation_percentage);
+      const backlog = asNumber(ev.backlog);
+      const parts: string[] = [];
+      if (deviation !== null) parts.push(`entrada ${deviation > 0 ? "+" : ""}${Math.round(deviation)}% vs média`);
+      if (backlog !== null) parts.push(`backlog ${backlog}`);
+      if (parts.length) return parts.join(" · ");
+      break;
+    }
+    case "OS_OPENING_ABOVE_AVERAGE":
+    case "OS_GROWTH_ANOMALY": {
+      const openedCount = asNumber(ev.count);
+      const average = asNumber(ev.baseline_average);
+      if (openedCount !== null && window !== null) {
+        return `${openedCount} O.S. em ${window} min` + (average !== null && average > 0 ? ` · média ${average.toFixed(1)}` : "");
+      }
+      break;
+    }
+    case "BACKLOG_THRESHOLD": {
+      const total = asNumber(ev.backlog_total);
+      const threshold = asNumber(ev.threshold);
+      if (total !== null) return `${total} O.S. em aberto` + (threshold !== null ? ` · limite ${threshold}` : "");
+      break;
+    }
+    case "SLA_THRESHOLD": {
+      const rate = asNumber(ev.sla_rate);
+      const threshold = asNumber(ev.threshold);
+      if (rate !== null) return `SLA ${rate}%` + (threshold !== null ? ` · limite ${threshold}%` : "");
+      break;
+    }
+    case "MONITOR_UNHEALTHY": {
+      const failures = asNumber(ev.consecutive_failures);
+      const threshold = asNumber(ev.threshold);
+      if (failures !== null) return `${failures} falhas seguidas` + (threshold !== null ? ` · limite ${threshold}` : "");
+      break;
+    }
+  }
+  // Melhor resumo disponível (já escrito pelo próprio monitor) - nunca deixa o card sem nenhuma
+  // evidência só porque o formato dedicado não bateu.
+  return item.summary.length > 96 ? `${item.summary.slice(0, 93)}...` : item.summary;
+}
+
+function SeverityDot({ tone, label }: { tone: Tone; label: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500" title={label}>
+      <span className={cn("h-1.5 w-1.5 rounded-full", DOT_COLOR_CLASS[tone])} />
+      {label}
+    </span>
+  );
 }
 
 function KpiCard({ label, value, suffix, tone = "slate" }: { label: string; value: number | null; suffix?: string; tone?: Tone }) {
@@ -151,32 +244,37 @@ function ContentCard({ item }: { item: CockpitContent }) {
   );
 }
 
-function FeaturedProblem({ item }: { item: CockpitAlertSummary }) {
+// Alerta principal: leve destaque (borda colorida à esquerda), nunca fundo colorido grande -
+// severidade fica discreta (SeverityDot), o conteúdo (título + evidência) é o que ocupa espaço.
+function FeaturedProblem({ item, slaTarget }: { item: CockpitAlertSummary; slaTarget: number }) {
   const tone = SEVERITY_TONE[item.severity] ?? "slate";
-  const Icon = item.severity === "CRITICAL" ? ShieldAlert : AlertTriangle;
   return (
-    <div className={cn("rounded-xl border p-3", SPOTLIGHT_PANEL_CLASS[tone])}>
+    <div className={cn("rounded-xl border border-slate-200 border-l-4 bg-white p-3", LEFT_BORDER_CLASS[tone])}>
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge tone={tone} icon={Icon}>
-          {labelFor(STATUS_WORD_LABELS, item.kind)} · {labelFor(SEVERITY_LABEL, item.severity)}
-        </StatusBadge>
-        <span className="text-[11px] text-slate-500">{formatAge(item.age_seconds)}</span>
-        {item.regional ? <span className="text-[11px] text-slate-500">· {item.regional}</span> : null}
+        <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{labelFor(STATUS_WORD_LABELS, item.kind)}</span>
+        <SeverityDot tone={tone} label={labelFor(SEVERITY_LABEL, item.severity)} />
+        <span className="text-[11px] text-slate-400">{formatAge(item.age_seconds)}</span>
       </div>
       <h3 className="mt-1.5 text-base font-semibold text-slate-950">{item.title}</h3>
-      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-700">{item.summary}</p>
+      <p className="mt-1 text-sm font-medium text-slate-700">{evidenceLine(item, slaTarget)}</p>
     </div>
   );
 }
 
-function CompactProblemRow({ item }: { item: CockpitAlertSummary }) {
+// Recolhido: fundo branco, borda neutra, cor só no pontinho de severidade - mas mostra uma
+// segunda linha com evidência real (nunca só severidade + título + tempo), pedido explícito do
+// usuário ("hoje mostram informação insuficiente").
+function CompactProblemRow({ item, slaTarget }: { item: CockpitAlertSummary; slaTarget: number }) {
   const tone = SEVERITY_TONE[item.severity] ?? "slate";
   return (
-    <div className={cn("flex items-center gap-2 rounded-lg px-2.5 py-1.5", SEVERITY_ROW_TINT[item.severity] ?? "")}>
-      <StatusBadge tone={tone} dot className="shrink-0">
-        {SEVERITY_LABEL[item.severity] ?? item.severity}
-      </StatusBadge>
-      <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-800">{item.title}</span>
+    <div className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+      <span className={cn("h-2 w-2 shrink-0 rounded-full", DOT_COLOR_CLASS[tone])} title={labelFor(SEVERITY_LABEL, item.severity)} />
+      <div className="min-w-0 flex-1">
+        {/* O título de todo monitor/regra já embute a regional (ex.: "Deterioração de SLA em X",
+            "Possível incidente coletivo - Y") - repetir aqui duplicava a informação. */}
+        <p className="truncate text-xs font-semibold text-slate-800">{item.title}</p>
+        <p className="truncate text-[11px] text-slate-500">{evidenceLine(item, slaTarget)}</p>
+      </div>
       <span className="shrink-0 text-[10px] text-slate-400">{formatAge(item.age_seconds)}</span>
     </div>
   );
@@ -285,7 +383,8 @@ export default function CockpitPage() {
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-slate-50 p-5 text-slate-900">
-      {/* TOPO: status geral, profile, freshness */}
+      {/* TOPO: profile, freshness, saúde dos monitores - sem badge de status geral (o estado já
+          fica claro pela área de Problemas agora e pelos indicadores, ajuste visual pedido). */}
       <header className="relative flex flex-shrink-0 items-center justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
         <span className={cn("absolute inset-x-0 top-0 h-1", status.accent)} />
         <div>
@@ -296,9 +395,6 @@ export default function CockpitPage() {
             {payload.monitor_health.length}
           </p>
         </div>
-        <StatusBadge tone={status.tone} icon={Activity} className="px-4 py-2 text-base font-black tracking-wide">
-          {status.label}
-        </StatusBadge>
       </header>
 
       {fetchError && (
@@ -441,11 +537,11 @@ export default function CockpitPage() {
                 <p className="text-sm text-slate-500">Nenhum problema ativo — operação dentro do esperado.</p>
               ) : (
                 <div className="flex flex-col gap-2">
-                  {featuredProblem && <FeaturedProblem item={featuredProblem} />}
+                  {featuredProblem && <FeaturedProblem item={featuredProblem} slaTarget={payload.sla.target} />}
                   {restProblems.length > 0 && (
-                    <div className="space-y-0.5">
+                    <div className="space-y-1.5">
                       {restProblems.map((item) => (
-                        <CompactProblemRow key={`${item.kind}-${item.id}`} item={item} />
+                        <CompactProblemRow key={`${item.kind}-${item.id}`} item={item} slaTarget={payload.sla.target} />
                       ))}
                     </div>
                   )}
