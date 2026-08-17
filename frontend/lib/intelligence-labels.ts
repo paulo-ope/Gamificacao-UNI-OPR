@@ -28,11 +28,18 @@ export const CONTENT_STATUS_LABELS: Record<string, string> = {
   DISMISSED: "Encerrado",
 };
 
+// Valores reais de IntelligenceAlert.status (ver backend/app/modules/intelligence/models.py) -
+// achado real: a tela usava "ACTIVE"/"ACKNOWLEDGED", que não existem no enum de verdade (o filtro
+// nunca batia com nenhum alerta, sempre voltava 0 registros mesmo com alertas ativos no banco).
 export const ALERT_STATUS_LABELS: Record<string, string> = {
-  ACTIVE: "Ativo",
-  ACKNOWLEDGED: "Reconhecido",
+  NEW: "Novo",
+  INVESTIGATING: "Investigando",
+  CONFIRMED: "Confirmado",
+  IN_PROGRESS: "Em andamento",
+  RECOVERING: "Normalizando",
   RESOLVED: "Resolvido",
   DISMISSED: "Encerrado",
+  EXPIRED: "Expirado",
 };
 
 export const SEVERITY_LABELS: Record<string, string> = {

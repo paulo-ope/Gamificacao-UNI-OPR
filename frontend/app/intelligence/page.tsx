@@ -78,7 +78,10 @@ const FIELD_LABELS = FILTER_FIELD_LABELS;
 
 const CONTENT_TYPES = ["AI_INSIGHT", "MANUAL_MESSAGE", "ANNOUNCEMENT", "OPERATIONAL_PRIORITY", "INCIDENT_UPDATE", "MAINTENANCE_NOTICE", "INFO"];
 const SEVERITIES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
-const ALERT_STATUSES = ["ACTIVE", "ACKNOWLEDGED", "RESOLVED", "DISMISSED"];
+// Valores reais do enum IntelligenceAlert.status (ver models.py) - NEW/INVESTIGATING/CONFIRMED/
+// IN_PROGRESS/RECOVERING contam como "ainda ativo" (mesma tupla ACTIVE_STATUSES de alerts.py).
+const ALERT_STATUSES = ["NEW", "INVESTIGATING", "CONFIRMED", "IN_PROGRESS", "RECOVERING", "RESOLVED", "DISMISSED", "EXPIRED"];
+const DEFAULT_ACTIVE_ALERT_STATUSES = ["NEW", "INVESTIGATING", "CONFIRMED", "IN_PROGRESS", "RECOVERING"];
 const ALERT_KINDS = ["ALERT", "INCIDENT"];
 
 function severityTone(severity: string): Tone {
@@ -308,7 +311,7 @@ function AlertasTab({
 }) {
   const [items, setItems] = useState<IntelligenceAlert[]>([]);
   const [total, setTotal] = useState(0);
-  const [statuses, setStatuses] = useState<string[]>(["ACTIVE"]);
+  const [statuses, setStatuses] = useState<string[]>(DEFAULT_ACTIVE_ALERT_STATUSES);
   const [severities, setSeverities] = useState<string[]>([]);
   const [kinds, setKinds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
