@@ -221,6 +221,28 @@ class CockpitDataFreshnessOut(BaseModel):
     date_to: date | None
 
 
+class CockpitProductionPointOut(BaseModel):
+    date: date
+    opened: int
+    closed: int
+
+
+class CockpitSlaPointOut(BaseModel):
+    date: date
+    sla_rate: float | None
+
+
+class CockpitBacklogPointOut(BaseModel):
+    date: date
+    quantity: int
+
+
+class CockpitChartsOut(BaseModel):
+    production_7d: list[CockpitProductionPointOut]
+    sla_7d: list[CockpitSlaPointOut]
+    backlog_7d: list[CockpitBacklogPointOut]
+
+
 class CockpitPayloadOut(BaseModel):
     profile: CockpitProfileOut
     generated_at: datetime
@@ -233,6 +255,7 @@ class CockpitPayloadOut(BaseModel):
     incidents: list[CockpitAlertSummaryOut]
     content: list[CockpitContentOut]
     monitor_health: list[CockpitMonitorHealthOut]
+    charts: CockpitChartsOut
     data_freshness: CockpitDataFreshnessOut
     meta: IntelligenceResponseMetaOut
 
@@ -247,3 +270,84 @@ class PublishCockpitContentRequest(BaseModel):
     evidence: dict = {}
     confidence: float | None = None
     valid_until: datetime | None = None
+
+
+# --- Administração (F5) --------------------------------------------------------------------------
+
+
+class WidgetEntryOut(BaseModel):
+    key: str
+    filters: dict
+
+
+class WidgetEntryIn(BaseModel):
+    key: str
+    filters: dict = {}
+
+
+class AdminProfileOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    purpose: str
+    scope: dict
+    widgets: list[WidgetEntryOut]
+    display_config: dict
+    refresh_seconds: int
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminProfileCreateRequest(BaseModel):
+    key: str
+    name: str
+    purpose: str = "REGIONAL_TV"
+    scope: dict = {"regionals": []}
+    widgets: list[WidgetEntryIn] = []
+    display_config: dict = {}
+    refresh_seconds: int = 60
+    active: bool = True
+
+
+class AdminProfileUpdateRequest(BaseModel):
+    name: str | None = None
+    purpose: str | None = None
+    scope: dict | None = None
+    widgets: list[WidgetEntryIn] | None = None
+    display_config: dict | None = None
+    refresh_seconds: int | None = None
+    active: bool | None = None
+
+
+class WidgetCatalogEntryOut(BaseModel):
+    key: str
+    allowed_filters: list[str]
+
+
+class FilterCatalogOut(BaseModel):
+    regionals: list[str]
+    sectors: list[str]
+    team_models: list[str]
+    os_subjects: list[str]
+    content_types: list[str]
+    content_severities: list[str]
+    profile_purposes: list[str]
+    widgets: list[WidgetCatalogEntryOut]
+
+
+class AdminContentUpdateRequest(BaseModel):
+    title: str | None = None
+    body: str | None = None
+    severity: str | None = None
+    valid_until: datetime | None = None
+
+
+class AdminMonitorUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    interval_minutes: int | None = None
+    resolve_after_misses: int | None = None
+
+
+class AdminContentOut(CockpitContentOut):
+    status: str

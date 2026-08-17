@@ -82,6 +82,28 @@ def get_monitor_resolve_after_misses(db: Session, monitor: MonitorDefinition) ->
     return max(value, 1)
 
 
+def update_monitor_settings(
+    db: Session,
+    monitor: MonitorDefinition,
+    *,
+    enabled: bool | None = None,
+    interval_minutes: int | None = None,
+    resolve_after_misses: int | None = None,
+) -> None:
+    """Administração → UNI Intelligence → Monitores - só os 3 parâmetros já configuráveis por
+    monitor (mesmas chaves que o próprio loop já lê a cada ciclo, ver get_monitor_enabled/
+    get_monitor_interval_minutes/get_monitor_resolve_after_misses) - nenhum parâmetro perigoso
+    (raio de cluster, janelas de baseline etc.) é exposto por aqui."""
+    if enabled is not None:
+        upsert_setting(db, _setting_key(monitor.key, "enabled"), "true" if enabled else "false")
+    if interval_minutes is not None:
+        clamped = min(max(interval_minutes, 1), 1440)
+        upsert_setting(db, _setting_key(monitor.key, "interval_minutes"), str(clamped))
+    if resolve_after_misses is not None:
+        upsert_setting(db, _setting_key(monitor.key, "resolve_after_misses"), str(max(resolve_after_misses, 1)))
+    db.commit()
+
+
 def get_monitor_next_allowed_at(db: Session, monitor_key: str) -> datetime | None:
     raw = get_setting(db, _setting_key(monitor_key, "next_allowed_at"), "")
     return _parse_timestamp(raw)

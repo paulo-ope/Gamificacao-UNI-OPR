@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import dynamic from "next/dynamic";
+import type { EChartsOption } from "echarts";
 import { Activity, AlertTriangle, ShieldAlert } from "lucide-react";
 
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import { buildBacklogChartOption, buildProductionChartOption, buildSlaChartOption } from "@/lib/cockpit-chart-options";
 import { type Tone } from "@/lib/tones";
 import { cn } from "@/lib/utils";
 import {
@@ -16,6 +19,11 @@ import {
   type CockpitContent,
   type CockpitPayload
 } from "@/lib/intelligence-cockpit-api";
+
+const ReactECharts = dynamic(() => import("echarts-for-react"), {
+  ssr: false,
+  loading: () => <div className="h-[130px] animate-pulse rounded-lg bg-slate-100" aria-label="Carregando gráfico" />
+});
 
 // Mesmo padrão de "barra de acento de 4px no topo do card" já usado em
 // operations-openings-analytics.tsx::MetricCard - cor comunica status sem pintar o card inteiro.
@@ -46,6 +54,17 @@ const SOURCE_META: Record<string, { label: string; tone: Tone; caption: string }
   USER: { label: "GESTÃO", tone: "blue", caption: "Publicado pela gestão" },
   SYSTEM: { label: "SISTEMA", tone: "slate", caption: "Gerado pelo sistema" },
   MONITOR: { label: "MONITOR", tone: "amber", caption: "Detectado por monitor" }
+};
+
+// Painel de destaque compartilhado entre o problema principal e a publicação da UNI Intelligence
+// em foco - a cor do painel segue o tom da fonte/severidade, nunca vermelho como moldura padrão.
+const SPOTLIGHT_PANEL_CLASS: Record<Tone, string> = {
+  red: "border-red-200 bg-red-50/70",
+  amber: "border-amber-200 bg-amber-50/70",
+  emerald: "border-emerald-200 bg-emerald-50/70",
+  blue: "border-blue-200 bg-blue-50/70",
+  violet: "border-violet-200 bg-violet-50/70",
+  slate: "border-slate-200 bg-slate-50"
 };
 
 function formatAge(seconds: number): string {
@@ -91,50 +110,23 @@ function KpiCard({ label, value, suffix, tone = "slate" }: { label: string; valu
   );
 }
 
-function FeaturedProblem({ item }: { item: CockpitAlertSummary }) {
-  const tone = SEVERITY_TONE[item.severity] ?? "slate";
-  const PANEL_CLASS: Record<Tone, string> = {
-    red: "border-red-200 bg-red-50/70",
-    amber: "border-amber-200 bg-amber-50/70",
-    emerald: "border-emerald-200 bg-emerald-50/70",
-    blue: "border-blue-200 bg-blue-50/70",
-    violet: "border-violet-200 bg-violet-50/70",
-    slate: "border-slate-200 bg-slate-50"
-  };
-  const Icon = item.severity === "CRITICAL" ? ShieldAlert : AlertTriangle;
+// Spotlight = a publicação/insight mais recente da UNI Intelligence, sempre em destaque na área
+// editorial principal da TV (requisito F5: IA deixa de ser rodapé e vira a área central).
+function IntelligenceSpotlight({ item }: { item: CockpitContent }) {
+  const source = SOURCE_META[item.source_type] ?? SOURCE_META.SYSTEM;
+  const tone = item.severity !== "INFO" ? SEVERITY_TONE[item.severity] ?? "blue" : source.tone;
   return (
-    <div className={cn("rounded-2xl border p-5", PANEL_CLASS[tone])}>
+    <div className={cn("rounded-2xl border p-5", SPOTLIGHT_PANEL_CLASS[tone])}>
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge tone={tone} icon={Icon}>
-          {item.kind === "INCIDENT" ? "Incidente" : "Alerta"} · {SEVERITY_LABEL[item.severity] ?? item.severity}
-        </StatusBadge>
-        <span className="text-[11px] text-slate-500">{formatAge(item.age_seconds)}</span>
-        {item.regional ? <span className="text-[11px] text-slate-500">· {item.regional}</span> : null}
+        <StatusBadge tone={source.tone}>{source.label}</StatusBadge>
+        {item.severity !== "INFO" && <StatusBadge tone={SEVERITY_TONE[item.severity] ?? "slate"}>{SEVERITY_LABEL[item.severity] ?? item.severity}</StatusBadge>}
+        <span className="text-[11px] italic text-slate-500">{source.caption}</span>
         {item.confidence !== null && (
           <span className="ml-auto text-[11px] font-medium text-slate-500">confiança {Math.round(item.confidence * 100)}%</span>
         )}
       </div>
-      <h3 className="mt-2 text-xl font-semibold text-slate-950">{item.title}</h3>
-      <p className="mt-1 text-sm leading-5 text-slate-700">{item.summary}</p>
-      {item.recommended_action && (
-        <p className="mt-3 text-sm">
-          <span className="font-semibold text-slate-900">Próximo passo: </span>
-          <span className="text-slate-700">{item.recommended_action}</span>
-        </p>
-      )}
-    </div>
-  );
-}
-
-function CompactProblemRow({ item }: { item: CockpitAlertSummary }) {
-  const tone = SEVERITY_TONE[item.severity] ?? "slate";
-  return (
-    <div className={cn("flex items-center gap-2 rounded-lg px-2.5 py-2", SEVERITY_ROW_TINT[item.severity] ?? "")}>
-      <StatusBadge tone={tone} dot className="shrink-0">
-        {SEVERITY_LABEL[item.severity] ?? item.severity}
-      </StatusBadge>
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{item.title}</span>
-      <span className="shrink-0 text-[11px] text-slate-400">{formatAge(item.age_seconds)}</span>
+      <h3 className="mt-2 text-2xl font-semibold text-slate-950">{item.title}</h3>
+      <p className="mt-2 whitespace-pre-line text-base leading-6 text-slate-700">{item.body}</p>
     </div>
   );
 }
@@ -143,7 +135,7 @@ function ContentCard({ item }: { item: CockpitContent }) {
   const source = SOURCE_META[item.source_type] ?? SOURCE_META.SYSTEM;
   const severityTone = SEVERITY_TONE[item.severity] ?? "blue";
   return (
-    <div className="min-w-[300px] max-w-[400px] flex-shrink-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="w-full rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center gap-2">
         <StatusBadge tone={source.tone}>{source.label}</StatusBadge>
         {item.severity !== "INFO" && <StatusBadge tone={severityTone}>{SEVERITY_LABEL[item.severity] ?? item.severity}</StatusBadge>}
@@ -151,6 +143,46 @@ function ContentCard({ item }: { item: CockpitContent }) {
       <p className="mt-1.5 text-[10px] italic text-slate-400">{source.caption}</p>
       <h4 className="mt-1 text-sm font-semibold text-slate-950">{item.title}</h4>
       <p className="mt-1 line-clamp-3 text-sm text-slate-600">{item.body}</p>
+    </div>
+  );
+}
+
+function FeaturedProblem({ item }: { item: CockpitAlertSummary }) {
+  const tone = SEVERITY_TONE[item.severity] ?? "slate";
+  const Icon = item.severity === "CRITICAL" ? ShieldAlert : AlertTriangle;
+  return (
+    <div className={cn("rounded-xl border p-3", SPOTLIGHT_PANEL_CLASS[tone])}>
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusBadge tone={tone} icon={Icon}>
+          {item.kind === "INCIDENT" ? "Incidente" : "Alerta"} · {SEVERITY_LABEL[item.severity] ?? item.severity}
+        </StatusBadge>
+        <span className="text-[11px] text-slate-500">{formatAge(item.age_seconds)}</span>
+        {item.regional ? <span className="text-[11px] text-slate-500">· {item.regional}</span> : null}
+      </div>
+      <h3 className="mt-1.5 text-base font-semibold text-slate-950">{item.title}</h3>
+      <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-700">{item.summary}</p>
+    </div>
+  );
+}
+
+function CompactProblemRow({ item }: { item: CockpitAlertSummary }) {
+  const tone = SEVERITY_TONE[item.severity] ?? "slate";
+  return (
+    <div className={cn("flex items-center gap-2 rounded-lg px-2.5 py-1.5", SEVERITY_ROW_TINT[item.severity] ?? "")}>
+      <StatusBadge tone={tone} dot className="shrink-0">
+        {SEVERITY_LABEL[item.severity] ?? item.severity}
+      </StatusBadge>
+      <span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-800">{item.title}</span>
+      <span className="shrink-0 text-[10px] text-slate-400">{formatAge(item.age_seconds)}</span>
+    </div>
+  );
+}
+
+function MiniChart({ title, option }: { title: string; option: EChartsOption }) {
+  return (
+    <div className="min-w-[180px] flex-1 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{title}</p>
+      <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 130, width: "100%" }} />
     </div>
   );
 }
@@ -204,7 +236,7 @@ export default function CockpitPage() {
     return [...payload.incidents, ...payload.alerts].sort((a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9));
   }, [payload]);
 
-  const [featured, ...rest] = sortedProblems;
+  const [featuredProblem, ...restProblems] = sortedProblems;
 
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">Carregando UNI Workspace...</main>;
@@ -228,7 +260,6 @@ export default function CockpitPage() {
   }
 
   const status = STATUS_META[payload.overall_status.status];
-  const isIncidentMode = payload.display_mode === "INCIDENT";
   const healthyCount = payload.monitor_health.filter((m) => m.enabled && m.consecutive_failures === 0).length;
 
   const showProblems = widgetEnabled(payload, "active_alerts") || widgetEnabled(payload, "active_incidents");
@@ -236,11 +267,21 @@ export default function CockpitPage() {
   const showBacklog = widgetEnabled(payload, "backlog");
   const showSla = widgetEnabled(payload, "sla");
   const showMonitorHealth = widgetEnabled(payload, "monitor_health");
-  const showContent = widgetEnabled(payload, "cockpit_content");
+  const showContent = widgetEnabled(payload, "cockpit_content") || widgetEnabled(payload, "ai_insights");
+
+  const [featuredContent, ...restContent] = payload.content;
+
+  const productionPoints = payload.charts.production_7d;
+  const slaPoints = payload.charts.sla_7d;
+  const backlogPoints = payload.charts.backlog_7d;
+  const showProductionChart = showProduction && productionPoints.length > 0;
+  const showSlaChart = showSla && slaPoints.length > 0;
+  const showBacklogChart = showBacklog && backlogPoints.length > 0;
+  const showCharts = showProductionChart || showSlaChart || showBacklogChart;
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-slate-50 p-5 text-slate-900">
-      {/* TOPO */}
+      {/* TOPO: status geral, profile, freshness */}
       <header className="relative flex flex-shrink-0 items-center justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
         <span className={cn("absolute inset-x-0 top-0 h-1", status.accent)} />
         <div>
@@ -262,29 +303,29 @@ export default function CockpitPage() {
         </div>
       )}
 
-      {/* CORPO */}
-      <div className="mt-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] gap-4 overflow-hidden">
-        {/* ESQUERDA: PROBLEMAS AGORA */}
-        {showProblems && (
+      {/* CORPO: área principal (UNI Intelligence) + coluna secundária/suporte */}
+      <div className="mt-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] gap-4 overflow-hidden">
+        {/* PRINCIPAL: UNI Intelligence - a análise, não apenas o dado bruto */}
+        {showContent && (
           <SectionCard
             eyebrow="UNI Intelligence"
-            title="Problemas agora"
-            className={cn("flex min-h-0 flex-col", isIncidentMode && "ring-2 ring-red-300")}
+            title="Análise e prioridades"
+            className="flex min-h-0 flex-col"
             contentClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
           >
-            {sortedProblems.length === 0 ? (
+            {payload.content.length === 0 ? (
               <div className="flex flex-1 flex-col items-center justify-center text-center">
-                <p className="text-4xl">🟢</p>
-                <p className="mt-2 text-lg font-semibold text-slate-700">Nenhum problema ativo</p>
-                <p className="text-sm text-slate-500">A operação está dentro do esperado.</p>
+                <p className="text-4xl">🧠</p>
+                <p className="mt-2 text-lg font-semibold text-slate-700">Nenhuma publicação no momento</p>
+                <p className="text-sm text-slate-500">A próxima análise da UNI Intelligence aparecerá aqui.</p>
               </div>
             ) : (
               <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
-                {featured && <FeaturedProblem item={featured} />}
-                {rest.length > 0 && (
-                  <div className="space-y-0.5">
-                    {rest.map((item) => (
-                      <CompactProblemRow key={`${item.kind}-${item.id}`} item={item} />
+                {featuredContent && <IntelligenceSpotlight item={featuredContent} />}
+                {restContent.length > 0 && (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {restContent.map((item) => (
+                      <ContentCard key={item.id} item={item} />
                     ))}
                   </div>
                 )}
@@ -293,8 +334,8 @@ export default function CockpitPage() {
           </SectionCard>
         )}
 
-        {/* DIREITA: KPIs + BACKLOG/SLA/PRODUÇÃO + SAÚDE DOS MONITORES */}
-        <section className={cn("flex min-h-0 flex-col gap-3 overflow-y-auto pr-1", !showProblems && "col-span-2")}>
+        {/* SECUNDÁRIO + SUPORTE: KPIs, tendências, incidentes compactos, saúde dos monitores */}
+        <section className={cn("flex min-h-0 flex-col gap-3 overflow-y-auto pr-1", !showContent && "col-span-2")}>
           <div className="grid flex-shrink-0 grid-cols-5 gap-3">
             <KpiCard label="Abertas" value={payload.production.opened_today} tone="blue" />
             <KpiCard label="Finalizadas" value={payload.production.closed_today} tone="emerald" />
@@ -348,6 +389,14 @@ export default function CockpitPage() {
             </div>
           )}
 
+          {showCharts && (
+            <div className="flex flex-shrink-0 flex-wrap gap-3">
+              {showProductionChart && <MiniChart title="Abertas x finalizadas (7d)" option={buildProductionChartOption(productionPoints)} />}
+              {showSlaChart && <MiniChart title="Tendência de SLA (7d)" option={buildSlaChartOption(slaPoints, payload.sla.target)} />}
+              {showBacklogChart && <MiniChart title="Evolução do backlog (7d)" option={buildBacklogChartOption(backlogPoints)} />}
+            </div>
+          )}
+
           {(showProduction || showMonitorHealth) && (
             <div className="grid flex-shrink-0 grid-cols-2 gap-3">
               {showProduction && (
@@ -381,23 +430,27 @@ export default function CockpitPage() {
               )}
             </div>
           )}
+
+          {showProblems && (
+            <SectionCard eyebrow="UNI Intelligence" title="Problemas agora" className="flex-shrink-0 shadow-sm">
+              {sortedProblems.length === 0 ? (
+                <p className="text-sm text-slate-500">Nenhum problema ativo — operação dentro do esperado.</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {featuredProblem && <FeaturedProblem item={featuredProblem} />}
+                  {restProblems.length > 0 && (
+                    <div className="space-y-0.5">
+                      {restProblems.map((item) => (
+                        <CompactProblemRow key={`${item.kind}-${item.id}`} item={item} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </SectionCard>
+          )}
         </section>
       </div>
-
-      {/* RODAPÉ: CONTEÚDO / UNI INTELLIGENCE */}
-      {showContent && (
-        <SectionCard eyebrow="UNI Intelligence" title="Conteúdo" className="mt-4 flex-shrink-0 shadow-sm">
-          {payload.content.length === 0 ? (
-            <p className="text-sm text-slate-400">Nenhum conteúdo publicado no momento.</p>
-          ) : (
-            <div className="flex gap-3 overflow-x-auto pb-1">
-              {payload.content.map((item) => (
-                <ContentCard key={item.id} item={item} />
-              ))}
-            </div>
-          )}
-        </SectionCard>
-      )}
     </main>
   );
 }

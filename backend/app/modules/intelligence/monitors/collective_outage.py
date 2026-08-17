@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_incident_analysis
 from app.modules.operations.models import OperationLoginCurrentStatus, OperationOnuSignalCurrent
+from app.modules.operations.scope import transmitter_display_name
 
 from ..types import MonitorDetection, MonitorRunResult
 
@@ -116,10 +117,11 @@ def run_collective_outage_monitor(db: Session) -> MonitorRunResult:
         dedupe_key = f"collective_outage:{regional or 'sem_regional'}:{lat_key}:{lng_key}"
 
         sample_logins = logins[:5]
+        transmitter_label = transmitter_display_name(transmitter_id)
         summary = (
             f"{size} logins offline concentrados em um raio de {cluster['radius_meters']:.0f}m "
             f"nos ultimos {WINDOW_MINUTES} minutos"
-            + (f", predominantemente no transmissor {transmitter_id}" if transmitter_id and transmitter_share >= 0.5 else "")
+            + (f", predominantemente no transmissor {transmitter_label}" if transmitter_label and transmitter_share >= 0.5 else "")
             + "."
         )
 
@@ -144,6 +146,7 @@ def run_collective_outage_monitor(db: Session) -> MonitorRunResult:
                     "window_minutes": WINDOW_MINUTES,
                     "logins_sample": sample_logins,
                     "dominant_transmitter_id": transmitter_id,
+                    "dominant_transmitter_label": transmitter_label,
                     "transmitter_share": transmitter_share,
                     "still_offline_total": analysis.get("still_offline"),
                     "new_drops_total": analysis.get("new_drops"),

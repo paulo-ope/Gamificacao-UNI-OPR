@@ -66,3 +66,18 @@ def ixc_sector_scope_label(sector_ids: list[str] | tuple[str, ...] | None) -> st
     if len(names) <= 3:
         return ", ".join(names)
     return f"{len(names)} setores: {', '.join(names[:3])}..."
+
+
+def transmitter_display_name(transmitter_id: str | None) -> str | None:
+    """Nome de exibição do transmissor/OLT - investigado antes de implementar (F5): a única fonte
+    real hoje é o ID cru vindo do IXC (`id_transmissor`, tabela `radpop_radio_cliente_fibra` via
+    `OperationOnuSignalCurrent.transmitter_id`). Não existe, em nenhuma fonte já capturada, nome,
+    site, localidade ou descrição de transmissor/OLT - só o identificador numérico.
+
+    Por isso esta função NÃO inventa um nome amigável - só formata o ID cru de forma consistente
+    ("TX 408"), para que toda tela (collective_outage, intelligence_alerts, cockpit, contexto MCP)
+    mostre exatamente o mesmo texto em vez de cada uma montar a própria string. Se um catálogo de
+    nomes de transmissor for importado no futuro, só esta função precisa mudar."""
+    if not transmitter_id:
+        return None
+    return f"TX {transmitter_id}"

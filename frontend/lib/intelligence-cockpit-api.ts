@@ -92,6 +92,16 @@ export type CockpitDataFreshness = {
   date_to: string | null;
 };
 
+export type CockpitProductionPoint = { date: string; opened: number; closed: number };
+export type CockpitSlaPoint = { date: string; sla_rate: number | null };
+export type CockpitBacklogPoint = { date: string; quantity: number };
+
+export type CockpitCharts = {
+  production_7d: CockpitProductionPoint[];
+  sla_7d: CockpitSlaPoint[];
+  backlog_7d: CockpitBacklogPoint[];
+};
+
 export type CockpitPayload = {
   profile: CockpitProfile;
   generated_at: string;
@@ -104,9 +114,124 @@ export type CockpitPayload = {
   incidents: CockpitAlertSummary[];
   content: CockpitContent[];
   monitor_health: CockpitMonitorHealth[];
+  charts: CockpitCharts;
   data_freshness: CockpitDataFreshness;
   meta: { applied_filters: Record<string, unknown>; ignored_filters: unknown[]; warnings: Array<Record<string, unknown>>; generated_at: string; source_last_sync: string | null };
 };
+
+// --- Administração (F5) ----------------------------------------------------------------------
+
+export type WidgetEntry = { key: string; filters: Record<string, unknown> };
+
+export type AdminProfile = {
+  id: number;
+  key: string;
+  name: string;
+  purpose: string;
+  scope: Record<string, unknown>;
+  widgets: WidgetEntry[];
+  display_config: Record<string, unknown>;
+  refresh_seconds: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AdminProfileInput = {
+  key?: string;
+  name?: string;
+  purpose?: string;
+  scope?: Record<string, unknown>;
+  widgets?: WidgetEntry[];
+  display_config?: Record<string, unknown>;
+  refresh_seconds?: number;
+  active?: boolean;
+};
+
+export type WidgetCatalogEntry = { key: string; allowed_filters: string[] };
+
+export type FilterCatalog = {
+  regionals: string[];
+  sectors: string[];
+  team_models: string[];
+  os_subjects: string[];
+  content_types: string[];
+  content_severities: string[];
+  profile_purposes: string[];
+  widgets: WidgetCatalogEntry[];
+};
+
+export type AdminContent = CockpitContent & { status: string };
+
+export type AdminContentUpdateInput = {
+  title?: string;
+  body?: string;
+  severity?: string;
+  valid_until?: string | null;
+};
+
+export type MonitorInfo = {
+  key: string;
+  name: string;
+  description: string;
+  scope_strategy: string;
+  enabled: boolean;
+  interval_minutes: number;
+  resolve_after_misses: number;
+  last_run_at: string | null;
+  last_run_status: string | null;
+  last_success_at: string | null;
+  consecutive_failures: number;
+};
+
+export type MonitorUpdateInput = {
+  enabled?: boolean;
+  interval_minutes?: number;
+  resolve_after_misses?: number;
+};
+
+export type IntelligenceAlert = {
+  id: number;
+  kind: "ALERT" | "INCIDENT";
+  alert_type: string;
+  monitor_key: string;
+  dedupe_key: string;
+  regional: string | null;
+  city: string | null;
+  scope: Record<string, unknown>;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  title: string;
+  summary: string;
+  recommended_action: string | null;
+  evidence: Record<string, unknown>;
+  confidence: number | null;
+  coverage: Record<string, unknown>;
+  warnings: Array<Record<string, unknown>>;
+  source_last_sync: string | null;
+  status: string;
+  first_detected_at: string;
+  last_seen_at: string;
+  resolved_at: string | null;
+  acknowledged_by: number | null;
+  acknowledged_at: string | null;
+  misses_count: number;
+  source_type: string;
+  source_key: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type IntelligenceAlertEvent = {
+  id: number;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  created_by: number | null;
+};
+
+export type IntelligenceAlertDetail = IntelligenceAlert & { events: IntelligenceAlertEvent[] };
+
+export type AlertPage = { items: IntelligenceAlert[]; total: number; page: number; page_size: number };
 
 export type PublishCockpitContentInput = {
   content_type: string;
@@ -161,5 +286,47 @@ export const intelligenceCockpitApi = {
     request<CockpitContent>("/intelligence/cockpit-content", {
       method: "POST",
       body: JSON.stringify(payload)
-    })
+    }),
+
+  // --- alertas/incidentes ----------------------------------------------------------------------
+  listAlerts: (params: { statuses?: string[]; severities?: string[]; kinds?: string[]; regionals?: string[]; page?: number; page_size?: number } = {}) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined) continue;
+      if (Array.isArray(value)) value.forEach((v) => search.append(key, String(v)));
+      else search.set(key, String(value));
+    }
+    const query = search.toString();
+    return request<AlertPage>(`/intelligence/alerts${query ? `?${query}` : ""}`);
+  },
+  getAlert: (alertId: number) => request<IntelligenceAlertDetail>(`/intelligence/alerts/${alertId}`),
+  dismissAlert: (alertId: number, reason?: string) =>
+    request<IntelligenceAlertDetail>(`/intelligence/alerts/${alertId}/dismiss`, { method: "POST", body: JSON.stringify({ reason: reason ?? null }) }),
+
+  // --- monitores --------------------------------------------------------------------------------
+  listMonitors: () => request<{ items: MonitorInfo[] }>("/intelligence/monitors"),
+  updateMonitor: (monitorKey: string, payload: MonitorUpdateInput) =>
+    request<MonitorInfo>(`/intelligence/admin/monitors/${encodeURIComponent(monitorKey)}`, { method: "PUT", body: JSON.stringify(payload) }),
+
+  // --- profiles -----------------------------------------------------------------------------------
+  listProfiles: () => request<AdminProfile[]>("/intelligence/admin/profiles"),
+  getProfile: (profileKey: string) => request<AdminProfile>(`/intelligence/admin/profiles/${encodeURIComponent(profileKey)}`),
+  createProfile: (payload: AdminProfileInput) => request<AdminProfile>("/intelligence/admin/profiles", { method: "POST", body: JSON.stringify(payload) }),
+  updateProfile: (profileKey: string, payload: AdminProfileInput) =>
+    request<AdminProfile>(`/intelligence/admin/profiles/${encodeURIComponent(profileKey)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  getFilterCatalog: () => request<FilterCatalog>("/intelligence/admin/filter-catalog"),
+
+  // --- publicações --------------------------------------------------------------------------------
+  listAdminContent: (params: { profile_key?: string; status?: string; content_type?: string } = {}) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) search.set(key, value);
+    }
+    const query = search.toString();
+    return request<AdminContent[]>(`/intelligence/admin/content${query ? `?${query}` : ""}`);
+  },
+  updateAdminContent: (contentId: number, payload: AdminContentUpdateInput) =>
+    request<AdminContent>(`/intelligence/admin/content/${contentId}`, { method: "PUT", body: JSON.stringify(payload) }),
+  dismissAdminContent: (contentId: number) =>
+    request<AdminContent>(`/intelligence/admin/content/${contentId}/dismiss`, { method: "POST" })
 };

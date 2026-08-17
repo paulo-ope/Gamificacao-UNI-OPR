@@ -21,9 +21,23 @@ from app.models import User
 from app.modules.ai_governance.response_meta import build_meta
 
 from .alerts import dismiss_alert
-from .cockpit import CockpitContentValidationError, build_cockpit_payload, get_profile, publish_cockpit_content
-from .models import IntelligenceAlert, IntelligenceAlertEvent, IntelligenceMonitorRun
-from .registry import list_monitors
+from .cockpit import (
+    CockpitContentValidationError,
+    ProfileValidationError,
+    build_cockpit_payload,
+    build_filter_catalog,
+    create_profile,
+    dismiss_cockpit_content,
+    get_profile,
+    list_cockpit_content,
+    list_profiles,
+    profile_to_admin_out,
+    publish_cockpit_content,
+    update_cockpit_content,
+    update_profile,
+)
+from .models import IntelligenceAlert, IntelligenceAlertEvent, IntelligenceCockpitContent, IntelligenceMonitorRun
+from .registry import get_monitor, list_monitors
 from .scheduler import (
     count_consecutive_failures,
     get_monitor_enabled,
@@ -31,8 +45,15 @@ from .scheduler import (
     get_monitor_resolve_after_misses,
     last_success_run,
     recent_runs,
+    update_monitor_settings,
 )
 from .schemas import (
+    AdminContentOut,
+    AdminContentUpdateRequest,
+    AdminMonitorUpdateRequest,
+    AdminProfileCreateRequest,
+    AdminProfileOut,
+    AdminProfileUpdateRequest,
     AlertDetailOut,
     AlertDismissRequest,
     AlertEventOut,
@@ -40,6 +61,7 @@ from .schemas import (
     AlertPageOut,
     CockpitContentOut,
     CockpitPayloadOut,
+    FilterCatalogOut,
     IntelligenceResponseMetaOut,
     MonitorListOut,
     MonitorOut,
@@ -350,3 +372,142 @@ def publish_cockpit_content_endpoint(
     except CockpitContentValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return _content_out(content)
+
+
+# --- Administração (F5) --------------------------------------------------------------------------
+# Toda rota abaixo exige intelligence:manage (além de intelligence:read, já exigido pelo router
+# inteiro) - é a gestão de profiles/publicações/monitores, não a leitura pública da TV.
+
+admin_router = APIRouter(dependencies=[Depends(require_permission("intelligence:manage"))])
+
+
+def _admin_content_out(content: IntelligenceCockpitContent) -> AdminContentOut:
+    base = _content_out(content)
+    return AdminContentOut(**base.model_dump(), status=content.status)
+
+
+# --- profiles --------------------------------------------------------------------------------
+
+
+@admin_router.get("/admin/profiles", response_model=list[AdminProfileOut])
+def list_profiles_endpoint(db: Session = Depends(get_db)) -> list[AdminProfileOut]:
+    return [AdminProfileOut(**profile_to_admin_out(p)) for p in list_profiles(db)]
+
+
+@admin_router.get("/admin/profiles/{profile_key}", response_model=AdminProfileOut)
+def get_profile_admin_endpoint(profile_key: str, db: Session = Depends(get_db)) -> AdminProfileOut:
+    profile = get_profile(db, profile_key)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Profile '{profile_key}' não encontrado.")
+    return AdminProfileOut(**profile_to_admin_out(profile))
+
+
+@admin_router.post("/admin/profiles", response_model=AdminProfileOut, status_code=status.HTTP_201_CREATED)
+def create_profile_endpoint(body: AdminProfileCreateRequest, db: Session = Depends(get_db)) -> AdminProfileOut:
+    try:
+        profile = create_profile(
+            db,
+            key=body.key,
+            name=body.name,
+            purpose=body.purpose,
+            scope=body.scope,
+            widgets=[w.model_dump() for w in body.widgets],
+            display_config=body.display_config,
+            refresh_seconds=body.refresh_seconds,
+            active=body.active,
+        )
+    except ProfileValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return AdminProfileOut(**profile_to_admin_out(profile))
+
+
+@admin_router.put("/admin/profiles/{profile_key}", response_model=AdminProfileOut)
+def update_profile_endpoint(profile_key: str, body: AdminProfileUpdateRequest, db: Session = Depends(get_db)) -> AdminProfileOut:
+    profile = get_profile(db, profile_key)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Profile '{profile_key}' não encontrado.")
+    try:
+        profile = update_profile(
+            db,
+            profile,
+            name=body.name,
+            purpose=body.purpose,
+            scope=body.scope,
+            widgets=[w.model_dump() for w in body.widgets] if body.widgets is not None else None,
+            display_config=body.display_config,
+            refresh_seconds=body.refresh_seconds,
+            active=body.active,
+        )
+    except ProfileValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return AdminProfileOut(**profile_to_admin_out(profile))
+
+
+@admin_router.get("/admin/filter-catalog", response_model=FilterCatalogOut)
+def get_filter_catalog_endpoint(db: Session = Depends(get_db)) -> FilterCatalogOut:
+    return FilterCatalogOut(**build_filter_catalog(db))
+
+
+# --- publicações -------------------------------------------------------------------------------
+
+
+@admin_router.get("/admin/content", response_model=list[AdminContentOut])
+def list_content_admin_endpoint(
+    profile_key: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    content_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[AdminContentOut]:
+    rows = list_cockpit_content(db, profile_key=profile_key, status=status_filter, content_type=content_type)
+    return [_admin_content_out(row) for row in rows]
+
+
+@admin_router.put("/admin/content/{content_id}", response_model=AdminContentOut)
+def update_content_admin_endpoint(content_id: int, body: AdminContentUpdateRequest, db: Session = Depends(get_db)) -> AdminContentOut:
+    content = db.get(IntelligenceCockpitContent, content_id)
+    if content is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conteúdo não encontrado.")
+    try:
+        content = update_cockpit_content(db, content, title=body.title, body=body.body, severity=body.severity, valid_until=body.valid_until)
+    except CockpitContentValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return _admin_content_out(content)
+
+
+@admin_router.post("/admin/content/{content_id}/dismiss", response_model=AdminContentOut)
+def dismiss_content_admin_endpoint(content_id: int, db: Session = Depends(get_db)) -> AdminContentOut:
+    content = db.get(IntelligenceCockpitContent, content_id)
+    if content is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conteúdo não encontrado.")
+    content = dismiss_cockpit_content(db, content)
+    return _admin_content_out(content)
+
+
+# --- monitores -----------------------------------------------------------------------------------
+
+
+@admin_router.put("/admin/monitors/{monitor_key}", response_model=MonitorOut)
+def update_monitor_admin_endpoint(monitor_key: str, body: AdminMonitorUpdateRequest, db: Session = Depends(get_db)) -> MonitorOut:
+    monitor = get_monitor(monitor_key)
+    if monitor is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Monitor '{monitor_key}' não encontrado.")
+    update_monitor_settings(db, monitor, enabled=body.enabled, interval_minutes=body.interval_minutes, resolve_after_misses=body.resolve_after_misses)
+    runs = recent_runs(db, monitor.key, limit=20)
+    last_run = runs[0] if runs else None
+    success_run = last_success_run(db, monitor.key)
+    return MonitorOut(
+        key=monitor.key,
+        name=monitor.name,
+        description=monitor.description,
+        scope_strategy=monitor.scope_strategy,
+        enabled=get_monitor_enabled(db, monitor),
+        interval_minutes=get_monitor_interval_minutes(db, monitor),
+        resolve_after_misses=get_monitor_resolve_after_misses(db, monitor),
+        last_run_at=last_run.started_at if last_run else None,
+        last_run_status=last_run.status if last_run else None,
+        last_success_at=success_run.started_at if success_run else None,
+        consecutive_failures=count_consecutive_failures(runs),
+    )
+
+
+router.include_router(admin_router)

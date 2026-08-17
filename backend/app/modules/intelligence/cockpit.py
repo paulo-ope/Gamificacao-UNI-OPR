@@ -43,6 +43,28 @@ WIDGET_CATALOG = (
     "ai_insights",
 )
 
+# F5 - filtros que cada widget aceita, em nomes canônicos do FilterContractV1 (nunca vocabulário
+# paralelo). Um widget só pode RESTRINGIR o scope do profile, nunca ampliar (ver
+# _restrict_filter_values) - "regionals"/"cities"/"sectors"/"os_subjects"/"team_models"/
+# "responsibles" recortam a população consultada; "severity"/"status"/"content_type" filtram a
+# lista já recortada (alertas/incidentes/conteúdo não têm "scope" próprio de operations, então não
+# há o que restringir além do que o profile já aplicou por regional).
+WIDGET_ALLOWED_FILTERS: dict[str, frozenset[str]] = {
+    "overall_status": frozenset(),
+    "monitor_health": frozenset(),
+    "production": frozenset({"regionals", "cities", "sectors", "os_subjects", "team_models"}),
+    "backlog": frozenset({"regionals", "cities", "sectors", "os_subjects", "team_models", "responsibles"}),
+    "sla": frozenset({"regionals", "cities", "sectors", "os_subjects", "team_models"}),
+    "active_alerts": frozenset({"regionals", "severity", "status"}),
+    "active_incidents": frozenset({"regionals", "severity", "status"}),
+    "cockpit_content": frozenset({"content_type", "severity"}),
+    "ai_insights": frozenset({"content_type", "severity"}),
+}
+
+# Campos de "scope de operations" (population-level) vs campos de "filtro de lista" (pós-consulta,
+# sobre algo que não vem de operations_orders) - determina qual mecanismo de restrição usar.
+_OPERATIONS_SCOPE_FIELDS = frozenset({"regionals", "cities", "sectors", "os_subjects", "team_models", "responsibles"})
+
 CONTENT_TYPES = (
     "AI_INSIGHT",
     "MANUAL_MESSAGE",
@@ -58,6 +80,133 @@ CONTENT_STATUSES = ("ACTIVE", "EXPIRED", "DISMISSED")
 
 MAX_TITLE_LENGTH = 200
 MAX_BODY_LENGTH = 4000
+
+
+class ProfileValidationError(ValueError):
+    """Erro de validação de profile/widget - vira 422 no REST (admin de profiles)."""
+
+
+def normalize_widget_entries(widgets_json: list) -> list[dict]:
+    """Aceita tanto o formato legado (`["overall_status", "backlog", ...]`) quanto o formato com
+    filtro (`[{"key": "backlog", "filters": {"team_models": [...]}}, ...]`) e sempre devolve a
+    forma normalizada - a ORDEM da lista é a prioridade/ordem de exibição do widget (sem campo
+    separado; "subir/descer" na Administração só reordena a lista)."""
+    normalized = []
+    for entry in widgets_json or []:
+        if isinstance(entry, str):
+            normalized.append({"key": entry, "filters": {}})
+        elif isinstance(entry, dict) and "key" in entry:
+            normalized.append({"key": entry["key"], "filters": dict(entry.get("filters") or {})})
+    return normalized
+
+
+def validate_widget_entries(widgets_json: list) -> list[dict]:
+    """Validação de escrita (Administração cria/edita um profile): widget precisa existir no
+    catálogo e cada filtro dele precisa estar na lista permitida daquele widget - nunca aceita
+    filtro ignorado em silêncio (bloqueia aqui, não só avisa na leitura)."""
+    normalized = normalize_widget_entries(widgets_json)
+    seen_keys = set()
+    for entry in normalized:
+        key = entry["key"]
+        if key not in WIDGET_CATALOG:
+            raise ProfileValidationError(f"widget inválido: {key!r}. Use um de {WIDGET_CATALOG}.")
+        if key in seen_keys:
+            raise ProfileValidationError(f"widget duplicado: {key!r}.")
+        seen_keys.add(key)
+        allowed = WIDGET_ALLOWED_FILTERS.get(key, frozenset())
+        for field in entry["filters"]:
+            if field not in allowed:
+                raise ProfileValidationError(
+                    f"filtro {field!r} não é suportado pelo widget {key!r}. Filtros aceitos: {sorted(allowed) or 'nenhum'}."
+                )
+    return normalized
+
+
+def _restrict_filter_values(base: list[str], override: list[str] | None) -> tuple[list[str], bool]:
+    """Combina o valor BASE (scope do profile) com um filtro de WIDGET - o widget só pode
+    RESTRINGIR, nunca ampliar. Retorna (valores_efetivos, houve_conflito).
+
+    - base vazio (profile global/sem recorte naquele campo) + widget define -&gt; usa o do widget
+      (é uma restrição válida de "tudo" para "isso").
+    - base preenchido + widget define um valor DENTRO do base -&gt; interseção (mais restrito ainda).
+    - base preenchido + widget define algo TOTALMENTE fora do base -&gt; conflito: mantém o base
+      (nunca amplia, nunca zera pra "sem filtro"), e quem chamou registra o warning."""
+    if not override:
+        return base, False
+    if not base:
+        return list(override), False
+    intersection = [v for v in base if v in override]
+    if not intersection:
+        return list(base), True
+    return intersection, False
+
+
+def _to_operations_rest_filters(filters: dict[str, Any]) -> dict[str, Any]:
+    """`operations.queries`/`operations.services` (usadas por `overview`/`overview_trends`/
+    `collaborator_sla`) ainda falam o vocabulário legado do REST - `"subjects"`, não `"os_subjects"`
+    canônico (achado documentado em docs/proposta-filter-contract-v1.md: só `ai/queries.py` foi
+    migrado ao FilterContractV1, o REST de `operations` nunca foi). Sem esta tradução, um filtro
+    `os_subjects` do widget seria silenciosamente IGNORADO por essas duas funções (`FILTER_COLUMNS`
+    delas nem reconhece a chave) - exatamente o anti-padrão que a Fase 1 de confiabilidade corrigiu
+    em outros endpoints. O cockpit só fala canônico pra fora; a tradução fica só aqui, isolada."""
+    translated = dict(filters)
+    if "os_subjects" in translated:
+        translated["subjects"] = translated.pop("os_subjects")
+    return translated
+
+
+def _widget_entry(widget_entries: list[dict], key: str) -> dict:
+    return next((entry for entry in widget_entries if entry["key"] == key), {"key": key, "filters": {}})
+
+
+def _effective_operations_filters(
+    base_filters: dict[str, Any],
+    widget_filters: dict[str, Any],
+    widget_key: str,
+    warnings: list[dict],
+) -> dict[str, Any]:
+    """Mescla o scope base (profile) com o filtro do widget para as consultas de `operations`/
+    `ai` - só usado pelos widgets de "população" (production/backlog/sla). Filtro não suportado
+    pelo widget vira warning estruturado e é descartado (nunca aplicado em silêncio)."""
+    allowed = WIDGET_ALLOWED_FILTERS.get(widget_key, frozenset())
+    effective = dict(base_filters)
+    for field, value in widget_filters.items():
+        if field not in allowed or field not in _OPERATIONS_SCOPE_FIELDS:
+            warnings.append({"code": "FILTER_NOT_SUPPORTED_BY_WIDGET", "widget": widget_key, "field": field})
+            continue
+        base_value = base_filters.get(field) or []
+        restricted, conflict = _restrict_filter_values(list(base_value), value)
+        effective[field] = restricted
+        if conflict:
+            warnings.append({"code": "WIDGET_FILTER_CONFLICTS_WITH_SCOPE", "widget": widget_key, "field": field})
+    return effective
+
+
+def _apply_list_post_filters(
+    items: list[dict],
+    widget_filters: dict[str, Any],
+    widget_key: str,
+    warnings: list[dict],
+    *,
+    regional_field: str = "regional",
+) -> list[dict]:
+    """Filtra uma lista JÁ recortada pelo scope do profile (alertas/incidentes/conteúdo) - estes
+    não têm "scope de operations" próprio, então o filtro do widget é só um refinamento posterior
+    da mesma lista (nunca busca dado novo, nunca amplia o que o profile já decidiu mostrar)."""
+    allowed = WIDGET_ALLOWED_FILTERS.get(widget_key, frozenset())
+    result = items
+    for field, value in widget_filters.items():
+        if field not in allowed:
+            warnings.append({"code": "FILTER_NOT_SUPPORTED_BY_WIDGET", "widget": widget_key, "field": field})
+            continue
+        if not value:
+            continue
+        wanted = set(value) if isinstance(value, (list, tuple, set)) else {value}
+        if field == "regionals":
+            result = [item for item in result if item.get(regional_field) in wanted]
+        elif field in ("severity", "status", "content_type"):
+            result = [item for item in result if item.get(field) in wanted]
+    return result
 
 # Meta de SLA percentual - não existe constante equivalente em `operations` (achado da
 # investigação: `sla_target_hours` é por O.S. individual, não um percentual agregado). Usa o
@@ -268,6 +417,34 @@ def _monitor_health_summary(db: Session) -> list[dict]:
     return rows
 
 
+# F5 - os 3 setores canônicos ("Suporte Externo", "Suporte Externo Rádio", "Suporte Externo
+# Fibra") compartilham o prefixo "Suporte Externo" - `backlog_history` só aceita um filtro de
+# TEXTO sobre `sector` (`sector_filter`, não uma lista como as outras funções), então
+# "starts_with" é o jeito honesto de escopar pro mesmo recorte operacional sem inventar um
+# mecanismo novo de filtro só pra este gráfico.
+_BACKLOG_HISTORY_SECTOR_FILTER = {"operator": "starts_with", "value": "Suporte Externo"}
+
+
+def _backlog_history_series(db: Session, user, *, date_from: date, date_to: date, regionals: list[str]) -> list[dict]:
+    """Série diária de backlog (evolução) - lida do snapshot já existente
+    (`operations_backlog_snapshots`/`ai.queries.backlog_history`), nenhuma consulta nova. Só tem
+    dado a partir do dia em que o job de captura entrou em produção (sem retroatividade) - dias
+    sem snapshot simplesmente não aparecem na série, não são preenchidos com zero."""
+    try:
+        rows = ai_queries.backlog_history(
+            db, user, metric="backlog", date_from=date_from, date_to=date_to,
+            group_by="regional", sector_filter=_BACKLOG_HISTORY_SECTOR_FILTER,
+        )
+    except Exception:
+        return []
+    if regionals:
+        rows = [row for row in rows if row.get("group") in regionals]
+    daily: dict[date, int] = {}
+    for row in rows:
+        daily[row["snapshot_date"]] = daily.get(row["snapshot_date"], 0) + row["quantity"]
+    return [{"date": day, "quantity": quantity} for day, quantity in sorted(daily.items())]
+
+
 def _uni_wide_critical_incident(incidents: list[dict]) -> bool:
     """Um incidente CRITICAL é "de fato UNI-wide" quando não tem regional (achado genuinamente
     global, ex.: MONITOR_UNHEALTHY) OU quando atinge múltiplas regionais ao mesmo tempo
@@ -345,25 +522,45 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
     # próprio frontend aplicar por padrão os "3 setores principais" (ver
     # frontend/app/operacao/page.tsx::DEFAULT_PRIORITY_SECTORS, espelho de
     # operations/scope.py::PRIMARY_SECTOR_NAMES). O cockpit precisa do mesmo default - profile pode
-    # sobrescrever via scope_json["sectors"] no futuro, mas nasce sempre escopado por padrão.
+    # sobrescrever via scope_json["sectors"], mas nasce sempre escopado por padrão.
     sectors = list((profile.scope_json or {}).get("sectors") or PRIMARY_SECTOR_NAMES)
-    filters: dict[str, Any] = {"sectors": sectors}
+    base_filters: dict[str, Any] = {"sectors": sectors}
     if regionals:
-        filters["regionals"] = regionals
+        base_filters["regionals"] = regionals
     user = system_user()
     today = datetime.now(OPERATIONS_TIMEZONE).date()
     week_ago = today - timedelta(days=6)
 
     warnings: list[dict] = []
 
-    overview_today = ops_queries.overview(db, today, today, user, **filters)
-    trend = ops_services.overview_trends(db, week_ago, today, user, granularity="day", **filters)
+    # F5 - regra de filtros: scope do profile = filtro base de toda a TV; widget.filters só pode
+    # RESTRINGIR esse scope (nunca ampliar) - ver _effective_operations_filters/
+    # _restrict_filter_values. Cada widget de "população" (production/backlog/sla) pode ter seu
+    # próprio recorte adicional, então cada um calcula seu PRÓPRIO filtro efetivo em vez de
+    # compartilhar um único `filters` fixo.
+    widget_entries = normalize_widget_entries(profile.widgets_json)
+    production_filters = _effective_operations_filters(base_filters, _widget_entry(widget_entries, "production")["filters"], "production", warnings)
+    backlog_filters = _effective_operations_filters(base_filters, _widget_entry(widget_entries, "backlog")["filters"], "backlog", warnings)
+    sla_filters = _effective_operations_filters(base_filters, _widget_entry(widget_entries, "sla")["filters"], "sla", warnings)
+
+    overview_today = ops_queries.overview(db, today, today, user, **_to_operations_rest_filters(production_filters))
+    trend = ops_services.overview_trends(db, week_ago, today, user, granularity="day", **_to_operations_rest_filters(production_filters))
     points = trend.get("points", [])
     avg_opened_7d = round(mean(p["opened_operation"] for p in points), 1) if points else 0.0
     avg_closed_7d = round(mean(p["completed"] for p in points), 1) if points else 0.0
 
+    # F5 - poucos gráficos, só com fonte confiável (validado com dado real antes de expor):
+    # abertas x finalizadas usa o MESMO `trend` já calculado acima (nenhuma consulta extra);
+    # SLA por dia vem do mesmo ponto (`sla_rate` já é confiável - validado sem None em 7 dias
+    # reais); evolução de backlog usa o snapshot diário já existente (uma consulta a mais).
+    charts = {
+        "production_7d": [{"date": p["period_start"], "opened": p["opened_operation"], "closed": p["completed"]} for p in points],
+        "sla_7d": [{"date": p["period_start"], "sla_rate": p["sla_rate"]} for p in points],
+        "backlog_7d": _backlog_history_series(db, user, date_from=week_ago, date_to=today, regionals=regionals),
+    }
+
     try:
-        aging = ai_queries.backlog_aging(db, user, group_by="regional", date_to=today, **filters)
+        aging = ai_queries.backlog_aging(db, user, group_by="regional", date_to=today, **backlog_filters)
         aging_rows = aging.get("data", [])
     except Exception:  # backlog vazio ou dimensão sem dado não pode derrubar o cockpit inteiro
         aging_rows = []
@@ -371,8 +568,14 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
     backlog_gt_3d = sum(row.get("over_3d", 0) for row in aging_rows)
     backlog_gt_7d = sum(row.get("over_7d", 0) for row in aging_rows)
     backlog_gt_15d = sum(row.get("over_15d", 0) for row in aging_rows)
+    # backlog.total precisa refletir o MESMO filtro do widget backlog (não o de production) -
+    # só recalcula `overview` de novo se o filtro efetivo realmente mudou (caso comum: igual ao
+    # de production, reusa sem custo extra de query).
+    backlog_overview = (
+        overview_today if backlog_filters == production_filters else ops_queries.overview(db, today, today, user, **_to_operations_rest_filters(backlog_filters))
+    )
 
-    collab_sla = ops_queries.collaborator_sla(db, week_ago, today, user, **filters)
+    collab_sla = ops_queries.collaborator_sla(db, week_ago, today, user, **_to_operations_rest_filters(sla_filters))
     regional_sla_totals: dict[str, dict[str, int]] = {}
     for item in collab_sla.get("items", []):
         regional_name = item.get("regional") or "NAO IDENTIFICADO"
@@ -389,13 +592,26 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
             critical_regionals.append({"regional": regional_name, "sla_rate": rate})
     critical_regionals.sort(key=lambda item: item["sla_rate"])
 
-    sla_current = overview_today.get("sla_rate")
+    sla_overview = (
+        overview_today if sla_filters == production_filters else ops_queries.overview(db, today, today, user, **_to_operations_rest_filters(sla_filters))
+    )
+    sla_current = sla_overview.get("sla_rate")
 
     freshness = ops_queries.data_freshness(db)
 
-    active_alerts = [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "ALERT"]
-    active_incidents = [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "INCIDENT"]
-    content = [_content_to_summary(c) for c in _content_query(db, profile, regionals)]
+    alerts_filters = _widget_entry(widget_entries, "active_alerts")["filters"]
+    incidents_filters = _widget_entry(widget_entries, "active_incidents")["filters"]
+    content_filters = _widget_entry(widget_entries, "cockpit_content")["filters"]
+
+    active_alerts = _apply_list_post_filters(
+        [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "ALERT"], alerts_filters, "active_alerts", warnings
+    )
+    active_incidents = _apply_list_post_filters(
+        [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "INCIDENT"], incidents_filters, "active_incidents", warnings
+    )
+    content = _apply_list_post_filters(
+        [_content_to_summary(c) for c in _content_query(db, profile, regionals)], content_filters, "cockpit_content", warnings
+    )
     monitor_health = _monitor_health_summary(db)
     any_monitor_unhealthy = any(item["alert_type"] == "MONITOR_UNHEALTHY" for item in active_alerts)
 
@@ -427,7 +643,7 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
             "key": profile.key,
             "name": profile.name,
             "purpose": profile.purpose,
-            "widgets": profile.widgets_json,
+            "widgets": [entry["key"] for entry in widget_entries],
             "refresh_seconds": profile.refresh_seconds,
             "display_config": profile.display_config_json,
         },
@@ -442,7 +658,7 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
             "avg_closed_7d": avg_closed_7d,
         },
         "backlog": {
-            "total": overview_today.get("in_progress", 0),
+            "total": backlog_overview.get("in_progress", 0),
             "gt_3d": backlog_gt_3d,
             "gt_7d": backlog_gt_7d,
             "gt_15d": backlog_gt_15d,
@@ -456,6 +672,7 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
         "incidents": active_incidents,
         "content": content,
         "monitor_health": monitor_health,
+        "charts": charts,
         "data_freshness": freshness,
         "meta": meta,
     }
@@ -569,3 +786,206 @@ def publish_cockpit_content(
     db.commit()
     db.refresh(content)
     return content
+
+
+def dismiss_cockpit_content(db: Session, content: IntelligenceCockpitContent) -> IntelligenceCockpitContent:
+    """Expira manualmente uma publicação (Administração → Publicações) - status vira DISMISSED,
+    o que já é suficiente pra `_content_query` parar de mostrar na TV (só aceita status ACTIVE)."""
+    content.status = "DISMISSED"
+    db.commit()
+    db.refresh(content)
+    return content
+
+
+def update_cockpit_content(
+    db: Session,
+    content: IntelligenceCockpitContent,
+    *,
+    title: str | None = None,
+    body: str | None = None,
+    severity: str | None = None,
+    valid_until: datetime | None = None,
+) -> IntelligenceCockpitContent:
+    """Edição simples de uma publicação ativa (Administração → Publicações) - só os campos
+    editoriais (título/corpo/severidade/validade); origem, tipo e profile/scope não mudam depois
+    de publicados (evita reescrever a proveniência de um conteúdo já entregue)."""
+    if content.status != "ACTIVE":
+        raise CockpitContentValidationError("só é possível editar conteúdo ACTIVE.")
+    if title is not None:
+        if not title.strip():
+            raise CockpitContentValidationError("title não pode ficar vazio.")
+        if len(title) > MAX_TITLE_LENGTH:
+            raise CockpitContentValidationError(f"title excede o limite de {MAX_TITLE_LENGTH} caracteres.")
+        content.title = title.strip()
+    if body is not None:
+        if not body.strip():
+            raise CockpitContentValidationError("body não pode ficar vazio.")
+        if len(body) > MAX_BODY_LENGTH:
+            raise CockpitContentValidationError(f"body excede o limite de {MAX_BODY_LENGTH} caracteres.")
+        content.body = body.strip()
+    if severity is not None:
+        if severity not in CONTENT_SEVERITIES:
+            raise CockpitContentValidationError(f"severity inválida: {severity!r}. Use um de {CONTENT_SEVERITIES}.")
+        content.severity = severity
+    if valid_until is not None:
+        if valid_until <= datetime.now(timezone.utc):
+            raise CockpitContentValidationError("valid_until precisa ser uma data futura.")
+        content.valid_until = valid_until
+    db.commit()
+    db.refresh(content)
+    return content
+
+
+def list_cockpit_content(
+    db: Session,
+    *,
+    profile_key: str | None = None,
+    status: str | None = None,
+    content_type: str | None = None,
+    limit: int = 100,
+) -> list[IntelligenceCockpitContent]:
+    """Listagem para Administração → Publicações (ativos + histórico básico) - diferente de
+    `_content_query` (que é o que a TV vê): aqui mostra QUALQUER status e não aplica recorte de
+    regional, porque é uma tela de gestão, não a TV."""
+    conditions = []
+    if profile_key is not None:
+        conditions.append(IntelligenceCockpitContent.profile_key == profile_key)
+    if status is not None:
+        conditions.append(IntelligenceCockpitContent.status == status)
+    if content_type is not None:
+        conditions.append(IntelligenceCockpitContent.content_type == content_type)
+    return list(
+        db.scalars(
+            select(IntelligenceCockpitContent).where(*conditions).order_by(IntelligenceCockpitContent.created_at.desc()).limit(limit)
+        )
+    )
+
+
+# --- administração de profiles (F5) ---------------------------------------------------------------
+
+
+def list_profiles(db: Session) -> list[IntelligenceDashboardProfile]:
+    return list(db.scalars(select(IntelligenceDashboardProfile).order_by(IntelligenceDashboardProfile.key)))
+
+
+def create_profile(
+    db: Session,
+    *,
+    key: str,
+    name: str,
+    purpose: str,
+    scope: dict,
+    widgets: list[dict],
+    display_config: dict,
+    refresh_seconds: int,
+    active: bool,
+) -> IntelligenceDashboardProfile:
+    if not key or not key.strip():
+        raise ProfileValidationError("key é obrigatória.")
+    if get_profile(db, key) is not None:
+        raise ProfileValidationError(f"já existe um profile com key {key!r}.")
+    if not name or not name.strip():
+        raise ProfileValidationError("name é obrigatório.")
+    if refresh_seconds < 15:
+        raise ProfileValidationError("refresh_seconds precisa ser >= 15 (mesmo piso do polling da TV).")
+    validated_widgets = validate_widget_entries(widgets)
+    profile = IntelligenceDashboardProfile(
+        key=key.strip(),
+        name=name.strip(),
+        purpose=purpose,
+        scope_json=scope or {"regionals": []},
+        widgets_json=validated_widgets,
+        display_config_json=display_config or {},
+        refresh_seconds=refresh_seconds,
+        active=active,
+    )
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+def update_profile(
+    db: Session,
+    profile: IntelligenceDashboardProfile,
+    *,
+    name: str | None = None,
+    purpose: str | None = None,
+    scope: dict | None = None,
+    widgets: list[dict] | None = None,
+    display_config: dict | None = None,
+    refresh_seconds: int | None = None,
+    active: bool | None = None,
+) -> IntelligenceDashboardProfile:
+    if name is not None:
+        if not name.strip():
+            raise ProfileValidationError("name não pode ficar vazio.")
+        profile.name = name.strip()
+    if purpose is not None:
+        profile.purpose = purpose
+    if scope is not None:
+        profile.scope_json = scope
+    if widgets is not None:
+        profile.widgets_json = validate_widget_entries(widgets)
+    if display_config is not None:
+        profile.display_config_json = display_config
+    if refresh_seconds is not None:
+        if refresh_seconds < 15:
+            raise ProfileValidationError("refresh_seconds precisa ser >= 15 (mesmo piso do polling da TV).")
+        profile.refresh_seconds = refresh_seconds
+    if active is not None:
+        profile.active = active
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+def profile_to_admin_out(profile: IntelligenceDashboardProfile) -> dict:
+    return {
+        "id": profile.id,
+        "key": profile.key,
+        "name": profile.name,
+        "purpose": profile.purpose,
+        "scope": profile.scope_json,
+        "widgets": normalize_widget_entries(profile.widgets_json),
+        "display_config": profile.display_config_json,
+        "refresh_seconds": profile.refresh_seconds,
+        "active": profile.active,
+        "created_at": profile.created_at,
+        "updated_at": profile.updated_at,
+    }
+
+
+# --- catálogo de filtros para a Administração (F5) -------------------------------------------------
+
+
+def build_filter_catalog(db: Session) -> dict:
+    """Fontes REAIS para popular selects na Administração (perfis/widgets) - nunca JSON bruto
+    como interface principal. `os_subjects`/regionais/setores vêm dos mesmos catálogos que o
+    resto da Operação Analítica já usa; `team_models` vem da tabela real de modelos de equipe."""
+    from app.modules.operations.models import OperationTeamModel
+    from app.modules.operations.scope import ALL_SECTOR_NAMES
+    from app.services.regional import REGIONAL_CODE_MAP
+
+    team_models = list(db.scalars(select(OperationTeamModel.name).where(OperationTeamModel.active.is_(True)).order_by(OperationTeamModel.name)))
+
+    os_subjects: list[str] = []
+    try:
+        # Janela ampla só para popular o select com valores reais já usados - não é uma consulta
+        # de dado de produto, é catálogo de opções (mesmo espírito de `filter_options`).
+        today = datetime.now(OPERATIONS_TIMEZONE).date()
+        options = ops_queries.filter_options(db, today - timedelta(days=400), today, system_user())
+        os_subjects = sorted(options.get("subjects", []))
+    except Exception:
+        os_subjects = []
+
+    return {
+        "regionals": sorted(set(REGIONAL_CODE_MAP.values())),
+        "sectors": list(ALL_SECTOR_NAMES),
+        "team_models": team_models,
+        "os_subjects": os_subjects,
+        "content_types": list(CONTENT_TYPES),
+        "content_severities": list(CONTENT_SEVERITIES),
+        "profile_purposes": ["MATRIX_TV", "REGIONAL_TV", "EXECUTIVE", "INCIDENT_ROOM", "NOC"],
+        "widgets": [{"key": key, "allowed_filters": sorted(allowed)} for key, allowed in WIDGET_ALLOWED_FILTERS.items()],
+    }
