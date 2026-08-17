@@ -260,11 +260,21 @@ def _run_os_concentration_rule(db: Session, rule: IntelligenceAlertRule) -> list
                     "os_count": len(group),
                     "radius_meters": radius_meters,
                     "window_minutes": window_minutes,
-                    # Amostra identificável (código real da O.S. + endereço/bairro, não o id interno
-                    # do banco) - pedido explícito: dá pra saber QUAIS O.S./endereços formam o
-                    # agrupamento sem precisar consultar o banco na mão.
+                    # Centro do agrupamento (média das coordenadas do grupo) - pedido explícito para
+                    # localizar o alerta sem abrir o detalhe.
+                    "center_latitude": round(center_lat, 6),
+                    "center_longitude": round(center_lng, 6),
+                    # Amostra identificável (código real da O.S. + endereço/bairro/coordenadas, não o
+                    # id interno do banco) - pedido explícito: dá pra saber QUAIS O.S./endereços
+                    # formam o agrupamento sem precisar consultar o banco na mão.
                     "os_sample": [
-                        {"order_code": p.order_code, "address": p.address, "neighborhood": p.neighborhood}
+                        {
+                            "order_code": p.order_code,
+                            "address": p.address,
+                            "neighborhood": p.neighborhood,
+                            "latitude": round(p.latitude, 6),
+                            "longitude": round(p.longitude, 6),
+                        }
                         for p in group[:10]
                     ],
                 },

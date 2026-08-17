@@ -144,6 +144,10 @@ def run_collective_outage_monitor(db: Session) -> MonitorRunResult:
                     "cluster_size": size,
                     "radius_meters": cluster["radius_meters"],
                     "window_minutes": WINDOW_MINUTES,
+                    # Centro do agrupamento - mesmo dado já usado no dedupe_key/scope, exposto aqui
+                    # também para localizar o incidente sem abrir o detalhe.
+                    "center_latitude": round(cluster["center_latitude"], 6),
+                    "center_longitude": round(cluster["center_longitude"], 6),
                     "logins_sample": sample_logins,
                     "dominant_transmitter_id": transmitter_id,
                     "dominant_transmitter_label": transmitter_label,

@@ -178,6 +178,23 @@ function evidenceLine(item: CockpitAlertSummary, slaTarget: number): string {
   return item.summary.length > 96 ? `${item.summary.slice(0, 93)}...` : item.summary;
 }
 
+// Localização legível sem abrir o detalhe (pedido explícito: "mostrar qual rua e ter as
+// coordenadas em cada linha desses alertas"). Rua vem do primeiro endereço da amostra real de O.S.
+// (evidence.os_sample) quando existir; coordenadas vêm do centro do agrupamento já calculado pelo
+// monitor (evidence.center_latitude/longitude) - nunca inventa dado que não veio na evidência.
+function locationLine(item: CockpitAlertSummary): string | null {
+  const ev = item.evidence ?? {};
+  const sample = Array.isArray(ev.os_sample) ? (ev.os_sample as Array<Record<string, unknown>>) : [];
+  const address = typeof sample[0]?.address === "string" ? (sample[0].address as string) : null;
+  const lat = asNumber(ev.center_latitude);
+  const lng = asNumber(ev.center_longitude);
+  const coords = lat !== null && lng !== null ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : null;
+  if (address && coords) return `📍 ${address} · ${coords}`;
+  if (address) return `📍 ${address}`;
+  if (coords) return `📍 ${coords}`;
+  return null;
+}
+
 function SeverityDot({ tone, label }: { tone: Tone; label: string }) {
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500" title={label}>
@@ -261,6 +278,10 @@ function FeaturedProblem({ item, slaTarget }: { item: CockpitAlertSummary; slaTa
       </div>
       <h3 className="mt-1.5 text-base font-semibold text-slate-950">{item.title}</h3>
       <p className="mt-1 text-sm font-medium text-slate-700">{evidenceLine(item, slaTarget)}</p>
+      {locationLine(item) && <p className="mt-0.5 text-xs text-slate-500">{locationLine(item)}</p>}
+      {item.recommended_action && (
+        <p className="mt-1 text-xs font-medium text-slate-600">Ação recomendada: {item.recommended_action}</p>
+      )}
     </div>
   );
 }
@@ -278,6 +299,7 @@ function CompactProblemRow({ item, slaTarget }: { item: CockpitAlertSummary; sla
             "Possível incidente coletivo - Y") - repetir aqui duplicava a informação. */}
         <p className="truncate text-xs font-semibold text-slate-800">{item.title}</p>
         <p className="truncate text-[11px] text-slate-500">{evidenceLine(item, slaTarget)}</p>
+        {locationLine(item) && <p className="truncate text-[10px] text-slate-400">{locationLine(item)}</p>}
       </div>
       <span className="shrink-0 text-[10px] text-slate-400">{formatAge(item.age_seconds)}</span>
     </div>
