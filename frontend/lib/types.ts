@@ -56,7 +56,10 @@ export type Permission =
   | "admin:audit:read"
   | "admin:ai_governance:read"
   | "admin:ai_governance:write"
-  | "admin:ai_tokens:manage";
+  | "admin:ai_tokens:manage"
+  | "intelligence:read"
+  | "intelligence:manage"
+  | "intelligence:publish";
 
 export type AuthUser = {
   id: number;

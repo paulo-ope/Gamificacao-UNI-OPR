@@ -14,6 +14,7 @@ from app.modules.admin.router import router as admin_router
 from app.modules.ai.router import public_router as ai_public_router, router as ai_router
 from app.modules.ai_governance.bootstrap import ensure_ai_governance_seed
 from app.modules.ai_governance.router import router as ai_governance_router
+from app.modules.intelligence.cockpit import ensure_default_dashboard_profile
 from app.modules.intelligence.router import router as intelligence_router
 from app.modules.intelligence.scheduler import run_intelligence_scheduler_loop
 from app.modules.management.router import router as management_router
@@ -50,6 +51,9 @@ async def lifespan(app: FastAPI):
     if inspector.has_table("ai_endpoints") and inspector.has_table("ai_field_permissions"):
         with SessionLocal() as db:
             ensure_ai_governance_seed(db)
+    if inspector.has_table("intelligence_dashboard_profiles"):
+        with SessionLocal() as db:
+            ensure_default_dashboard_profile(db)
 
     # O loop fica sempre rodando quando o IXC está configurado - se ligar/desligar e o intervalo passam a
     # ser controlados pelo banco (AppSetting), lidos a cada ciclo, para dar pra mudar pela própria tela de

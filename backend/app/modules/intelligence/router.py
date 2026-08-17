@@ -1,6 +1,8 @@
-"""Endpoints do UNI Intelligence - só o necessário para inspecionar/testar o motor nesta fase
-(F0+F1). Sem Cockpit API, sem dashboard_profiles, sem frontend de TV - isso é escopo de F2+ (ver
-docs/plano-plataforma-inteligencia-operacional.md).
+"""Endpoints do UNI Intelligence.
+
+F0+F1: inspeção do motor (monitores, runs, alertas). F2: Cockpit API (payload único da TV) e
+publicação genérica de conteúdo (`intelligence_cockpit_content`) - ver
+docs/plano-plataforma-inteligencia-operacional.md.
 
 Nasce 100% no FilterContractV1: filtros de igualdade em plural/snake_case, envelope `meta` com
 applied_filters/ignored_filters/warnings/source_last_sync em toda listagem - sem herdar o
@@ -19,6 +21,7 @@ from app.models import User
 from app.modules.ai_governance.response_meta import build_meta
 
 from .alerts import dismiss_alert
+from .cockpit import CockpitContentValidationError, build_cockpit_payload, get_profile, publish_cockpit_content
 from .models import IntelligenceAlert, IntelligenceAlertEvent, IntelligenceMonitorRun
 from .registry import list_monitors
 from .scheduler import (
@@ -35,11 +38,14 @@ from .schemas import (
     AlertEventOut,
     AlertOut,
     AlertPageOut,
+    CockpitContentOut,
+    CockpitPayloadOut,
     IntelligenceResponseMetaOut,
     MonitorListOut,
     MonitorOut,
     MonitorRunOut,
     MonitorRunPageOut,
+    PublishCockpitContentRequest,
 )
 
 router = APIRouter(
@@ -273,3 +279,74 @@ def dismiss_alert_endpoint(
     db.refresh(alert)
     base = _alert_to_out(alert)
     return AlertDetailOut(**base.model_dump(), events=[_event_to_out(event) for event in alert.events])
+
+
+# --- Cockpit (F2) --------------------------------------------------------------------------------
+
+
+def _content_out(content) -> CockpitContentOut:
+    return CockpitContentOut(
+        id=content.id,
+        content_type=content.content_type,
+        profile_key=content.profile_key,
+        regional=content.regional,
+        severity=content.severity,
+        title=content.title,
+        body=content.body,
+        evidence=content.evidence_json,
+        confidence=content.confidence,
+        source_type=content.source_type,
+        source_key=content.source_key,
+        author_user_id=content.author_user_id,
+        valid_from=content.valid_from,
+        valid_until=content.valid_until,
+        created_at=content.created_at,
+    )
+
+
+@router.get("/cockpit/{profile_key}", response_model=CockpitPayloadOut)
+def get_cockpit_payload(profile_key: str, db: Session = Depends(get_db)) -> CockpitPayloadOut:
+    """Payload único da TV - tudo que o frontend precisa para renderizar o cockpit num só
+    request. Monta no backend reaproveitando funções já existentes de operations/ai (ver
+    cockpit.py); o frontend nunca chama dezenas de endpoints separados."""
+    profile = get_profile(db, profile_key)
+    if profile is None or not profile.active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Profile '{profile_key}' não encontrado.")
+    payload = build_cockpit_payload(db, profile)
+    return CockpitPayloadOut(**payload)
+
+
+@router.post(
+    "/cockpit-content",
+    response_model=CockpitContentOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("intelligence:publish"))],
+)
+def publish_cockpit_content_endpoint(
+    body: PublishCockpitContentRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> CockpitContentOut:
+    """Porta de publicação REST - usa a MESMA função (`cockpit.publish_cockpit_content`) que a
+    tool MCP `opr_publish_cockpit_content`, para nunca duplicar regra de validação. Origem
+    sempre determinada pelo backend a partir de quem chamou (nunca aceita publisher arbitrário
+    vindo do payload) - aqui é sempre `source_type="USER"` com `author_user_id` do usuário logado."""
+    try:
+        content = publish_cockpit_content(
+            db,
+            content_type=body.content_type,
+            profile_key=body.profile_key,
+            scope=body.scope,
+            severity=body.severity,
+            title=body.title,
+            body=body.body,
+            evidence=body.evidence,
+            confidence=body.confidence,
+            valid_until=body.valid_until,
+            source_type="USER",
+            source_key=None,
+            author_user_id=user.id,
+        )
+    except CockpitContentValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return _content_out(content)

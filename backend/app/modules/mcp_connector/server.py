@@ -1062,4 +1062,81 @@ def build_mcp_server() -> FastMCP:
                 }
             )
 
+    @mcp.tool(
+        name="opr_publish_cockpit_content",
+        annotations={"title": "Publicar conteúdo no cockpit", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    )
+    def opr_publish_cockpit_content(
+        content_type: str,
+        title: str,
+        body: str,
+        profile_key: str | None = None,
+        scope: dict[str, Any] | None = None,
+        severity: str = "INFO",
+        evidence: dict[str, Any] | None = None,
+        confidence: float | None = None,
+        valid_until: str | None = None,
+    ) -> str:
+        """Publica um conteúdo no cockpit UNI Intelligence (TV operacional) - insight de IA,
+        comunicado, aviso de manutenção etc. É a ÚNICA forma de escrita exposta por este servidor
+        MCP: não altera alertas, não fecha O.S., não mexe em agenda nem em rede - só publica
+        conteúdo informativo, sempre com origem identificável (nunca anônimo).
+
+        Args:
+            content_type: AI_INSIGHT, MANUAL_MESSAGE, ANNOUNCEMENT, OPERATIONAL_PRIORITY,
+                INCIDENT_UPDATE, MAINTENANCE_NOTICE ou INFO.
+            title: até 200 caracteres.
+            body: até 4000 caracteres.
+            profile_key: profile do cockpit a direcionar (ex.: "uni-geral"); None = conteúdo
+                global, aparece em qualquer profile.
+            scope: opcional, ex. {"regional": "UNI - JI PARANA"} ou {"regionals": [...]}.
+            severity: LOW, MEDIUM, HIGH, CRITICAL ou INFO (default).
+            evidence: dados de apoio estruturados (opcional).
+            confidence: 0.0 a 1.0 (opcional) - grau de confiança da análise, se houver.
+            valid_until: ISO8601 (ex. "2026-08-20T00:00:00-04:00") - depois disso some da TV.
+
+        Returns:
+            JSON com o conteúdo publicado (id, status, created_at, ...).
+        """
+        from app.modules.intelligence.cockpit import CockpitContentValidationError, publish_cockpit_content
+
+        user = _current_user()
+        if "intelligence:publish" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para publicar no cockpit (intelligence:publish).")
+        parsed_valid_until = _parse_datetime(valid_until) if valid_until else None
+        with SessionLocal() as db:
+            try:
+                content = publish_cockpit_content(
+                    db,
+                    content_type=content_type,
+                    profile_key=profile_key,
+                    scope=scope or {},
+                    severity=severity,
+                    title=title,
+                    body=body,
+                    evidence=evidence or {},
+                    confidence=confidence,
+                    valid_until=parsed_valid_until,
+                    source_type="MCP",
+                    source_key=f"mcp:{user.email}",
+                    author_user_id=user.id,
+                )
+            except CockpitContentValidationError as exc:
+                raise ValueError(str(exc)) from exc
+            return _dump(
+                {
+                    "id": content.id,
+                    "content_type": content.content_type,
+                    "profile_key": content.profile_key,
+                    "severity": content.severity,
+                    "title": content.title,
+                    "status": content.status,
+                    "source_type": content.source_type,
+                    "source_key": content.source_key,
+                    "author_user_id": content.author_user_id,
+                    "valid_until": content.valid_until,
+                    "created_at": content.created_at,
+                }
+            )
+
     return mcp

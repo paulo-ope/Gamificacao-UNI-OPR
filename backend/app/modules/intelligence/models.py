@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -161,3 +161,71 @@ class IntelligenceAlertEvent(Base):
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     alert: Mapped["IntelligenceAlert"] = relationship(back_populates="events")
+
+
+class IntelligenceDashboardProfile(Base):
+    """Um perfil de exibição do cockpit (F2) - define escopo, widgets e frequência de uma tela,
+    sem hardcodar uma página por regional/finalidade. `key` é o slug usado na URL da TV
+    (`/cockpit/{key}`). Ver docs/plano-plataforma-inteligencia-operacional.md (item F)."""
+
+    __tablename__ = "intelligence_dashboard_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    # MATRIX_TV | REGIONAL_TV | EXECUTIVE | INCIDENT_ROOM | NOC
+    purpose: Mapped[str] = mapped_column(String(30), nullable=False, default="MATRIX_TV")
+    # {"regionals": []} - lista vazia = UNI inteira; escopo é aplicado no servidor (cockpit.py),
+    # nunca decidido pela tela.
+    scope_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Catálogo fechado de widgets (ver cockpit.py::WIDGET_CATALOG) - a tela renderiza só o que
+    # está aqui, na ordem dada.
+    widgets_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    display_config_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    refresh_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class IntelligenceCockpitContent(Base):
+    """Conteúdo genérico publicado no cockpit - IA, mensagem manual, aviso, comunicado... ChatGPT
+    é só UM publicador possível entre vários (gestor, supervisor, sistema, outro monitor, outra
+    IA). Não existe uma tabela `ai_insights` separada de propósito (decisão aprovada): tudo passa
+    por aqui, diferenciado por `content_type`, e o widget `ai_insights` do cockpit é só um filtro
+    `content_type=AI_INSIGHT` sobre esta mesma tabela."""
+
+    __tablename__ = "intelligence_cockpit_content"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # AI_INSIGHT | MANUAL_MESSAGE | ANNOUNCEMENT | OPERATIONAL_PRIORITY | INCIDENT_UPDATE |
+    # MAINTENANCE_NOTICE | INFO
+    content_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # None = conteúdo global (aparece em qualquer profile); preenchido = direcionado a um profile
+    # específico (ver cockpit.py: profile específico prevalece sobre global).
+    profile_key: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    scope_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    regional: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # LOW | MEDIUM | HIGH | CRITICAL | INFO (INFO cobre o caso comum de aviso/comunicado sem
+    # gravidade operacional - alertas não usam INFO, conteúdo publicado sim).
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="INFO")
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # SYSTEM | MONITOR | AI | USER | MCP - de onde a publicação veio. Nenhuma publicação
+    # anônima: toda linha tem source_type + (source_key ou author_user_id) - ver cockpit.py::publish_cockpit_content.
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    author_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # ACTIVE | EXPIRED | DISMISSED
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE", index=True)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (
+        Index("ix_intelligence_cockpit_content_status_profile", "status", "profile_key"),
+    )

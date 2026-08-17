@@ -154,6 +154,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "admin:ai_tokens:manage",
         "intelligence:read",
         "intelligence:manage",
+        "intelligence:publish",
     },
     # Identidade de máquina (não uma pessoa logando) - usada pela chave de API que expõe dados
     # analíticos de O.S. para consumo por IA (conector MCP/Actions). Só leitura, sem nenhuma
@@ -228,6 +229,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "ai:query": "IA: consultar dados analíticos de O.S.",
     "intelligence:read": "Intelligence: consultar monitores, runs e alertas",
     "intelligence:manage": "Intelligence: descartar/reconhecer alertas",
+    "intelligence:publish": "Intelligence: publicar conteúdo no cockpit",
 }
 
 PROFILE_LABELS: dict[str, tuple[str, str]] = {
