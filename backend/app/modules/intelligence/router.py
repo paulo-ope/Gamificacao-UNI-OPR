@@ -20,6 +20,15 @@ from app.db.session import get_db
 from app.models import User
 from app.modules.ai_governance.response_meta import build_meta
 
+from .alert_rules import (
+    AlertRuleValidationError,
+    build_alert_rule_catalog,
+    alert_rule_to_out,
+    create_alert_rule,
+    get_alert_rule,
+    list_alert_rules,
+    update_alert_rule,
+)
 from .alerts import dismiss_alert
 from .cockpit import (
     CockpitContentValidationError,
@@ -48,6 +57,9 @@ from .scheduler import (
     update_monitor_settings,
 )
 from .schemas import (
+    AdminAlertRuleCreateRequest,
+    AdminAlertRuleOut,
+    AdminAlertRuleUpdateRequest,
     AdminContentOut,
     AdminContentUpdateRequest,
     AdminMonitorUpdateRequest,
@@ -59,6 +71,7 @@ from .schemas import (
     AlertEventOut,
     AlertOut,
     AlertPageOut,
+    AlertRuleCatalogOut,
     CockpitContentOut,
     CockpitPayloadOut,
     FilterCatalogOut,
@@ -508,6 +521,63 @@ def update_monitor_admin_endpoint(monitor_key: str, body: AdminMonitorUpdateRequ
         last_success_at=success_run.started_at if success_run else None,
         consecutive_failures=count_consecutive_failures(runs),
     )
+
+
+# --- regras de alertas (parametrizáveis) ---------------------------------------------------------
+
+
+@admin_router.get("/admin/alert-rules", response_model=list[AdminAlertRuleOut])
+def list_alert_rules_endpoint(db: Session = Depends(get_db)) -> list[AdminAlertRuleOut]:
+    return [AdminAlertRuleOut(**alert_rule_to_out(rule)) for rule in list_alert_rules(db)]
+
+
+@admin_router.get("/admin/alert-rules/catalog", response_model=AlertRuleCatalogOut)
+def get_alert_rule_catalog_endpoint() -> AlertRuleCatalogOut:
+    return AlertRuleCatalogOut(**build_alert_rule_catalog())
+
+
+@admin_router.post("/admin/alert-rules", response_model=AdminAlertRuleOut, status_code=status.HTTP_201_CREATED)
+def create_alert_rule_endpoint(body: AdminAlertRuleCreateRequest, db: Session = Depends(get_db)) -> AdminAlertRuleOut:
+    try:
+        rule = create_alert_rule(
+            db,
+            key=body.key,
+            name=body.name,
+            rule_type=body.rule_type,
+            scope=body.scope,
+            params=body.params,
+            severity=body.severity,
+            active=body.active,
+            cooldown_minutes=body.cooldown_minutes,
+            confirm_cycles=body.confirm_cycles,
+            resolve_cycles=body.resolve_cycles,
+        )
+    except AlertRuleValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return AdminAlertRuleOut(**alert_rule_to_out(rule))
+
+
+@admin_router.put("/admin/alert-rules/{rule_key}", response_model=AdminAlertRuleOut)
+def update_alert_rule_endpoint(rule_key: str, body: AdminAlertRuleUpdateRequest, db: Session = Depends(get_db)) -> AdminAlertRuleOut:
+    rule = get_alert_rule(db, rule_key)
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Regra '{rule_key}' não encontrada.")
+    try:
+        rule = update_alert_rule(
+            db,
+            rule,
+            name=body.name,
+            active=body.active,
+            scope=body.scope,
+            params=body.params,
+            severity=body.severity,
+            cooldown_minutes=body.cooldown_minutes,
+            confirm_cycles=body.confirm_cycles,
+            resolve_cycles=body.resolve_cycles,
+        )
+    except AlertRuleValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return AdminAlertRuleOut(**alert_rule_to_out(rule))
 
 
 router.include_router(admin_router)

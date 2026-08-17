@@ -13,6 +13,7 @@ import {
   Radar,
   RefreshCw,
   Settings2,
+  ShieldAlert,
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -36,8 +37,11 @@ import {
   CONTENT_STATUS_LABELS,
   CONTENT_TYPE_LABELS,
   FILTER_FIELD_LABELS,
+  GROUP_BY_LABELS,
   MONITOR_RUN_STATUS_LABELS,
   PROFILE_PURPOSE_LABELS,
+  RULE_PARAM_LABELS,
+  RULE_TYPE_LABELS,
   SEVERITY_LABELS,
   SOURCE_TYPE_LABELS,
   STATUS_WORD_LABELS,
@@ -49,6 +53,8 @@ import {
   intelligenceCockpitApi,
   type AdminContent,
   type AdminProfile,
+  type AlertRule,
+  type AlertRuleCatalog,
   type FilterCatalog,
   type IntelligenceAlert,
   type IntelligenceAlertDetail,
@@ -176,6 +182,7 @@ export default function IntelligencePage() {
             {canManage ? <TabsTrigger value="publicacoes"><Newspaper className="mr-1.5 h-4 w-4" /> Publicações</TabsTrigger> : null}
             {canManage ? <TabsTrigger value="profiles"><Settings2 className="mr-1.5 h-4 w-4" /> Profiles</TabsTrigger> : null}
             {canManage ? <TabsTrigger value="monitores"><MonitorCog className="mr-1.5 h-4 w-4" /> Monitores</TabsTrigger> : null}
+            {canManage ? <TabsTrigger value="regras"><ShieldAlert className="mr-1.5 h-4 w-4" /> Regras de Alertas</TabsTrigger> : null}
           </TabsList>
 
           <TabsContent value="cockpit"><CockpitTab canManage={canManage} /></TabsContent>
@@ -188,6 +195,9 @@ export default function IntelligencePage() {
           ) : null}
           {canManage ? (
             <TabsContent value="monitores"><MonitoresTab onError={setError} onMessage={setMessage} /></TabsContent>
+          ) : null}
+          {canManage ? (
+            <TabsContent value="regras"><AlertRulesTab onError={setError} onMessage={setMessage} /></TabsContent>
           ) : null}
         </Tabs>
       </section>
@@ -996,5 +1006,324 @@ function MonitoresTab({
         </Table>
       </div>
     </SectionCard>
+  );
+}
+
+const NUMERIC_RULE_PARAM_FIELDS = new Set([
+  "min_count",
+  "window_minutes",
+  "radius_meters",
+  "min_multiplier_over_average",
+  "baseline_days",
+  "threshold_value",
+  "window_days",
+  "max_consecutive_failures",
+]);
+
+function ParamValueEditor({
+  field,
+  value,
+  groupByOptions,
+  onChange,
+}: {
+  field: string;
+  value: unknown;
+  groupByOptions: string[];
+  onChange: (value: unknown) => void;
+}) {
+  if (field === "historical_comparison") {
+    return (
+      <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+        Ativada
+      </label>
+    );
+  }
+  if (field === "group_by") {
+    return (
+      <select
+        className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+        value={String(value ?? groupByOptions[0] ?? "regional")}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {groupByOptions.map((option) => (
+          <option key={option} value={option}>{labelFor(GROUP_BY_LABELS, option)}</option>
+        ))}
+      </select>
+    );
+  }
+  if (field === "target_monitor_key") {
+    return <Input value={String(value ?? "")} onChange={(event) => onChange(event.target.value)} placeholder="ex.: collective_outage" />;
+  }
+  if (NUMERIC_RULE_PARAM_FIELDS.has(field)) {
+    return (
+      <Input
+        type="number"
+        step={field === "min_multiplier_over_average" || field === "threshold_value" || field === "radius_meters" ? "0.1" : "1"}
+        value={value === undefined || value === null ? "" : String(value)}
+        onChange={(event) => onChange(event.target.value === "" ? undefined : Number(event.target.value))}
+      />
+    );
+  }
+  return <Input value={String(value ?? "")} onChange={(event) => onChange(event.target.value)} />;
+}
+
+function AlertRulesTab({
+  onError,
+  onMessage,
+}: {
+  onError: (value: string | null) => void;
+  onMessage: (value: string | null) => void;
+}) {
+  const [rules, setRules] = useState<AlertRule[]>([]);
+  const [catalog, setCatalog] = useState<AlertRuleCatalog | null>(null);
+  const [filterCatalog, setFilterCatalog] = useState<FilterCatalog | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [draft, setDraft] = useState<AlertRule | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState("");
+
+  async function loadAll() {
+    setLoading(true);
+    try {
+      const [ruleRows, ruleCatalog, filters] = await Promise.all([
+        intelligenceCockpitApi.listAlertRules(),
+        intelligenceCockpitApi.getAlertRuleCatalog(),
+        intelligenceCockpitApi.getFilterCatalog(),
+      ]);
+      setRules(ruleRows);
+      setCatalog(ruleCatalog);
+      setFilterCatalog(filters);
+      setNewType((current) => current || ruleCatalog.rule_types[0]?.key || "");
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Falha ao carregar regras de alerta.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function typeCatalogFor(ruleType: string) {
+    return catalog?.rule_types.find((entry) => entry.key === ruleType) ?? null;
+  }
+
+  function selectRule(key: string) {
+    const rule = rules.find((item) => item.key === key) ?? null;
+    setSelectedKey(key);
+    setDraft(rule ? { ...rule, scope: { ...rule.scope }, params: { ...rule.params } } : null);
+  }
+
+  async function save() {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      const updated = await intelligenceCockpitApi.updateAlertRule(draft.key, {
+        name: draft.name,
+        active: draft.active,
+        scope: draft.scope,
+        params: draft.params,
+        severity: draft.severity,
+        cooldown_minutes: draft.cooldown_minutes,
+        confirm_cycles: draft.confirm_cycles,
+        resolve_cycles: draft.resolve_cycles,
+      });
+      onMessage("Regra salva.");
+      setRules((current) => current.map((item) => (item.key === updated.key ? updated : item)));
+      setDraft({ ...updated, scope: { ...updated.scope }, params: { ...updated.params } });
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Falha ao salvar regra.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createRule() {
+    if (!newKey.trim() || !newName.trim() || !newType) {
+      onError("Key, nome e tipo são obrigatórios para criar uma regra.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const defaults = typeCatalogFor(newType)?.default_params ?? {};
+      const created = await intelligenceCockpitApi.createAlertRule({
+        key: newKey.trim(),
+        name: newName.trim(),
+        rule_type: newType,
+        scope: {},
+        params: defaults,
+        active: true,
+      });
+      onMessage("Regra criada.");
+      setNewKey("");
+      setNewName("");
+      setRules((current) => [...current, created]);
+      selectRule(created.key);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Falha ao criar regra.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function updateScopeField(field: string, values: string[]) {
+    setDraft((current) => (current ? { ...current, scope: { ...current.scope, [field]: values } } : current));
+  }
+
+  function updateParamField(field: string, value: unknown) {
+    setDraft((current) => (current ? { ...current, params: { ...current.params, [field]: value } } : current));
+  }
+
+  const draftTypeCatalog = draft ? typeCatalogFor(draft.rule_type) : null;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+      <SectionCard eyebrow="UNI Intelligence" title="Regras de Alertas" subtitle={loading ? "Carregando..." : `${rules.length} regra(s)`}>
+        <div className="grid gap-2">
+          {rules.map((rule) => (
+            <button
+              key={rule.key}
+              type="button"
+              onClick={() => selectRule(rule.key)}
+              className={`rounded-lg border px-3 py-2 text-left text-sm ${
+                selectedKey === rule.key ? "border-uni-royal bg-uni-royal/5 text-uni-royal" : "border-slate-200 text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <p className="font-semibold">{rule.name}</p>
+              <p className="text-[11px] text-slate-500">
+                {labelFor(RULE_TYPE_LABELS, rule.rule_type)} · {rule.active ? "ativa" : "inativa"}
+              </p>
+            </button>
+          ))}
+          {!loading && !rules.length ? <p className="text-sm text-slate-500">Nenhuma regra cadastrada ainda.</p> : null}
+        </div>
+        <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
+          <p className="text-[11px] font-semibold text-slate-500">Nova regra</p>
+          <Input value={newKey} onChange={(event) => setNewKey(event.target.value)} placeholder="key (ex.: aglomeracao-urbana)" />
+          <Input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Nome de exibição" />
+          <select
+            className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+            value={newType}
+            onChange={(event) => setNewType(event.target.value)}
+          >
+            {(catalog?.rule_types ?? []).map((type) => (
+              <option key={type.key} value={type.key}>{labelFor(RULE_TYPE_LABELS, type.key)}</option>
+            ))}
+          </select>
+          <Button type="button" size="sm" variant="outline" onClick={() => void createRule()} disabled={creating}>Criar regra</Button>
+        </div>
+      </SectionCard>
+
+      {draft && draftTypeCatalog ? (
+        <div className="grid gap-4">
+          <SectionCard
+            eyebrow="Regra"
+            title={draft.name}
+            subtitle={`${labelFor(RULE_TYPE_LABELS, draft.rule_type)} · ${draft.key}`}
+            actions={<Button type="button" onClick={() => void save()} disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>}
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Nome</p>
+                <Input value={draft.name} onChange={(event) => setDraft((current) => (current ? { ...current, name: event.target.value } : current))} />
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Severidade</p>
+                <select
+                  className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
+                  value={draft.severity}
+                  onChange={(event) => setDraft((current) => (current ? { ...current, severity: event.target.value as AlertRule["severity"] } : current))}
+                >
+                  {(catalog?.severities ?? []).map((severity) => (
+                    <option key={severity} value={severity}>{labelFor(SEVERITY_LABELS, severity)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Cooldown (minutos)</p>
+                <Input
+                  type="number"
+                  min={0}
+                  value={draft.cooldown_minutes}
+                  onChange={(event) => setDraft((current) => (current ? { ...current, cooldown_minutes: Number(event.target.value) } : current))}
+                />
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Ciclos para confirmar</p>
+                <Input
+                  type="number"
+                  min={1}
+                  value={draft.confirm_cycles}
+                  onChange={(event) => setDraft((current) => (current ? { ...current, confirm_cycles: Number(event.target.value) } : current))}
+                />
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Ciclos para resolver</p>
+                <Input
+                  type="number"
+                  min={1}
+                  value={draft.resolve_cycles}
+                  onChange={(event) => setDraft((current) => (current ? { ...current, resolve_cycles: Number(event.target.value) } : current))}
+                />
+              </div>
+              <div className="flex items-center gap-2 pt-6">
+                <input
+                  type="checkbox"
+                  id="rule-active"
+                  checked={draft.active}
+                  onChange={(event) => setDraft((current) => (current ? { ...current, active: event.target.checked } : current))}
+                />
+                <label htmlFor="rule-active" className="text-sm text-slate-700">Regra ativa</label>
+              </div>
+            </div>
+          </SectionCard>
+
+          {draftTypeCatalog.allowed_scope.length ? (
+            <SectionCard eyebrow="Escopo" title="Escopo da regra" subtitle="Só a população que a regra avalia - nomes canônicos do FilterContractV1.">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {draftTypeCatalog.allowed_scope.map((field) => (
+                  <div key={field}>
+                    <p className="mb-1 text-[11px] font-semibold text-slate-500">{FIELD_LABELS[field] ?? field}</p>
+                    <FilterValuesEditor
+                      field={field}
+                      values={(draft.scope[field] as string[] | undefined) ?? []}
+                      options={optionsForField(field, filterCatalog)}
+                      onChange={(values) => updateScopeField(field, values)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          ) : null}
+
+          {draftTypeCatalog.allowed_params.length ? (
+            <SectionCard eyebrow="Parâmetros" title="Parâmetros da regra" subtitle="Cada tipo de regra só aceita os parâmetros que o detector por trás realmente usa.">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {draftTypeCatalog.allowed_params.map((field) => (
+                  <div key={field}>
+                    <p className="mb-1 text-[11px] font-semibold text-slate-500">{labelFor(RULE_PARAM_LABELS, field)}</p>
+                    <ParamValueEditor
+                      field={field}
+                      value={draft.params[field]}
+                      groupByOptions={catalog?.group_by_values ?? []}
+                      onChange={(value) => updateParamField(field, value)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          ) : null}
+        </div>
+      ) : (
+        <SectionCard eyebrow="UNI Intelligence" title="Selecione uma regra" subtitle="Escolha uma regra à esquerda ou crie uma nova." />
+      )}
+    </div>
   );
 }

@@ -233,6 +233,48 @@ export type IntelligenceAlertDetail = IntelligenceAlert & { events: Intelligence
 
 export type AlertPage = { items: IntelligenceAlert[]; total: number; page: number; page_size: number };
 
+export type AlertRule = {
+  id: number;
+  key: string;
+  name: string;
+  rule_type: string;
+  active: boolean;
+  scope: Record<string, unknown>;
+  params: Record<string, unknown>;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  cooldown_minutes: number;
+  confirm_cycles: number;
+  resolve_cycles: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlertRuleInput = {
+  key?: string;
+  name?: string;
+  rule_type?: string;
+  scope?: Record<string, unknown>;
+  params?: Record<string, unknown>;
+  severity?: string;
+  active?: boolean;
+  cooldown_minutes?: number;
+  confirm_cycles?: number;
+  resolve_cycles?: number;
+};
+
+export type AlertRuleTypeCatalogEntry = {
+  key: string;
+  allowed_scope: string[];
+  allowed_params: string[];
+  default_params: Record<string, unknown>;
+};
+
+export type AlertRuleCatalog = {
+  rule_types: AlertRuleTypeCatalogEntry[];
+  severities: string[];
+  group_by_values: string[];
+};
+
 export type PublishCockpitContentInput = {
   content_type: string;
   profile_key?: string | null;
@@ -279,6 +321,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// Cache raso em memória (TTL curto) para catálogos que várias abas da Administração pedem de
+// forma independente (Cockpit/Publicações/Profiles chamam listProfiles(); Profiles chama
+// getFilterCatalog()) - achado real de performance: sem isso, trocar de aba refaz a mesma consulta
+// mais de uma vez em poucos segundos. Nunca usado para dado operacional (alertas, conteúdo,
+// monitores) - só catálogo que muda pouco.
+const _shortCache = new Map<string, { value: unknown; expiresAt: number }>();
+const CACHE_TTL_MS = 30_000;
+
+async function cached<T>(key: string, loader: () => Promise<T>): Promise<T> {
+  const hit = _shortCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.value as T;
+  const value = await loader();
+  _shortCache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  return value;
+}
+
+function invalidateCache(key: string) {
+  _shortCache.delete(key);
+}
+
 export const intelligenceCockpitApi = {
   getCockpit: (profileKey: string) => request<CockpitPayload>(`/intelligence/cockpit/${encodeURIComponent(profileKey)}`),
 
@@ -309,12 +371,21 @@ export const intelligenceCockpitApi = {
     request<MonitorInfo>(`/intelligence/admin/monitors/${encodeURIComponent(monitorKey)}`, { method: "PUT", body: JSON.stringify(payload) }),
 
   // --- profiles -----------------------------------------------------------------------------------
-  listProfiles: () => request<AdminProfile[]>("/intelligence/admin/profiles"),
+  listProfiles: () => cached("profiles", () => request<AdminProfile[]>("/intelligence/admin/profiles")),
   getProfile: (profileKey: string) => request<AdminProfile>(`/intelligence/admin/profiles/${encodeURIComponent(profileKey)}`),
-  createProfile: (payload: AdminProfileInput) => request<AdminProfile>("/intelligence/admin/profiles", { method: "POST", body: JSON.stringify(payload) }),
+  createProfile: (payload: AdminProfileInput) =>
+    request<AdminProfile>("/intelligence/admin/profiles", { method: "POST", body: JSON.stringify(payload) }).then((result) => {
+      invalidateCache("profiles");
+      return result;
+    }),
   updateProfile: (profileKey: string, payload: AdminProfileInput) =>
-    request<AdminProfile>(`/intelligence/admin/profiles/${encodeURIComponent(profileKey)}`, { method: "PUT", body: JSON.stringify(payload) }),
-  getFilterCatalog: () => request<FilterCatalog>("/intelligence/admin/filter-catalog"),
+    request<AdminProfile>(`/intelligence/admin/profiles/${encodeURIComponent(profileKey)}`, { method: "PUT", body: JSON.stringify(payload) }).then(
+      (result) => {
+        invalidateCache("profiles");
+        return result;
+      },
+    ),
+  getFilterCatalog: () => cached("filter-catalog", () => request<FilterCatalog>("/intelligence/admin/filter-catalog")),
 
   // --- publicações --------------------------------------------------------------------------------
   listAdminContent: (params: { profile_key?: string; status?: string; content_type?: string } = {}) => {
@@ -328,5 +399,12 @@ export const intelligenceCockpitApi = {
   updateAdminContent: (contentId: number, payload: AdminContentUpdateInput) =>
     request<AdminContent>(`/intelligence/admin/content/${contentId}`, { method: "PUT", body: JSON.stringify(payload) }),
   dismissAdminContent: (contentId: number) =>
-    request<AdminContent>(`/intelligence/admin/content/${contentId}/dismiss`, { method: "POST" })
+    request<AdminContent>(`/intelligence/admin/content/${contentId}/dismiss`, { method: "POST" }),
+
+  // --- regras de alertas ---------------------------------------------------------------------
+  listAlertRules: () => request<AlertRule[]>("/intelligence/admin/alert-rules"),
+  getAlertRuleCatalog: () => cached("alert-rule-catalog", () => request<AlertRuleCatalog>("/intelligence/admin/alert-rules/catalog")),
+  createAlertRule: (payload: AlertRuleInput) => request<AlertRule>("/intelligence/admin/alert-rules", { method: "POST", body: JSON.stringify(payload) }),
+  updateAlertRule: (ruleKey: string, payload: AlertRuleInput) =>
+    request<AlertRule>(`/intelligence/admin/alert-rules/${encodeURIComponent(ruleKey)}`, { method: "PUT", body: JSON.stringify(payload) })
 };

@@ -351,3 +351,59 @@ class AdminMonitorUpdateRequest(BaseModel):
 
 class AdminContentOut(CockpitContentOut):
     status: str
+
+
+# --- Regras de Alertas (parametrizáveis) -----------------------------------------------------
+
+
+class AdminAlertRuleOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    rule_type: str
+    active: bool
+    scope: dict
+    params: dict
+    severity: str
+    cooldown_minutes: int
+    confirm_cycles: int
+    resolve_cycles: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminAlertRuleCreateRequest(BaseModel):
+    key: str
+    name: str
+    rule_type: str
+    scope: dict = {}
+    params: dict = {}
+    severity: str = "MEDIUM"
+    active: bool = True
+    cooldown_minutes: int = 0
+    confirm_cycles: int = 1
+    resolve_cycles: int = 2
+
+
+class AdminAlertRuleUpdateRequest(BaseModel):
+    name: str | None = None
+    active: bool | None = None
+    scope: dict | None = None
+    params: dict | None = None
+    severity: str | None = None
+    cooldown_minutes: int | None = None
+    confirm_cycles: int | None = None
+    resolve_cycles: int | None = None
+
+
+class AlertRuleTypeCatalogEntryOut(BaseModel):
+    key: str
+    allowed_scope: list[str]
+    allowed_params: list[str]
+    default_params: dict
+
+
+class AlertRuleCatalogOut(BaseModel):
+    rule_types: list[AlertRuleTypeCatalogEntryOut]
+    severities: list[str]
+    group_by_values: list[str]

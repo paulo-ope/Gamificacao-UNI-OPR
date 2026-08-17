@@ -958,6 +958,35 @@ def profile_to_admin_out(profile: IntelligenceDashboardProfile) -> dict:
 
 # --- catálogo de filtros para a Administração (F5) -------------------------------------------------
 
+# Achado real (investigação de performance): `build_filter_catalog` chamava `ops_queries.
+# filter_options()` só para extrair `os_subjects` - essa função varre ~16 colunas de
+# `operations_orders` (uma query DISTINCT por coluna), cada uma um Seq Scan completo na tabela
+# (janela de 400 dias cobre 95% das linhas, o índice de data não ajuda) - medido em produção:
+# 1.8-3.4s na aba Profiles só por causa disso, para usar 1 de 16 resultados. Query dedicada abaixo
+# faz 1 scan em vez de 16. `os_subjects` muda pouco (é catálogo de opções, não dado operacional em
+# tempo real) - por isso também cacheado por alguns minutos em processo (nunca por usuário/request,
+# o valor é o mesmo para qualquer chamador).
+_OS_SUBJECTS_CACHE_TTL_SECONDS = 300
+_os_subjects_cache: dict[str, Any] = {"values": None, "expires_at": None}
+
+
+def _distinct_os_subjects(db: Session) -> list[str]:
+    from app.modules.operations.models import OperationOrder
+
+    cached_values = _os_subjects_cache["values"]
+    expires_at = _os_subjects_cache["expires_at"]
+    now = datetime.now(timezone.utc)
+    if cached_values is not None and expires_at is not None and now < expires_at:
+        return cached_values
+
+    values = db.scalars(
+        select(OperationOrder.os_subject).where(OperationOrder.os_subject.is_not(None), OperationOrder.os_subject != "").distinct()
+    )
+    result = sorted({str(value) for value in values}, key=str.casefold)
+    _os_subjects_cache["values"] = result
+    _os_subjects_cache["expires_at"] = now + timedelta(seconds=_OS_SUBJECTS_CACHE_TTL_SECONDS)
+    return result
+
 
 def build_filter_catalog(db: Session) -> dict:
     """Fontes REAIS para popular selects na Administração (perfis/widgets) - nunca JSON bruto
@@ -969,13 +998,8 @@ def build_filter_catalog(db: Session) -> dict:
 
     team_models = list(db.scalars(select(OperationTeamModel.name).where(OperationTeamModel.active.is_(True)).order_by(OperationTeamModel.name)))
 
-    os_subjects: list[str] = []
     try:
-        # Janela ampla só para popular o select com valores reais já usados - não é uma consulta
-        # de dado de produto, é catálogo de opções (mesmo espírito de `filter_options`).
-        today = datetime.now(OPERATIONS_TIMEZONE).date()
-        options = ops_queries.filter_options(db, today - timedelta(days=400), today, system_user())
-        os_subjects = sorted(options.get("subjects", []))
+        os_subjects = _distinct_os_subjects(db)
     except Exception:
         os_subjects = []
 

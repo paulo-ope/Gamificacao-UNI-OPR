@@ -110,6 +110,38 @@ export const MONITOR_RUN_STATUS_LABELS: Record<string, string> = {
   INTERRUPTED: "Interrompido",
 };
 
+// Regras de Alertas (camada de configuração sobre os monitores/detectores existentes).
+export const RULE_TYPE_LABELS: Record<string, string> = {
+  OS_CONCENTRATION_AREA: "Concentração de O.S. em área",
+  OS_CONCENTRATION_LINEAR: "Concentração linear de O.S.",
+  OS_OPENING_ABOVE_AVERAGE: "Abertura de O.S. acima da média",
+  OS_GROWTH_ANOMALY: "Crescimento anormal de O.S.",
+  BACKLOG_THRESHOLD: "Backlog acima do limite",
+  SLA_THRESHOLD: "SLA abaixo do limite",
+  COLLECTIVE_OUTAGE: "Incidente coletivo (variante configurável)",
+  MONITOR_UNHEALTHY: "Monitor com falhas consecutivas",
+};
+
+export const RULE_PARAM_LABELS: Record<string, string> = {
+  min_count: "Quantidade mínima",
+  window_minutes: "Janela (minutos)",
+  radius_meters: "Raio (metros)",
+  historical_comparison: "Comparação histórica",
+  min_multiplier_over_average: "Mínimo acima da média (x)",
+  baseline_days: "Dias de histórico (baseline)",
+  threshold_value: "Limite",
+  window_days: "Janela (dias)",
+  group_by: "Agrupar por",
+  target_monitor_key: "Monitor alvo",
+  max_consecutive_failures: "Falhas consecutivas máximas",
+};
+
+export const GROUP_BY_LABELS: Record<string, string> = {
+  regional: "Regional",
+  city: "Cidade",
+  os_subject: "Assunto de O.S.",
+};
+
 /** Lookup seguro: valor desconhecido cai para o próprio valor técnico (nunca quebra a tela por um
  * enum novo que ainda não ganhou tradução). */
 export function labelFor(map: Record<string, string>, key: string | null | undefined): string {

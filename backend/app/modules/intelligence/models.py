@@ -229,3 +229,49 @@ class IntelligenceCockpitContent(Base):
     __table_args__ = (
         Index("ix_intelligence_cockpit_content_status_profile", "status", "profile_key"),
     )
+
+
+class IntelligenceAlertRule(Base):
+    """Regra de alerta parametrizável (Administração → UNI Intelligence → Regras de Alertas).
+
+    NÃO é um detector novo por si só - é uma camada de configuração sobre os monitores/consultas
+    já existentes (ver monitors/rules_engine.py, único monitor novo do registry: lê todas as regras
+    ATIVAS a cada ciclo e delega para a função de avaliação do `rule_type` correspondente, que por
+    sua vez reaproveita `find_offline_login_clusters`, `ops_queries.overview`,
+    `scheduler.recent_runs` etc. - nenhuma consulta pesada nova).
+
+    `key` é estável (usado no dedupe_key dos alertas gerados por esta regra) - não muda depois de
+    criada, mesmo que `name` mude."""
+
+    __tablename__ = "intelligence_alert_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    # OS_CONCENTRATION_AREA | OS_CONCENTRATION_LINEAR | OS_OPENING_ABOVE_AVERAGE |
+    # OS_GROWTH_ANOMALY | BACKLOG_THRESHOLD | SLA_THRESHOLD | COLLECTIVE_OUTAGE | MONITOR_UNHEALTHY
+    rule_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    # {"regionals": [...], "cities": [...], "sectors": [...], "os_subjects": [...], "team_models": [...]}
+    # - nomes canônicos do FilterContractV1, validados contra o catálogo real (build_filter_catalog)
+    # na escrita (ver alert_rules.py::validate_alert_rule) - nunca aceita valor inventado.
+    scope_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Parâmetros específicos do rule_type (min_count, window_minutes, radius_meters,
+    # historical_comparison, min_multiplier_over_average, baseline_days, threshold_value,
+    # group_by, target_monitor_key, max_consecutive_failures - ver
+    # alert_rules.py::RULE_TYPE_ALLOWED_PARAMS para a lista fechada por tipo).
+    params_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # LOW | MEDIUM | HIGH | CRITICAL
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="MEDIUM")
+    # Minutos mínimos entre o fim (RESOLVED/DISMISSED) de uma ocorrência e o início de outra com a
+    # MESMA dedupe_key - evita "piscar" alerta/resolvido/alerta em loop numa condição de fronteira.
+    cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Ciclos consecutivos em que a condição precisa se repetir antes de criar o alerta (reduz falso
+    # positivo de pico isolado) - avaliado dentro do monitor via contador em app_settings (ver
+    # rules_engine.py::_confirm_hits), não altera o lifecycle genérico de alerts.py.
+    confirm_cycles: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Repassado como `resolve_after_misses` para `alerts.sync_alerts_for_monitor` quando esta regra
+    # gera a detecção (mesmo mecanismo de auto-resolve já usado pelos monitores existentes).
+    resolve_cycles: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)

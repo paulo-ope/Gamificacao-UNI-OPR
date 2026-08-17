@@ -58,6 +58,12 @@ def _monitor_health_runner(db: Session) -> MonitorRunResult:
     return run_monitor_health_monitor(db)
 
 
+def _alert_rules_runner(db: Session) -> MonitorRunResult:
+    from .monitors.rules_engine import run_alert_rules_monitor
+
+    return run_alert_rules_monitor(db)
+
+
 MONITORS: tuple[MonitorDefinition, ...] = (
     MonitorDefinition(
         key="collective_outage",
@@ -107,6 +113,21 @@ MONITORS: tuple[MonitorDefinition, ...] = (
         scope_strategy="global",
         resolve_after_misses=2,
         runner=_monitor_health_runner,
+    ),
+    MonitorDefinition(
+        key="alert_rules",
+        name="Regras de alertas configuraveis",
+        description=(
+            "Executa as regras de alerta ativas cadastradas na Administracao (concentracao de O.S., "
+            "abertura acima da media, backlog/SLA acima do limite, variantes configuraveis de "
+            "incidente coletivo e saude de monitor) - nao reimplementa deteccao, reaproveita os "
+            "detectores/consultas ja existentes por tras de cada tipo de regra."
+        ),
+        default_interval_minutes=10,
+        enabled_by_default=True,
+        scope_strategy="regional",
+        resolve_after_misses=2,
+        runner=_alert_rules_runner,
     ),
 )
 
