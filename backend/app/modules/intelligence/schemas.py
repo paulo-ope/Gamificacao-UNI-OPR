@@ -177,6 +177,7 @@ class CockpitAlertSummaryOut(BaseModel):
     summary: str
     recommended_action: str | None
     regional: str | None
+    city: str | None
     confidence: float | None
     coverage: dict
     warnings: list[dict]
@@ -185,6 +186,10 @@ class CockpitAlertSummaryOut(BaseModel):
     last_seen_at: datetime
     age_seconds: int
     source_type: str
+    monitor_key: str
+    source_key: str | None
+    resolved_at: datetime | None
+    resolution_reason: str | None
 
 
 class CockpitContentOut(BaseModel):
@@ -254,6 +259,7 @@ class CockpitPayloadOut(BaseModel):
     sla: CockpitSlaOut
     alerts: list[CockpitAlertSummaryOut]
     incidents: list[CockpitAlertSummaryOut]
+    recent_alerts: list[CockpitAlertSummaryOut]
     content: list[CockpitContentOut]
     monitor_health: list[CockpitMonitorHealthOut]
     charts: CockpitChartsOut
@@ -408,3 +414,9 @@ class AlertRuleCatalogOut(BaseModel):
     rule_types: list[AlertRuleTypeCatalogEntryOut]
     severities: list[str]
     group_by_values: list[str]
+
+
+class AlertRuleSimulationOut(BaseModel):
+    rule_key: str
+    detection_count: int
+    detections: list[dict]

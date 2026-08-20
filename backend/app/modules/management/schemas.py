@@ -261,3 +261,12 @@ class ManagementSettingsUpdate(BaseModel):
     management_case_low_severity_pct: str | None = None
     management_case_min_days_worked: str | None = None
     management_case_due_days: str | None = None
+
+
+class ManagementAutoGenerateSettingsOut(BaseModel):
+    enabled: bool
+    last_run_date: date | None = None
+
+
+class ManagementAutoGenerateSettingsUpdate(BaseModel):
+    enabled: bool

@@ -53,7 +53,7 @@ def _make_signal(db_session, login_id: int, **overrides):
 def test_ixc_field_parsers_handle_empty_and_zero_markers():
     assert _parse_ixc_datetime("0000-00-00 00:00:00") is None
     assert _parse_ixc_datetime(None) is None
-    assert _parse_ixc_datetime("2026-08-14 10:00:00") == datetime(2026, 8, 14, 10, 0, 0, tzinfo=timezone.utc)
+    assert _parse_ixc_datetime("2026-08-14 10:00:00") == datetime(2026, 8, 14, 14, 0, 0, tzinfo=timezone.utc)
     assert _parse_ixc_float("") is None
     assert _parse_ixc_float("-18.50") == -18.5
     assert _parse_ixc_text("") is None

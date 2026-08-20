@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import IntelligenceAlertRule
+from .models import IntelligenceAlert, IntelligenceAlertEvent, IntelligenceAlertRule
 
 RULE_TYPES = (
     "OS_CONCENTRATION_AREA",
@@ -48,10 +48,10 @@ RULE_TYPE_ALLOWED_SCOPE: dict[str, frozenset[str]] = {
 # rules_engine.py (quem efetivamente os lê).
 RULE_TYPE_ALLOWED_PARAMS: dict[str, frozenset[str]] = {
     "OS_CONCENTRATION_AREA": frozenset(
-        {"min_count", "window_minutes", "radius_meters", "historical_comparison", "min_multiplier_over_average", "baseline_days"}
+        {"min_count", "window_minutes", "radius_meters", "historical_comparison", "min_multiplier_over_average", "baseline_days", "require_same_regional"}
     ),
     "OS_CONCENTRATION_LINEAR": frozenset(
-        {"min_count", "window_minutes", "radius_meters", "historical_comparison", "min_multiplier_over_average", "baseline_days"}
+        {"min_count", "window_minutes", "radius_meters", "historical_comparison", "min_multiplier_over_average", "baseline_days", "require_same_regional"}
     ),
     "OS_OPENING_ABOVE_AVERAGE": frozenset(
         {"min_count", "window_minutes", "historical_comparison", "min_multiplier_over_average", "baseline_days"}
@@ -61,7 +61,7 @@ RULE_TYPE_ALLOWED_PARAMS: dict[str, frozenset[str]] = {
     ),
     "BACKLOG_THRESHOLD": frozenset({"threshold_value"}),
     "SLA_THRESHOLD": frozenset({"threshold_value", "window_days"}),
-    "COLLECTIVE_OUTAGE": frozenset({"min_count", "window_minutes", "radius_meters"}),
+    "COLLECTIVE_OUTAGE": frozenset({"min_count", "window_minutes", "radius_meters", "require_same_regional"}),
     "MONITOR_UNHEALTHY": frozenset({"target_monitor_key", "max_consecutive_failures"}),
 }
 
@@ -70,13 +70,13 @@ RULE_TYPE_ALLOWED_PARAMS: dict[str, frozenset[str]] = {
 GROUP_BY_VALUES = ("regional", "city", "os_subject")
 
 DEFAULT_PARAMS_BY_TYPE: dict[str, dict] = {
-    "OS_CONCENTRATION_AREA": {"min_count": 5, "window_minutes": 60, "radius_meters": 300, "historical_comparison": False, "baseline_days": 14},
-    "OS_CONCENTRATION_LINEAR": {"min_count": 5, "window_minutes": 90, "radius_meters": 800, "historical_comparison": False, "baseline_days": 14},
+    "OS_CONCENTRATION_AREA": {"min_count": 5, "window_minutes": 60, "radius_meters": 300, "historical_comparison": False, "baseline_days": 14, "require_same_regional": True},
+    "OS_CONCENTRATION_LINEAR": {"min_count": 5, "window_minutes": 90, "radius_meters": 800, "historical_comparison": False, "baseline_days": 14, "require_same_regional": True},
     "OS_OPENING_ABOVE_AVERAGE": {"window_minutes": 60, "historical_comparison": True, "min_multiplier_over_average": 1.5, "baseline_days": 14},
     "OS_GROWTH_ANOMALY": {"window_minutes": 60, "historical_comparison": True, "min_multiplier_over_average": 1.5, "baseline_days": 14, "group_by": "regional"},
     "BACKLOG_THRESHOLD": {"threshold_value": 500},
     "SLA_THRESHOLD": {"threshold_value": 80.0, "window_days": 7},
-    "COLLECTIVE_OUTAGE": {"min_count": 3, "window_minutes": 90, "radius_meters": 300},
+    "COLLECTIVE_OUTAGE": {"min_count": 3, "window_minutes": 90, "radius_meters": 300, "require_same_regional": True},
     "MONITOR_UNHEALTHY": {"max_consecutive_failures": 2},
 }
 
@@ -223,6 +223,52 @@ def update_alert_rule(
     return rule
 
 
+def delete_alert_rule(db: Session, rule: IntelligenceAlertRule) -> int:
+    """Exclui uma regra e encerra os alertas ativos que ela originou.
+
+    A regra não possui FK direta com o alerta porque o vínculo operacional é a `rule_key` no
+    escopo da detecção. A filtragem final em Python mantém o comportamento compatível entre
+    SQLite e PostgreSQL, sem depender de operadores JSON específicos de um banco.
+    """
+    from .alerts import ACTIVE_STATUSES
+
+    now = datetime.now(timezone.utc)
+    active_alerts = list(
+        db.scalars(
+            select(IntelligenceAlert).where(
+                IntelligenceAlert.monitor_key == "alert_rules",
+                IntelligenceAlert.status.in_(ACTIVE_STATUSES),
+            )
+        )
+    )
+    resolved_count = 0
+    for alert in active_alerts:
+        if (alert.scope_json or {}).get("rule_key") != rule.key:
+            continue
+        previous_status = alert.status
+        alert.status = "RESOLVED"
+        alert.resolved_at = now
+        db.add(
+            IntelligenceAlertEvent(
+                alert_id=alert.id,
+                event_type="RESOLVED",
+                payload_json={"reason": "rule_deleted", "rule_key": rule.key},
+            )
+        )
+        db.add(
+            IntelligenceAlertEvent(
+                alert_id=alert.id,
+                event_type="STATUS_CHANGED",
+                payload_json={"from": previous_status, "to": "RESOLVED"},
+            )
+        )
+        resolved_count += 1
+
+    db.delete(rule)
+    db.commit()
+    return resolved_count
+
+
 def alert_rule_to_out(rule: IntelligenceAlertRule) -> dict:
     return {
         "id": rule.id,
@@ -254,6 +300,32 @@ def build_alert_rule_catalog() -> dict:
         ],
         "severities": list(SEVERITIES),
         "group_by_values": list(GROUP_BY_VALUES),
+    }
+
+
+def simulate_alert_rule(db: Session, rule: IntelligenceAlertRule) -> dict:
+    """Avalia uma regra sem alterar alertas, cooldown ou contadores de confirmação."""
+    from .monitors.rules_engine import _RULE_RUNNERS
+
+    runner = _RULE_RUNNERS.get(rule.rule_type)
+    detections = runner(db, rule) if runner else []
+    return {
+        "rule_key": rule.key,
+        "detection_count": len(detections),
+        "detections": [
+            {
+                "kind": item.kind,
+                "alert_type": item.alert_type,
+                "severity": item.severity,
+                "title": item.title,
+                "summary": item.summary,
+                "regional": item.regional,
+                "city": item.city,
+                "evidence": item.evidence,
+                "confidence": item.confidence,
+            }
+            for item in detections[:20]
+        ],
     }
 
 

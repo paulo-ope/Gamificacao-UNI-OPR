@@ -1042,6 +1042,28 @@ class OperationOnuSignalOut(BaseModel):
     onu_serial: str | None
     onu_model: str | None
     transmitter_id: str | None
+    transmitter_name: str | None
+    temperature_c: float | None
+    voltage: float | None
+    signal_measured_at: datetime | None
+    pon_id: str | None
+    pon_no: str | None
+    slot_no: str | None
+    latitude: float | None
+    longitude: float | None
+    captured_at: datetime
+
+
+class OperationOnuSignalHistoryItemOut(BaseModel):
+    login_id: int
+    contract_id: str | None
+    signal_rx_dbm: float | None
+    signal_tx_dbm: float | None
+    last_drop_cause: str | None
+    onu_serial: str | None
+    onu_model: str | None
+    transmitter_id: str | None
+    transmitter_name: str | None
     temperature_c: float | None
     voltage: float | None
     signal_measured_at: datetime | None

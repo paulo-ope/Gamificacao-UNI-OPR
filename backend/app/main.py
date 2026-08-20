@@ -18,6 +18,7 @@ from app.modules.intelligence.cockpit import ensure_default_dashboard_profile
 from app.modules.intelligence.router import router as intelligence_router
 from app.modules.intelligence.scheduler import run_intelligence_scheduler_loop
 from app.modules.management.router import router as management_router
+from app.modules.management.scheduler import run_management_case_scheduler_loop
 from app.modules.mcp_connector.router import router as mcp_connector_router
 from app.modules.mcp_connector.server import build_mcp_server
 from app.modules.operations.backlog_snapshot import run_backlog_snapshot_loop
@@ -82,6 +83,12 @@ async def lifespan(app: FastAPI):
     # modules/intelligence/scheduler.py), não uma task asyncio por monitor.
     intelligence_scheduler_task = asyncio.create_task(run_intelligence_scheduler_loop())
 
+    # Geração automática dos casos de gestão (produtividade abaixo da meta) do mês anterior já
+    # fechado - mesma condição do backlog_snapshot_task acima, é só uma leitura do banco já
+    # sincronizado. Liga/desliga via AppSetting (ver modules/management/scheduler.py), lido a cada
+    # ciclo, sem precisar reiniciar o backend.
+    management_case_scheduler_task = asyncio.create_task(run_management_case_scheduler_loop())
+
     # Histórico de status de conexão dos logins (para detecção de queda de fibra por proximidade
     # geográfica) - só roda quando o IXC está configurado, mesma condição do `ixc_sync_task`.
     login_status_snapshot_task = None
@@ -122,6 +129,10 @@ async def lifespan(app: FastAPI):
     intelligence_scheduler_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await intelligence_scheduler_task
+
+    management_case_scheduler_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await management_case_scheduler_task
 
     if login_status_snapshot_task:
         login_status_snapshot_task.cancel()

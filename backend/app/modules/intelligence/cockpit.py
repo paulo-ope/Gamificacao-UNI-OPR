@@ -86,6 +86,53 @@ class ProfileValidationError(ValueError):
     """Erro de validação de profile/widget - vira 422 no REST (admin de profiles)."""
 
 
+DISPLAY_CONFIG_DEFAULTS = {
+    "theme": "LIGHT",
+    "density": "COMFORTABLE",
+    "layout_mode": "MOSAIC",
+    "widget_sizes": {},
+    "alert_limit": 4,
+    "alert_sort": "RECENT",
+    "show_resolved_minutes": 120,
+    "show_os_details": True,
+    "show_coordinates": True,
+    "show_recommendations": True,
+    "rotate_seconds": 0,
+}
+
+
+def validate_display_config(config: dict | None) -> dict:
+    merged = {**DISPLAY_CONFIG_DEFAULTS, **(config or {})}
+    if merged["theme"] not in ("LIGHT", "DARK", "AUTO"):
+        raise ProfileValidationError("theme precisa ser LIGHT, DARK ou AUTO.")
+    if merged["density"] not in ("COMPACT", "COMFORTABLE", "TV"):
+        raise ProfileValidationError("density precisa ser COMPACT, COMFORTABLE ou TV.")
+    if merged["layout_mode"] not in ("MOSAIC", "FOCUS", "DENSE"):
+        raise ProfileValidationError("layout_mode precisa ser MOSAIC, FOCUS ou DENSE.")
+    if merged["alert_sort"] not in ("RECENT", "SEVERITY", "IMPACT"):
+        raise ProfileValidationError("alert_sort precisa ser RECENT, SEVERITY ou IMPACT.")
+    merged["alert_limit"] = int(merged["alert_limit"])
+    if merged["alert_limit"] not in (4, 6, 8, 12):
+        raise ProfileValidationError("alert_limit precisa ser 4, 6, 8 ou 12.")
+    for field, maximum in (("show_resolved_minutes", 1440), ("rotate_seconds", 3600)):
+        merged[field] = int(merged[field])
+        if merged[field] < 0 or merged[field] > maximum:
+            raise ProfileValidationError(f"{field} precisa estar entre 0 e {maximum}.")
+    for field in ("show_os_details", "show_coordinates", "show_recommendations"):
+        merged[field] = bool(merged[field])
+    widget_sizes = merged.get("widget_sizes") or {}
+    if not isinstance(widget_sizes, dict):
+        raise ProfileValidationError("widget_sizes precisa ser um objeto.")
+    invalid_keys = sorted(set(widget_sizes) - set(WIDGET_CATALOG))
+    if invalid_keys:
+        raise ProfileValidationError(f"widget_sizes contém widgets inválidos: {invalid_keys}.")
+    invalid_sizes = sorted({size for size in widget_sizes.values() if size not in ("S", "M", "L", "XL")})
+    if invalid_sizes:
+        raise ProfileValidationError(f"widget_sizes contém tamanhos inválidos: {invalid_sizes}.")
+    merged["widget_sizes"] = dict(widget_sizes)
+    return merged
+
+
 def normalize_widget_entries(widgets_json: list) -> list[dict]:
     """Aceita tanto o formato legado (`["overall_status", "backlog", ...]`) quanto o formato com
     filtro (`[{"key": "backlog", "filters": {"team_models": [...]}}, ...]`) e sempre devolve a
@@ -321,6 +368,20 @@ def _active_alerts_query(db: Session, regionals: list[str]):
     return list(db.scalars(select(IntelligenceAlert).where(*conditions).order_by(IntelligenceAlert.last_seen_at.desc())))
 
 
+def _recent_resolved_alerts_query(db: Session, regionals: list[str], *, minutes: int) -> list[IntelligenceAlert]:
+    if minutes <= 0:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    conditions = [
+        IntelligenceAlert.status.in_(("RESOLVED", "DISMISSED")),
+        IntelligenceAlert.resolved_at.is_not(None),
+        IntelligenceAlert.resolved_at >= cutoff,
+    ]
+    if regionals:
+        conditions.append((IntelligenceAlert.regional.in_(regionals)) | (IntelligenceAlert.regional.is_(None)))
+    return list(db.scalars(select(IntelligenceAlert).where(*conditions).order_by(IntelligenceAlert.resolved_at.desc()).limit(20)))
+
+
 def _as_aware_utc(value: datetime) -> datetime:
     """SQLite não preserva tzinfo no round-trip (achado real, mesmo padrão já visto em
     scheduler.py::mark_interrupted_runs_on_startup) - normaliza antes de fazer aritmética de data."""
@@ -329,6 +390,12 @@ def _as_aware_utc(value: datetime) -> datetime:
 
 def _alert_to_summary(alert: IntelligenceAlert) -> dict:
     age_seconds = (datetime.now(timezone.utc) - _as_aware_utc(alert.first_detected_at)).total_seconds()
+    resolution_reason = None
+    if alert.status in ("RESOLVED", "DISMISSED"):
+        for event in reversed(alert.events):
+            if event.event_type in ("RESOLVED", "DISMISSED"):
+                resolution_reason = (event.payload_json or {}).get("reason")
+                break
     return {
         "id": alert.id,
         "kind": alert.kind,
@@ -339,6 +406,7 @@ def _alert_to_summary(alert: IntelligenceAlert) -> dict:
         "summary": alert.summary,
         "recommended_action": alert.recommended_action,
         "regional": alert.regional,
+        "city": alert.city,
         "confidence": alert.confidence,
         "coverage": alert.coverage_json,
         "warnings": alert.warnings_json,
@@ -347,6 +415,10 @@ def _alert_to_summary(alert: IntelligenceAlert) -> dict:
         "last_seen_at": alert.last_seen_at,
         "age_seconds": round(age_seconds),
         "source_type": alert.source_type,
+        "monitor_key": alert.monitor_key,
+        "source_key": alert.source_key,
+        "resolved_at": alert.resolved_at,
+        "resolution_reason": resolution_reason,
     }
 
 
@@ -610,6 +682,15 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
     active_incidents = _apply_list_post_filters(
         [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "INCIDENT"], incidents_filters, "active_incidents", warnings
     )
+    display_config = profile.display_config_json or {}
+    recent_alerts = [
+        _alert_to_summary(alert)
+        for alert in _recent_resolved_alerts_query(
+            db,
+            regionals,
+            minutes=int(display_config.get("show_resolved_minutes", 120)),
+        )
+    ]
     content = _apply_list_post_filters(
         [_content_to_summary(c) for c in _content_query(db, profile, regionals)], content_filters, "cockpit_content", warnings
     )
@@ -646,7 +727,7 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
             "purpose": profile.purpose,
             "widgets": [entry["key"] for entry in widget_entries],
             "refresh_seconds": profile.refresh_seconds,
-            "display_config": profile.display_config_json,
+            "display_config": display_config,
         },
         "generated_at": datetime.now(timezone.utc),
         "overall_status": overall_status,
@@ -671,6 +752,7 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
         },
         "alerts": active_alerts,
         "incidents": active_incidents,
+        "recent_alerts": recent_alerts,
         "content": content,
         "monitor_health": monitor_health,
         "charts": charts,
@@ -896,7 +978,7 @@ def create_profile(
         purpose=purpose,
         scope_json=scope or {"regionals": []},
         widgets_json=validated_widgets,
-        display_config_json=display_config or {},
+        display_config_json=validate_display_config(display_config),
         refresh_seconds=refresh_seconds,
         active=active,
     )
@@ -929,7 +1011,7 @@ def update_profile(
     if widgets is not None:
         profile.widgets_json = validate_widget_entries(widgets)
     if display_config is not None:
-        profile.display_config_json = display_config
+        profile.display_config_json = validate_display_config(display_config)
     if refresh_seconds is not None:
         if refresh_seconds < 15:
             raise ProfileValidationError("refresh_seconds precisa ser >= 15 (mesmo piso do polling da TV).")

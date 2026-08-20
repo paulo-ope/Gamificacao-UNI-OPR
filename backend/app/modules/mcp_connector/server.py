@@ -39,7 +39,7 @@ from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
-from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
+from app.modules.operations.onu_signal_snapshot import query_onu_signal_history, query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.operations.schemas import OperationOrderDetailOut
 
@@ -472,8 +472,8 @@ def build_mcp_server() -> FastMCP:
         Returns:
             JSON com lista de {"login_id", "login", "contract_id", "signal_rx_dbm",
             "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
-            "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no", "slot_no",
-            "latitude", "longitude", "captured_at"}.
+            "transmitter_name", "temperature_c", "voltage", "signal_measured_at", "pon_id",
+            "pon_no", "slot_no", "latitude", "longitude", "captured_at"}.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -490,6 +490,59 @@ def build_mcp_server() -> FastMCP:
                     login_ids=login_ids or [],
                     last_drop_causes=last_drop_causes or [],
                     transmitter_ids=transmitter_ids or [],
+                    limit=limit,
+                )
+            )
+
+    @mcp.tool(
+        name="opr_onu_signal_history",
+        annotations={"title": "Histórico de sinal óptico/ONU", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_onu_signal_history(
+        login_ids: list[int] | None = None,
+        onu_serials: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 500,
+    ) -> str:
+        """Série histórica de telemetria óptica/ONU (um ponto por captura, não só o valor mais
+        recente) - use para responder "o sinal do login/serial X estava em Y na data Z, e hoje
+        está em W". Exige pelo menos login_ids ou onu_serials - não é uma consulta de exploração
+        livre, é a série de um equipamento/login específico.
+
+        Cobertura parcial por desenho: só existem pontos para os momentos em que o login estava na
+        fila de diagnóstico daquele ciclo (offline, transição recente, ou nunca capturado - ver
+        opr_onu_signal) - ausência de ponto num período não significa sinal bom o tempo todo,
+        significa que não foi medido nesse período.
+
+        Args:
+            login_ids: lista de login_id. Informe isto ou onu_serials.
+            onu_serials: lista de serial/MAC da ONU. Informe isto ou login_ids.
+            date_from, date_to: AAAA-MM-DDTHH:MM:SS (ISO 8601), opcional - sem eles, devolve toda a
+                série disponível até o limite.
+            limit: até 2000 (default 500).
+
+        Returns:
+            JSON com lista ordenada por captured_at (mais antigo primeiro) de {"login_id",
+            "contract_id", "signal_rx_dbm", "signal_tx_dbm", "last_drop_cause", "onu_serial",
+            "onu_model", "transmitter_id", "transmitter_name", "temperature_c", "voltage",
+            "signal_measured_at", "pon_id", "pon_no", "slot_no", "latitude", "longitude",
+            "captured_at"}.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "operations.network.onu_signal_history", "mcp")
+            if login_ids:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "login_id", "filterable")
+            if onu_serials:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "onu_serial", "filterable")
+            return _dump(
+                query_onu_signal_history(
+                    db,
+                    login_ids=login_ids or [],
+                    onu_serials=onu_serials or [],
+                    date_from=_parse_datetime(date_from) if date_from else None,
+                    date_to=_parse_datetime(date_to) if date_to else None,
                     limit=limit,
                 )
             )

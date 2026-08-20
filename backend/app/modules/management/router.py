@@ -29,6 +29,8 @@ from app.modules.management.models import (
     ManagementOperationalMember,
 )
 from app.modules.management.schemas import (
+    ManagementAutoGenerateSettingsOut,
+    ManagementAutoGenerateSettingsUpdate,
     ManagementCaseCommentCreate,
     ManagementCaseCommentOut,
     ManagementCaseCreate,
@@ -49,10 +51,16 @@ from app.modules.management.schemas import (
     ManagementOptionsOut,
     ManagementSettingsUpdate,
 )
+from app.modules.management.scheduler import (
+    AUTO_GENERATE_LAST_RUN_DATE_KEY,
+    auto_generate_enabled,
+    set_auto_generate_enabled,
+)
 from app.modules.management.services import member_out, refresh_operational_members, summarize_members, visible_member_filters
 from app.modules.operations.models import OperationTeamModel
 from app.services import notifications as notifications_service
 from app.services.audit_log import record_audit_log, snapshot
+from app.services.calculation import get_setting
 from app.services.regional import normalize_regional
 
 router = APIRouter(prefix="/management", tags=["management"])
@@ -536,3 +544,30 @@ def update_settings(
     record_audit_log(db, user, "update", "management_settings", "thresholds", None, values)
     db.commit()
     return result
+
+
+@router.get("/settings/auto-generate", response_model=ManagementAutoGenerateSettingsOut)
+def get_auto_generate_settings(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("management:read")),
+):
+    raw_last_run = get_setting(db, AUTO_GENERATE_LAST_RUN_DATE_KEY, "")
+    last_run_date = date.fromisoformat(raw_last_run) if raw_last_run else None
+    return ManagementAutoGenerateSettingsOut(enabled=auto_generate_enabled(), last_run_date=last_run_date)
+
+
+@router.put("/settings/auto-generate", response_model=ManagementAutoGenerateSettingsOut)
+def update_auto_generate_settings(
+    payload: ManagementAutoGenerateSettingsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:admin")),
+):
+    """Liga/desliga a geração automática (diária) dos casos de produtividade do mês anterior
+    fechado - ver `modules/management/scheduler.py`. O botão manual "Gerar casos do mês" continua
+    disponível mesmo com o automático ligado, para reprocessar uma competência específica."""
+    set_auto_generate_enabled(payload.enabled)
+    record_audit_log(db, user, "update", "management_settings", "auto_generate", None, {"enabled": payload.enabled})
+    db.commit()
+    raw_last_run = get_setting(db, AUTO_GENERATE_LAST_RUN_DATE_KEY, "")
+    last_run_date = date.fromisoformat(raw_last_run) if raw_last_run else None
+    return ManagementAutoGenerateSettingsOut(enabled=payload.enabled, last_run_date=last_run_date)

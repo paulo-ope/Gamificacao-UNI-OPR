@@ -4,11 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import type { EChartsOption } from "echarts";
+import { MapPinned, Moon, Sun } from "lucide-react";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { buildBacklogChartOption, buildProductionChartOption, buildSlaChartOption } from "@/lib/cockpit-chart-options";
+import { configuredCockpitWidgetSize, type CockpitWidgetSize } from "@/lib/intelligence-cockpit-layout";
 import { SEVERITY_LABELS, SOURCE_TYPE_LABELS, STATUS_WORD_LABELS, labelFor } from "@/lib/intelligence-labels";
 import { type Tone } from "@/lib/tones";
 import { cn } from "@/lib/utils";
@@ -92,6 +94,11 @@ function formatAge(seconds: number): string {
 function formatClock(iso: string | null): string {
   if (!iso) return "--:--";
   return new Date(iso).toLocaleTimeString("pt-BR", { timeZone: "America/Porto_Velho", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateTime(iso: string | null): string {
+  if (!iso) return "Horário não informado";
+  return new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Porto_Velho", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function formatNumber(value: number | null): string {
@@ -189,10 +196,30 @@ function locationLine(item: CockpitAlertSummary): string | null {
   const lat = asNumber(ev.center_latitude);
   const lng = asNumber(ev.center_longitude);
   const coords = lat !== null && lng !== null ? `${lat.toFixed(5)}, ${lng.toFixed(5)}` : null;
-  if (address && coords) return `📍 ${address} · ${coords}`;
-  if (address) return `📍 ${address}`;
-  if (coords) return `📍 ${coords}`;
+  if (address && coords) return `${address} · ${coords}`;
+  if (address) return address;
+  if (coords) return coords;
   return null;
+}
+
+type OrderSample = { order_code: string; address: string | null; neighborhood: string | null; latitude: number | null; longitude: number | null; opened_at: string | null };
+
+function orderSamples(item: CockpitAlertSummary): OrderSample[] {
+  const raw = Array.isArray(item.evidence?.os_sample) ? item.evidence.os_sample : [];
+  return raw.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const sample = value as Record<string, unknown>;
+    const orderCode = typeof sample.order_code === "string" ? sample.order_code : null;
+    if (!orderCode) return [];
+    return [{
+      order_code: orderCode,
+      address: typeof sample.address === "string" ? sample.address : null,
+      neighborhood: typeof sample.neighborhood === "string" ? sample.neighborhood : null,
+      latitude: asNumber(sample.latitude),
+      longitude: asNumber(sample.longitude),
+      opened_at: typeof sample.opened_at === "string" ? sample.opened_at : null,
+    }];
+  });
 }
 
 function SeverityDot({ tone, label }: { tone: Tone; label: string }) {
@@ -234,7 +261,7 @@ function IntelligenceSpotlight({ item }: { item: CockpitContent }) {
   const source = SOURCE_META[item.source_type] ?? SOURCE_META.SYSTEM;
   const tone = item.severity !== "INFO" ? SEVERITY_TONE[item.severity] ?? "blue" : source.tone;
   return (
-    <div className={cn("rounded-2xl border p-5", SPOTLIGHT_PANEL_CLASS[tone])}>
+    <div className={cn("cockpit-spotlight rounded-2xl border p-5", SPOTLIGHT_PANEL_CLASS[tone])}>
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge tone={source.tone}>{source.label}</StatusBadge>
         {item.severity !== "INFO" && <StatusBadge tone={SEVERITY_TONE[item.severity] ?? "slate"}>{SEVERITY_LABEL[item.severity] ?? item.severity}</StatusBadge>}
@@ -267,48 +294,65 @@ function ContentCard({ item }: { item: CockpitContent }) {
 
 // Alerta principal: leve destaque (borda colorida à esquerda), nunca fundo colorido grande -
 // severidade fica discreta (SeverityDot), o conteúdo (título + evidência) é o que ocupa espaço.
-function FeaturedProblem({ item, slaTarget }: { item: CockpitAlertSummary; slaTarget: number }) {
+function RecentAlertCard({ item, slaTarget, showOsDetails = true, showCoordinates = true, showRecommendations = true, compact = false }: { item: CockpitAlertSummary; slaTarget: number; showOsDetails?: boolean; showCoordinates?: boolean; showRecommendations?: boolean; compact?: boolean }) {
   const tone = SEVERITY_TONE[item.severity] ?? "slate";
+  const samples = orderSamples(item).slice(0, 3);
+  const location = locationLine(item);
+  const regional = [item.regional, item.city].filter(Boolean).join(" · ");
   return (
-    <div className={cn("rounded-xl border border-slate-200 border-l-4 bg-white p-3", LEFT_BORDER_CLASS[tone])}>
+    <article className={cn("rounded-xl border border-slate-200 border-l-4 bg-white", compact ? "p-2.5" : "p-3", LEFT_BORDER_CLASS[tone])}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">{labelFor(STATUS_WORD_LABELS, item.kind)}</span>
         <SeverityDot tone={tone} label={labelFor(SEVERITY_LABEL, item.severity)} />
-        <span className="text-[11px] text-slate-400">{formatAge(item.age_seconds)}</span>
+        {regional && <span className="text-[11px] text-slate-500">{regional}</span>}
+        <span className="ml-auto text-[11px] text-slate-400">{formatAge(item.age_seconds)}</span>
       </div>
       <h3 className="mt-1.5 text-base font-semibold text-slate-950">{item.title}</h3>
       <p className="mt-1 text-sm font-medium text-slate-700">{evidenceLine(item, slaTarget)}</p>
-      {locationLine(item) && <p className="mt-0.5 text-xs text-slate-500">{locationLine(item)}</p>}
-      {item.recommended_action && (
+      {showCoordinates && location && (
+        <p className="mt-1 flex items-start gap-1.5 text-xs text-slate-500">
+          <MapPinned className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>{location}</span>
+        </p>
+      )}
+      {showOsDetails && samples.length > 0 && (
+        <ul className="cockpit-soft-panel mt-2 divide-y divide-slate-100 rounded-lg border border-slate-100 bg-slate-50/70 px-2">
+          {samples.map((sample) => (
+            <li key={sample.order_code} className="py-1.5 text-xs text-slate-600">
+              <span className="font-semibold text-slate-800">O.S. {sample.order_code}</span>
+              <span className="text-slate-500"> · aberta em {formatDateTime(sample.opened_at)}</span>
+              {(sample.address || sample.neighborhood) && <span> · {sample.address ?? sample.neighborhood}</span>}
+              {sample.latitude !== null && sample.longitude !== null && <span className="text-slate-400"> · {sample.latitude.toFixed(5)}, {sample.longitude.toFixed(5)}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {showRecommendations && item.recommended_action && (
         <p className="mt-1 text-xs font-medium text-slate-600">Ação recomendada: {item.recommended_action}</p>
       )}
-    </div>
+    </article>
   );
 }
 
-// Recolhido: fundo branco, borda neutra, cor só no pontinho de severidade - mas mostra uma
-// segunda linha com evidência real (nunca só severidade + título + tempo), pedido explícito do
-// usuário ("hoje mostram informação insuficiente").
-function CompactProblemRow({ item, slaTarget }: { item: CockpitAlertSummary; slaTarget: number }) {
-  const tone = SEVERITY_TONE[item.severity] ?? "slate";
-  return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-      <span className={cn("h-2 w-2 shrink-0 rounded-full", DOT_COLOR_CLASS[tone])} title={labelFor(SEVERITY_LABEL, item.severity)} />
-      <div className="min-w-0 flex-1">
-        {/* O título de todo monitor/regra já embute a regional (ex.: "Deterioração de SLA em X",
-            "Possível incidente coletivo - Y") - repetir aqui duplicava a informação. */}
-        <p className="truncate text-xs font-semibold text-slate-800">{item.title}</p>
-        <p className="truncate text-[11px] text-slate-500">{evidenceLine(item, slaTarget)}</p>
-        {locationLine(item) && <p className="truncate text-[10px] text-slate-400">{locationLine(item)}</p>}
-      </div>
-      <span className="shrink-0 text-[10px] text-slate-400">{formatAge(item.age_seconds)}</span>
-    </div>
-  );
+const MOSAIC_SPAN: Record<CockpitWidgetSize, string> = {
+  S: "col-span-12 md:col-span-6 xl:col-span-3",
+  M: "col-span-12 md:col-span-6 xl:col-span-4",
+  L: "col-span-12 xl:col-span-8",
+  XL: "col-span-12",
+};
+
+function widgetSpan(config: Record<string, unknown>, key: string): string {
+  return MOSAIC_SPAN[configuredCockpitWidgetSize(config, key)];
 }
 
-function MiniChart({ title, option }: { title: string; option: EChartsOption }) {
+function widgetOrder(payload: CockpitPayload, key: string, offset = 0): number {
+  const index = payload.profile.widgets.indexOf(key);
+  return (index < 0 ? payload.profile.widgets.length : index) * 10 + offset;
+}
+
+function MiniChart({ title, option, className, order }: { title: string; option: EChartsOption; className?: string; order?: number }) {
   return (
-    <div className="min-w-[180px] flex-1 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+    <div className={cn("min-w-0 rounded-xl border border-slate-200 bg-white p-3 shadow-sm", className)} style={{ order }}>
       <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{title}</p>
       <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 130, width: "100%" }} />
     </div>
@@ -323,7 +367,9 @@ export default function CockpitPage() {
   const [payload, setPayload] = useState<CockpitPayload | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
   const requestRef = useRef(0);
+  const secondaryPanelRef = useRef<HTMLDivElement | null>(null);
 
   const canRead = Boolean(user?.permissions.includes("intelligence:read"));
 
@@ -358,13 +404,48 @@ export default function CockpitPage() {
     };
   }, [user, canRead, profileKey]);
 
+  useEffect(() => {
+    const storedTheme = window.localStorage.getItem("uni-cockpit-theme-v2");
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setTheme(storedTheme);
+      return;
+    }
+    const configured = String(payload?.profile.display_config.theme ?? "LIGHT");
+    if (configured === "DARK" || (configured === "AUTO" && window.matchMedia("(prefers-color-scheme: dark)").matches)) setTheme("dark");
+    else setTheme("light");
+  }, [payload?.profile.display_config.theme]);
+
+  function setCockpitTheme(next: "light" | "dark") {
+    setTheme(next);
+    window.localStorage.setItem("uni-cockpit-theme-v2", next);
+  }
+
+  useEffect(() => {
+    const seconds = Number(payload?.profile.display_config.rotate_seconds ?? 0);
+    if (seconds <= 0) return;
+    const timer = window.setInterval(() => {
+      const panel = secondaryPanelRef.current;
+      if (!panel) return;
+      const nearBottom = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 12;
+      panel.scrollTo({ top: nearBottom ? 0 : panel.scrollTop + Math.max(panel.clientHeight * 0.8, 280), behavior: "smooth" });
+    }, Math.max(seconds, 10) * 1000);
+    return () => window.clearInterval(timer);
+  }, [payload?.profile.display_config.rotate_seconds]);
+
   const sortedProblems = useMemo(() => {
     if (!payload) return [];
     const rank: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
-    return [...payload.incidents, ...payload.alerts].sort((a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9));
+    const sortMode = String(payload.profile.display_config.alert_sort ?? "RECENT");
+    const impact = (item: CockpitAlertSummary) => asNumber(item.evidence.cluster_size) ?? asNumber(item.evidence.os_count) ?? asNumber(item.evidence.count) ?? 0;
+    const rows = [...payload.incidents, ...payload.alerts];
+    rows.sort((a, b) => {
+      if (sortMode === "SEVERITY") return (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9) || new Date(b.last_seen_at).getTime() - new Date(a.last_seen_at).getTime();
+      if (sortMode === "IMPACT") return impact(b) - impact(a) || (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9);
+      return new Date(b.last_seen_at).getTime() - new Date(a.last_seen_at).getTime() || (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9);
+    });
+    const limit = [4, 6, 8, 12].includes(Number(payload.profile.display_config.alert_limit)) ? Number(payload.profile.display_config.alert_limit) : 4;
+    return rows.slice(0, limit);
   }, [payload]);
-
-  const [featuredProblem, ...restProblems] = sortedProblems;
 
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">Carregando UNI Workspace...</main>;
@@ -391,11 +472,14 @@ export default function CockpitPage() {
   const healthyCount = payload.monitor_health.filter((m) => m.enabled && m.consecutive_failures === 0).length;
 
   const showProblems = widgetEnabled(payload, "active_alerts") || widgetEnabled(payload, "active_incidents");
+  const showOverall = widgetEnabled(payload, "overall_status");
   const showProduction = widgetEnabled(payload, "production");
   const showBacklog = widgetEnabled(payload, "backlog");
   const showSla = widgetEnabled(payload, "sla");
   const showMonitorHealth = widgetEnabled(payload, "monitor_health");
   const showContent = widgetEnabled(payload, "cockpit_content") || widgetEnabled(payload, "ai_insights");
+  const contentWidgetKey = payload.profile.widgets.find((key) => key === "ai_insights" || key === "cockpit_content") ?? "cockpit_content";
+  const problemsWidgetKey = payload.profile.widgets.find((key) => key === "active_incidents" || key === "active_alerts") ?? "active_alerts";
 
   const [featuredContent, ...restContent] = payload.content;
 
@@ -406,9 +490,14 @@ export default function CockpitPage() {
   const showSlaChart = showSla && slaPoints.length > 0;
   const showBacklogChart = showBacklog && backlogPoints.length > 0;
   const showCharts = showProductionChart || showSlaChart || showBacklogChart;
+  const displayConfig = payload.profile.display_config;
+  const compactAlerts = displayConfig.density === "COMPACT";
+  const showOsDetails = displayConfig.show_os_details !== false;
+  const showCoordinates = displayConfig.show_coordinates !== false;
+  const showRecommendations = displayConfig.show_recommendations !== false;
 
   return (
-    <main className="flex h-screen w-screen flex-col overflow-hidden bg-slate-50 p-5 text-slate-900">
+    <main className={cn("flex h-screen w-screen flex-col overflow-hidden", displayConfig.density === "COMPACT" ? "p-3" : displayConfig.density === "TV" ? "p-6" : "p-5", theme === "dark" ? "cockpit-theme-dark bg-[#101216] text-slate-100" : "bg-slate-50 text-slate-900")}>
       {/* TOPO: profile, freshness, saúde dos monitores - sem badge de status geral (o estado já
           fica claro pela área de Problemas agora e pelos indicadores, ajuste visual pedido). */}
       <header className="relative flex flex-shrink-0 items-center justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
@@ -421,6 +510,26 @@ export default function CockpitPage() {
             {payload.monitor_health.length}
           </p>
         </div>
+        <div className="inline-flex rounded-lg border border-slate-200 p-1" aria-label="Tema do cockpit">
+          <button
+            type="button"
+            onClick={() => setCockpitTheme("light")}
+            className={cn("inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium", theme === "light" ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:text-slate-700")}
+            aria-pressed={theme === "light"}
+          >
+            <Sun className="h-3.5 w-3.5" aria-hidden="true" />
+            Claro
+          </button>
+          <button
+            type="button"
+            onClick={() => setCockpitTheme("dark")}
+            className={cn("inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium", theme === "dark" ? "bg-slate-800 text-white" : "text-slate-500 hover:text-slate-700")}
+            aria-pressed={theme === "dark"}
+          >
+            <Moon className="h-3.5 w-3.5" aria-hidden="true" />
+            Escuro
+          </button>
+        </div>
       </header>
 
       {fetchError && (
@@ -429,15 +538,16 @@ export default function CockpitPage() {
         </div>
       )}
 
-      {/* CORPO: área principal (UNI Intelligence) + coluna secundária/suporte */}
-      <div className="mt-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] gap-4 overflow-hidden">
+      {/* Mosaico responsivo: a ordem vem do profile e os tamanhos ficam em display_config. */}
+      <div ref={secondaryPanelRef} className="mt-4 grid min-h-0 flex-1 grid-flow-dense auto-rows-max grid-cols-12 gap-4 overflow-y-auto pr-1">
         {/* PRINCIPAL: UNI Intelligence - a análise, não apenas o dado bruto */}
         {showContent && (
           <SectionCard
             eyebrow="UNI Intelligence"
             title="Análise e prioridades"
-            className="flex min-h-0 flex-col"
-            contentClassName="flex min-h-0 flex-1 flex-col overflow-hidden"
+            className={cn("self-start", widgetSpan(displayConfig, contentWidgetKey))}
+            contentClassName="min-h-0"
+            style={{ order: widgetOrder(payload, contentWidgetKey) }}
           >
             {payload.content.length === 0 ? (
               <div className="flex flex-1 flex-col items-center justify-center text-center">
@@ -446,7 +556,7 @@ export default function CockpitPage() {
                 <p className="text-sm text-slate-500">A próxima análise da UNI Intelligence aparecerá aqui.</p>
               </div>
             ) : (
-              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+              <div className="grid gap-3">
                 {featuredContent && <IntelligenceSpotlight item={featuredContent} />}
                 {restContent.length > 0 && (
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -461,8 +571,8 @@ export default function CockpitPage() {
         )}
 
         {/* SECUNDÁRIO + SUPORTE: KPIs, tendências, incidentes compactos, saúde dos monitores */}
-        <section className={cn("flex min-h-0 flex-col gap-3 overflow-y-auto pr-1", !showContent && "col-span-2")}>
-          <div className="grid flex-shrink-0 grid-cols-5 gap-3">
+        <section className="contents">
+          {showOverall && <div className={cn("grid grid-cols-2 gap-3 self-start", widgetSpan(displayConfig, "overall_status"), configuredCockpitWidgetSize(displayConfig, "overall_status") !== "M" && "xl:grid-cols-5")} style={{ order: widgetOrder(payload, "overall_status") }}>
             <KpiCard label="Abertas" value={payload.production.opened_today} />
             <KpiCard label="Finalizadas" value={payload.production.closed_today} />
             {/* Saldo positivo (abriu mais do que fechou) é o único sinal de problema real aqui -
@@ -475,12 +585,12 @@ export default function CockpitPage() {
               suffix="%"
               tone={payload.sla.current !== null && payload.sla.current < payload.sla.target ? "red" : "slate"}
             />
-          </div>
+          </div>}
 
           {(showBacklog || showSla) && (
-            <div className="grid flex-shrink-0 grid-cols-2 gap-3">
+            <div className="contents">
               {showBacklog && (
-                <SectionCard eyebrow="Backlog" title="Por idade" className="shadow-sm">
+                <SectionCard eyebrow="Backlog" title="Por idade" className={cn("self-start shadow-sm", widgetSpan(displayConfig, "backlog"))} style={{ order: widgetOrder(payload, "backlog") }}>
                   <div className="grid grid-cols-3 gap-2 text-center">
                     <div>
                       <p className="text-xl font-bold text-slate-900">{formatNumber(payload.backlog.gt_3d)}</p>
@@ -499,7 +609,7 @@ export default function CockpitPage() {
               )}
 
               {showSla && (
-                <SectionCard eyebrow="SLA" title="Regionais críticas" subtitle={`meta ${payload.sla.target}%`} className="shadow-sm">
+                <SectionCard eyebrow="SLA" title="Regionais críticas" subtitle={`meta ${payload.sla.target}%`} className={cn("self-start shadow-sm", widgetSpan(displayConfig, "sla"))} style={{ order: widgetOrder(payload, "sla") }}>
                   {payload.sla.critical_regionals.length === 0 ? (
                     <p className="text-sm text-slate-500">Nenhuma regional abaixo da meta.</p>
                   ) : (
@@ -518,17 +628,17 @@ export default function CockpitPage() {
           )}
 
           {showCharts && (
-            <div className="flex flex-shrink-0 flex-wrap gap-3">
-              {showProductionChart && <MiniChart title="Abertas x finalizadas (7d)" option={buildProductionChartOption(productionPoints)} />}
-              {showSlaChart && <MiniChart title="Tendência de SLA (7d)" option={buildSlaChartOption(slaPoints, payload.sla.target)} />}
-              {showBacklogChart && <MiniChart title="Evolução do backlog (7d)" option={buildBacklogChartOption(backlogPoints)} />}
+            <div className="contents">
+              {showProductionChart && <MiniChart className={widgetSpan(displayConfig, "production")} order={widgetOrder(payload, "production", 1)} title="Abertas x finalizadas (7d)" option={buildProductionChartOption(productionPoints)} />}
+              {showSlaChart && <MiniChart className={widgetSpan(displayConfig, "sla")} order={widgetOrder(payload, "sla", 1)} title="Tendência de SLA (7d)" option={buildSlaChartOption(slaPoints, payload.sla.target)} />}
+              {showBacklogChart && <MiniChart className={widgetSpan(displayConfig, "backlog")} order={widgetOrder(payload, "backlog", 1)} title="Evolução do backlog (7d)" option={buildBacklogChartOption(backlogPoints)} />}
             </div>
           )}
 
           {(showProduction || showMonitorHealth) && (
-            <div className="grid flex-shrink-0 grid-cols-2 gap-3">
+            <div className="contents">
               {showProduction && (
-                <SectionCard eyebrow="Produção" title="Média 7 dias" className="shadow-sm">
+                <SectionCard eyebrow="Produção" title="Média 7 dias" className={cn("self-start shadow-sm", widgetSpan(displayConfig, "production"))} style={{ order: widgetOrder(payload, "production") }}>
                   <div className="flex justify-around text-center">
                     <div>
                       <p className="text-xl font-bold text-slate-900">{payload.production.avg_opened_7d}</p>
@@ -543,7 +653,7 @@ export default function CockpitPage() {
               )}
 
               {showMonitorHealth && (
-                <SectionCard eyebrow="UNI Intelligence" title="Saúde dos monitores" className="shadow-sm">
+                <SectionCard eyebrow="UNI Intelligence" title="Saúde dos monitores" className={cn("self-start shadow-sm", widgetSpan(displayConfig, "monitor_health"))} style={{ order: widgetOrder(payload, "monitor_health") }}>
                   <ul className="space-y-1">
                     {payload.monitor_health.map((monitor) => (
                       <li key={monitor.monitor_key} className="flex items-center justify-between text-xs">
@@ -560,25 +670,64 @@ export default function CockpitPage() {
           )}
 
           {showProblems && (
-            <SectionCard eyebrow="UNI Intelligence" title="Problemas agora" className="flex-shrink-0 shadow-sm">
+            <SectionCard eyebrow="UNI Intelligence" title="Alertas da operação" subtitle={`Mostrando ${sortedProblems.length} ocorrência(s) conforme este profile`} className={cn("self-start shadow-sm", widgetSpan(displayConfig, problemsWidgetKey))} style={{ order: widgetOrder(payload, problemsWidgetKey) }}>
               {sortedProblems.length === 0 ? (
                 <p className="text-sm text-slate-500">Nenhum problema ativo — operação dentro do esperado.</p>
               ) : (
-                <div className="flex flex-col gap-2">
-                  {featuredProblem && <FeaturedProblem item={featuredProblem} slaTarget={payload.sla.target} />}
-                  {restProblems.length > 0 && (
-                    <div className="space-y-1.5">
-                      {restProblems.map((item) => (
-                        <CompactProblemRow key={`${item.kind}-${item.id}`} item={item} slaTarget={payload.sla.target} />
-                      ))}
-                    </div>
-                  )}
+                <div className="grid gap-2">
+                  {sortedProblems.map((item) => (
+                    <RecentAlertCard key={`${item.kind}-${item.id}`} item={item} slaTarget={payload.sla.target} compact={compactAlerts} showOsDetails={showOsDetails} showCoordinates={showCoordinates} showRecommendations={showRecommendations} />
+                  ))}
+                </div>
+              )}
+              {payload.recent_alerts.length > 0 && (
+                <div className="mt-3 border-t border-slate-200 pt-3">
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-600">Normalizados recentemente</p>
+                  <div className="space-y-1.5">
+                    {payload.recent_alerts.slice(0, 6).map((item) => (
+                      <div key={`resolved-${item.id}`} className="cockpit-resolved flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs">
+                        <span className="font-semibold text-emerald-800">Normalizado</span>
+                        <span className="min-w-0 flex-1 truncate text-slate-700">{item.title}</span>
+                        <span className="text-slate-500">{formatDateTime(item.resolved_at)}</span>
+                        <span className="text-slate-400">{item.resolution_reason === "auto_resolve" ? "Condição não voltou a ocorrer" : item.resolution_reason ?? "Encerrado"}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </SectionCard>
           )}
         </section>
       </div>
+      <style jsx global>{`
+        .cockpit-theme-dark .bg-white { background-color: #171b22 !important; }
+        .cockpit-theme-dark .bg-slate-50 { background-color: #101216 !important; }
+        .cockpit-theme-dark .cockpit-soft-panel { background-color: rgba(27, 33, 43, 0.92) !important; }
+        .cockpit-theme-dark .cockpit-spotlight { background-color: rgba(45, 30, 38, 0.78) !important; }
+        .cockpit-theme-dark .cockpit-resolved { background-color: rgba(16, 62, 45, 0.72) !important; }
+        .cockpit-theme-dark .bg-red-50\\/70 { background-color: rgba(69, 26, 33, 0.55) !important; }
+        .cockpit-theme-dark .bg-amber-50\\/70 { background-color: rgba(66, 46, 18, 0.55) !important; }
+        .cockpit-theme-dark .bg-emerald-50\\/70 { background-color: rgba(16, 62, 45, 0.55) !important; }
+        .cockpit-theme-dark .bg-blue-50\\/70 { background-color: rgba(22, 43, 72, 0.55) !important; }
+        .cockpit-theme-dark .bg-violet-50\\/70 { background-color: rgba(51, 35, 78, 0.55) !important; }
+        .cockpit-theme-dark .border-red-200 { border-color: rgba(248, 113, 113, 0.35) !important; }
+        .cockpit-theme-dark .border-amber-200 { border-color: rgba(251, 191, 36, 0.35) !important; }
+        .cockpit-theme-dark .border-emerald-200 { border-color: rgba(52, 211, 153, 0.35) !important; }
+        .cockpit-theme-dark .border-blue-200 { border-color: rgba(96, 165, 250, 0.35) !important; }
+        .cockpit-theme-dark .border-violet-200 { border-color: rgba(167, 139, 250, 0.35) !important; }
+        .cockpit-theme-dark .bg-slate-50\\/70 { background-color: rgba(27, 33, 43, 0.72) !important; }
+        .cockpit-theme-dark .border-slate-100,
+        .cockpit-theme-dark .border-slate-200 { border-color: rgba(148, 163, 184, 0.2) !important; }
+        .cockpit-theme-dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: rgba(148, 163, 184, 0.15) !important; }
+        .cockpit-theme-dark .text-slate-950,
+        .cockpit-theme-dark .text-slate-900,
+        .cockpit-theme-dark .text-slate-800,
+        .cockpit-theme-dark .text-slate-700 { color: #f1f5f9 !important; }
+        .cockpit-theme-dark .text-slate-600,
+        .cockpit-theme-dark .text-slate-500,
+        .cockpit-theme-dark .text-slate-400 { color: #aeb9c8 !important; }
+        .cockpit-theme-dark select { background-color: #171b22; color: #f1f5f9; }
+      `}</style>
     </main>
   );
 }

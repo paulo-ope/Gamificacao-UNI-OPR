@@ -25,9 +25,12 @@ from .alert_rules import (
     build_alert_rule_catalog,
     alert_rule_to_out,
     create_alert_rule,
+    delete_alert_rule,
     get_alert_rule,
     list_alert_rules,
+    simulate_alert_rule,
     update_alert_rule,
+    validate_alert_rule,
 )
 from .alerts import dismiss_alert
 from .cockpit import (
@@ -45,7 +48,7 @@ from .cockpit import (
     update_cockpit_content,
     update_profile,
 )
-from .models import IntelligenceAlert, IntelligenceAlertEvent, IntelligenceCockpitContent, IntelligenceMonitorRun
+from .models import IntelligenceAlert, IntelligenceAlertEvent, IntelligenceAlertRule, IntelligenceCockpitContent, IntelligenceMonitorRun
 from .registry import get_monitor, list_monitors
 from .scheduler import (
     count_consecutive_failures,
@@ -72,6 +75,7 @@ from .schemas import (
     AlertOut,
     AlertPageOut,
     AlertRuleCatalogOut,
+    AlertRuleSimulationOut,
     CockpitContentOut,
     CockpitPayloadOut,
     FilterCatalogOut,
@@ -536,6 +540,34 @@ def get_alert_rule_catalog_endpoint() -> AlertRuleCatalogOut:
     return AlertRuleCatalogOut(**build_alert_rule_catalog())
 
 
+@admin_router.post("/admin/alert-rules/{rule_key}/simulate", response_model=AlertRuleSimulationOut)
+def simulate_alert_rule_endpoint(rule_key: str, body: AdminAlertRuleUpdateRequest, db: Session = Depends(get_db)) -> AlertRuleSimulationOut:
+    rule = get_alert_rule(db, rule_key)
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Regra '{rule_key}' não encontrada.")
+    try:
+        scope, params = validate_alert_rule(
+            rule_type=rule.rule_type,
+            scope=body.scope if body.scope is not None else rule.scope_json,
+            params=body.params if body.params is not None else rule.params_json,
+        )
+    except AlertRuleValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    candidate = IntelligenceAlertRule(
+        key=rule.key,
+        name=body.name or rule.name,
+        rule_type=rule.rule_type,
+        scope_json=scope,
+        params_json=params,
+        severity=body.severity or rule.severity,
+        active=True,
+        cooldown_minutes=body.cooldown_minutes if body.cooldown_minutes is not None else rule.cooldown_minutes,
+        confirm_cycles=body.confirm_cycles if body.confirm_cycles is not None else rule.confirm_cycles,
+        resolve_cycles=body.resolve_cycles if body.resolve_cycles is not None else rule.resolve_cycles,
+    )
+    return AlertRuleSimulationOut(**simulate_alert_rule(db, candidate))
+
+
 @admin_router.post("/admin/alert-rules", response_model=AdminAlertRuleOut, status_code=status.HTTP_201_CREATED)
 def create_alert_rule_endpoint(body: AdminAlertRuleCreateRequest, db: Session = Depends(get_db)) -> AdminAlertRuleOut:
     try:
@@ -578,6 +610,14 @@ def update_alert_rule_endpoint(rule_key: str, body: AdminAlertRuleUpdateRequest,
     except AlertRuleValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return AdminAlertRuleOut(**alert_rule_to_out(rule))
+
+
+@admin_router.delete("/admin/alert-rules/{rule_key}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_alert_rule_endpoint(rule_key: str, db: Session = Depends(get_db)) -> None:
+    rule = get_alert_rule(db, rule_key)
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Regra '{rule_key}' não encontrada.")
+    delete_alert_rule(db, rule)
 
 
 router.include_router(admin_router)

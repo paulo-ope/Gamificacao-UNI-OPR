@@ -100,12 +100,53 @@ def test_update_alert_rule_endpoint_toggles_active(client, db_session):
     assert response.json()["active"] is False
 
 
+def test_delete_alert_rule_endpoint_removes_rule_and_resolves_linked_alert(client, db_session):
+    rule = alert_rules.create_alert_rule(
+        db_session, key="teste-excluir", name="Teste", rule_type="BACKLOG_THRESHOLD", scope={}, params={}
+    )
+    alert = IntelligenceAlert(
+        kind="ALERT", alert_type="BACKLOG_THRESHOLD", monitor_key="alert_rules",
+        dedupe_key="rule:teste-excluir:geral", severity="HIGH", title="Teste", summary="Teste",
+        status="CONFIRMED", first_detected_at=_local_now(), last_seen_at=_local_now(),
+        scope_json={"rule_key": rule.key},
+    )
+    db_session.add(alert)
+    db_session.commit()
+
+    response = client.delete("/api/intelligence/admin/alert-rules/teste-excluir")
+
+    assert response.status_code == 204
+    assert alert_rules.get_alert_rule(db_session, "teste-excluir") is None
+    db_session.refresh(alert)
+    assert alert.status == "RESOLVED"
+
+
 def test_alert_rule_catalog_lists_all_rule_types(client):
     response = client.get("/api/intelligence/admin/alert-rules/catalog")
     assert response.status_code == 200
     body = response.json()
     keys = {entry["key"] for entry in body["rule_types"]}
     assert keys == set(alert_rules.RULE_TYPES)
+
+
+def test_simulate_alert_rule_does_not_create_alert(client, db_session):
+    alert_rules.create_alert_rule(
+        db_session,
+        key="teste-simular",
+        name="Teste simular",
+        rule_type="BACKLOG_THRESHOLD",
+        scope={},
+        params={"threshold_value": 999999},
+    )
+
+    response = client.post(
+        "/api/intelligence/admin/alert-rules/teste-simular/simulate",
+        json={"params": {"threshold_value": 999999}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["detection_count"] == 0
+    assert db_session.query(IntelligenceAlert).count() == 0
 
 
 # --- OS_CONCENTRATION_AREA (cluster por raio sobre coordenadas de O.S.) --------------------------
@@ -206,6 +247,21 @@ def test_os_concentration_rule_never_widens_beyond_configured_scope(db_session):
     assert detections[0].regional == "UNI - JARU"
 
 
+def test_os_concentration_rule_does_not_mix_regionals_when_required(db_session):
+    rule = alert_rules.create_alert_rule(
+        db_session,
+        key="teste-cluster-mesma-regional",
+        name="Teste",
+        rule_type="OS_CONCENTRATION_AREA",
+        scope={},
+        params={"min_count": 3, "window_minutes": 120, "radius_meters": 300, "require_same_regional": True},
+    )
+    for regional in ("UNI - JARU", "UNI - JARU", "UNI - JI PARANA"):
+        _seed_order(db_session, regional=regional, latitude=-10.4, longitude=-62.4)
+
+    assert rules_engine._run_os_concentration_rule(db_session, rule) == []
+
+
 # --- OS_OPENING_ABOVE_AVERAGE (baseline suficiente x insuficiente) -------------------------------
 
 
@@ -227,6 +283,7 @@ def test_above_average_rule_triggers_with_sufficient_baseline(db_session):
     assert len(detections) == 1
     assert not detections[0].warnings
     assert detections[0].confidence == 0.85
+    assert len(detections[0].evidence["os_sample"]) == 4
 
 
 def test_above_average_rule_flags_insufficient_baseline_without_high_confidence(db_session):

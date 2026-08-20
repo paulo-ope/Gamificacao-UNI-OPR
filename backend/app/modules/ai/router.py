@@ -35,7 +35,7 @@ from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
-from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
+from app.modules.operations.onu_signal_snapshot import query_onu_signal_history, query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.ai.schemas import (
     AiAggregationRequest,
@@ -55,6 +55,7 @@ from app.modules.ai.schemas import (
     AiSearchLoginsRequest,
     AiOfflineLoginClustersRequest,
     AiOnuSignalRequest,
+    AiOnuSignalHistoryRequest,
     AiOrderDetailsRequest,
     AiOrderDetailsResponse,
     AiSearchRequest,
@@ -83,6 +84,7 @@ from app.modules.operations.schemas import (
     OperationCoordinateQualityResponseOut,
     OperationOfflineLoginClustersOut,
     OperationOnuSignalOut,
+    OperationOnuSignalHistoryItemOut,
     OperationOrderDetailOut,
 )
 
@@ -542,6 +544,41 @@ def onu_signal_route(
         user=context.user,
         token_id=context.token_id,
         filters={"login_ids": payload.login_ids, "last_drop_causes": payload.last_drop_causes, "transmitter_ids": payload.transmitter_ids},
+        result_count=len(results),
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return results
+
+
+@router.post("/infra/onu-signal-history", response_model=list[OperationOnuSignalHistoryItemOut])
+def onu_signal_history_route(
+    payload: AiOnuSignalHistoryRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> list[dict]:
+    """Série histórica de telemetria óptica/ONU (um ponto por captura) - "o sinal do login/serial
+    X estava em Y na data Z, e hoje está em W". Exige pelo menos `login_ids` ou `onu_serials`.
+    Cobertura parcial por desenho: só existem pontos para os momentos em que o login estava na
+    fila de diagnóstico daquele ciclo - ausência de ponto num período não significa sinal bom o
+    tempo todo, significa que não foi medido nesse período."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.onu_signal_history", "api")
+    results = query_onu_signal_history(
+        db,
+        login_ids=payload.login_ids,
+        onu_serials=payload.onu_serials,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        limit=payload.limit,
+    )
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.onu_signal_history",
+        user=context.user,
+        token_id=context.token_id,
+        filters={"login_ids": payload.login_ids, "onu_serials": payload.onu_serials},
         result_count=len(results),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )

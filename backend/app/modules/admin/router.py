@@ -43,16 +43,53 @@ TEAM_TYPES = ("field", "scheduling", "internal_support", "regional", "administra
 STRUCTURE_STATUSES = ("pending_review", "validated", "needs_fix", "outside_operation", "inactive")
 
 
+PERMISSION_MODULE_BY_PREFIX = {
+    "admin": "Administração",
+    "ai": "IA e API",
+    "audit": "Auditoria",
+    "intelligence": "UNI Intelligence",
+    "management": "Gestão Integrada",
+    "operations": "Operação Analítica",
+    "portal": "Portal do Colaborador",
+    "scheduling": "Agendamento",
+    "support": "SGP Suporte",
+    "users": "Administração legada",
+}
+
+GAMIFICATION_PERMISSION_PREFIXES = {
+    "calculation",
+    "dashboard",
+    "health_rules",
+    "orders",
+    "penalties",
+    "scoring",
+    "settings",
+}
+
+# Permissões que concedem autoridade de aprovação/administração acima do uso rotineiro do módulo -
+# aceitar/rejeitar a decisão da matriz (`management:review`), gerência avançada da Gestão
+# (`management:admin`) ou poder sobre o acesso de outras pessoas (`admin:users:*`, `admin:roles:write`).
+# Achado real: a tela de Perfis de Acesso tinha um único botão "Selecionar módulo" por módulo, e
+# `management:review`/`management:admin` caem no mesmo módulo ("Gestão Integrada") que permissões
+# de rotina (`management:read`, `management:write_justification`) - marcar o módulo inteiro para
+# dar acesso de supervisor concedia, sem aviso, poder de aprovar/rejeitar o caso da matriz. Essas
+# permissões ficam de fora do toggle de módulo e exigem clique individual (ver frontend).
+SENSITIVE_PERMISSIONS = {
+    "management:review",
+    "management:admin",
+    "admin:users:write",
+    "admin:users:delete",
+    "admin:roles:write",
+}
+
+
 def _permission_module(permission: str) -> str:
-    if permission.startswith("operations:"):
-        return "Operação Analítica"
-    if permission.startswith("management:"):
-        return "Gestão"
-    if permission.startswith("admin:"):
-        return "Administração"
-    if permission.startswith("portal:"):
-        return "Portal"
-    return "Gamificação"
+    prefix = permission.split(":", 1)[0]
+    if prefix in PERMISSION_MODULE_BY_PREFIX:
+        return PERMISSION_MODULE_BY_PREFIX[prefix]
+    if prefix in GAMIFICATION_PERMISSION_PREFIXES:
+        return "Gamificação Operacional"
+    return "Outras permissões"
 
 
 def _profile_out(profile: AccessProfile, user_count: int = 0) -> AccessProfileOut:
@@ -205,7 +242,12 @@ def _build_single_module_out(db: Session, module) -> AdminWorkspaceModuleOut:
 @router.get("/permissions", response_model=list[EcosystemPermissionOut])
 def list_permissions(_: User = Depends(require_permission("admin:permissions:read"))):
     return [
-        EcosystemPermissionOut(key=key, label=label, module=_permission_module(key))
+        EcosystemPermissionOut(
+            key=key,
+            label=label,
+            module=_permission_module(key),
+            sensitive=key in SENSITIVE_PERMISSIONS,
+        )
         for key, label in sorted(PERMISSION_LABELS.items())
     ]
 

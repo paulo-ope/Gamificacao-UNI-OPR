@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     ixc_api_verify_ssl: bool = True
     ixc_sync_enabled: bool = False
     ixc_sync_interval_minutes: int = 20
+    opa_api_base_url: str = ""
+    opa_api_token: str = ""
+    opa_api_verify_ssl: bool = True
+    opa_sync_enabled: bool = False
+    opa_sync_interval_minutes: int = 20
+    opa_sync_lookback_days: int = 1
     cpk_api_base_url: str = ""
     cpk_api_key: str = ""
     # URL pública (com esquema, sem barra final) por onde este backend é alcançado de fora -

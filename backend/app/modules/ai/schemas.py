@@ -489,6 +489,21 @@ class AiOnuSignalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AiOnuSignalHistoryRequest(BaseModel):
+    """Série histórica de telemetria óptica/ONU (um ponto por captura) - "o sinal do login/serial
+    X estava em Y na data Z, e hoje está em W". Distinto de `AiOnuSignalRequest`: aqui é a série no
+    tempo de um login/serial específico, não o estado mais recente de vários. Exige pelo menos
+    `login_ids` ou `onu_serials`."""
+
+    login_ids: list[int] = Field(default_factory=list, max_length=50)
+    onu_serials: list[str] = Field(default_factory=list, max_length=50)
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    limit: int = Field(default=500, ge=1, le=2000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AiLoginStatusRequest(BaseModel):
     """Status ATUAL de conectividade por login - mesmos parâmetros de `GET
     /operations/network/logins`, agora acessível para IA/MCP via chave de API. Distinto de

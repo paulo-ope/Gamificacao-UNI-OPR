@@ -9,6 +9,7 @@ class EcosystemPermissionOut(BaseModel):
     key: str
     label: str
     module: str
+    sensitive: bool = False
 
 
 class AccessProfileBase(BaseModel):

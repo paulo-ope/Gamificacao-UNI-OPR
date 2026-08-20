@@ -49,6 +49,7 @@ from .onu_signal_snapshot import (
     ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY,
     ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES,
     ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES,
+    query_onu_signal_history,
     query_onu_signal_status,
 )
 from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
@@ -113,6 +114,7 @@ from .schemas import (
     OperationCoordinateQualityItemOut,
     OperationCoordinateQualityResponseOut,
     OperationOnuSignalOut,
+    OperationOnuSignalHistoryItemOut,
 )
 
 
@@ -1232,6 +1234,37 @@ def network_onu_signal(
         login_ids=login_ids,
         last_drop_causes=last_drop_causes,
         transmitter_ids=transmitter_ids,
+        limit=limit,
+    )
+
+
+@router.get("/network/onu-signal/history", response_model=list[OperationOnuSignalHistoryItemOut])
+def network_onu_signal_history(
+    login_ids: list[int] = Query(default_factory=list),
+    onu_serials: list[str] = Query(default_factory=list),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Série histórica de telemetria óptica/ONU (um ponto por captura) - "o sinal do login/serial
+    X estava em Y na data Z, e hoje está em W" (pedido do usuário em 2026-08-17). Exige pelo menos
+    `login_ids` ou `onu_serials`. Cobertura parcial por desenho: só existem pontos para os momentos
+    em que o login estava na fila de diagnóstico daquele ciclo (ver
+    `OperationOnuSignalSnapshot`) - ausência de ponto num período não significa sinal bom o tempo
+    todo, significa que não foi medido nesse período."""
+    policy = enforce_ai_endpoint_for_user(db, user, "operations.network.onu_signal_history", "api")
+    if login_ids:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "login_id", "filterable")
+    if onu_serials:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "onu_serial", "filterable")
+    return query_onu_signal_history(
+        db,
+        login_ids=login_ids,
+        onu_serials=onu_serials,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
     )
 

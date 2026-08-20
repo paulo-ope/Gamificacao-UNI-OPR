@@ -176,6 +176,7 @@ def _run_os_concentration_rule(db: Session, rule: IntelligenceAlertRule) -> list
     historical_comparison = bool(params.get("historical_comparison", False))
     multiplier = float(params.get("min_multiplier_over_average", 1.5))
     baseline_days = int(params.get("baseline_days", 14))
+    require_same_regional = bool(params.get("require_same_regional", True))
 
     now = datetime.now(timezone.utc)
     window_start = now - timedelta(minutes=window_minutes)
@@ -203,7 +204,15 @@ def _run_os_concentration_rule(db: Session, rule: IntelligenceAlertRule) -> list
         for order in orders
     ]
 
-    groups = _cluster_points(points, radius_meters=radius_meters, min_samples=min_count)
+    if require_same_regional:
+        groups = []
+        points_by_regional: dict[str | None, list[_OrderPoint]] = {}
+        for point in points:
+            points_by_regional.setdefault(point.regional, []).append(point)
+        for regional_points in points_by_regional.values():
+            groups.extend(_cluster_points(regional_points, radius_meters=radius_meters, min_samples=min_count))
+    else:
+        groups = _cluster_points(points, radius_meters=radius_meters, min_samples=min_count)
     detections: list[MonitorDetection] = []
     for group in groups:
         if len(group) < min_count:
@@ -274,6 +283,7 @@ def _run_os_concentration_rule(db: Session, rule: IntelligenceAlertRule) -> list
                             "neighborhood": p.neighborhood,
                             "latitude": round(p.latitude, 6),
                             "longitude": round(p.longitude, 6),
+                            "opened_at": next((order.opened_at.isoformat() for order in orders if order.id == p.order_id), None),
                         }
                         for p in group[:10]
                     ],
@@ -290,6 +300,40 @@ def _run_os_concentration_rule(db: Session, rule: IntelligenceAlertRule) -> list
 _GROUP_BY_COLUMNS = {"regional": OperationOrder.regional, "city": OperationOrder.city, "os_subject": OperationOrder.os_subject}
 
 
+def _recent_orders_evidence(db: Session, conditions: list) -> dict:
+    """Amostra enxuta das O.S. que explicam um alerta de volume.
+
+    Mantém a evidência no backend para que cockpit, API e qualquer consumidor futuro vejam os
+    mesmos códigos, endereços e coordenadas, em vez de cada tela tentar reconstruí-los.
+    """
+    orders = list(
+        db.scalars(
+            select(OperationOrder)
+            .where(*conditions)
+            .order_by(OperationOrder.opened_at.desc())
+            .limit(4)
+        )
+    )
+    coordinates = [(order.latitude, order.longitude) for order in orders if order.latitude is not None and order.longitude is not None]
+    evidence: dict = {
+        "os_sample": [
+            {
+                "order_code": order.order_code,
+                "address": _service_address_from_payload(order.raw_payload),
+                "neighborhood": order.neighborhood,
+                "latitude": round(order.latitude, 6) if order.latitude is not None else None,
+                "longitude": round(order.longitude, 6) if order.longitude is not None else None,
+                "opened_at": order.opened_at.isoformat() if order.opened_at else None,
+            }
+            for order in orders
+        ]
+    }
+    if coordinates:
+        evidence["center_latitude"] = round(sum(latitude for latitude, _ in coordinates) / len(coordinates), 6)
+        evidence["center_longitude"] = round(sum(longitude for _, longitude in coordinates) / len(coordinates), 6)
+    return evidence
+
+
 def _run_opening_above_average_rule(db: Session, rule: IntelligenceAlertRule) -> list[MonitorDetection]:
     params = rule.params_json
     scope = rule.scope_json
@@ -302,7 +346,10 @@ def _run_opening_above_average_rule(db: Session, rule: IntelligenceAlertRule) ->
 
     detections: list[MonitorDetection] = []
 
-    def _make_detection(*, count: int, dimension_label: str | None, dimension_value: str | None, average: float, days_available: int) -> MonitorDetection:
+    def _make_detection(
+        *, count: int, dimension_label: str | None, dimension_value: str | None,
+        average: float, days_available: int, sample_conditions: list,
+    ) -> MonitorDetection:
         warnings: list[dict] = []
         confidence = 0.6
         if days_available < MIN_BASELINE_SAMPLES:
@@ -327,7 +374,13 @@ def _run_opening_above_average_rule(db: Session, rule: IntelligenceAlertRule) ->
             city=dimension_value if dimension_label == "city" else None,
             scope={dimension_label: dimension_value, "rule_key": rule.key} if dimension_label else {"rule_key": rule.key},
             recommended_action="avaliar reforço de equipe ou investigar causa comum",
-            evidence={"count": count, "baseline_average": average, "baseline_days_available": days_available, "window_minutes": window_minutes},
+            evidence={
+                "count": count,
+                "baseline_average": average,
+                "baseline_days_available": days_available,
+                "window_minutes": window_minutes,
+                **_recent_orders_evidence(db, sample_conditions),
+            },
             confidence=confidence,
             warnings=warnings,
         )
@@ -351,7 +404,17 @@ def _run_opening_above_average_rule(db: Session, rule: IntelligenceAlertRule) ->
             average = _historical_average_count(db, conditions_builder=_baseline_conditions, window_minutes=window_minutes, baseline_days=baseline_days, now=now)
             if days_available >= MIN_BASELINE_SAMPLES and average > 0 and count < average * multiplier:
                 continue
-            detections.append(_make_detection(count=count, dimension_label=group_by, dimension_value=str(value), average=average, days_available=days_available))
+            current_conditions = _dimension_scope(value, column) + [OperationOrder.opened_at >= window_start, OperationOrder.opened_at < now]
+            detections.append(
+                _make_detection(
+                    count=count,
+                    dimension_label=group_by,
+                    dimension_value=str(value),
+                    average=average,
+                    days_available=days_available,
+                    sample_conditions=current_conditions,
+                )
+            )
     else:
         conditions = _scope_conditions(scope) + [OperationOrder.opened_at >= window_start, OperationOrder.opened_at < now]
         count = db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0
@@ -362,7 +425,16 @@ def _run_opening_above_average_rule(db: Session, rule: IntelligenceAlertRule) ->
             days_available = _days_of_history_available(db, scope_conditions=_scope_conditions(scope), now=now)
             average = _historical_average_count(db, conditions_builder=_baseline_conditions, window_minutes=window_minutes, baseline_days=baseline_days, now=now)
             if not (days_available >= MIN_BASELINE_SAMPLES and average > 0 and count < average * multiplier):
-                detections.append(_make_detection(count=count, dimension_label=None, dimension_value=None, average=average, days_available=days_available))
+                detections.append(
+                    _make_detection(
+                        count=count,
+                        dimension_label=None,
+                        dimension_value=None,
+                        average=average,
+                        days_available=days_available,
+                        sample_conditions=conditions,
+                    )
+                )
     return detections
 
 
@@ -439,6 +511,7 @@ def _run_collective_outage_rule(db: Session, rule: IntelligenceAlertRule) -> lis
     window_minutes = int(params.get("window_minutes", 90))
     min_count = int(params.get("min_count", 3))
     radius_meters = float(params.get("radius_meters", 300))
+    require_same_regional = bool(params.get("require_same_regional", True))
     regionals_filter = set(scope.get("regionals") or [])
 
     analysis = login_incident_analysis(db, window_minutes=window_minutes, regionals=None, cluster_radius_meters=radius_meters, cluster_min_size=min_count)
@@ -448,6 +521,14 @@ def _run_collective_outage_rule(db: Session, rule: IntelligenceAlertRule) -> lis
         regional = None
         if logins:
             regional = db.scalar(select(OperationLoginCurrentStatus.regional).where(OperationLoginCurrentStatus.login == logins[0]))
+        if require_same_regional and logins:
+            cluster_regionals = set(
+                db.scalars(
+                    select(OperationLoginCurrentStatus.regional).where(OperationLoginCurrentStatus.login.in_(logins))
+                )
+            )
+            if len(cluster_regionals) > 1:
+                continue
         if regionals_filter and regional not in regionals_filter:
             continue
         lat_key, lng_key = round(cluster["center_latitude"], 3), round(cluster["center_longitude"], 3)

@@ -12,13 +12,14 @@ type SectionCardProps = {
   children?: React.ReactNode;
   className?: string;
   contentClassName?: string;
+  style?: React.CSSProperties;
 };
 
 // Card padrão "premium" do sistema (mesmo padrão do módulo de operações analíticas:
 // operations-trend-chart.tsx) - eyebrow azul, título forte, subtítulo discreto.
-export function SectionCard({ eyebrow, title, subtitle, badge, actions, children, className, contentClassName }: SectionCardProps) {
+export function SectionCard({ eyebrow, title, subtitle, badge, actions, children, className, contentClassName, style }: SectionCardProps) {
   return (
-    <Card className={cn("overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm", className)}>
+    <Card className={cn("overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm", className)} style={style}>
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-0">
         <div className="min-w-0">
           <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">{eyebrow}</p>

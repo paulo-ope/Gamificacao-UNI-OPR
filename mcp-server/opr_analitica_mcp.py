@@ -481,8 +481,8 @@ def opr_onu_signal(params: OnuSignalInput) -> str:
     Returns:
         str: JSON com lista de {"login_id", "login", "contract_id", "signal_rx_dbm",
         "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
-        "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no", "slot_no",
-        "latitude", "longitude", "captured_at"}.
+        "transmitter_name", "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no",
+        "slot_no", "latitude", "longitude", "captured_at"}.
     """
     payload = {
         "login_ids": params.login_ids,
@@ -491,6 +491,58 @@ def opr_onu_signal(params: OnuSignalInput) -> str:
         "limit": params.limit,
     }
     return _call("infra/onu-signal", payload)
+
+
+class OnuSignalHistoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    login_ids: list[int] = Field(default_factory=list, max_length=50, description="Lista de login_id. Informe isto ou onu_serials.")
+    onu_serials: list[str] = Field(default_factory=list, max_length=50, description="Lista de serial/MAC da ONU. Informe isto ou login_ids.")
+    date_from: str | None = Field(default=None, description="Início do período, ISO 8601 (AAAA-MM-DDTHH:MM:SS). Opcional.")
+    date_to: str | None = Field(default=None, description="Fim do período, ISO 8601. Opcional.")
+    limit: int = Field(default=500, ge=1, le=2000)
+
+
+@mcp.tool(
+    name="opr_onu_signal_history",
+    annotations={
+        "title": "Histórico de sinal óptico/ONU",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_onu_signal_history(params: OnuSignalHistoryInput) -> str:
+    """Série histórica de telemetria óptica/ONU (um ponto por captura, não só o valor mais
+    recente) - use para responder "o sinal do login/serial X estava em Y na data Z, e hoje está em
+    W". Exige pelo menos login_ids ou onu_serials - não é uma consulta de exploração livre, é a
+    série de um equipamento/login específico.
+
+    Cobertura parcial por desenho: só existem pontos para os momentos em que o login estava na
+    fila de diagnóstico daquele ciclo (offline, transição recente, ou nunca capturado - ver
+    opr_onu_signal) - ausência de ponto num período não significa sinal bom o tempo todo, significa
+    que não foi medido nesse período.
+
+    Args:
+        params (OnuSignalHistoryInput): login_ids ou onu_serials (pelo menos um), date_from/
+            date_to (opcional, ISO 8601), limit (até 2000, default 500).
+
+    Returns:
+        str: JSON com lista ordenada por captured_at (mais antigo primeiro) de {"login_id",
+        "contract_id", "signal_rx_dbm", "signal_tx_dbm", "last_drop_cause", "onu_serial",
+        "onu_model", "transmitter_id", "transmitter_name", "temperature_c", "voltage",
+        "signal_measured_at", "pon_id", "pon_no", "slot_no", "latitude", "longitude",
+        "captured_at"}.
+    """
+    payload = {
+        "login_ids": params.login_ids,
+        "onu_serials": params.onu_serials,
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "limit": params.limit,
+    }
+    return _call("infra/onu-signal-history", payload)
 
 
 DateTimeOpDoc = (

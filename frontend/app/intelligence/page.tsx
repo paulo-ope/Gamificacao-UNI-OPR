@@ -32,6 +32,7 @@ import { MultiSelect } from "@/components/ui/multi-select";
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import { configuredCockpitWidgetSize } from "@/lib/intelligence-cockpit-layout";
 import {
   ALERT_STATUS_LABELS,
   CONTENT_STATUS_LABELS,
@@ -290,7 +291,9 @@ function EvidenceView({ evidence }: { evidence: Record<string, unknown> }) {
             {sample.map((item, index) => (
               <div key={index} className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs">
                 <span className="font-semibold text-slate-800">{String(item.order_code ?? "-")}</span>
+                <span className="text-slate-500"> · aberta em {typeof item.opened_at === "string" ? new Date(item.opened_at).toLocaleString("pt-BR") : "horário não informado"}</span>
                 <span className="text-slate-500"> · {[item.address, item.neighborhood].filter(Boolean).join(" · ") || "endereço não disponível"}</span>
+                {typeof item.latitude === "number" && typeof item.longitude === "number" ? <span className="text-slate-400"> · {item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}</span> : null}
               </div>
             ))}
           </div>
@@ -476,6 +479,9 @@ function AlertasTab({
                 <span>Confiança: {detail.confidence != null ? `${Math.round(detail.confidence * 100)}%` : "-"}</span>
                 <span>Primeira detecção: {new Date(detail.first_detected_at).toLocaleString("pt-BR")}</span>
                 <span>Última observação: {new Date(detail.last_seen_at).toLocaleString("pt-BR")}</span>
+                <span>Origem: {detail.monitor_key === "alert_rules" ? `Regra personalizada ${String(detail.scope.rule_key ?? detail.source_key ?? "")}` : `Monitor padrão ${detail.monitor_key}`}</span>
+                <span>Configuração: {detail.monitor_key === "alert_rules" ? "Aba Regras de Alertas" : "Aba Monitores"}</span>
+                {detail.resolved_at ? <span>Encerrado em: {new Date(detail.resolved_at).toLocaleString("pt-BR")}</span> : null}
               </div>
               <div>
                 <p className="mb-2 text-xs font-semibold uppercase text-slate-500">Linha do tempo</p>
@@ -489,7 +495,7 @@ function AlertasTab({
                   {!detail.events.length ? <p className="text-xs text-slate-500">Sem eventos registrados.</p> : null}
                 </div>
               </div>
-              {canManage && detail.status === "ACTIVE" ? (
+              {canManage && DEFAULT_ACTIVE_ALERT_STATUSES.includes(detail.status) ? (
                 <Button type="button" variant="outline" onClick={() => void dismiss(detail.id)}>Descartar alerta</Button>
               ) : null}
             </div>
@@ -681,6 +687,13 @@ function emptyWidgetEntry(key: string): WidgetEntry {
   return { key, filters: {} };
 }
 
+const WIDGET_SIZE_OPTIONS = [
+  { value: "S", label: "Compacto" },
+  { value: "M", label: "Médio" },
+  { value: "L", label: "Largo" },
+  { value: "XL", label: "Total" },
+] as const;
+
 function ProfilesTab({
   onError,
   onMessage,
@@ -735,6 +748,7 @@ function ProfilesTab({
         purpose: draft.purpose,
         scope: draft.scope,
         widgets: draft.widgets,
+        display_config: draft.display_config,
         refresh_seconds: draft.refresh_seconds,
         active: draft.active,
       });
@@ -761,6 +775,7 @@ function ProfilesTab({
         purpose: "REGIONAL_TV",
         scope: { regionals: [] },
         widgets: [],
+        display_config: { theme: "LIGHT", density: "COMFORTABLE", layout_mode: "MOSAIC", widget_sizes: {}, alert_limit: 4, alert_sort: "RECENT", show_resolved_minutes: 120, show_os_details: true, show_coordinates: true, show_recommendations: true, rotate_seconds: 0 },
         active: true,
       });
       onMessage("Profile criado.");
@@ -777,6 +792,22 @@ function ProfilesTab({
 
   function updateScopeField(field: string, values: string[]) {
     setDraft((current) => (current ? { ...current, scope: { ...current.scope, [field]: values } } : current));
+  }
+
+  function updateDisplayConfig(field: string, value: unknown) {
+    setDraft((current) => (current ? { ...current, display_config: { ...current.display_config, [field]: value } } : current));
+  }
+
+  function updateWidgetSize(widgetKey: string, size: string) {
+    setDraft((current) => {
+      if (!current) return current;
+      const currentSizes = current.display_config.widget_sizes;
+      const widgetSizes = currentSizes && typeof currentSizes === "object" && !Array.isArray(currentSizes)
+        ? { ...(currentSizes as Record<string, unknown>) }
+        : {};
+      widgetSizes[widgetKey] = size;
+      return { ...current, display_config: { ...current.display_config, widget_sizes: widgetSizes } };
+    });
   }
 
   function moveWidget(index: number, direction: -1 | 1) {
@@ -886,6 +917,55 @@ function ProfilesTab({
             </div>
           </SectionCard>
 
+          <SectionCard eyebrow="Exibição" title="Personalização do painel" subtitle="Ajustes independentes deste profile para TV, suporte, regional ou matriz.">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Tema padrão</p>
+                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.theme ?? "LIGHT")} onChange={(event) => updateDisplayConfig("theme", event.target.value)}>
+                  <option value="LIGHT">Claro</option><option value="DARK">Escuro</option><option value="AUTO">Automático</option>
+                </select>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Densidade</p>
+                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.density ?? "COMFORTABLE")} onChange={(event) => updateDisplayConfig("density", event.target.value)}>
+                  <option value="COMPACT">Compacta</option><option value="COMFORTABLE">Confortável</option><option value="TV">TV</option>
+                </select>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Composição do painel</p>
+                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.layout_mode ?? "MOSAIC")} onChange={(event) => updateDisplayConfig("layout_mode", event.target.value)}>
+                  <option value="MOSAIC">Mosaico equilibrado</option><option value="FOCUS">Foco em alertas</option><option value="DENSE">Máxima informação</option>
+                </select>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Quantidade de alertas</p>
+                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={Number(draft.display_config.alert_limit ?? 4)} onChange={(event) => updateDisplayConfig("alert_limit", Number(event.target.value))}>
+                  {[4, 6, 8, 12].map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Ordenação dos alertas</p>
+                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.alert_sort ?? "RECENT")} onChange={(event) => updateDisplayConfig("alert_sort", event.target.value)}>
+                  <option value="RECENT">Mais recentes</option><option value="SEVERITY">Maior severidade</option><option value="IMPACT">Maior impacto</option>
+                </select>
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Manter normalizados por (minutos)</p>
+                <Input type="number" min={0} max={1440} value={Number(draft.display_config.show_resolved_minutes ?? 120)} onChange={(event) => updateDisplayConfig("show_resolved_minutes", Number(event.target.value))} />
+              </div>
+              <div>
+                <p className="mb-1 text-[11px] font-semibold text-slate-500">Rotação automática (segundos)</p>
+                <Input type="number" min={0} max={3600} value={Number(draft.display_config.rotate_seconds ?? 0)} onChange={(event) => updateDisplayConfig("rotate_seconds", Number(event.target.value))} />
+              </div>
+              {[["show_os_details", "Mostrar O.S. relacionadas"], ["show_coordinates", "Mostrar coordenadas"], ["show_recommendations", "Mostrar ação recomendada"]].map(([field, label]) => (
+                <label key={field} className="flex items-center gap-2 text-sm text-slate-700">
+                  <input type="checkbox" checked={draft.display_config[field] !== false} onChange={(event) => updateDisplayConfig(field, event.target.checked)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </SectionCard>
+
           <SectionCard eyebrow="Escopo base" title="Escopo do profile" subtitle="Filtro base de toda a TV - widgets só podem restringir, nunca ampliar este escopo.">
             <div className="grid gap-3 sm:grid-cols-2">
               {SCOPE_FIELDS.map((field) => (
@@ -902,7 +982,7 @@ function ProfilesTab({
             </div>
           </SectionCard>
 
-          <SectionCard eyebrow="Widgets" title="Widgets habilitados" subtitle="Ordem = prioridade de exibição na TV. Cada filtro só restringe o escopo acima.">
+          <SectionCard eyebrow="Mosaico" title="Blocos do painel" subtitle="Escolha os blocos, a ordem e quanto espaço cada um ocupa. O painel reorganiza tudo sem sobreposição.">
             <div className="grid gap-3">
               {(catalog?.widgets ?? []).map((widgetCatalog) => {
                 const index = draft.widgets.findIndex((widget) => widget.key === widgetCatalog.key);
@@ -926,6 +1006,27 @@ function ProfilesTab({
                         </div>
                       ) : null}
                     </div>
+                    {enabled ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                        <span className="text-[11px] font-semibold text-slate-500">Tamanho</span>
+                        <div className="inline-flex overflow-hidden rounded-md border border-slate-200" aria-label={`Tamanho de ${labelFor(WIDGET_LABELS, widgetCatalog.key)}`}>
+                          {WIDGET_SIZE_OPTIONS.map((option) => {
+                            const selected = configuredCockpitWidgetSize(draft.display_config, widgetCatalog.key) === option.value;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => updateWidgetSize(widgetCatalog.key, option.value)}
+                                className={`h-8 border-r border-slate-200 px-2.5 text-[11px] font-medium last:border-r-0 ${selected ? "bg-uni-royal text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                                aria-pressed={selected}
+                              >
+                                {option.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
                     {enabled && widgetCatalog.allowed_filters.length ? (
                       <div className="mt-3 grid gap-2 sm:grid-cols-2">
                         {widgetCatalog.allowed_filters.map((field) => (
@@ -1086,11 +1187,11 @@ function ParamValueEditor({
   groupByOptions: string[];
   onChange: (value: unknown) => void;
 }) {
-  if (field === "historical_comparison") {
+  if (field === "historical_comparison" || field === "require_same_regional") {
     return (
       <label className="flex h-10 items-center gap-2 text-sm text-slate-700">
         <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
-        Ativada
+        {field === "require_same_regional" ? "Somente mesma regional" : "Ativada"}
       </label>
     );
   }
@@ -1138,6 +1239,9 @@ function AlertRulesTab({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const [simulationResult, setSimulationResult] = useState<{ detection_count: number; detections: Array<{ title: string; summary: string }> } | null>(null);
   const [newKey, setNewKey] = useState("");
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState("");
@@ -1220,9 +1324,73 @@ function AlertRulesTab({
       setNewKey("");
       setNewName("");
       setRules((current) => [...current, created]);
-      selectRule(created.key);
+      setSelectedKey(created.key);
+      setDraft({ ...created, scope: { ...created.scope }, params: { ...created.params } });
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : "Falha ao criar regra.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function deleteRule() {
+    if (!draft) return;
+    const confirmed = window.confirm(
+      `Excluir a regra "${draft.name}"? Os alertas ativos criados por ela serão encerrados e essa ação não pode ser desfeita.`,
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      await intelligenceCockpitApi.deleteAlertRule(draft.key);
+      setRules((current) => current.filter((item) => item.key !== draft.key));
+      setSelectedKey(null);
+      setDraft(null);
+      onMessage("Regra excluída e alertas ativos vinculados encerrados.");
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Falha ao excluir regra.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function simulateRule() {
+    if (!draft) return;
+    setSimulating(true);
+    try {
+      const result = await intelligenceCockpitApi.simulateAlertRule(draft.key, { name: draft.name, scope: draft.scope, params: draft.params, severity: draft.severity, cooldown_minutes: draft.cooldown_minutes, confirm_cycles: draft.confirm_cycles, resolve_cycles: draft.resolve_cycles });
+      setSimulationResult(result);
+      onMessage(`Simulação concluída: ${result.detection_count} ocorrência(s) encontrada(s).`);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Falha ao simular regra.");
+    } finally {
+      setSimulating(false);
+    }
+  }
+
+  async function duplicateRule() {
+    if (!draft) return;
+    setCreating(true);
+    try {
+      const suffix = Date.now().toString().slice(-6);
+      const created = await intelligenceCockpitApi.createAlertRule({
+        key: `${draft.key.slice(0, 70)}-copia-${suffix}`,
+        name: `${draft.name} - cópia`,
+        rule_type: draft.rule_type,
+        scope: draft.scope,
+        params: draft.params,
+        severity: draft.severity,
+        active: false,
+        cooldown_minutes: draft.cooldown_minutes,
+        confirm_cycles: draft.confirm_cycles,
+        resolve_cycles: draft.resolve_cycles,
+      });
+      setRules((current) => [...current, created]);
+      setSelectedKey(created.key);
+      setDraft({ ...created, scope: { ...created.scope }, params: { ...created.params } });
+      onMessage("Regra duplicada como inativa. Revise os parâmetros antes de ativar.");
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "Falha ao duplicar regra.");
     } finally {
       setCreating(false);
     }
@@ -1285,7 +1453,13 @@ function AlertRulesTab({
             eyebrow="Regra"
             title={draft.name}
             subtitle={`${labelFor(RULE_TYPE_LABELS, draft.rule_type)} · ${draft.key}`}
-            actions={<Button type="button" onClick={() => void save()} disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>}
+            actions={
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="outline" onClick={() => void simulateRule()} disabled={simulating}>{simulating ? "Simulando..." : "Testar regra"}</Button>
+                <Button type="button" variant="outline" onClick={() => void duplicateRule()} disabled={creating}>Duplicar</Button>
+                <Button type="button" onClick={() => void save()} disabled={saving}>{saving ? "Salvando..." : "Salvar"}</Button>
+              </div>
+            }
           >
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
@@ -1347,6 +1521,23 @@ function AlertRulesTab({
                 </label>
                 <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_TOP_LEVEL_HELP.active}</p>
               </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4 sm:col-span-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">Excluir esta regra</p>
+                  <p className="mt-1 text-xs text-slate-500">Os alertas ativos vinculados serão encerrados e a regra não poderá ser recuperada.</p>
+                </div>
+                <Button type="button" variant="destructive" onClick={() => void deleteRule()} disabled={deleting}>
+                  <Trash2 className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                  {deleting ? "Excluindo..." : "Excluir regra"}
+                </Button>
+              </div>
+              {simulationResult ? (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 sm:col-span-2">
+                  <p className="text-sm font-semibold text-blue-900">Simulação: {simulationResult.detection_count} ocorrência(s)</p>
+                  {simulationResult.detections.slice(0, 3).map((item, index) => <p key={`${item.title}-${index}`} className="mt-1 text-xs text-blue-800">{item.title}: {item.summary}</p>)}
+                  {!simulationResult.detection_count ? <p className="mt-1 text-xs text-blue-700">A condição não seria disparada com os dados atuais.</p> : null}
+                </div>
+              ) : null}
             </div>
           </SectionCard>
 
@@ -1373,14 +1564,22 @@ function AlertRulesTab({
               <div className="grid gap-4 sm:grid-cols-2">
                 {draftTypeCatalog.allowed_params.map((field) => (
                   <div key={field}>
-                    <p className="mb-1 text-[11px] font-semibold text-slate-500">{labelFor(RULE_PARAM_LABELS, field)}</p>
+                    <p className="mb-1 text-[11px] font-semibold text-slate-500">
+                      {draft.rule_type === "COLLECTIVE_OUTAGE" && field === "min_count"
+                        ? "Quantidade mínima de logins offline no mesmo cluster"
+                        : labelFor(RULE_PARAM_LABELS, field)}
+                    </p>
                     <ParamValueEditor
                       field={field}
                       value={draft.params[field]}
                       groupByOptions={catalog?.group_by_values ?? []}
                       onChange={(value) => updateParamField(field, value)}
                     />
-                    <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_PARAM_HELP[field]}</p>
+                    <p className="mt-1 text-[10px] leading-snug text-slate-400">
+                      {draft.rule_type === "COLLECTIVE_OUTAGE" && field === "min_count"
+                        ? "O alerta só aparece quando essa quantidade de logins estiver offline, próxima entre si e dentro da janela configurada."
+                        : RULE_PARAM_HELP[field]}
+                    </p>
                   </div>
                 ))}
               </div>

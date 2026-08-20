@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.modules.intelligence import cockpit
 from app.modules.intelligence.models import IntelligenceAlert, IntelligenceCockpitContent, IntelligenceDashboardProfile, IntelligenceMonitorRun
 from app.modules.operations.models import OperationOrder
@@ -107,7 +109,7 @@ def test_cockpit_payload_has_all_expected_sections(db_session):
 
     payload = cockpit.build_cockpit_payload(db_session, profile)
 
-    for key in ("profile", "generated_at", "overall_status", "display_mode", "production", "backlog", "sla", "alerts", "incidents", "content", "monitor_health", "data_freshness", "meta"):
+    for key in ("profile", "generated_at", "overall_status", "display_mode", "production", "backlog", "sla", "alerts", "incidents", "recent_alerts", "content", "monitor_health", "data_freshness", "meta"):
         assert key in payload, f"chave ausente no payload do cockpit: {key}"
     assert payload["overall_status"]["status"] in ("NORMAL", "ATTENTION", "RISK", "CRITICAL")
     assert payload["production"]["opened_today"] >= 3
@@ -145,6 +147,39 @@ def test_cockpit_payload_incidents_separated_from_alerts(db_session):
     assert len(payload["alerts"]) == 1
     assert len(payload["incidents"]) == 1
     assert payload["incidents"][0]["kind"] == "INCIDENT"
+
+
+def test_cockpit_keeps_recently_resolved_alert_visible(db_session):
+    profile = _make_profile(db_session, "uni-geral")
+    resolved = _seed_alert(
+        db_session,
+        status="RESOLVED",
+        resolved_at=datetime.now(timezone.utc),
+    )
+
+    payload = cockpit.build_cockpit_payload(db_session, profile)
+
+    assert not payload["alerts"]
+    assert [item["id"] for item in payload["recent_alerts"]] == [resolved.id]
+
+
+def test_profile_display_config_is_validated_and_normalized():
+    config = cockpit.validate_display_config({
+        "theme": "DARK",
+        "alert_limit": 8,
+        "show_resolved_minutes": 60,
+        "layout_mode": "MOSAIC",
+        "widget_sizes": {"active_alerts": "L", "production": "M"},
+    })
+    assert config["theme"] == "DARK"
+    assert config["alert_limit"] == 8
+    assert config["show_os_details"] is True
+    assert config["widget_sizes"] == {"active_alerts": "L", "production": "M"}
+
+
+def test_profile_display_config_rejects_invalid_mosaic_size():
+    with pytest.raises(cockpit.ProfileValidationError, match="tamanhos inválidos"):
+        cockpit.validate_display_config({"widget_sizes": {"production": "GIANT"}})
 
 
 def test_cockpit_payload_monitor_unhealthy_reflected(db_session):

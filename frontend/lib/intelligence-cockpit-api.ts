@@ -48,6 +48,7 @@ export type CockpitAlertSummary = {
   summary: string;
   recommended_action: string | null;
   regional: string | null;
+  city: string | null;
   confidence: number | null;
   coverage: Record<string, unknown>;
   warnings: Array<Record<string, unknown>>;
@@ -56,6 +57,10 @@ export type CockpitAlertSummary = {
   last_seen_at: string;
   age_seconds: number;
   source_type: string;
+  monitor_key: string;
+  source_key: string | null;
+  resolved_at: string | null;
+  resolution_reason: string | null;
 };
 
 export type CockpitContent = {
@@ -113,6 +118,7 @@ export type CockpitPayload = {
   sla: CockpitSla;
   alerts: CockpitAlertSummary[];
   incidents: CockpitAlertSummary[];
+  recent_alerts: CockpitAlertSummary[];
   content: CockpitContent[];
   monitor_health: CockpitMonitorHealth[];
   charts: CockpitCharts;
@@ -276,6 +282,8 @@ export type AlertRuleCatalog = {
   group_by_values: string[];
 };
 
+export type AlertRuleSimulation = { rule_key: string; detection_count: number; detections: Array<{ title: string; summary: string; severity: string; regional: string | null; city: string | null; evidence: Record<string, unknown>; confidence: number | null }> };
+
 export type PublishCockpitContentInput = {
   content_type: string;
   profile_key?: string | null;
@@ -407,5 +415,8 @@ export const intelligenceCockpitApi = {
   getAlertRuleCatalog: () => cached("alert-rule-catalog", () => request<AlertRuleCatalog>("/intelligence/admin/alert-rules/catalog")),
   createAlertRule: (payload: AlertRuleInput) => request<AlertRule>("/intelligence/admin/alert-rules", { method: "POST", body: JSON.stringify(payload) }),
   updateAlertRule: (ruleKey: string, payload: AlertRuleInput) =>
-    request<AlertRule>(`/intelligence/admin/alert-rules/${encodeURIComponent(ruleKey)}`, { method: "PUT", body: JSON.stringify(payload) })
+    request<AlertRule>(`/intelligence/admin/alert-rules/${encodeURIComponent(ruleKey)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteAlertRule: (ruleKey: string) =>
+    request<void>(`/intelligence/admin/alert-rules/${encodeURIComponent(ruleKey)}`, { method: "DELETE" }),
+  simulateAlertRule: (ruleKey: string, payload: AlertRuleInput) => request<AlertRuleSimulation>(`/intelligence/admin/alert-rules/${encodeURIComponent(ruleKey)}/simulate`, { method: "POST", body: JSON.stringify(payload) })
 };
