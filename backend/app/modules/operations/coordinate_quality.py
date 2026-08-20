@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.ai_governance.response_meta import build_meta
+
 from .models import OperationLoginCurrentStatus, OperationOnuSignalCurrent, OperationOrder
 
 EARTH_RADIUS_KM = 6371.0
@@ -79,12 +81,15 @@ def coordinate_quality_audit(
     entity: CoordinateEntity,
     outlier_km: float = DEFAULT_OUTLIER_KM,
     duplicate_threshold: int = DEFAULT_DUPLICATE_THRESHOLD,
-) -> list[dict]:
+) -> dict:
     """Audita a qualidade de latitude/longitude de uma entidade, quebrado por regional. Não
     corrige nada - só classifica e conta. `outlier_km`: distância do centróide dos próprios
     registros válidos da regional acima da qual uma coordenada válida (dentro do intervalo
     geográfico possível) é considerada fora de lugar. `duplicate_threshold`: quantos registros
-    compartilhando a mesma coordenada exata (~1m) fazem ela ser "suspeita de valor chumbado"."""
+    compartilhando a mesma coordenada exata (~1m) fazem ela ser "suspeita de valor chumbado".
+
+    Retorna {"meta": {...}, "data": [...]} (envelope padrão da Fase 1, item 1 - ver
+    `app.modules.ai_governance.response_meta`), um item de `data` por regional."""
     records = _load_records(db, entity)
 
     by_regional: dict[str, list[_Record]] = defaultdict(list)
@@ -144,4 +149,9 @@ def coordinate_quality_audit(
             }
         )
     results.sort(key=lambda item: item["total"], reverse=True)
-    return results
+    return {
+        "meta": build_meta(
+            applied_filters={"entity": entity, "outlier_km": outlier_km, "duplicate_threshold": duplicate_threshold}
+        ),
+        "data": results,
+    }

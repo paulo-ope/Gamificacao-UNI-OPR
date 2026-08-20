@@ -227,7 +227,7 @@ export default function ManagementPage() {
           </TabsList>
 
           <TabsContent value="cases">
-            <ManagementCasesPanel options={options} canReview={canReview} canJustify={canJustify} />
+            <ManagementCasesPanel options={options} canReview={canReview} canJustify={canJustify} canAdmin={canAdminReasons} />
           </TabsContent>
 
           {canAdminReasons ? (

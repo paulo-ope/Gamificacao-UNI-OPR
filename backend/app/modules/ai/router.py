@@ -33,13 +33,13 @@ from app.modules.ai_governance.gate import (
 from app.modules.ai_governance.policy import EffectivePolicy
 from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
-from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
+from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
-from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
+from app.modules.operations.onu_signal_snapshot import query_onu_signal_history, query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.ai.schemas import (
     AiAggregationRequest,
-    AiBacklogAgingItem,
+    AiBacklogAgingResponse,
     AiBacklogAgingRequest,
     AiBacklogHistoryPoint,
     AiBacklogHistoryRequest,
@@ -55,14 +55,15 @@ from app.modules.ai.schemas import (
     AiSearchLoginsRequest,
     AiOfflineLoginClustersRequest,
     AiOnuSignalRequest,
+    AiOnuSignalHistoryRequest,
     AiOrderDetailsRequest,
     AiOrderDetailsResponse,
     AiSearchRequest,
     AiTeamTargetItem,
-    AiTeamTargetPerformanceItem,
+    AiTeamTargetPerformanceResponse,
     AiTeamTargetPerformanceRequest,
     AiTeamTargetsRequest,
-    AiTimeseriesPoint,
+    AiTimeseriesResponse,
     AiTimeseriesRequest,
     AiWarrantyAnalyticsRequest,
     AiWarrantyAnalyticsResponse,
@@ -73,12 +74,17 @@ from app.modules.operations.schemas import (
     OperationLoginSearchResultOut,
     OperationLoginDetailOut,
     OperationLoginAggregateItemOut,
+    OperationLoginAggregateResponseOut,
     OperationLoginOutageItemOut,
+    OperationLoginOutagesResponseOut,
     OperationLoginTimeseriesPointOut,
+    OperationLoginTimeseriesResponseOut,
     OperationLoginIncidentAnalysisOut,
     OperationCoordinateQualityItemOut,
+    OperationCoordinateQualityResponseOut,
     OperationOfflineLoginClustersOut,
     OperationOnuSignalOut,
+    OperationOnuSignalHistoryItemOut,
     OperationOrderDetailOut,
 )
 
@@ -95,7 +101,7 @@ def aggregate_orders_route(
     payload: AiAggregationRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return aggregate_orders(
         db,
         user,
@@ -107,12 +113,12 @@ def aggregate_orders_route(
     )
 
 
-@router.post("/orders-timeseries", response_model=list[AiTimeseriesPoint])
+@router.post("/orders-timeseries", response_model=AiTimeseriesResponse)
 def orders_timeseries_route(
     payload: AiTimeseriesRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return orders_timeseries(
         db,
         user,
@@ -275,37 +281,12 @@ def offline_login_clusters_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.offline_login_clusters", "api")
-    clusters = find_offline_login_clusters(
+    result = offline_login_clusters_response(
         db,
         radius_meters=payload.radius_meters,
         min_cluster_size=payload.min_cluster_size,
         window_minutes=payload.window_minutes,
     )
-    result = {
-        "radius_meters": payload.radius_meters,
-        "min_cluster_size": payload.min_cluster_size,
-        "window_minutes": payload.window_minutes,
-        "clusters": [
-            {
-                "center_latitude": cluster.center_latitude,
-                "center_longitude": cluster.center_longitude,
-                "radius_meters": cluster.radius_meters,
-                "size": cluster.size,
-                "logins": [
-                    {
-                        "login_id": point.login_id,
-                        "login": point.login,
-                        "online": point.online,
-                        "latitude": point.latitude,
-                        "longitude": point.longitude,
-                        "last_disconnected_at": point.last_disconnected_at,
-                    }
-                    for point in cluster.logins
-                ],
-            }
-            for cluster in clusters
-        ],
-    }
     record_ai_access(
         db,
         origin="api",
@@ -313,7 +294,7 @@ def offline_login_clusters_route(
         user=context.user,
         token_id=context.token_id,
         filters={"radius_meters": payload.radius_meters, "min_cluster_size": payload.min_cluster_size, "window_minutes": payload.window_minutes},
-        result_count=len(clusters),
+        result_count=len(result["clusters"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
@@ -427,12 +408,12 @@ def login_detail_route(
     return detail
 
 
-@router.post("/infra/login-aggregate", response_model=list[OperationLoginAggregateItemOut])
+@router.post("/infra/login-aggregate", response_model=OperationLoginAggregateResponseOut)
 def login_aggregate_route(
     payload: AiLoginAggregateRequest,
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
-) -> list:
+) -> dict:
     """Contagem de logins por dimensão (item novo, pedido do usuário em 2026-08-15) - para
     detecção de incidente coletivo sem baixar registro por registro."""
     started_at = perf_counter()
@@ -444,18 +425,18 @@ def login_aggregate_route(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_aggregate", user=context.user, token_id=context.token_id,
-        filters={"group_by": payload.group_by, "regionals": payload.regionals}, result_count=len(result),
+        filters={"group_by": payload.group_by, "regionals": payload.regionals}, result_count=len(result["data"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
 
 
-@router.post("/infra/login-outages", response_model=list[OperationLoginOutageItemOut])
+@router.post("/infra/login-outages", response_model=OperationLoginOutagesResponseOut)
 def login_outages_route(
     payload: AiLoginOutagesRequest,
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
-) -> list:
+) -> dict:
     """Logins offline agora que caíram dentro de [since, until] (item novo, pedido do usuário em
     2026-08-15) - candidatos a incidente coletivo quando concentrados na mesma regional/PON."""
     started_at = perf_counter()
@@ -464,18 +445,18 @@ def login_outages_route(
     result = login_outages(db, since=payload.since, until=payload.until, regionals=payload.regionals, limit=payload.limit)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_outages", user=context.user, token_id=context.token_id,
-        filters={"since": payload.since, "regionals": payload.regionals}, result_count=len(result),
+        filters={"since": payload.since, "regionals": payload.regionals}, result_count=len(result["data"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
 
 
-@router.post("/infra/login-timeseries", response_model=list[OperationLoginTimeseriesPointOut])
+@router.post("/infra/login-timeseries", response_model=OperationLoginTimeseriesResponseOut)
 def login_timeseries_route(
     payload: AiLoginTimeseriesRequest,
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
-) -> list:
+) -> dict:
     """Série temporal de conectados/desconectados/quedas novas/reconexões novas (item novo, pedido
     do usuário em 2026-08-15) - um ponto por captura real do snapshot periódico."""
     started_at = perf_counter()
@@ -484,7 +465,7 @@ def login_timeseries_route(
     result = login_timeseries(db, since=payload.since, until=payload.until)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_timeseries", user=context.user, token_id=context.token_id,
-        filters={"since": payload.since}, result_count=len(result),
+        filters={"since": payload.since}, result_count=len(result["data"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
@@ -514,12 +495,12 @@ def login_incident_analysis_route(
     return result
 
 
-@router.post("/infra/coordinate-quality", response_model=list[OperationCoordinateQualityItemOut])
+@router.post("/infra/coordinate-quality", response_model=OperationCoordinateQualityResponseOut)
 def coordinate_quality_route(
     payload: AiCoordinateQualityRequest,
     db: Session = Depends(get_db),
     context: ApiKeyContext = Depends(require_api_key_context),
-) -> list:
+) -> dict:
     """Auditoria de qualidade de latitude/longitude, quebrada por regional (item novo, Fase 1 do
     plano de confiabilidade de dado, pedido do usuário em 2026-08-15) - SÓ classifica e conta,
     nenhuma correção automática. Use antes de confiar em qualquer cluster geográfico."""
@@ -531,7 +512,7 @@ def coordinate_quality_route(
     )
     record_ai_access(
         db, origin="api", endpoint_key="ai.coordinate_quality", user=context.user, token_id=context.token_id,
-        filters={"entity": payload.entity}, result_count=len(result),
+        filters={"entity": payload.entity}, result_count=len(result["data"]),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result
@@ -569,12 +550,47 @@ def onu_signal_route(
     return results
 
 
-@router.post("/backlog-aging", response_model=list[AiBacklogAgingItem])
+@router.post("/infra/onu-signal-history", response_model=list[OperationOnuSignalHistoryItemOut])
+def onu_signal_history_route(
+    payload: AiOnuSignalHistoryRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> list[dict]:
+    """Série histórica de telemetria óptica/ONU (um ponto por captura) - "o sinal do login/serial
+    X estava em Y na data Z, e hoje está em W". Exige pelo menos `login_ids` ou `onu_serials`.
+    Cobertura parcial por desenho: só existem pontos para os momentos em que o login estava na
+    fila de diagnóstico daquele ciclo - ausência de ponto num período não significa sinal bom o
+    tempo todo, significa que não foi medido nesse período."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "infra.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.onu_signal_history", "api")
+    results = query_onu_signal_history(
+        db,
+        login_ids=payload.login_ids,
+        onu_serials=payload.onu_serials,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        limit=payload.limit,
+    )
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.onu_signal_history",
+        user=context.user,
+        token_id=context.token_id,
+        filters={"login_ids": payload.login_ids, "onu_serials": payload.onu_serials},
+        result_count=len(results),
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return results
+
+
+@router.post("/backlog-aging", response_model=AiBacklogAgingResponse)
 def backlog_aging_route(
     payload: AiBacklogAgingRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return backlog_aging(db, user, group_by=payload.group_by, date_to=payload.date_to, **payload.filters.model_dump())
 
 
@@ -668,7 +684,7 @@ def team_targets_route(
 
 @router.post(
     "/team-target-performance",
-    response_model=list[AiTeamTargetPerformanceItem],
+    response_model=AiTeamTargetPerformanceResponse,
     description=(
         "Produção realizada (fechadas) x meta prevista, por modelo de equipe. Usa a meta que "
         "era vigente em cada bucket, não a de hoje. Só cobre modelos com produção real no "
@@ -679,7 +695,7 @@ def team_target_performance_route(
     payload: AiTeamTargetPerformanceRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_api_key_user),
-) -> list[dict]:
+) -> dict:
     return team_target_performance(
         db,
         user,

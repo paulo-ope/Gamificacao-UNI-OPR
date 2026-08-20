@@ -38,6 +38,7 @@ import type {
   ManagementCaseComment,
   ManagementCaseFilters,
   ManagementCaseGenerateResult,
+  ManagementAutoGenerateSettings,
   ManagementCasePage,
   ManagementCaseReason,
   ManagementDashboard,
@@ -64,6 +65,17 @@ import type {
   ServiceOrderDeletePeriodResult,
   ServiceOrderPeriodSummary,
   ServiceOrderSubjectSummary,
+  SupportImportResult,
+  SupportOpaAttendanceDetail,
+  SupportOpaAttendanceFilters,
+  SupportOpaAttendancePage,
+  SupportOpaBreakdownDimension,
+  SupportOpaBreakdowns,
+  SupportOpaFilters,
+  SupportOpaMetrics,
+  SupportOpaOverview,
+  SupportOpaSyncSettings,
+  SupportOpaSyncStatus,
   SlaPenaltyRule,
   UnmappedSubject,
   WorkspaceVisibleModule
@@ -360,6 +372,67 @@ export const api = {
   managementSettings: () => request<Record<string, string>>("/management/settings"),
   updateManagementSettings: (values: Record<string, string>) =>
     request<Record<string, string>>("/management/settings", { method: "PUT", body: JSON.stringify(values) }),
+  managementAutoGenerateSettings: () =>
+    request<ManagementAutoGenerateSettings>("/management/settings/auto-generate"),
+  updateManagementAutoGenerateSettings: (enabled: boolean) =>
+    request<ManagementAutoGenerateSettings>("/management/settings/auto-generate", {
+      method: "PUT",
+      body: JSON.stringify({ enabled })
+    }),
+  supportOpaMetrics: (period: { date_from: string; date_to: string }) => {
+    const params = new URLSearchParams();
+    params.set("date_from", period.date_from);
+    params.set("date_to", period.date_to);
+    return request<SupportOpaMetrics>(`/support/opa-metrics?${params.toString()}`);
+  },
+  supportOpaOverview: (filters: SupportOpaAttendanceFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      params.set(key, String(value));
+    });
+    return request<SupportOpaOverview>(`/support/opa/overview?${params.toString()}`);
+  },
+  supportOpaSyncStatus: () => request<SupportOpaSyncStatus>("/support/opa-sync-status"),
+  supportOpaSyncSettings: () => request<SupportOpaSyncSettings>("/support/opa-sync-settings"),
+  updateSupportOpaSyncSettings: (payload: Partial<SupportOpaSyncSettings>) =>
+    request<SupportOpaSyncSettings>("/support/opa-sync-settings", {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  importSupportOpaPeriod: (period: { date_from: string; date_to: string }) =>
+    request<SupportImportResult>("/support/opa-imports", {
+      method: "POST",
+      body: JSON.stringify(period)
+    }),
+  supportOpaAttendances: (filters: SupportOpaAttendanceFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      params.set(key, String(value));
+    });
+    return request<SupportOpaAttendancePage>(`/support/opa/attendances?${params.toString()}`);
+  },
+  supportOpaBreakdowns: (
+    dimension: SupportOpaBreakdownDimension,
+    filters: SupportOpaAttendanceFilters & { limit?: number },
+  ) => {
+    const params = new URLSearchParams();
+    params.set("dimension", dimension);
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      params.set(key, String(value));
+    });
+    return request<SupportOpaBreakdowns>(`/support/opa/breakdowns?${params.toString()}`);
+  },
+  supportOpaAttendanceDetail: (id: number) => request<SupportOpaAttendanceDetail>(`/support/opa/attendances/${id}`),
+  supportOpaFilters: (period?: { date_from?: string; date_to?: string }) => {
+    const params = new URLSearchParams();
+    if (period?.date_from) params.set("date_from", period.date_from);
+    if (period?.date_to) params.set("date_to", period.date_to);
+    const query = params.toString();
+    return request<SupportOpaFilters>(`/support/opa/filters${query ? `?${query}` : ""}`);
+  },
   notifications: (limit?: number) => request<Notification[]>(`/notifications${limit ? `?limit=${limit}` : ""}`),
   notificationsUnreadCount: () => request<{ unread_count: number }>("/notifications/unread-count"),
   markNotificationRead: (id: number) => request<Notification>(`/notifications/${id}/read`, { method: "POST" }),

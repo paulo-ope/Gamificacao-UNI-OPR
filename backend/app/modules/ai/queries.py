@@ -10,6 +10,7 @@ from sqlalchemy import Numeric, String, and_, case, cast, func, literal, or_, se
 from sqlalchemy.orm import Session
 
 from app.models import User
+from app.modules.ai_governance.response_meta import build_meta
 from app.modules.operations import queries as operations_queries
 from app.modules.operations.models import (
     OperationBacklogSnapshot,
@@ -452,6 +453,76 @@ def _sla_risk_bucket(elapsed_hours: float | None, sla_target_hours: float | None
     return "on_track"
 
 
+def _normalize_os_subjects_alias(filters: dict) -> tuple[dict, list[str] | None, dict | None]:
+    """FilterContractV1 (docs/proposta-filter-contract-v1.md) - traduz o alias legado `subjects`
+    pro nome canônico `os_subjects` sem tocar em `FILTER_COLUMNS`/`_dimension_conditions`
+    (compartilhados por várias funções deste módulo - a normalização fica aqui, chamada
+    explicitamente por cada função migrada, uma por vez, com teste de paridade a cada lote, em vez
+    de embutida no ponto compartilhado). `subjects` continua funcionando sem prazo de remoção (§6
+    do documento) - só passa a gerar um aviso `DEPRECATED_FILTER_ALIAS` em vez de ficar silencioso.
+
+    Retorna (filters com `subjects` já resolvido pra uso interno de `_dimension_conditions`, valor
+    efetivo aplicado ou None, aviso de alias depreciado ou None)."""
+    normalized = dict(filters)
+    os_subjects = normalized.pop("os_subjects", None) or None
+    legacy_subjects = normalized.get("subjects") or None
+    warning = None
+    if os_subjects:
+        effective = os_subjects
+        normalized["subjects"] = os_subjects
+    elif legacy_subjects:
+        effective = legacy_subjects
+        warning = {"code": "DEPRECATED_FILTER_ALIAS", "received": "subjects", "canonical": "os_subjects"}
+    else:
+        effective = None
+    return normalized, effective, warning
+
+
+# FilterContractV1 lote 7 (docs/proposta-filter-contract-v1.md §13.5) - `near_latitude`/
+# `near_longitude`/`radius_km` (`_geo_filter_conditions`) e as 5 peças de `custom_window_*`
+# (`operations_queries._dimension_conditions:316-346`) só formam condição SQL quando TODAS as
+# peças de um grupo estão presentes - a query em si já respeita essa regra hoje (nenhuma peça
+# isolada nunca gerou SQL parcial). O bug era só de observabilidade: `meta.applied_filters`
+# ecoava qualquer peça isolada como se tivesse formado uma condição real.
+_COMPOSITE_FILTERS = {
+    "geo_radius": ("near_latitude", "near_longitude", "radius_km"),
+    "custom_window": (
+        "custom_window_basis", "custom_window_start_weekday", "custom_window_start_time",
+        "custom_window_end_weekday", "custom_window_end_time",
+    ),
+}
+
+
+def _composite_filter_report(filters: dict) -> tuple[dict, list[dict]]:
+    """Verifica os grupos de `_COMPOSITE_FILTERS` contra `filters` (o mesmo dict que já alimenta
+    a query - ver módulo acima). Um grupo com só ALGUMAS peças (não todas, não nenhuma) nunca gera
+    condição SQL, então não deve aparecer em `applied_filters` como se tivesse sido aplicado -
+    em vez disso, gera um aviso `INCOMPLETE_COMPOSITE_FILTER` com as peças recebidas e as que
+    faltam. Grupo completo (todas as peças) ou totalmente ausente (nenhuma peça) não gera aviso -
+    nesses dois casos o `applied_filters` de sempre já está correto.
+
+    Retorna (dict pra usar como base de `applied_filters`, com as peças de grupo incompleto já
+    removidas, warnings de grupo incompleto - 0 a 2 itens)."""
+    cleaned = dict(filters)
+    warnings: list[dict] = []
+    for filter_name, fields in _COMPOSITE_FILTERS.items():
+        received = [field for field in fields if cleaned.get(field) not in (None, "", [])]
+        if not received or len(received) == len(fields):
+            continue
+        missing = [field for field in fields if field not in received]
+        for field in received:
+            cleaned.pop(field, None)
+        warnings.append(
+            {
+                "code": "INCOMPLETE_COMPOSITE_FILTER",
+                "filter": filter_name,
+                "received_fields": received,
+                "missing_fields": missing,
+            }
+        )
+    return cleaned, warnings
+
+
 def aggregate_orders(
     db: Session,
     user: User,
@@ -472,6 +543,7 @@ def aggregate_orders(
     conectores configurados). Com 2+ dimensões, `label` some e cada dimensão pedida aparece como
     sua própria chave (ex.: `{"regional": "...", "subject": "...", "quantity": ...}`) - aditivo,
     não quebra quem já chama com 1 dimensão só."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     dims = _group_labels(group_by)
     labels = [_group_label(db, dim) for dim in dims]
     start, end = local_period_utc_bounds(date_from, date_to)
@@ -576,7 +648,17 @@ def aggregate_orders(
             item = {dim: str(value) for dim, value in zip(dims, label_values)}
             item.update({"quantity": count, "metric_value": metric_value, "percentage": percentage})
         results.append(item)
-    return results
+
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({"group_by": group_by, "metric": metric})
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
+    return {
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
+        "data": results,
+    }
 
 
 def orders_timeseries(
@@ -589,13 +671,21 @@ def orders_timeseries(
     date_to: date,
     group_by: str | None = None,
     **filters,
-) -> list[dict]:
+) -> dict:
     """Série temporal (dia/semana/mês) de abertas, fechadas, ou saldo (abertas - fechadas) por
     bucket - mesma lógica de bucketing de `operations_queries._period_group_start`.
 
     `group_by` é opcional: sem ele, cada ponto é `{period_start, quantity}` (formato já em uso).
     Com ele, cada ponto ganha `group` com o valor da dimensão naquele bucket (ex.: "quantidade
-    fechada por dia por modelo de equipe") - aditivo, não muda a chamada sem `group_by`."""
+    fechada por dia por modelo de equipe") - aditivo, não muda a chamada sem `group_by`.
+
+    Normaliza o alias `subjects`->`os_subjects` (FilterContractV1,
+    docs/proposta-filter-contract-v1.md) - achado real de produção antes desta correção:
+    `os_subjects` já era aceito pelo schema (`AiOrderFilters`), mas esta função não o
+    reconhecia e o descartava em silêncio, devolvendo a base sem filtro nenhum com HTTP 200
+    (nenhum erro, nenhum `ignored_filters` - só o número errado). `subjects` continua
+    funcionando sem prazo de remoção, agora com aviso em vez de ambiguidade."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     start, end = local_period_utc_bounds(date_from, date_to)
     opened_day = operations_queries._local_date(db, OperationOrder.opened_at)
     closed_day = operations_queries._local_date(db, OperationOrder.closed_at)
@@ -644,7 +734,20 @@ def orders_timeseries(
         if label is not None:
             item["group"] = group
         results.append(item)
-    return results
+
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({
+        "metric": metric, "granularity": granularity,
+        "date_from": date_from, "date_to": date_to, "group_by": group_by,
+    })
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
+    return {
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
+        "data": results,
+    }
 
 
 def _team_target_versions_for_names(db: Session, team_model_names: set[str]) -> list[OperationTeamTargetVersion]:
@@ -867,6 +970,7 @@ def search_orders(
     `fields` já deve chegar validado/autorizado pelo chamador (ver `AI_SEARCH_GOVERNED_FIELDS`
     acima) - esta função só filtra o dict de saída, não decide o que é permitido."""
     page_size = min(page_size, AI_SEARCH_MAX_PAGE_SIZE)
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     if keyword:
         filters = {**filters, "search": keyword}
 
@@ -916,20 +1020,32 @@ def search_orders(
             team_target = _resolve_team_target(target_versions, team_model, period_type, order.closed_at)
         item = _build_search_item(order, team_model, team_target, reference_point=reference_point)
         items.append(_shape_search_item(item, fields))
+
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({"date_from": date_from, "date_to": date_to, "date_field": date_field})
+    applied_filters.pop("subjects", None)
+    applied_filters.pop("search", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    if keyword:
+        applied_filters["keyword"] = keyword
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
     return {
         "items": items,
         "total_encontrado": total,
         "page": page,
         "page_size": page_size,
         "has_more": total > page * page_size,
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
     }
 
 
-def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **filters) -> list[dict]:
+def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **filters) -> dict:
     """Idade do backlog (O.S. ainda abertas em `date_to`), por dimensão: quantidade, idade média
     e mediana em dias, a O.S. mais antiga, e quantas passam de 1/3/5/7/15 dias. Calculado em
     Python (não em SQL) porque o volume é do tamanho do backlog atual - milhares, não a base toda
     - e mediana não é portável entre Postgres/SQLite sem depender de extensão específica."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     label = _group_label(db, group_by)
     conditions = _dimension_conditions_with_text(db, user, filters)
     _, reference_at = local_period_utc_bounds(date_to, date_to)
@@ -966,7 +1082,17 @@ def backlog_aging(db: Session, user: User, *, group_by: str, date_to: date, **fi
             }
         )
     results.sort(key=lambda item: -item["quantity"])
-    return results
+
+    applied_filters, composite_warnings = _composite_filter_report(filters)
+    applied_filters.update({"group_by": group_by, "date_to": date_to})
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    warnings = ([alias_warning] if alias_warning else []) + composite_warnings
+    return {
+        "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
+        "data": results,
+    }
 
 
 def filter_options_for_ai(db: Session, user: User, date_from: date, date_to: date) -> OperationFilters:
@@ -1040,6 +1166,122 @@ def backlog_history(
     return results
 
 
+# FilterContractV1 lote 8 (docs/proposta-filter-contract-v1.md §13.4/§14.3) - listas confirmadas
+# por leitura direta de `operations_queries.warranty_analytics` (`operations/queries.py:995-1141`).
+# A função só chama `_dimension_conditions` (2x: origem restrita a `_warranty_origin_filters` -
+# WARRANTY_ORIGIN_SHARED_FILTERS = regionals/companies/states/cities/team_models -, e retorno com
+# `{**filters, "os_types": []}`) - nunca chama `_text_filter_conditions`/
+# `_sla_stage_filter_conditions`/`_geo_filter_conditions`/`_datetime_filter_conditions`. Por isso:
+_WARRANTY_NOT_SUPPORTED_FIELDS = (
+    "text_filters", "scheduled_after_sla", "sla_expired_before_schedule", "has_coordinates",
+    "near_latitude", "near_longitude", "radius_km",
+    "opened_at", "closed_at", "deadline_at", "scheduled_at", "assumed_at",
+    "displacement_started_at", "execution_started_at", "finished_at", "source_updated_at",
+)
+
+# Campos de `FILTER_COLUMNS`/`_dimension_conditions` que SÃO aplicados, mas só no lado
+# retorno/manutenção (`_dimension_conditions(db, user, {**filters, "os_types": []})`) - nunca no
+# lado origem/denominador (que só recebe os 5 campos de `WARRANTY_ORIGIN_SHARED_FILTERS`, mais
+# `team_models`). Não inclui `subjects`/`os_subjects` (tratado à parte, alias já corrigido no
+# lote 6 - não mexido aqui) nem `os_types` (forçado `[]`, tratado como não suportado abaixo).
+_WARRANTY_RETURN_ONLY_FIELDS = (
+    "contract_types", "person_types", "diagnoses", "departments", "sectors", "priorities",
+    "creators", "responsibles", "statuses", "sla_statuses", "projects", "pops", "customer_logins",
+    "opened_weekdays", "closed_weekdays",
+)
+
+# `custom_window_*` é tratado à parte dos demais campos de `_WARRANTY_RETURN_ONLY_FIELDS` porque é
+# um filtro composto (5 peças, ver `_COMPOSITE_FILTERS` - lote 7) - reaproveita a MESMA tupla de
+# campos de lá, pra não duplicar a lista. Sem isso, uma versão anterior deste código marcava cada
+# peça isolada como `PARTIAL_FILTER_SCOPE` sem checar se o grupo estava completo, reproduzindo
+# exatamente o bug do lote 7 (`meta` afirmando aplicação de um filtro incompleto que nunca gerou
+# condição SQL nenhuma) - só que dentro de `warranty_analytics_for_ai`.
+_WARRANTY_RETURN_ONLY_COMPOSITE_FILTERS = {"custom_window": _COMPOSITE_FILTERS["custom_window"]}
+
+
+def _warranty_filter_report(filters: dict) -> tuple[dict, list[dict], list[dict]]:
+    """Classifica os filtros de `warranty_analytics_for_ai` antes de montar `meta` - não muda
+    nenhuma condição de consulta (`filters` segue intocado, é só o relatório pro `meta` que muda).
+
+    - Campo de `_WARRANTY_NOT_SUPPORTED_FIELDS` recebido (não vazio) -> sai de `applied_filters`,
+      entra em `ignored_filters` com `reason: "NOT_SUPPORTED_BY_ENDPOINT"`. `os_types` recebe o
+      mesmo tratamento (a função força `[]` no lado retorno por design, então o valor enviado
+      nunca tem efeito).
+    - Campo de `_WARRANTY_RETURN_ONLY_FIELDS` recebido -> continua em `applied_filters` (foi de
+      fato aplicado), mas ganha um aviso `PARTIAL_FILTER_SCOPE` (nunca em `ignored_filters` -
+      não foi ignorado, só tem alcance parcial).
+    - `custom_window_*` (composto) só ganha `PARTIAL_FILTER_SCOPE` quando as 5 peças estão
+      completas (só aí gera condição SQL de verdade, mesma regra do lote 7); incompleto gera
+      `INCOMPLETE_COMPOSITE_FILTER` e sai de `applied_filters`, igual aos demais endpoints.
+
+    Retorna (dict base pra `applied_filters`, já sem os campos não suportados/compostos
+    incompletos; lista de `ignored_filters`; lista de warnings de escopo parcial/composto)."""
+    applied = dict(filters)
+    ignored: list[dict] = []
+    warnings: list[dict] = []
+
+    for field in _WARRANTY_NOT_SUPPORTED_FIELDS:
+        if applied.get(field) not in (None, "", []):
+            applied.pop(field, None)
+            ignored.append(
+                {
+                    "field": field,
+                    "reason": "NOT_SUPPORTED_BY_ENDPOINT",
+                    "detail": "warranty_analytics_for_ai não aplica este filtro atualmente",
+                }
+            )
+    if applied.get("os_types") not in (None, "", []):
+        applied.pop("os_types", None)
+        ignored.append(
+            {
+                "field": "os_types",
+                "reason": "NOT_SUPPORTED_BY_ENDPOINT",
+                "detail": (
+                    "warranty_analytics_for_ai força os_types=[] no lado retorno por design "
+                    "(o tipo de retorno é sempre manutenção, nunca um dos tipos de origem) - o "
+                    "valor enviado não tem efeito"
+                ),
+            }
+        )
+    for field in _WARRANTY_RETURN_ONLY_FIELDS:
+        if applied.get(field) not in (None, "", []):
+            warnings.append(
+                {
+                    "code": "PARTIAL_FILTER_SCOPE",
+                    "field": field,
+                    "applies_to": "warranty_return_orders",
+                    "does_not_apply_to": "origin_orders",
+                }
+            )
+    for filter_name, fields in _WARRANTY_RETURN_ONLY_COMPOSITE_FILTERS.items():
+        received = [f for f in fields if applied.get(f) not in (None, "", [])]
+        if not received:
+            continue
+        if len(received) == len(fields):
+            for f in received:
+                warnings.append(
+                    {
+                        "code": "PARTIAL_FILTER_SCOPE",
+                        "field": f,
+                        "applies_to": "warranty_return_orders",
+                        "does_not_apply_to": "origin_orders",
+                    }
+                )
+        else:
+            missing = [f for f in fields if f not in received]
+            for f in received:
+                applied.pop(f, None)
+            warnings.append(
+                {
+                    "code": "INCOMPLETE_COMPOSITE_FILTER",
+                    "filter": filter_name,
+                    "received_fields": received,
+                    "missing_fields": missing,
+                }
+            )
+    return applied, ignored, warnings
+
+
 def warranty_analytics_for_ai(
     db: Session,
     user: User,
@@ -1055,7 +1297,24 @@ def warranty_analytics_for_ai(
     Garantias da tela - sem nenhuma lógica nova. Só troca os itens individuais: a versão da tela
     embute o objeto completo de 2 O.S. (origem e retorno) por item, pro drill clicável; aqui isso
     seria pesado demais pra IA (mesmo motivo de `search_orders` ser paginado) - fica só os campos
-    planos de cada garantia encontrada."""
+    planos de cada garantia encontrada.
+
+    Normaliza o alias `subjects`->`os_subjects` (FilterContractV1, lote 6,
+    docs/proposta-filter-contract-v1.md §13.3) - achado de auditoria: `os_subjects` já era
+    aceito pelo schema (`AiOrderFilters`) mas `operations_queries.warranty_analytics` só
+    reconhece `subjects` (nome de `FILTER_COLUMNS`), então era descartado em silêncio. A
+    normalização acontece aqui, não em `operations_queries.warranty_analytics` - essa função é
+    compartilhada com a aba Garantias da tela (REST), que não deve ganhar `meta`/mudança de
+    contrato por este lote.
+
+    Fase 1 lote 8 (docs/proposta-filter-contract-v1.md §14.3-§14.4): `_warranty_filter_report`
+    classifica os demais filtros de `AiOrderFilters` que esta função ainda não aplica de fato -
+    saem de `applied_filters` e entram em `ignored_filters` (`NOT_SUPPORTED_BY_ENDPOINT`), em vez
+    de aparecer como aplicados sem terem tido efeito nenhum na consulta. Os que são aplicados só
+    no lado retorno/manutenção (nunca no lado origem/denominador) continuam em `applied_filters`,
+    mas ganham aviso `PARTIAL_FILTER_SCOPE`. Nenhum filtro novo foi implementado - só a
+    observabilidade do que já era (ou não era) aplicado."""
+    filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     result = operations_queries.warranty_analytics(
         db,
         date_from,
@@ -1070,6 +1329,16 @@ def warranty_analytics_for_ai(
         {key: value for key, value in item.items() if key not in ("origin_order", "return_order")}
         for item in result["items"]
     ]
+    applied_filters, ignored_filters, scope_warnings = _warranty_filter_report(filters)
+    applied_filters.update({
+        "date_from": date_from, "date_to": date_to, "period_basis": period_basis,
+        "denominator": denominator, "origin_excluded_diagnoses": origin_excluded_diagnoses,
+    })
+    applied_filters.pop("subjects", None)
+    if effective_os_subjects:
+        applied_filters["os_subjects"] = effective_os_subjects
+    warnings = ([alias_warning] if alias_warning else []) + scope_warnings
+    result["meta"] = build_meta(applied_filters=applied_filters, ignored_filters=ignored_filters, warnings=warnings)
     return result
 
 
@@ -1125,18 +1394,27 @@ def team_target_performance(
     date_to: date,
     granularity: TeamTargetGranularity = "day",
     **filters,
-) -> list[dict]:
+) -> dict:
     """Produção realizada (fechadas) x meta prevista, por bucket e por modelo de equipe - a meta
     usada é a que era VIGENTE naquele bucket (ver `_team_target_for_bucket`), não a de hoje.
     Reaproveita `orders_timeseries` (metric="fechadas", group_by="team_model") pro lado realizado
     - só cobre os modelos de equipe que aparecem com produção real no período, não todo modelo
-    cadastrado (evita gerar linha zerada pra modelo sem nenhuma atividade)."""
-    actual_points = orders_timeseries(
+    cadastrado (evita gerar linha zerada pra modelo sem nenhuma atividade).
+
+    `orders_timeseries` já normaliza o alias `subjects`->`os_subjects` (FilterContractV1) e
+    devolve seu próprio `meta` - esta função reaproveita esse `meta` sem reprocessar (repassa
+    `**filters` intocado). Antes, esta função tinha sua PRÓPRIA normalização, redundante com a de
+    `orders_timeseries` - removida nesta correção porque produzia dupla transformação: o filtro
+    chegava aqui já resolvido pra `subjects` internamente e `orders_timeseries` interpretava isso
+    como se o alias legado tivesse sido usado pelo chamador original, gerando um aviso
+    `DEPRECATED_FILTER_ALIAS` incorreto (inofensivo porque nunca chegava a ser exposto - esta
+    função descartava o `meta` de `orders_timeseries` por completo - mas errado internamente)."""
+    timeseries = orders_timeseries(
         db, user, metric="fechadas", granularity=granularity, date_from=date_from, date_to=date_to,
         group_by="team_model", **filters,
     )
     results = []
-    for point in actual_points:
+    for point in timeseries["data"]:
         team_model = point.get("group")
         if not team_model:
             continue
@@ -1152,4 +1430,4 @@ def team_target_performance(
                 "percentage_of_target": round(actual / target * 100, 1) if target else None,
             }
         )
-    return results
+    return {"meta": timeseries["meta"], "data": results}

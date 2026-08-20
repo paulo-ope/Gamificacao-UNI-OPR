@@ -1,6 +1,7 @@
 "use client";
 
 import { Bell, Loader2 } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,8 @@ function timeAgo(value: string) {
 }
 
 export function NotificationBell() {
+  const pathname = usePathname();
+  const router = useRouter();
   const [unreadCount, setUnreadCount] = useState(0);
   const [items, setItems] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
@@ -33,8 +36,12 @@ export function NotificationBell() {
 
   useEffect(() => {
     refreshCount();
+    window.addEventListener("notifications:refresh", refreshCount);
     const interval = setInterval(refreshCount, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    return () => {
+      window.removeEventListener("notifications:refresh", refreshCount);
+      clearInterval(interval);
+    };
   }, [refreshCount]);
 
   useEffect(() => {
@@ -70,7 +77,11 @@ export function NotificationBell() {
       void api.markNotificationRead(notification.id).catch(() => undefined);
     }
     if (notification.link_url) {
-      window.location.href = notification.link_url;
+      const targetPath = notification.link_url.split("?")[0];
+      if (targetPath !== pathname) {
+        router.push(notification.link_url);
+      }
+      setOpen(false);
     }
   }
 

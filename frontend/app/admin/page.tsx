@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, History, Home, KeyRound, Loader2, LogOut, PlugZap, Plus, Save, Settings2, ShieldCheck, SlidersHorizontal, Trash2, UserCog, Users } from "lucide-react";
+import { Boxes, ExternalLink, History, Home, KeyRound, Loader2, LogOut, PlugZap, Plus, Save, Search, Settings2, ShieldCheck, SlidersHorizontal, Trash2, UserCog, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
@@ -26,10 +26,12 @@ import { operationsApi, type OperationIxcSyncSettings } from "@/lib/operations-a
 import type { AccessProfile, AdminPeopleStructure, AdminPersonStructure, AdminWorkspaceModule, AuthUser, EcosystemPermission, Permission } from "@/lib/types";
 
 const PARAMETER_MODULE_LINKS = [
-  { module: "Gamificação", owner: "Pontuação, penalidades, fechamento e pagamento", path: "/gamificacao" },
-  { module: "Agendamento", owner: "SLA, meta diária, expediente e equipe", path: "/agendamento" },
-  { module: "Operação", owner: "Modelos de equipe, assuntos e filtros globais", path: "/operacao" },
-  { module: "Gestão", owner: "Motivos, prazos, status e regras de justificativa", path: "/gestao" },
+  { module: "Gamificação Operacional", owner: "Pontuação, penalidades, fechamento e pagamento", permissionArea: "Gamificação", path: "/gamificacao" },
+  { module: "Operação Analítica", owner: "Modelos de equipe, assuntos, SLA e filtros globais", permissionArea: "Operação", path: "/operacao" },
+  { module: "Agendamento", owner: "Metas diárias, expediente, sincronização e equipe", permissionArea: "Agendamento", path: "/agendamento" },
+  { module: "SGP Suporte", owner: "Atendimentos, dimensões e sincronização com o OPA Suite", permissionArea: "Suporte", path: "/suporte" },
+  { module: "Gestão Integrada", owner: "Estrutura, motivos, prazos, justificativas e revisão", permissionArea: "Gestão", path: "/gestao" },
+  { module: "UNI Intelligence", owner: "Monitores, alertas, conteúdo e publicação no cockpit", permissionArea: "Inteligência", path: "/intelligence" },
 ] as const;
 
 const LEGACY_ROLE_BY_PROFILE: Record<string, AuthUser["role"]> = {
@@ -169,6 +171,7 @@ export default function AdminPage() {
   const [personDraft, setPersonDraft] = useState<PersonStructureDraft | null>(null);
   const [personSearch, setPersonSearch] = useState("");
   const [personStatusFilter, setPersonStatusFilter] = useState("all");
+  const [permissionSearch, setPermissionSearch] = useState("");
   const [activeTab, setActiveTab] = useState<AdminTab>("users");
 
   const canAdmin = Boolean(user?.permissions.includes("admin:users:read"));
@@ -178,6 +181,20 @@ export default function AdminPage() {
   const canReadAudit = Boolean(user?.permissions.includes("admin:audit:read"));
   const canReadAiGovernance = Boolean(user?.permissions.includes("admin:ai_governance:read"));
   const groupedPermissions = useMemo(() => permissionGroups(permissions), [permissions]);
+  const filteredPermissionGroups = useMemo(() => {
+    const search = permissionSearch.trim().toLocaleLowerCase("pt-BR");
+    if (!search) return groupedPermissions;
+    return Object.fromEntries(
+      Object.entries(groupedPermissions)
+        .map(([module, items]) => [
+          module,
+          items.filter((permission) =>
+            `${module} ${permission.label} ${permission.key}`.toLocaleLowerCase("pt-BR").includes(search),
+          ),
+        ])
+        .filter(([, items]) => items.length > 0),
+    ) as Record<string, EcosystemPermission[]>;
+  }, [groupedPermissions, permissionSearch]);
   const activeUsers = users.filter((item) => item.active).length;
   const filteredPeople = (peopleStructure?.people || []).filter((person) => {
     const search = personSearch.trim().toLowerCase();
@@ -328,7 +345,7 @@ export default function AdminPage() {
       } else {
         await api.updateAccessProfile(profileDraft.id, payload);
       }
-      setProfileDraft(null);
+      closeProfileEditor();
       setMessage("Perfil salvo.");
       await loadAdminData();
     } catch (reason) {
@@ -348,6 +365,33 @@ export default function AdminPage() {
           ? current.permission_keys.filter((item) => item !== permission)
           : [...current.permission_keys, permission].sort(),
       };
+    });
+  }
+
+  function openProfileEditor(draft: ProfileDraft) {
+    setPermissionSearch("");
+    setProfileDraft(draft);
+  }
+
+  function closeProfileEditor() {
+    setPermissionSearch("");
+    setProfileDraft(null);
+  }
+
+  function setProfileModulePermissions(modulePermissions: EcosystemPermission[], selected: boolean) {
+    setProfileDraft((current) => {
+      if (!current) return current;
+      // Permissões sensíveis (aprovar caso da matriz, administração avançada, gerenciar acesso de
+      // outras pessoas) ficam de fora do toggle em lote - achado real: marcar "Gestão Integrada"
+      // inteira para dar acesso de rotina a um supervisor também concedia, sem aviso,
+      // management:review (aprovar/rejeitar decisão da matriz). Precisam de clique individual.
+      const bulkPermissions = modulePermissions.filter((permission) => !permission.sensitive);
+      const modulePermissionKeys = bulkPermissions.map((permission) => permission.key);
+      const moduleKeys = new Set(modulePermissionKeys);
+      const permissionKeys = selected
+        ? new Set<Permission>(current.permission_keys.concat(modulePermissionKeys))
+        : new Set(current.permission_keys.filter((permission) => !moduleKeys.has(permission)));
+      return { ...current, permission_keys: Array.from(permissionKeys).sort() };
     });
   }
 
@@ -633,7 +677,7 @@ export default function AdminPage() {
                   <p className="text-sm text-slate-500">Monte grupos de permissões por módulo.</p>
                 </div>
                 {canWriteProfiles ? (
-                  <Button type="button" onClick={() => setProfileDraft(blankProfileDraft())}>
+                  <Button type="button" onClick={() => openProfileEditor(blankProfileDraft())}>
                     <Plus className="h-4 w-4" /> Novo perfil
                   </Button>
                 ) : null}
@@ -645,7 +689,7 @@ export default function AdminPage() {
                     type="button"
                     className="rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:shadow"
                     onClick={() =>
-                      setProfileDraft({
+                      openProfileEditor({
                         id: profile.id,
                         name: profile.name,
                         description: profile.description || "",
@@ -852,29 +896,61 @@ export default function AdminPage() {
           </TabsContent>
 
           <TabsContent value="parameters" className="mt-4">
-            <div className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-              <div className="flex items-center gap-2 border-b border-slate-200 p-5">
-                <Settings2 className="h-4 w-4 text-blue-600" />
-                <h3 className="text-lg font-semibold text-slate-950">Parametrizações por módulo</h3>
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col gap-4 border-b border-slate-200 p-5 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Settings2 className="h-4 w-4 text-blue-600" />
+                    <h3 className="text-lg font-semibold text-slate-950">Central de parametrizações</h3>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">Governança de módulos, acessos, integrações e regras operacionais.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="outline" onClick={() => setActiveTab("profiles")}>
+                    <ShieldCheck className="h-4 w-4" /> Perfis e permissões
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setActiveTab("modules")}>
+                    <Boxes className="h-4 w-4" /> Módulos
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setActiveTab("integrations")}>
+                    <PlugZap className="h-4 w-4" /> Integrações
+                  </Button>
+                </div>
               </div>
-              <p className="px-5 pt-4 text-sm text-slate-500">
-                Cada módulo continua dono da sua regra de negócio e da própria tela de configuração. A Administração
-                não edita essas regras diretamente — veja abaixo onde cada uma vive.
-              </p>
-              <div className="grid gap-3 p-5 md:grid-cols-2">
+              <div className="grid border-b border-slate-200 bg-slate-50 sm:grid-cols-2 xl:grid-cols-4">
+                {[
+                  { label: "Módulos ativos", value: visibleModuleRows.filter((item) => item.status === "active").length },
+                  { label: "Áreas de permissão", value: permissionModuleRows.length },
+                  { label: "Permissões catalogadas", value: permissions.length },
+                  { label: "Perfis configurados", value: profiles.length },
+                ].map((item) => (
+                  <div key={item.label} className="border-b border-slate-200 px-5 py-4 last:border-b-0 sm:[&:nth-child(odd)]:border-r xl:border-b-0 xl:border-r xl:last:border-r-0">
+                    <p className="text-2xl font-semibold text-slate-950">{item.value}</p>
+                    <p className="text-xs text-slate-500">{item.label}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="p-5">
+                <div className="mb-4">
+                  <h4 className="font-semibold text-slate-950">Regras por domínio</h4>
+                  <p className="mt-1 text-sm text-slate-500">Cada módulo mantém suas regras de negócio e validações no próprio contexto operacional.</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {PARAMETER_MODULE_LINKS.map((item) => (
                   <Link
                     key={item.module}
                     href={item.path}
-                    className="rounded-2xl border border-slate-200 p-4 transition hover:border-uni-royal/40 hover:bg-uni-royal/5"
+                    className="group rounded-lg border border-slate-200 p-4 transition hover:border-blue-300 hover:bg-blue-50/40"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <h4 className="font-semibold text-slate-950">{item.module}</h4>
-                      <Badge className="border border-slate-200 bg-white text-slate-600">Abrir módulo</Badge>
+                      <ExternalLink className="h-4 w-4 shrink-0 text-slate-400 transition group-hover:text-blue-600" />
                     </div>
                     <p className="mt-2 text-sm text-slate-600">{item.owner}</p>
+                    <Badge className="mt-3 border border-slate-200 bg-white text-slate-600">{item.permissionArea}</Badge>
                   </Link>
                 ))}
+                </div>
               </div>
             </div>
           </TabsContent>
@@ -1156,46 +1232,136 @@ export default function AdminPage() {
       ) : null}
 
       {profileDraft ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/30 p-4">
-          <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-semibold text-slate-950">{profileDraft.id === "new" ? "Novo perfil" : "Editar perfil"}</h3>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="grid gap-2">
-                <Label>Nome do perfil</Label>
-                <Input value={profileDraft.name} onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
-              </div>
-              <label className="mt-7 flex items-center gap-2 text-sm">
-                <AppCheckbox checked={profileDraft.active} onCheckedChange={(checked) => setProfileDraft({ ...profileDraft, active: checked })} ariaLabel="Perfil ativo" />
-                Perfil ativo
-              </label>
-              <div className="grid gap-2 md:col-span-2">
-                <Label>Descrição</Label>
-                <Input value={profileDraft.description} onChange={(event) => setProfileDraft({ ...profileDraft, description: event.target.value })} />
-              </div>
-            </div>
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              {Object.entries(groupedPermissions).map(([module, items]) => (
-                <div key={module} className="rounded-2xl border border-slate-200 p-3">
-                  <h4 className="font-semibold text-slate-950">{module}</h4>
-                  <div className="mt-2 grid gap-2">
-                    {items.map((permission) => (
-                      <label key={permission.key} className="flex items-start gap-2 rounded-xl p-2 text-sm hover:bg-slate-50">
-                        <AppCheckbox
-                          checked={profileDraft.permission_keys.includes(permission.key)}
-                          onCheckedChange={() => toggleProfilePermission(permission.key)}
-                          ariaLabel={permission.label}
-                        />
-                        <span>
-                          <span className="font-medium text-slate-800">{permission.label}</span>
-                          <span className="block text-[10px] text-slate-400">{permission.key}</span>
-                        </span>
-                      </label>
-                    ))}
+        <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/35 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="profile-editor-title">
+          <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-white shadow-xl sm:h-[92vh] sm:max-w-5xl sm:rounded-2xl">
+            <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 id="profile-editor-title" className="text-lg font-semibold text-slate-950">
+                    {profileDraft.id === "new" ? "Novo perfil de acesso" : `Editar perfil: ${profileDraft.name}`}
+                  </h3>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>{profileDraft.permission_keys.length} permissões selecionadas</span>
+                    <span aria-hidden="true">·</span>
+                    <span>{profileDraft.active ? "Perfil ativo" : "Perfil inativo"}</span>
                   </div>
                 </div>
-              ))}
+                <Button type="button" size="icon" variant="ghost" aria-label="Fechar editor de perfil" title="Fechar" onClick={closeProfileEditor}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
             </div>
-            <div className="mt-5 flex flex-wrap justify-between gap-2">
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-5">
+              <section aria-labelledby="profile-identification-title" className="rounded-lg border border-slate-200 p-4">
+                <h4 id="profile-identification-title" className="font-semibold text-slate-950">Identificação do perfil</h4>
+                <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
+                  <div className="grid gap-2">
+                    <Label>Nome do perfil</Label>
+                    <Input value={profileDraft.name} onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
+                  </div>
+                  <label className="flex items-center gap-2 self-end rounded-md border border-slate-200 px-3 py-2.5 text-sm">
+                    <AppCheckbox
+                      checked={profileDraft.active}
+                      disabled={!canWriteProfiles}
+                      onCheckedChange={(checked) => setProfileDraft({ ...profileDraft, active: checked })}
+                      ariaLabel="Perfil ativo"
+                    />
+                    Perfil ativo
+                  </label>
+                  <div className="grid gap-2 md:col-span-2">
+                    <Label>Descrição</Label>
+                    <Input value={profileDraft.description} onChange={(event) => setProfileDraft({ ...profileDraft, description: event.target.value })} />
+                  </div>
+                </div>
+              </section>
+
+              <section aria-labelledby="profile-permissions-title" className="mt-5">
+                <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <h4 id="profile-permissions-title" className="font-semibold text-slate-950">Permissões por módulo</h4>
+                    <p className="mt-1 text-sm text-slate-500">Localize uma ação ou selecione o conjunto completo de um módulo.</p>
+                  </div>
+                  <div className="relative w-full md:max-w-sm">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      value={permissionSearch}
+                      className="pl-9"
+                      placeholder="Buscar módulo ou permissão"
+                      aria-label="Buscar módulo ou permissão"
+                      onChange={(event) => setPermissionSearch(event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  {Object.entries(filteredPermissionGroups).map(([module, items]) => {
+                    const modulePermissions = groupedPermissions[module] || items;
+                    const bulkModulePermissions = modulePermissions.filter((permission) => !permission.sensitive);
+                    const selectedCount = modulePermissions.filter((permission) => profileDraft.permission_keys.includes(permission.key)).length;
+                    const bulkSelectedCount = bulkModulePermissions.filter((permission) => profileDraft.permission_keys.includes(permission.key)).length;
+                    const allBulkSelected = bulkModulePermissions.length > 0 && bulkSelectedCount === bulkModulePermissions.length;
+                    return (
+                      <div key={module} className="overflow-hidden rounded-lg border border-slate-200">
+                        <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2.5">
+                          <div className="min-w-0">
+                            <h5 className="truncate text-sm font-semibold text-slate-950">{module}</h5>
+                            <p className="text-xs text-slate-500">{selectedCount} de {modulePermissions.length} selecionadas</p>
+                          </div>
+                          {bulkModulePermissions.length > 0 ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={!canWriteProfiles}
+                              onClick={() => setProfileModulePermissions(modulePermissions, !allBulkSelected)}
+                            >
+                              {allBulkSelected ? "Limpar módulo" : "Selecionar módulo"}
+                            </Button>
+                          ) : null}
+                        </div>
+                        <div className="grid gap-1 p-2">
+                          {items.map((permission) => (
+                            <label key={permission.key} className="flex items-start gap-2 rounded-md p-2 text-sm hover:bg-slate-50">
+                              <AppCheckbox
+                                checked={profileDraft.permission_keys.includes(permission.key)}
+                                disabled={!canWriteProfiles}
+                                onCheckedChange={() => toggleProfilePermission(permission.key)}
+                                ariaLabel={permission.label}
+                              />
+                              <span className="min-w-0">
+                                <span className="flex items-center gap-1.5 font-medium text-slate-800">
+                                  {permission.label}
+                                  {permission.sensitive ? (
+                                    <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                                      Sensível
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="block break-all text-[11px] text-slate-400">{permission.key}</span>
+                                {permission.sensitive ? (
+                                  <span className="block text-[11px] text-amber-700">
+                                    Fora do "Selecionar módulo" - exige marcar aqui, individualmente.
+                                  </span>
+                                ) : null}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {Object.keys(filteredPermissionGroups).length === 0 ? (
+                  <div className="mt-4 rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center text-sm text-slate-500">
+                    Nenhuma permissão encontrada para a busca informada.
+                  </div>
+                ) : null}
+              </section>
+            </div>
+
+            <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 sm:px-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 {profileDraft.id !== "new" && !profiles.find((profile) => profile.id === profileDraft.id)?.is_system && canWriteProfiles ? (
                   <Button
@@ -1205,7 +1371,7 @@ export default function AdminPage() {
                     onClick={async () => {
                       if (profileDraft.id === "new" || !confirm("Excluir este perfil?")) return;
                       await api.deleteAccessProfile(profileDraft.id);
-                      setProfileDraft(null);
+                      closeProfileEditor();
                       await loadAdminData();
                     }}
                   >
@@ -1214,10 +1380,11 @@ export default function AdminPage() {
                 ) : null}
               </div>
               <div className="flex gap-2">
-                <Button type="button" variant="outline" onClick={() => setProfileDraft(null)}>Cancelar</Button>
+                <Button type="button" variant="outline" onClick={closeProfileEditor}>Cancelar</Button>
                 <Button type="button" onClick={() => void saveProfileDraft()} disabled={saving || !canWriteProfiles}>
                   <Save className="h-4 w-4" /> {saving ? "Salvando..." : "Salvar perfil"}
                 </Button>
+              </div>
               </div>
             </div>
           </div>

@@ -37,9 +37,9 @@ from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
 from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
-from app.modules.operations.login_geo_clusters import find_offline_login_clusters, query_login_status
+from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
-from app.modules.operations.onu_signal_snapshot import query_onu_signal_status
+from app.modules.operations.onu_signal_snapshot import query_onu_signal_history, query_onu_signal_status
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.operations.schemas import OperationOrderDetailOut
 
@@ -188,11 +188,15 @@ def build_mcp_server() -> FastMCP:
                 quantidade_atrasada, quantidade_backlog, horas_abertura_agenda,
                 horas_agenda_execucao, horas_execucao_fechamento, horas_abertura_fechamento.
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. neste endpoint - `subjects` continua
+                funcionando (alias depreciado, sem prazo de remoção), só passa a gerar um aviso
+                DEPRECATED_FILTER_ALIAS em `meta.warnings` em vez de ficar silencioso.
 
         Returns:
-            JSON com lista de grupos: [{"label": str, "quantity": int, "metric_value": float,
-            "percentage": float}, ...] (ou uma chave por dimensão em vez de "label", com 2-3
-            dimensões), ordenado por quantidade decrescente.
+            JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "metric_value": float,
+            "percentage": float}, ...]} (ou uma chave por dimensão em vez de "label" dentro de
+            `data`, com 2-3 dimensões), `data` ordenado por quantidade decrescente.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -224,10 +228,14 @@ def build_mcp_server() -> FastMCP:
             granularity: day, week ou month.
             group_by: dimensão opcional. """ + GROUP_BY_DOC + """
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. - `subjects` continua funcionando
+                (alias depreciado), só passa a gerar um aviso DEPRECATED_FILTER_ALIAS em
+                `meta.warnings`.
 
         Returns:
-            JSON com lista de pontos [{"period_start": "AAAA-MM-DD", "quantity": int,
-            "group": str|null}, ...].
+            JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "quantity": int,
+            "group": str|null}, ...]}.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -269,7 +277,10 @@ def build_mcp_server() -> FastMCP:
             page_size: itens por página (10-200).
             keyword: busca livre opcional.
             filters: """ + FILTERS_DOC + """ (inclui o filtro geográfico de raio, útil para "O.S.
-                perto deste ponto/desta O.S.").
+                perto deste ponto/desta O.S."). Piloto do FilterContractV1
+                (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro
+                de assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa
+                a gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
             date_field: opened_at, closed_at, scheduled_at, assumed_at, displacement_started_at,
                 execution_started_at, finished_at ou deadline_at - default (None) mantém a regra
                 "abriu OU fechou no período" acima.
@@ -281,11 +292,11 @@ def build_mcp_server() -> FastMCP:
 
         Returns:
             JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-            "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, sector,
-            latitude, longitude, distance_km (só com filtro de raio), service_description,
-            technical_report, service_address, datas do ciclo de vida, indicadores de etapa de
-            SLA e a meta de equipe vigente na O.S. - recortado por `fields`/`response_mode` quando
-            informados.
+            "has_more": bool, "meta": {...}}. Cada item inclui order_code, regional, city,
+            neighborhood, sector, latitude, longitude, distance_km (só com filtro de raio),
+            service_description, technical_report, service_address, datas do ciclo de vida,
+            indicadores de etapa de SLA e a meta de equipe vigente na O.S. - recortado por
+            `fields`/`response_mode` quando informados.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -461,8 +472,8 @@ def build_mcp_server() -> FastMCP:
         Returns:
             JSON com lista de {"login_id", "login", "contract_id", "signal_rx_dbm",
             "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
-            "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no", "slot_no",
-            "latitude", "longitude", "captured_at"}.
+            "transmitter_name", "temperature_c", "voltage", "signal_measured_at", "pon_id",
+            "pon_no", "slot_no", "latitude", "longitude", "captured_at"}.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -479,6 +490,59 @@ def build_mcp_server() -> FastMCP:
                     login_ids=login_ids or [],
                     last_drop_causes=last_drop_causes or [],
                     transmitter_ids=transmitter_ids or [],
+                    limit=limit,
+                )
+            )
+
+    @mcp.tool(
+        name="opr_onu_signal_history",
+        annotations={"title": "Histórico de sinal óptico/ONU", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_onu_signal_history(
+        login_ids: list[int] | None = None,
+        onu_serials: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 500,
+    ) -> str:
+        """Série histórica de telemetria óptica/ONU (um ponto por captura, não só o valor mais
+        recente) - use para responder "o sinal do login/serial X estava em Y na data Z, e hoje
+        está em W". Exige pelo menos login_ids ou onu_serials - não é uma consulta de exploração
+        livre, é a série de um equipamento/login específico.
+
+        Cobertura parcial por desenho: só existem pontos para os momentos em que o login estava na
+        fila de diagnóstico daquele ciclo (offline, transição recente, ou nunca capturado - ver
+        opr_onu_signal) - ausência de ponto num período não significa sinal bom o tempo todo,
+        significa que não foi medido nesse período.
+
+        Args:
+            login_ids: lista de login_id. Informe isto ou onu_serials.
+            onu_serials: lista de serial/MAC da ONU. Informe isto ou login_ids.
+            date_from, date_to: AAAA-MM-DDTHH:MM:SS (ISO 8601), opcional - sem eles, devolve toda a
+                série disponível até o limite.
+            limit: até 2000 (default 500).
+
+        Returns:
+            JSON com lista ordenada por captured_at (mais antigo primeiro) de {"login_id",
+            "contract_id", "signal_rx_dbm", "signal_tx_dbm", "last_drop_cause", "onu_serial",
+            "onu_model", "transmitter_id", "transmitter_name", "temperature_c", "voltage",
+            "signal_measured_at", "pon_id", "pon_no", "slot_no", "latitude", "longitude",
+            "captured_at"}.
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "operations.network.onu_signal_history", "mcp")
+            if login_ids:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "login_id", "filterable")
+            if onu_serials:
+                _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "onu_serial", "filterable")
+            return _dump(
+                query_onu_signal_history(
+                    db,
+                    login_ids=login_ids or [],
+                    onu_serials=onu_serials or [],
+                    date_from=_parse_datetime(date_from) if date_from else None,
+                    date_to=_parse_datetime(date_to) if date_to else None,
                     limit=limit,
                 )
             )
@@ -523,7 +587,7 @@ def build_mcp_server() -> FastMCP:
 
         Returns:
             JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-            "has_more": bool}. Cada item inclui login_id, login, online, regional,
+            "has_more": bool, "meta": {...}}. Cada item inclui login_id, login, online, regional,
             latitude/longitude, last_connected_at, last_disconnected_at, status_changed_at,
             captured_at, contract_id, pon_id, transmitter_id, last_drop_cause.
         """
@@ -615,8 +679,9 @@ def build_mcp_server() -> FastMCP:
             regionals, online_statuses: filtros opcionais antes de agregar.
 
         Returns:
-            JSON com lista [{"label": str, "quantity": int, "percentage": float}, ...], ordenado
-            por quantidade decrescente.
+            JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "percentage": float}, ...]},
+            `data` ordenado por quantidade decrescente. `meta.applied_filters` mostra o que de fato
+            foi usado; `meta.source_last_sync` indica há quanto tempo o snapshot de login é real.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -642,8 +707,9 @@ def build_mcp_server() -> FastMCP:
             limit: até 1000 (default 200).
 
         Returns:
-            JSON com lista [{"login_id", "login", "regional", "latitude", "longitude",
-            "status_changed_at", "last_disconnected_at"}, ...], mais recente primeiro.
+            JSON {"meta": {...}, "data": [{"login_id", "login", "regional", "latitude",
+            "longitude", "status_changed_at", "last_disconnected_at"}, ...]}, `data` mais recente
+            primeiro. `meta.warnings` avisa se o resultado foi truncado pelo teto do endpoint.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -670,11 +736,11 @@ def build_mcp_server() -> FastMCP:
             until: fim da janela - default agora.
 
         Returns:
-            JSON com lista [{"captured_at", "connected", "disconnected", "new_drops",
-            "new_reconnects"}, ...], em ordem cronológica. `new_drops`/`new_reconnects` contam só
-            transições NESTA captura (comparado com a captura anterior do mesmo login) - o primeiro
-            ponto da série pode superestimar se não houver captura anterior próxima o bastante
-            (~20min) para comparar.
+            JSON {"meta": {...}, "data": [{"captured_at", "connected", "disconnected", "new_drops",
+            "new_reconnects"}, ...]}, `data` em ordem cronológica. `new_drops`/`new_reconnects`
+            contam só transições NESTA captura (comparado com a captura anterior do mesmo login) -
+            o primeiro ponto da série pode superestimar se não houver captura anterior próxima o
+            bastante (~20min) para comparar.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -704,41 +770,16 @@ def build_mcp_server() -> FastMCP:
         Returns:
             JSON {"radius_meters", "min_cluster_size", "window_minutes", "clusters": [{
             "center_latitude", "center_longitude", "radius_meters", "size", "logins": [{"login_id",
-            "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...]},
-            ordenado do maior cluster pro menor.
+            "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...],
+            "meta": {...}}, `clusters` ordenado do maior pro menor.
         """
         user = _current_user()
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.offline_login_clusters", "mcp")
-            clusters = find_offline_login_clusters(
-                db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
-            )
             return _dump(
-                {
-                    "radius_meters": radius_meters,
-                    "min_cluster_size": min_cluster_size,
-                    "window_minutes": window_minutes,
-                    "clusters": [
-                        {
-                            "center_latitude": cluster.center_latitude,
-                            "center_longitude": cluster.center_longitude,
-                            "radius_meters": cluster.radius_meters,
-                            "size": cluster.size,
-                            "logins": [
-                                {
-                                    "login_id": point.login_id,
-                                    "login": point.login,
-                                    "online": point.online,
-                                    "latitude": point.latitude,
-                                    "longitude": point.longitude,
-                                    "last_disconnected_at": point.last_disconnected_at,
-                                }
-                                for point in cluster.logins
-                            ],
-                        }
-                        for cluster in clusters
-                    ],
-                }
+                offline_login_clusters_response(
+                    db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+                )
             )
 
     @mcp.tool(
@@ -767,7 +808,7 @@ def build_mcp_server() -> FastMCP:
             JSON {"window_minutes", "since", "new_drops", "still_offline", "reconnects",
             "by_regional", "by_transmitter", "by_pon", "by_drop_cause": [{"label", "quantity",
             "percentage"}, ...], "geo_clusters": [{"center_latitude", "center_longitude",
-            "radius_meters", "size", "logins": [...]}, ...]}.
+            "radius_meters", "size", "logins": [...]}, ...], "meta": {...}}.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -801,10 +842,11 @@ def build_mcp_server() -> FastMCP:
                 fazem ela ser "suspeita de valor chumbado" (default 20).
 
         Returns:
-            JSON com lista por regional: [{"entity", "regional", "total", "validated", "missing",
+            JSON {"meta": {...}, "data": [{"entity", "regional", "total", "validated", "missing",
             "invalid_range", "zero_zero", "outside_region", "suspicious_duplicates",
-            "valid_coverage_pct"}, ...]. `validated` = passou todas as checagens; os demais
-            campos são mutuamente exclusivos entre si e com `validated`.
+            "valid_coverage_pct"}, ...]}, um item de `data` por regional. `validated` = passou
+            todas as checagens; os demais campos são mutuamente exclusivos entre si e com
+            `validated`.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -828,11 +870,15 @@ def build_mcp_server() -> FastMCP:
             date_to: AAAA-MM-DD.
             group_by: uma dimensão, default "regional". """ + GROUP_BY_DOC + """
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. - `subjects` continua funcionando
+                (alias depreciado), só passa a gerar um aviso DEPRECATED_FILTER_ALIAS em
+                `meta.warnings`.
 
         Returns:
-            JSON com lista [{"label": str, "quantity": int, "avg_age_days": float,
+            JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "avg_age_days": float,
             "median_age_days": float, "oldest_order_code": str, "oldest_age_days": float,
-            "over_1d"/"over_3d"/"over_5d"/"over_7d"/"over_15d": int}, ...].
+            "over_1d"/"over_3d"/"over_5d"/"over_7d"/"over_15d": int}, ...]}.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -908,10 +954,18 @@ def build_mcp_server() -> FastMCP:
             denominator: closed_origins, active_origins, maintenance_total ou activation_closed.
             origin_excluded_diagnoses: diagnósticos de origem a excluir, opcional.
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. no lado retorno/manutenção -
+                `subjects` continua funcionando (alias depreciado), só passa a gerar um aviso
+                DEPRECATED_FILTER_ALIAS em `meta.warnings`. Os demais filtros de `filters` (texto
+                livre, geografia, datas específicas) ainda não têm efeito nesta ferramenta - só os
+                mesmos filtros já suportados pela aba Garantias da tela (regional, empresa,
+                estado, cidade, modelo de equipe no lado origem+retorno; os demais campos de
+                `FILTER_COLUMNS` só no lado retorno).
 
         Returns:
             JSON com numerator, denominator_count, percentage, contracts_with_warranty,
-            customers_with_warranty, breakdown por dimensão, items e items_truncated.
+            customers_with_warranty, breakdown por dimensão, items, items_truncated e meta.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -954,10 +1008,15 @@ def build_mcp_server() -> FastMCP:
             date_from, date_to: AAAA-MM-DD.
             granularity: day, week ou month.
             filters: """ + FILTERS_DOC + """
+                Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é
+                o nome canônico do filtro de assunto da O.S. - `subjects` continua funcionando
+                (alias depreciado), só passa a gerar um aviso DEPRECATED_FILTER_ALIAS em
+                `meta.warnings`.
 
         Returns:
-            JSON com lista [{"period_start": "AAAA-MM-DD", "team_model": str, "actual": int,
-            "target": int|null, "delta": int|null, "percentage_of_target": float|null}, ...].
+            JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "team_model": str,
+            "actual": int, "target": int|null, "delta": int|null,
+            "percentage_of_target": float|null}, ...]}.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -1053,6 +1112,117 @@ def build_mcp_server() -> FastMCP:
                 {
                     "summary": management_cases.summarize_cases(db, conditions),
                     "items": [management_cases.case_out(item).model_dump() for item in rows],
+                }
+            )
+
+    @mcp.tool(
+        name="opr_get_cockpit_context",
+        annotations={"title": "Contexto do cockpit para análise", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_get_cockpit_context(profile_key: str) -> str:
+        """Contexto operacional completo de um profile do cockpit, numa única chamada - pensado
+        para uma análise periódica (ex.: ChatGPT agendado de hora em hora) decidir se vale
+        publicar um AI_INSIGHT novo via `opr_publish_cockpit_content`. Reusa o MESMO cálculo da
+        TV (nenhuma consulta nova, nenhum número recalculado) - os valores aqui são idênticos
+        aos que aparecem no cockpit no momento da chamada.
+
+        Args:
+            profile_key: profile do cockpit a consultar - "uni-geral", "machadinho-operacional",
+                "executivo-uni" ou outro profile configurado.
+
+        Returns:
+            JSON com profile, scope, generated_at, overall_status, production (abertas/
+            finalizadas/saldo/médias 7d), backlog (total e aging), sla (atual, meta, regionais
+            críticas), alerts, incidents, content (conteúdo ativo do profile), monitor_health,
+            data_freshness, meta (coverage/warnings/applied_filters) e last_ai_insight (último
+            AI_INSIGHT ativo deste profile - use para decidir "nada relevante mudou, não preciso
+            publicar outro insight" antes de chamar opr_publish_cockpit_content de novo).
+        """
+        from app.modules.intelligence.cockpit import build_cockpit_context, get_profile
+
+        user = _current_user()
+        if "intelligence:read" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para consultar o cockpit (intelligence:read).")
+        with SessionLocal() as db:
+            profile = get_profile(db, profile_key)
+            if profile is None or not profile.active:
+                raise ValueError(f"Profile '{profile_key}' não encontrado ou inativo.")
+            return _dump(build_cockpit_context(db, profile))
+
+    @mcp.tool(
+        name="opr_publish_cockpit_content",
+        annotations={"title": "Publicar conteúdo no cockpit", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    )
+    def opr_publish_cockpit_content(
+        content_type: str,
+        title: str,
+        body: str,
+        profile_key: str | None = None,
+        scope: dict[str, Any] | None = None,
+        severity: str = "INFO",
+        evidence: dict[str, Any] | None = None,
+        confidence: float | None = None,
+        valid_until: str | None = None,
+    ) -> str:
+        """Publica um conteúdo no cockpit UNI Intelligence (TV operacional) - insight de IA,
+        comunicado, aviso de manutenção etc. É a ÚNICA forma de escrita exposta por este servidor
+        MCP: não altera alertas, não fecha O.S., não mexe em agenda nem em rede - só publica
+        conteúdo informativo, sempre com origem identificável (nunca anônimo).
+
+        Args:
+            content_type: AI_INSIGHT, MANUAL_MESSAGE, ANNOUNCEMENT, OPERATIONAL_PRIORITY,
+                INCIDENT_UPDATE, MAINTENANCE_NOTICE ou INFO.
+            title: até 200 caracteres.
+            body: até 4000 caracteres.
+            profile_key: profile do cockpit a direcionar (ex.: "uni-geral"); None = conteúdo
+                global, aparece em qualquer profile.
+            scope: opcional, ex. {"regional": "UNI - JI PARANA"} ou {"regionals": [...]}.
+            severity: LOW, MEDIUM, HIGH, CRITICAL ou INFO (default).
+            evidence: dados de apoio estruturados (opcional).
+            confidence: 0.0 a 1.0 (opcional) - grau de confiança da análise, se houver.
+            valid_until: ISO8601 (ex. "2026-08-20T00:00:00-04:00") - depois disso some da TV.
+
+        Returns:
+            JSON com o conteúdo publicado (id, status, created_at, ...).
+        """
+        from app.modules.intelligence.cockpit import CockpitContentValidationError, publish_cockpit_content
+
+        user = _current_user()
+        if "intelligence:publish" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para publicar no cockpit (intelligence:publish).")
+        parsed_valid_until = _parse_datetime(valid_until) if valid_until else None
+        with SessionLocal() as db:
+            try:
+                content = publish_cockpit_content(
+                    db,
+                    content_type=content_type,
+                    profile_key=profile_key,
+                    scope=scope or {},
+                    severity=severity,
+                    title=title,
+                    body=body,
+                    evidence=evidence or {},
+                    confidence=confidence,
+                    valid_until=parsed_valid_until,
+                    source_type="MCP",
+                    source_key=f"mcp:{user.email}",
+                    author_user_id=user.id,
+                )
+            except CockpitContentValidationError as exc:
+                raise ValueError(str(exc)) from exc
+            return _dump(
+                {
+                    "id": content.id,
+                    "content_type": content.content_type,
+                    "profile_key": content.profile_key,
+                    "severity": content.severity,
+                    "title": content.title,
+                    "status": content.status,
+                    "source_type": content.source_type,
+                    "source_key": content.source_key,
+                    "author_user_id": content.author_user_id,
+                    "valid_until": content.valid_until,
+                    "created_at": content.created_at,
                 }
             )
 

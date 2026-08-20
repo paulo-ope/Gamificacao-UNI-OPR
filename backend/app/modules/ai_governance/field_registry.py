@@ -14,12 +14,18 @@ from dataclasses import dataclass
 
 from app.modules.ai import queries as ai_queries
 from app.modules.operations import queries as operations_queries
-from app.modules.operations.models import OperationLoginCurrentStatus, OperationOnuSignalCurrent, OperationOrder
+from app.modules.operations.models import (
+    OperationLoginCurrentStatus,
+    OperationOnuSignalCurrent,
+    OperationOnuSignalSnapshot,
+    OperationOrder,
+)
 from app.modules.operations.schemas import OperationOrderOut
 
 ENTITY_OPERATION_ORDERS = "operations_orders"
 ENTITY_LOGIN_CURRENT_STATUS = "operations_login_current_status"
 ENTITY_ONU_SIGNAL_CURRENT = "operations_onu_signal_current"
+ENTITY_ONU_SIGNAL_SNAPSHOT = "operations_onu_signal_snapshots"
 
 
 @dataclass(frozen=True)
@@ -149,8 +155,8 @@ def _onu_signal_current_registry() -> dict[str, FieldDescriptor]:
     # é identificador de equipamento, mesmo racional de latitude/longitude não serem sensíveis em
     # `operations_orders`.
     filterable_keys = {
-        "login_id", "contract_id", "last_drop_cause", "transmitter_id", "pon_id", "pon_no", "slot_no",
-        "latitude", "longitude",
+        "login_id", "contract_id", "last_drop_cause", "transmitter_id", "transmitter_name",
+        "pon_id", "pon_no", "slot_no", "latitude", "longitude",
     } | _ONU_DATETIME_KEYS
     registry: dict[str, FieldDescriptor] = {}
     for column in OperationOnuSignalCurrent.__table__.columns:
@@ -161,9 +167,37 @@ def _onu_signal_current_registry() -> dict[str, FieldDescriptor]:
             type=str(column.type),
             filterable=key in filterable_keys,
             text_filterable=False,
-            groupable=key in {"last_drop_cause", "transmitter_id", "pon_id", "pon_no", "slot_no"},
+            groupable=key in {"last_drop_cause", "transmitter_id", "transmitter_name", "pon_id", "pon_no", "slot_no"},
             returnable=True,
             selectable=True,
+            detail_available=True,
+            sensitive=False,
+            default_enabled=True,
+        )
+    return registry
+
+
+def _onu_signal_snapshot_registry() -> dict[str, FieldDescriptor]:
+    # Histórico append-only (item novo, pedido do usuário em 2026-08-17) - mesmas capacidades da
+    # tabela "current" acima, já que é a mesma telemetria, só com uma linha por captura em vez de
+    # 1 por login. `default_enabled=True` porque nasce como continuação direta de uma capacidade já
+    # habilitada hoje (`operations_onu_signal_current`), não uma exposição nova e desconhecida.
+    filterable_keys = {
+        "login_id", "contract_id", "last_drop_cause", "transmitter_id", "transmitter_name", "onu_serial",
+        "pon_id", "pon_no", "slot_no", "latitude", "longitude",
+    } | _ONU_DATETIME_KEYS
+    registry: dict[str, FieldDescriptor] = {}
+    for column in OperationOnuSignalSnapshot.__table__.columns:
+        key = column.key
+        registry[key] = FieldDescriptor(
+            entity=ENTITY_ONU_SIGNAL_SNAPSHOT,
+            field=key,
+            type=str(column.type),
+            filterable=key in filterable_keys,
+            text_filterable=False,
+            groupable=key in {"last_drop_cause", "transmitter_id", "transmitter_name", "pon_id", "pon_no", "slot_no"},
+            returnable=key != "id",
+            selectable=key != "id",
             detail_available=True,
             sensitive=False,
             default_enabled=True,
@@ -177,4 +211,5 @@ def build_field_registry() -> dict[str, dict[str, FieldDescriptor]]:
         ENTITY_OPERATION_ORDERS: _operation_order_registry(),
         ENTITY_LOGIN_CURRENT_STATUS: _login_current_status_registry(),
         ENTITY_ONU_SIGNAL_CURRENT: _onu_signal_current_registry(),
+        ENTITY_ONU_SIGNAL_SNAPSHOT: _onu_signal_snapshot_registry(),
     }

@@ -75,6 +75,24 @@ def _sanitize_raw_payload(value):
     return value
 
 
+class OperationIgnoredFilterOut(BaseModel):
+    field: str
+    reason: str
+    detail: str | None = None
+
+
+class OperationResponseMetaOut(BaseModel):
+    applied_filters: dict
+    ignored_filters: list[OperationIgnoredFilterOut]
+    # dict, não str - todo warning até hoje é estruturado (ex.: {"code": "DEPRECATED_FILTER_ALIAS",
+    # "received": ..., "canonical": ...} ou {"code": "PARTIAL_DIMENSION_COVERAGE", "dimension": ...},
+    # ver docs/proposta-filter-contract-v1.md §5) - cada `code` carrega campos extras diferentes,
+    # por isso `dict` livre em vez de um schema fixo por warning.
+    warnings: list[dict]
+    generated_at: datetime
+    source_last_sync: datetime | None
+
+
 class OperationPeriod(BaseModel):
     date_from: date
     date_to: date
@@ -998,6 +1016,7 @@ class OperationOfflineLoginClustersOut(BaseModel):
     min_cluster_size: int
     window_minutes: int
     clusters: list[OperationOfflineLoginClusterOut]
+    meta: OperationResponseMetaOut
 
 
 class OperationLoginStatusOut(BaseModel):
@@ -1023,6 +1042,28 @@ class OperationOnuSignalOut(BaseModel):
     onu_serial: str | None
     onu_model: str | None
     transmitter_id: str | None
+    transmitter_name: str | None
+    temperature_c: float | None
+    voltage: float | None
+    signal_measured_at: datetime | None
+    pon_id: str | None
+    pon_no: str | None
+    slot_no: str | None
+    latitude: float | None
+    longitude: float | None
+    captured_at: datetime
+
+
+class OperationOnuSignalHistoryItemOut(BaseModel):
+    login_id: int
+    contract_id: str | None
+    signal_rx_dbm: float | None
+    signal_tx_dbm: float | None
+    last_drop_cause: str | None
+    onu_serial: str | None
+    onu_model: str | None
+    transmitter_id: str | None
+    transmitter_name: str | None
     temperature_c: float | None
     voltage: float | None
     signal_measured_at: datetime | None
@@ -1057,6 +1098,7 @@ class OperationLoginSearchResultOut(BaseModel):
     page: int
     page_size: int
     has_more: bool
+    meta: OperationResponseMetaOut
 
 
 class OperationLoginHistoryEventOut(BaseModel):
@@ -1116,6 +1158,21 @@ class OperationLoginTimeseriesPointOut(BaseModel):
     new_reconnects: int
 
 
+class OperationLoginAggregateResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationLoginAggregateItemOut]
+
+
+class OperationLoginOutagesResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationLoginOutageItemOut]
+
+
+class OperationLoginTimeseriesResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationLoginTimeseriesPointOut]
+
+
 class OperationCoordinateQualityItemOut(BaseModel):
     entity: str
     regional: str
@@ -1127,6 +1184,11 @@ class OperationCoordinateQualityItemOut(BaseModel):
     outside_region: int
     suspicious_duplicates: int
     valid_coverage_pct: float
+
+
+class OperationCoordinateQualityResponseOut(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[OperationCoordinateQualityItemOut]
 
 
 class OperationLoginIncidentGeoClusterOut(BaseModel):
@@ -1148,6 +1210,7 @@ class OperationLoginIncidentAnalysisOut(BaseModel):
     by_pon: list[OperationLoginAggregateItemOut]
     by_drop_cause: list[OperationLoginAggregateItemOut]
     geo_clusters: list[OperationLoginIncidentGeoClusterOut]
+    meta: OperationResponseMetaOut
 
 
 class OperationBranchCapacityOut(BaseModel):

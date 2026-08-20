@@ -40,6 +40,8 @@ export type Permission =
   | "scheduling:manage_filters"
   | "scheduling:views:read_global"
   | "scheduling:views:manage_global"
+  | "support:read"
+  | "support:sync_opa"
   | "management:read"
   | "management:manage_structure"
   | "management:write_justification"
@@ -56,7 +58,10 @@ export type Permission =
   | "admin:audit:read"
   | "admin:ai_governance:read"
   | "admin:ai_governance:write"
-  | "admin:ai_tokens:manage";
+  | "admin:ai_tokens:manage"
+  | "intelligence:read"
+  | "intelligence:manage"
+  | "intelligence:publish";
 
 export type AuthUser = {
   id: number;
@@ -79,6 +84,7 @@ export type EcosystemPermission = {
   key: Permission;
   label: string;
   module: string;
+  sensitive?: boolean;
 };
 
 export type AccessProfile = {
@@ -135,13 +141,218 @@ export type ManagementOperationalMember = {
 };
 
 export type WorkspaceVisibleModule = {
-  key: "gamification" | "operations" | "scheduling" | "management" | "admin";
+  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin";
   name: string;
   description: string;
   web_path: string;
   api_prefix: string;
   required_permission: Permission;
   status: "active" | "planned" | "disabled" | string;
+};
+
+export type SupportOpaSyncSettings = {
+  enabled: boolean;
+  interval_minutes: number;
+  lookback_days: number;
+};
+
+export type SupportOpaSyncStatus = SupportOpaSyncSettings & {
+  configured: boolean;
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  next_allowed_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  consecutive_failures: number;
+};
+
+export type SupportImportResult = {
+  run_id: number;
+  status: string;
+  date_from: string;
+  date_to: string;
+  pages_processed: number;
+  fetched_count: number;
+  created_count: number;
+  updated_count: number;
+  unchanged_count: number;
+  rejected_count: number;
+  errors: Record<string, unknown>[];
+};
+
+export type SupportOpaMetricItem = {
+  label: string;
+  total: number;
+  average_tma_seconds: number | null;
+  average_tmr_seconds: number | null;
+  average_rating: number | null;
+};
+
+export type SupportOpaMetrics = {
+  date_from: string;
+  date_to: string;
+  total_attendances: number;
+  closed_attendances: number;
+  average_tma_seconds: number | null;
+  average_tmr_seconds: number | null;
+  average_rating: number | null;
+  by_attendant: SupportOpaMetricItem[];
+  by_reason: SupportOpaMetricItem[];
+};
+
+export type SupportOpaMetricComparison = {
+  current: number | null;
+  previous: number | null;
+  absolute_change: number | null;
+  percentage_change: number | null;
+};
+
+export type SupportOpaChannelCount = {
+  channel: string;
+  total: number;
+};
+
+export type SupportOpaOverviewPeriod = {
+  date_from: string;
+  date_to: string;
+};
+
+export type SupportOpaOverview = {
+  current_period: SupportOpaOverviewPeriod;
+  previous_period: SupportOpaOverviewPeriod;
+  total_attendances: SupportOpaMetricComparison;
+  closed_attendances: SupportOpaMetricComparison;
+  open_attendances: SupportOpaMetricComparison;
+  closure_rate: SupportOpaMetricComparison;
+  average_duration_seconds: SupportOpaMetricComparison;
+  average_rating: SupportOpaMetricComparison;
+  distinct_attendants: SupportOpaMetricComparison;
+  distinct_departments: SupportOpaMetricComparison;
+  by_channel: SupportOpaChannelCount[];
+};
+
+export type SupportOpaBreakdownDimension = "attendant" | "department" | "reason" | "channel" | "status" | "customer";
+
+export type SupportOpaBreakdownItem = {
+  id: string | null;
+  label: string;
+  total: number;
+  closed: number;
+  open: number;
+  closure_rate: number;
+  avg_duration_seconds: number | null;
+  avg_rating: number | null;
+  rating_count: number;
+  share_percentage: number;
+  previous_total: number;
+  total_change: number;
+  total_change_percentage: number | null;
+  previous_closure_rate: number;
+  closure_rate_change_pp: number;
+  previous_avg_duration_seconds: number | null;
+  avg_duration_change_percentage: number | null;
+  previous_avg_rating: number | null;
+  avg_rating_change: number | null;
+};
+
+export type SupportOpaBreakdowns = {
+  dimension: SupportOpaBreakdownDimension;
+  total: number;
+  items: SupportOpaBreakdownItem[];
+};
+
+export type SupportOpaAttendanceListItem = {
+  id: number;
+  source_id: string;
+  protocol: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  attendant_id: string | null;
+  attendant_name: string | null;
+  department_id: string | null;
+  department_name: string | null;
+  reason_id: string | null;
+  reason_name: string | null;
+  channel: string | null;
+  channel_id: string | null;
+  channel_customer: string | null;
+  status: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  rating: number | null;
+  tma_seconds: number | null;
+  tmr_seconds: number | null;
+};
+
+export type SupportOpaAttendancePage = {
+  items: SupportOpaAttendanceListItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+};
+
+export type SupportOpaAttendanceDetailData = {
+  source_id: string | null;
+  protocol: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  attendant_id: string | null;
+  attendant_name: string | null;
+  department_id: string | null;
+  department_name: string | null;
+  channel: string | null;
+  channel_id: string | null;
+  channel_customer: string | null;
+  status: string | null;
+  opened_at: string | null;
+  closed_at: string | null;
+  duration_seconds: number | null;
+  tma_seconds: number | null;
+  rating: number | null;
+  reasons: Array<Record<string, unknown>>;
+  tags: Array<Record<string, unknown>>;
+  description: string | null;
+  observations: string | null;
+};
+
+export type SupportOpaAttendanceDetail = {
+  id: number;
+  source_id: string;
+  local: SupportOpaAttendanceDetailData;
+  enriched: SupportOpaAttendanceDetailData | null;
+  external_detail_available: boolean;
+  external_detail_error: string | null;
+};
+
+export type SupportOpaFilterOption = {
+  value: string;
+  label: string;
+};
+
+export type SupportOpaFilters = {
+  attendants: SupportOpaFilterOption[];
+  departments: SupportOpaFilterOption[];
+  channels: SupportOpaFilterOption[];
+  statuses: SupportOpaFilterOption[];
+  reasons: SupportOpaFilterOption[];
+};
+
+export type SupportOpaAttendanceFilters = {
+  page?: number;
+  page_size?: number;
+  sort_by?: string;
+  sort_dir?: "asc" | "desc";
+  search?: string;
+  date_from?: string;
+  date_to?: string;
+  status?: string;
+  channel?: string;
+  attendant_id?: string;
+  department_id?: string;
+  reason_id?: string;
+  protocol?: string;
+  customer?: string;
 };
 
 export type AdminModuleProfileVisibility = {
@@ -320,6 +531,11 @@ export type ManagementCaseGenerateResult = {
   skipped_insufficient_data: number;
   reference_year: number;
   reference_month: number;
+};
+
+export type ManagementAutoGenerateSettings = {
+  enabled: boolean;
+  last_run_date: string | null;
 };
 
 export type LoginResult = {

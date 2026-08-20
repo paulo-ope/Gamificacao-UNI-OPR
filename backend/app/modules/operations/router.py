@@ -34,7 +34,7 @@ from . import backfill, queries, services
 from .ixc_ingestion import import_current_month_period
 from .coordinate_quality import coordinate_quality_audit
 from .login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
-from .login_geo_clusters import find_offline_login_clusters, query_login_status
+from .login_geo_clusters import offline_login_clusters_response, query_login_status
 from .login_search import get_login_detail, search_logins
 from .login_status_snapshot import (
     LOGIN_STATUS_SYNC_DEFAULT_INTERVAL_MINUTES,
@@ -49,6 +49,7 @@ from .onu_signal_snapshot import (
     ONU_SIGNAL_SYNC_INTERVAL_MINUTES_KEY,
     ONU_SIGNAL_SYNC_MAX_INTERVAL_MINUTES,
     ONU_SIGNAL_SYNC_MIN_INTERVAL_MINUTES,
+    query_onu_signal_history,
     query_onu_signal_status,
 )
 from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
@@ -104,11 +105,16 @@ from .schemas import (
     OperationLoginSearchResultOut,
     OperationLoginDetailOut,
     OperationLoginAggregateItemOut,
+    OperationLoginAggregateResponseOut,
     OperationLoginOutageItemOut,
+    OperationLoginOutagesResponseOut,
     OperationLoginTimeseriesPointOut,
+    OperationLoginTimeseriesResponseOut,
     OperationLoginIncidentAnalysisOut,
     OperationCoordinateQualityItemOut,
+    OperationCoordinateQualityResponseOut,
     OperationOnuSignalOut,
+    OperationOnuSignalHistoryItemOut,
 )
 
 
@@ -1158,34 +1164,9 @@ def network_offline_login_clusters(
     recebe filtro de regional/setor de propósito: proximidade geográfica é a única dimensão
     relevante aqui, e os mesmos filtros do resto do módulo (que operam sobre O.S., não sobre
     login) não se aplicam a este dado."""
-    clusters = find_offline_login_clusters(
+    return offline_login_clusters_response(
         db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
     )
-    return {
-        "radius_meters": radius_meters,
-        "min_cluster_size": min_cluster_size,
-        "window_minutes": window_minutes,
-        "clusters": [
-            {
-                "center_latitude": cluster.center_latitude,
-                "center_longitude": cluster.center_longitude,
-                "radius_meters": cluster.radius_meters,
-                "size": cluster.size,
-                "logins": [
-                    {
-                        "login_id": point.login_id,
-                        "login": point.login,
-                        "online": point.online,
-                        "latitude": point.latitude,
-                        "longitude": point.longitude,
-                        "last_disconnected_at": point.last_disconnected_at,
-                    }
-                    for point in cluster.logins
-                ],
-            }
-            for cluster in clusters
-        ],
-    }
 
 
 @router.get("/network/logins", response_model=list[OperationLoginStatusOut])
@@ -1253,6 +1234,37 @@ def network_onu_signal(
         login_ids=login_ids,
         last_drop_causes=last_drop_causes,
         transmitter_ids=transmitter_ids,
+        limit=limit,
+    )
+
+
+@router.get("/network/onu-signal/history", response_model=list[OperationOnuSignalHistoryItemOut])
+def network_onu_signal_history(
+    login_ids: list[int] = Query(default_factory=list),
+    onu_serials: list[str] = Query(default_factory=list),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Série histórica de telemetria óptica/ONU (um ponto por captura) - "o sinal do login/serial
+    X estava em Y na data Z, e hoje está em W" (pedido do usuário em 2026-08-17). Exige pelo menos
+    `login_ids` ou `onu_serials`. Cobertura parcial por desenho: só existem pontos para os momentos
+    em que o login estava na fila de diagnóstico daquele ciclo (ver
+    `OperationOnuSignalSnapshot`) - ausência de ponto num período não significa sinal bom o tempo
+    todo, significa que não foi medido nesse período."""
+    policy = enforce_ai_endpoint_for_user(db, user, "operations.network.onu_signal_history", "api")
+    if login_ids:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "login_id", "filterable")
+    if onu_serials:
+        enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "onu_serial", "filterable")
+    return query_onu_signal_history(
+        db,
+        login_ids=login_ids,
+        onu_serials=onu_serials,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
     )
 
@@ -1336,7 +1348,7 @@ def network_login_detail(
     return detail
 
 
-@router.get("/network/login-aggregate", response_model=list[OperationLoginAggregateItemOut])
+@router.get("/network/login-aggregate", response_model=OperationLoginAggregateResponseOut)
 def network_login_aggregate(
     group_by: str = Query(..., description="regional, online, transmitter_id, pon_id ou last_drop_cause."),
     regionals: list[str] = Query(default_factory=list),
@@ -1353,7 +1365,7 @@ def network_login_aggregate(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.get("/network/login-outages", response_model=list[OperationLoginOutageItemOut])
+@router.get("/network/login-outages", response_model=OperationLoginOutagesResponseOut)
 def network_login_outages(
     since: datetime = Query(..., description="Início da janela (ISO8601, qualquer timezone)."),
     until: datetime | None = Query(default=None, description="Fim da janela - default agora."),
@@ -1369,7 +1381,7 @@ def network_login_outages(
     return login_outages(db, since=since, until=until, regionals=regionals, limit=limit)
 
 
-@router.get("/network/login-timeseries", response_model=list[OperationLoginTimeseriesPointOut])
+@router.get("/network/login-timeseries", response_model=OperationLoginTimeseriesResponseOut)
 def network_login_timeseries(
     since: datetime = Query(..., description="Início da janela (ISO8601, qualquer timezone)."),
     until: datetime | None = Query(default=None, description="Fim da janela - default agora."),
@@ -1401,7 +1413,7 @@ def network_login_incident_analysis(
     )
 
 
-@router.get("/network/coordinate-quality", response_model=list[OperationCoordinateQualityItemOut])
+@router.get("/network/coordinate-quality", response_model=OperationCoordinateQualityResponseOut)
 def network_coordinate_quality(
     entity: str = Query(..., description="operations_orders, operations_login_current_status ou operations_onu_signal_current."),
     outlier_km: float = Query(default=300.0, gt=0, le=2000),

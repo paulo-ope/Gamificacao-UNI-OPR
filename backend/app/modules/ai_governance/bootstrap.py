@@ -87,6 +87,13 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     # de qualidade de coordenadas, so leitura/classificacao, sem correcao automatica.
     ("operations.network.coordinate_quality", "Auditoria de coordenadas (GET /operations/network/coordinate-quality)", "api", True),
     ("ai.coordinate_quality", "Auditoria de coordenadas para IA/MCP (opr_coordinate_quality_audit)", "mcp", True),
+    # Novo (pedido do usuário em 2026-08-17) - série histórica de sinal óptico/ONU (antes só existia
+    # o valor mais recente, ver operations_onu_signal_current). Mesma chave compartilhada entre a
+    # rota REST (origin "api") e a tool MCP (origin "mcp") - mesmo padrão de
+    # "operations.network.onu_signal" para o estado atual. `default_enabled=True` porque nasce como
+    # continuação direta de capacidade já habilitada hoje, não uma exposição nova e desconhecida.
+    ("operations.network.onu_signal_history", "Histórico de sinal óptico/ONU (GET /operations/network/onu-signal/history, opr_onu_signal_history)", "api", True),
+    ("ai.onu_signal_history", "Histórico de sinal óptico/ONU para IA (POST /ai/infra/onu-signal-history)", "api", True),
 ]
 
 

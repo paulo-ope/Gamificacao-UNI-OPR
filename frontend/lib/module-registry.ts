@@ -3,7 +3,7 @@ import type { Permission } from "@/lib/types";
 export type WorkspaceModuleStatus = "active" | "planned" | "disabled";
 
 export type WorkspaceModule = {
-  key: "gamification" | "operations" | "scheduling" | "management" | "admin";
+  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin" | "intelligence";
   name: string;
   description: string;
   webPath: string;
@@ -46,6 +46,15 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     status: "active"
   },
   {
+    key: "support",
+    name: "SGP Suporte",
+    description: "Atendimentos, tempos e motivos do suporte vindos do OPA Suite.",
+    webPath: "/suporte",
+    apiPrefix: "/api/support",
+    requiredPermission: "support:read",
+    status: "active"
+  },
+  {
     key: "management",
     name: "Gestão Integrada",
     description: "Estrutura operacional, casos de gestão, justificativas e decisão da matriz.",
@@ -61,6 +70,15 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/admin",
     apiPrefix: "/api/admin",
     requiredPermission: "admin:users:read",
+    status: "active"
+  },
+  {
+    key: "intelligence",
+    name: "UNI Intelligence",
+    description: "Cockpit operacional, alertas, monitores e publicações do UNI Intelligence.",
+    webPath: "/intelligence",
+    apiPrefix: "/api/intelligence",
+    requiredPermission: "intelligence:read",
     status: "active"
   }
 ];

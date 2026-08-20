@@ -76,6 +76,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "operations:manage",
         "operations:views:read_global",
         "operations:sync_ixc",
+        "support:read",
+        "support:sync_opa",
         "operations:view_order_details",
         "operations:view_openings",
         "scheduling:read",
@@ -110,6 +112,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "operations:read",
         "operations:manage",
         "operations:sync_ixc",
+        "support:read",
+        "support:sync_opa",
         "operations:manage_filters",
         "operations:views:read_global",
         "operations:views:create_global",
@@ -148,6 +152,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "admin:ai_governance:read",
         "admin:ai_governance:write",
         "admin:ai_tokens:manage",
+        "intelligence:read",
+        "intelligence:manage",
+        "intelligence:publish",
     },
     # Identidade de máquina (não uma pessoa logando) - usada pela chave de API que expõe dados
     # analíticos de O.S. para consumo por IA (conector MCP/Actions). Só leitura, sem nenhuma
@@ -179,6 +186,8 @@ PERMISSION_LABELS: dict[str, str] = {
     "operations:read": "Operação: acessar módulo",
     "operations:manage": "Operação: administrar módulo",
     "operations:sync_ixc": "Operação: sincronizar IXC",
+    "support:read": "Suporte: acessar módulo SGP",
+    "support:sync_opa": "Suporte: sincronizar OPA Suite",
     "operations:manage_filters": "Operação: gerenciar visões/filtros",
     "operations:views:read_global": "Operação: ver visões globais",
     "operations:views:create_global": "Operação: criar visões globais",
@@ -218,6 +227,9 @@ PERMISSION_LABELS: dict[str, str] = {
     "admin:ai_governance:write": "Administração: configurar Gestão API/MCP",
     "admin:ai_tokens:manage": "Administração: emitir/revogar tokens de API",
     "ai:query": "IA: consultar dados analíticos de O.S.",
+    "intelligence:read": "Intelligence: consultar monitores, runs e alertas",
+    "intelligence:manage": "Intelligence: descartar/reconhecer alertas",
+    "intelligence:publish": "Intelligence: publicar conteúdo no cockpit",
 }
 
 PROFILE_LABELS: dict[str, tuple[str, str]] = {

@@ -392,6 +392,19 @@ def fetch_onu_signal_by_login_ids(client: IxcClient, login_ids: list[int], *, rp
     )
 
 
+def fetch_radios_by_ids(client: IxcClient, radio_ids: list[str], *, rp: int = 200) -> Iterator[dict[str, Any]]:
+    """Resolve `id_transmissor` (telemetria óptica/ONU, ver `fetch_onu_signal_by_login_ids`) para
+    nome/modelo do transmissor (OLT/rádio) - tabela `radpop_radio`, cadastro de equipamento do IXC
+    (achada por sondagem manual em 2026-08-17: confirmado contra dado real que `descricao` desta
+    tabela é o mesmo nome já usado na tela do IXC, ex. id 1300 -> "UNI-NHDO-CNT-COA"). Mesmo padrão
+    de `fetch_funcionarios_by_ids` - resolve só os IDs pedidos, nunca a tabela inteira (~1.500
+    linhas, pequena, mas sem motivo pra buscar mais do que o necessário a cada ciclo)."""
+    if not radio_ids:
+        return
+    grid_param = [{"TB": "radpop_radio.id", "OP": "IN", "P": ",".join(str(rid) for rid in radio_ids)}]
+    yield from client.list_all("radpop_radio", grid_param=grid_param, rp=rp, sortname="radpop_radio.id")
+
+
 LOGIN_STATUS_SNAPSHOT_FIELDS = (
     "id",
     "login",

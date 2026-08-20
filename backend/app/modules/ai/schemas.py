@@ -10,6 +10,7 @@ from app.modules.operations.schemas import (
     OperationBreakdownItem,
     OperationFilters,
     OperationOfflineLoginClustersOut,
+    OperationResponseMetaOut,
     OperationWarrantyOriginTypeItem,
     OperationWarrantyRegionalRankingItem,
 )
@@ -81,6 +82,11 @@ class AiOrderFilters(BaseModel):
     person_types: list[str] = Field(default_factory=list, max_length=100)
     os_types: list[str] = Field(default_factory=list, max_length=100)
     subjects: list[str] = Field(default_factory=list, max_length=100)
+    # Nome canônico proposto em docs/proposta-filter-contract-v1.md (FilterContractV1, piloto
+    # aggregate_orders) para o mesmo filtro de `subjects` acima - os dois convivem, `subjects`
+    # continua funcionando (alias depreciado, sem prazo de remoção), só passa a gerar um aviso em
+    # `meta.warnings`. Só `aggregate_orders` normaliza os dois nesta etapa (piloto único aprovado).
+    os_subjects: list[str] = Field(default_factory=list, max_length=100)
     diagnoses: list[str] = Field(default_factory=list, max_length=100)
     departments: list[str] = Field(default_factory=list, max_length=100)
     sectors: list[str] = Field(default_factory=list, max_length=100)
@@ -166,6 +172,11 @@ class AiTimeseriesPoint(BaseModel):
     period_start: date
     quantity: int
     group: str | None = None
+
+
+class AiTimeseriesResponse(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[AiTimeseriesPoint]
 
 
 class AiSearchRequest(BaseModel):
@@ -338,6 +349,11 @@ class AiBacklogAgingItem(BaseModel):
     over_15d: int
 
 
+class AiBacklogAgingResponse(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[AiBacklogAgingItem]
+
+
 class AiBacklogSectorFilter(BaseModel):
     operator: Literal["contains", "starts_with", "ends_with", "not_equals"]
     value: str = Field(min_length=1, max_length=160)
@@ -406,6 +422,7 @@ class AiWarrantyAnalyticsResponse(BaseModel):
     by_origin_type: list[OperationWarrantyOriginTypeItem]
     items: list[AiWarrantyItem]
     items_truncated: bool
+    meta: OperationResponseMetaOut
 
 
 class AiTeamTargetsRequest(BaseModel):
@@ -444,6 +461,11 @@ class AiTeamTargetPerformanceItem(BaseModel):
     percentage_of_target: float | None
 
 
+class AiTeamTargetPerformanceResponse(BaseModel):
+    meta: OperationResponseMetaOut
+    data: list[AiTeamTargetPerformanceItem]
+
+
 class AiOfflineLoginClustersRequest(BaseModel):
     """Item 19 do pedido ("consulta de Infra" no monitor de incidentes) - mesmos parâmetros de
     `GET /operations/network/offline-login-clusters`, agora acessível para IA/MCP."""
@@ -463,6 +485,21 @@ class AiOnuSignalRequest(BaseModel):
     last_drop_causes: list[str] = Field(default_factory=list)
     transmitter_ids: list[str] = Field(default_factory=list)
     limit: int = Field(default=200, ge=1, le=500)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiOnuSignalHistoryRequest(BaseModel):
+    """Série histórica de telemetria óptica/ONU (um ponto por captura) - "o sinal do login/serial
+    X estava em Y na data Z, e hoje está em W". Distinto de `AiOnuSignalRequest`: aqui é a série no
+    tempo de um login/serial específico, não o estado mais recente de vários. Exige pelo menos
+    `login_ids` ou `onu_serials`."""
+
+    login_ids: list[int] = Field(default_factory=list, max_length=50)
+    onu_serials: list[str] = Field(default_factory=list, max_length=50)
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    limit: int = Field(default=500, ge=1, le=2000)
 
     model_config = ConfigDict(extra="forbid")
 

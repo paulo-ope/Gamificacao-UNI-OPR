@@ -54,6 +54,15 @@ MODULES: tuple[ModuleDefinition, ...] = (
         status="active",
     ),
     ModuleDefinition(
+        key="support",
+        name="SGP Suporte",
+        description="Indicadores, atendimentos e métricas de suporte vindos do OPA Suite.",
+        web_path="/suporte",
+        api_prefix="/api/support",
+        required_permission="support:read",
+        status="active",
+    ),
+    ModuleDefinition(
         key="management",
         name="Gestão Integrada",
         description="Estrutura operacional, casos de gestão, justificativas e tomada de decisão da matriz.",
@@ -69,6 +78,15 @@ MODULES: tuple[ModuleDefinition, ...] = (
         web_path="/admin",
         api_prefix="/api/admin",
         required_permission="admin:users:read",
+        status="active",
+    ),
+    ModuleDefinition(
+        key="intelligence",
+        name="UNI Intelligence",
+        description="Cockpit operacional, alertas, monitores e publicações do UNI Intelligence.",
+        web_path="/intelligence",
+        api_prefix="/api/intelligence",
+        required_permission="intelligence:read",
         status="active",
     ),
 )

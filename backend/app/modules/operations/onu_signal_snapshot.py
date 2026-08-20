@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.services.calculation import get_setting
-from app.services.ixc_client import IxcClient, fetch_onu_signal_by_login_ids, get_ixc_client
+from app.services.ixc_client import IxcClient, fetch_onu_signal_by_login_ids, fetch_radios_by_ids, get_ixc_client
 
-from .models import OperationLoginCurrentStatus, OperationOnuSignalCurrent
+from .models import OperationLoginCurrentStatus, OperationOnuSignalCurrent, OperationOnuSignalSnapshot
 from .period import parse_ixc_local_datetime
 
 logger = logging.getLogger(__name__)
@@ -90,13 +90,38 @@ def upsert_onu_signal_current(db: Session, rows: list[dict]) -> None:
         db.execute(stmt)
 
 
+def _resolve_transmitter_names(client: IxcClient, transmitter_ids: set[str]) -> dict[str, str]:
+    """Resolve `id_transmissor` -> nome (`radpop_radio.descricao`), só para os IDs que aparecerem
+    de fato neste ciclo - a tabela de cadastro (~1.500 linhas) é pequena, mas não há motivo pra
+    buscá-la inteira quando a captura típica cobre só uma fila pequena de logins."""
+    ids = [tid for tid in transmitter_ids if tid]
+    if not ids:
+        return {}
+    names: dict[str, str] = {}
+    for record in fetch_radios_by_ids(client, ids):
+        radio_id = record.get("id")
+        descricao = _parse_ixc_text(record.get("descricao"))
+        if radio_id and descricao:
+            names[str(radio_id)] = descricao
+    return names
+
+
+def record_onu_signal_history(db: Session, rows: list[dict]) -> None:
+    """Grava as mesmas linhas capturadas neste ciclo no histórico append-only (nunca upsertado) -
+    ver `OperationOnuSignalSnapshot`. `rows` já vem no formato de `OperationOnuSignalCurrent`
+    (chave `login_id`, sem `id`) - o model de histórico aceita as mesmas colunas via bulk insert."""
+    if not rows:
+        return
+    db.execute(pg_insert(OperationOnuSignalSnapshot), rows)
+
+
 def capture_onu_signal_snapshot(db: Session, client: IxcClient) -> int:
     """Busca telemetria óptica/ONU só para a fila de diagnóstico (ver `_onu_signal_watchlist_login_ids`)
     - logins offline, que transicionaram recentemente, ou nunca capturados - não a base inteira de
     logins monitorados (auditoria do usuário em 2026-08-15: confirmado que consultar todo mundo a
-    cada ciclo era desperdício real; a fila típica é ~5% do tamanho da base inteira). Upsert simples
-    (1 linha por login) - sem histórico append-only por enquanto (pode ser adicionado depois se
-    análise de tendência de sinal ao longo do tempo for necessária)."""
+    cada ciclo era desperdício real; a fila típica é ~5% do tamanho da base inteira). Upsert do
+    estado atual (1 linha por login) + insert append-only no histórico (`OperationOnuSignalSnapshot`,
+    pedido do usuário em 2026-08-17 - antes só existia o valor mais recente, sem série no tempo)."""
     login_ids = _onu_signal_watchlist_login_ids(db)
     if not login_ids:
         return 0
@@ -134,7 +159,12 @@ def capture_onu_signal_snapshot(db: Session, client: IxcClient) -> int:
     if not parsed:
         return 0
 
+    transmitter_names = _resolve_transmitter_names(client, {row["transmitter_id"] for row in parsed})
+    for row in parsed:
+        row["transmitter_name"] = transmitter_names.get(row["transmitter_id"])
+
     upsert_onu_signal_current(db, parsed)
+    record_onu_signal_history(db, parsed)
     db.commit()
     return len(parsed)
 
@@ -182,6 +212,7 @@ def query_onu_signal_status(
             "onu_serial": signal.onu_serial,
             "onu_model": signal.onu_model,
             "transmitter_id": signal.transmitter_id,
+            "transmitter_name": signal.transmitter_name,
             "temperature_c": signal.temperature_c,
             "voltage": signal.voltage,
             "signal_measured_at": signal.signal_measured_at,
@@ -193,6 +224,75 @@ def query_onu_signal_status(
             "captured_at": signal.captured_at,
         }
         for signal, login in rows
+    ]
+
+
+# Mesmo limite defensivo de `MAX_ONU_SIGNAL_RESULTS`, mas maior - histórico cobre vários pontos
+# no tempo POR login/serial (não 1 linha cada), então o mesmo número de entidades filtradas gera
+# mais linhas de resposta.
+MAX_ONU_SIGNAL_HISTORY_RESULTS = 2000
+
+
+def query_onu_signal_history(
+    db: Session,
+    *,
+    login_ids: list[int] | None = None,
+    onu_serials: list[str] | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Série histórica de telemetria óptica/ONU (um ponto por captura) para responder "o sinal do
+    login/serial X estava em Y na data Z, e hoje está em W" - pedido do usuário em 2026-08-17.
+    Exige pelo menos `login_ids` ou `onu_serials` (não é uma consulta de exploração livre, é
+    "me mostre a série de UM equipamento/login específico" - ver `MAX_ONU_SIGNAL_HISTORY_RESULTS`
+    sobre o motivo de não haver uma consulta "todo mundo, todo o histórico").
+
+    Cobertura parcial por desenho (ver docstring de `OperationOnuSignalSnapshot`): só existem
+    pontos para os momentos em que o login estava na fila de diagnóstico daquele ciclo - um login
+    saudável e estável por semanas pode não ter captura nova nesse intervalo. Ausência de pontos
+    num período não significa "sinal bom o tempo todo", significa "não foi medido nesse período"."""
+    if not login_ids and not onu_serials:
+        return []
+    conditions = []
+    if login_ids:
+        conditions.append(OperationOnuSignalSnapshot.login_id.in_(login_ids))
+    if onu_serials:
+        conditions.append(OperationOnuSignalSnapshot.onu_serial.in_(onu_serials))
+    if date_from:
+        conditions.append(OperationOnuSignalSnapshot.captured_at >= date_from)
+    if date_to:
+        conditions.append(OperationOnuSignalSnapshot.captured_at <= date_to)
+
+    stmt = (
+        select(OperationOnuSignalSnapshot)
+        .where(*conditions)
+        .order_by(OperationOnuSignalSnapshot.captured_at.asc())
+        .limit(min(limit, MAX_ONU_SIGNAL_HISTORY_RESULTS))
+    )
+    rows = db.scalars(stmt).all()
+    return [
+        {
+            "login_id": row.login_id,
+            "contract_id": row.contract_id,
+            "signal_rx_dbm": row.signal_rx_dbm,
+            "signal_tx_dbm": row.signal_tx_dbm,
+            "last_drop_cause": row.last_drop_cause,
+            "onu_serial": row.onu_serial,
+            "onu_model": row.onu_model,
+            "transmitter_id": row.transmitter_id,
+            "transmitter_name": row.transmitter_name,
+            "temperature_c": row.temperature_c,
+            "voltage": row.voltage,
+            "signal_measured_at": row.signal_measured_at,
+            "pon_id": row.pon_id,
+            "pon_no": row.pon_no,
+            "slot_no": row.slot_no,
+            "latitude": row.latitude,
+            "longitude": row.longitude,
+            "captured_at": row.captured_at,
+        }
+        for row in rows
     ]
 
 

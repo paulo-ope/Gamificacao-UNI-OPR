@@ -9,6 +9,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Zap,
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -25,6 +26,7 @@ import { api } from "@/lib/api";
 import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import { cn } from "@/lib/utils";
 import type {
+  ManagementAutoGenerateSettings,
   ManagementCase,
   ManagementCaseComment,
   ManagementCaseFilters,
@@ -92,16 +94,20 @@ export function ManagementCasesPanel({
   options,
   canReview,
   canJustify,
+  canAdmin = false,
 }: {
   options: ManagementOptions;
   canReview: boolean;
   canJustify: boolean;
+  canAdmin?: boolean;
 }) {
   const initialPeriod = useMemo(previousMonth, []);
   const [data, setData] = useState<ManagementCasePage | null>(null);
   const [reasons, setReasons] = useState<ManagementCaseReason[]>([]);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [autoGenerate, setAutoGenerate] = useState<ManagementAutoGenerateSettings | null>(null);
+  const [autoGenerateSaving, setAutoGenerateSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [selected, setSelected] = useState<ManagementCase | null>(null);
@@ -151,6 +157,23 @@ export function ManagementCasesPanel({
   useEffect(() => {
     void api.managementCaseReasons().then(setReasons).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!canReview) return;
+    void api.managementAutoGenerateSettings().then(setAutoGenerate).catch(() => undefined);
+  }, [canReview]);
+
+  async function toggleAutoGenerate(next: boolean) {
+    setAutoGenerateSaving(true);
+    setError(null);
+    try {
+      setAutoGenerate(await api.updateManagementAutoGenerateSettings(next));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Falha ao atualizar a geração automática.");
+    } finally {
+      setAutoGenerateSaving(false);
+    }
+  }
 
   // Abre direto o caso quando a tela é acessada via link de notificação (?case_id=97) - só
   // precisa do id, o próprio CaseDetailDialog busca o resto (ver uso de `selected.id` abaixo).
@@ -331,6 +354,31 @@ export function ManagementCasesPanel({
             </div>
           ) : null}
         </div>
+        {canReview && autoGenerate ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2">
+            <Zap className={cn("h-4 w-4", autoGenerate.enabled ? "text-emerald-600" : "text-slate-400")} />
+            <div className="text-xs text-slate-600">
+              <span className="font-medium text-slate-800">Geração automática {autoGenerate.enabled ? "ativada" : "desativada"}.</span>{" "}
+              {autoGenerate.enabled
+                ? "Todo dia, o sistema abre sozinho os casos do mês anterior já fechado — sem precisar entrar aqui."
+                : "Os casos só nascem quando alguém clicar em \"Gerar casos do mês\"."}
+              {autoGenerate.last_run_date ? ` Última verificação: ${formatDate(autoGenerate.last_run_date)}.` : ""}
+            </div>
+            {canAdmin ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="ml-auto"
+                disabled={autoGenerateSaving}
+                onClick={() => void toggleAutoGenerate(!autoGenerate.enabled)}
+              >
+                {autoGenerateSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {autoGenerate.enabled ? "Desativar" : "Ativar"}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

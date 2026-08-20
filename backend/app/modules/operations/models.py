@@ -430,6 +430,12 @@ class OperationOnuSignalCurrent(Base):
     onu_serial: Mapped[str | None] = mapped_column(String(60), nullable=True)
     onu_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
     transmitter_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Nome resolvido de `radpop_radio.descricao` (tabela de cadastro de OLT/transmissor do IXC,
+    # achada por sondagem manual em 2026-08-17 - `transmitter_id` sozinho é um ID numérico bruto,
+    # sem significado nenhum pra quem lê). Resolvido em `onu_signal_snapshot.py` a cada captura,
+    # sem tabela de lookup própria - mesmo padrão já usado pra resolver `id_tecnico` em nome de
+    # responsável na importação de O.S. (ver `operations/ixc_ingestion.py`).
+    transmitter_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
     voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
     signal_measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -439,6 +445,47 @@ class OperationOnuSignalCurrent(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+
+class OperationOnuSignalSnapshot(Base):
+    """Histórico APPEND-ONLY de telemetria óptica/ONU (uma linha por captura, nunca upsertada) -
+    complementa `OperationOnuSignalCurrent` (que só guarda o valor mais recente por login) para
+    permitir responder "o sinal do login/serial X estava em Y na data Z, e hoje está em W" (pedido
+    do usuário em 2026-08-17). Mesmo padrão de `OperationLoginStatusSnapshot`: a captura já busca
+    esse dado no IXC a cada ciclo (ver `onu_signal_snapshot.capture_onu_signal_snapshot`) - esta
+    tabela só grava a mesma linha de novo em vez de sobrescrever, sem chamada adicional ao IXC.
+
+    Cobertura parcial por desenho: só é gravada quando o login está na "fila de diagnóstico"
+    daquele ciclo (offline, transição recente, ou nunca capturado - ver
+    `_onu_signal_watchlist_login_ids`), não a cada ciclo para todo login monitorado. Um login
+    saudável e estável por dias não gera pontos novos nesse intervalo - a série reflete os
+    momentos em que houve motivo pra medir, não uma amostragem uniforme no tempo."""
+
+    __tablename__ = "operations_onu_signal_snapshots"
+    __table_args__ = (
+        Index("ix_operations_onu_signal_snapshots_login_captured", "login_id", "captured_at"),
+        Index("ix_operations_onu_signal_snapshots_serial_captured", "onu_serial", "captured_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    login_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    contract_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    signal_rx_dbm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_tx_dbm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_drop_cause: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    onu_serial: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    onu_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    transmitter_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    transmitter_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    voltage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    signal_measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pon_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    pon_no: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    slot_no: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True, default=utc_now)
 
 
 class OperationBranchCapacity(Base):

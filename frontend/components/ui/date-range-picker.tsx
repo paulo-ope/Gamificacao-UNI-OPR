@@ -63,6 +63,7 @@ export function DateRangePicker({
   min,
   max,
   presets,
+  className,
   onChange,
 }: {
   label?: string;
@@ -71,6 +72,7 @@ export function DateRangePicker({
   min?: string;
   max?: string;
   presets?: DateRangePreset[];
+  className?: string;
   onChange: (key: "date_from" | "date_to", value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -148,16 +150,16 @@ export function DateRangePicker({
   }
 
   return (
-    <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
+    <label className={`grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600 ${className || ""}`}>
       {label}
       <Popover.Root open={open} onOpenChange={setOpen}>
         <Popover.Trigger asChild>
           <button
             type="button"
-            className="flex h-10 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-left text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex h-10 w-full min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-left text-sm text-slate-800 outline-none focus:ring-2 focus:ring-blue-500"
           >
             <CalendarRange className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-            <span className="min-w-0 whitespace-nowrap text-[13px]">
+            <span className="min-w-0 truncate text-[13px]">
               {shortDateLabel(dateFrom)} <span className="text-slate-400">até</span> {shortDateLabel(dateTo)}
             </span>
           </button>

@@ -9,6 +9,8 @@ from typing import Literal
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.modules.ai_governance.response_meta import build_meta
+
 from .login_geo_clusters import find_offline_login_clusters
 from .models import OperationLoginCurrentStatus, OperationLoginStatusSnapshot, OperationOnuSignalCurrent
 
@@ -19,6 +21,14 @@ LoginAggregateDimension = Literal["regional", "online", "transmitter_id", "pon_i
 _ONU_DIMENSIONS = {"transmitter_id", "pon_id", "last_drop_cause"}
 
 MAX_LOGIN_OUTAGES_RESULTS = 1000
+
+
+def _login_source_last_sync(db: Session) -> datetime | None:
+    """Horário da última captura de status de login concluída - usado como `source_last_sync` no
+    envelope `meta` (Fase 1, item 1 do plano de confiabilidade de dado, pedido do usuário em
+    2026-08-15). Sinaliza pra quem consome o endpoint há quanto tempo o dado é real, sem precisar
+    inferir isso de fora."""
+    return db.scalar(select(func.max(OperationLoginCurrentStatus.captured_at)))
 
 # ~2-4 capturas antes de `since` (loop de captura roda a cada 5-15min em produção) - só o
 # suficiente pra LAG() de login_timeseries enxergar o estado "antes" da primeira captura já dentro
@@ -70,7 +80,7 @@ def login_aggregate(
 
     rows = db.execute(stmt).all()
     total = sum(count for _, count in rows)
-    return sorted(
+    data = sorted(
         (
             {"label": label, "quantity": int(count), "percentage": round((count / total) * 100, 2) if total else 0.0}
             for label, count in rows
@@ -78,6 +88,13 @@ def login_aggregate(
         key=lambda item: item["quantity"],
         reverse=True,
     )
+    return {
+        "meta": build_meta(
+            applied_filters={"group_by": group_by, "regionals": regionals, "online_statuses": online_statuses, "status_changed_since": status_changed_since},
+            source_last_sync=_login_source_last_sync(db),
+        ),
+        "data": data,
+    }
 
 
 def login_outages(
@@ -111,7 +128,7 @@ def login_outages(
         .order_by(OperationLoginCurrentStatus.status_changed_at.desc())
         .limit(min(limit, MAX_LOGIN_OUTAGES_RESULTS))
     ).scalars()
-    return [
+    data = [
         {
             "login_id": row.login_id,
             "login": row.login,
@@ -123,6 +140,19 @@ def login_outages(
         }
         for row in rows
     ]
+    warnings = []
+    if len(data) == MAX_LOGIN_OUTAGES_RESULTS and limit > MAX_LOGIN_OUTAGES_RESULTS:
+        warnings.append(
+            f"Resultado truncado em {MAX_LOGIN_OUTAGES_RESULTS} registros (limit={limit} solicitado, teto do endpoint)."
+        )
+    return {
+        "meta": build_meta(
+            applied_filters={"since": since, "until": until, "regionals": regionals, "limit": limit},
+            warnings=warnings,
+            source_last_sync=_login_source_last_sync(db),
+        ),
+        "data": data,
+    }
 
 
 # Índice existente em operations_login_status_snapshots.captured_at (mapped_column(index=True))
@@ -165,7 +195,7 @@ def login_timeseries(db: Session, *, since: datetime, until: datetime | None = N
     until = until or datetime.now(timezone.utc)
     lookback_start = since - _LOOKBACK_BUFFER
     rows = db.execute(_TIMESERIES_SQL, {"lookback_start": lookback_start, "since": since, "until": until}).all()
-    return [
+    data = [
         {
             "captured_at": row.captured_at,
             "connected": int(row.connected),
@@ -175,6 +205,13 @@ def login_timeseries(db: Session, *, since: datetime, until: datetime | None = N
         }
         for row in rows
     ]
+    return {
+        "meta": build_meta(
+            applied_filters={"since": since, "until": until},
+            source_last_sync=_login_source_last_sync(db),
+        ),
+        "data": data,
+    }
 
 
 MAX_INCIDENT_GEO_CLUSTER_LOGINS = 50
@@ -201,16 +238,16 @@ def login_incident_analysis(
       fronteira de regional)."""
     since = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
 
-    timeseries_points = login_timeseries(db, since=since)
+    timeseries_points = login_timeseries(db, since=since)["data"]
     new_drops = sum(point["new_drops"] for point in timeseries_points)
     reconnects = sum(point["new_reconnects"] for point in timeseries_points)
 
-    still_offline_items = login_outages(db, since=since, regionals=regionals, limit=MAX_LOGIN_OUTAGES_RESULTS)
+    still_offline_items = login_outages(db, since=since, regionals=regionals, limit=MAX_LOGIN_OUTAGES_RESULTS)["data"]
 
     def _breakdown(dimension: LoginAggregateDimension) -> list[dict]:
         return login_aggregate(
             db, group_by=dimension, regionals=regionals, online_statuses=["N"], status_changed_since=since
-        )
+        )["data"]
 
     clusters = find_offline_login_clusters(
         db, radius_meters=cluster_radius_meters, min_cluster_size=cluster_min_size, window_minutes=window_minutes
@@ -236,4 +273,13 @@ def login_incident_analysis(
             }
             for cluster in clusters
         ],
+        "meta": build_meta(
+            applied_filters={
+                "window_minutes": window_minutes,
+                "regionals": regionals,
+                "cluster_radius_meters": cluster_radius_meters,
+                "cluster_min_size": cluster_min_size,
+            },
+            source_last_sync=_login_source_last_sync(db),
+        ),
     }

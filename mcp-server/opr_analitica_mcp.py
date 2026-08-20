@@ -176,12 +176,16 @@ def opr_aggregate_orders(params: AggregateOrdersInput) -> str:
     Args:
         params (AggregateOrdersInput): date_from, date_to (AAAA-MM-DD), group_by (uma dimensão ou
             lista de até 3, ver GROUP_BY_DOC), metric (ver descrição do campo), filters (ver
-            FILTERS_DOC).
+            FILTERS_DOC). Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md):
+            `os_subjects` é o nome canônico do filtro de assunto da O.S. neste endpoint -
+            `subjects` continua funcionando (alias depreciado), só passa a gerar um aviso
+            DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com uma lista de grupos. Com 1 dimensão: [{"label": str, "quantity": int,
-        "metric_value": float, "percentage": float}, ...], ordenado por quantidade decrescente.
-        Com 2-3 dimensões: cada item troca "label" por uma chave por dimensão pedida
+        str: JSON {"meta": {...}, "data": [...]}. Com 1 dimensão, cada item de `data`:
+        [{"label": str, "quantity": int, "metric_value": float, "percentage": float}, ...],
+        ordenado por quantidade decrescente. Com 2-3 dimensões: cada item troca "label" por uma
+        chave por dimensão pedida
         (ex.: {"regional": ..., "subject": ..., "quantity": ..., "metric_value": ..., "percentage": ...}).
 
     Exemplos de uso:
@@ -226,11 +230,14 @@ def opr_orders_timeseries(params: OrdersTimeseriesInput) -> str:
     Args:
         params (OrdersTimeseriesInput): date_from, date_to, metric (abertas/fechadas/saldo),
             granularity (day/week/month, default day), group_by (opcional, ver GROUP_BY_DOC),
-            filters (ver FILTERS_DOC).
+            filters (ver FILTERS_DOC). Piloto do FilterContractV1
+            (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro de
+            assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com lista de pontos [{"period_start": "AAAA-MM-DD", "quantity": int,
-        "group": str|null}, ...]. "group" só aparece quando group_by foi informado.
+        str: JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "quantity": int,
+        "group": str|null}, ...]}. "group" só aparece quando group_by foi informado.
 
     Exemplos de uso:
         - "Evolução diária de O.S. abertas em agosto" -> metric="abertas", granularity="day"
@@ -296,11 +303,14 @@ def opr_search_orders(params: SearchOrdersInput) -> str:
     Args:
         params (SearchOrdersInput): date_from, date_to, page (default 1), page_size (10-200,
             default 50), keyword (busca livre opcional), filters (ver FILTERS_DOC - incluindo o
-            filtro geográfico de raio, útil para "O.S. perto deste ponto/desta O.S.").
+            filtro geográfico de raio, útil para "O.S. perto deste ponto/desta O.S."). Piloto do
+            FilterContractV1 (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome
+            canônico do filtro de assunto da O.S. - `subjects` continua funcionando (alias
+            depreciado), só passa a gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
         str: JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-        "has_more": bool}. Cada item inclui order_code, regional, city, neighborhood, sector,
+        "has_more": bool, "meta": {...}}. Cada item inclui order_code, regional, city, neighborhood, sector,
         latitude, longitude, distance_km (só quando o filtro de raio foi usado), service_description,
         technical_report, service_address, datas do ciclo de vida (opened_at, scheduled_at,
         execution_started_at, closed_at, sla_deadline_at...), indicadores de etapa de SLA
@@ -471,8 +481,8 @@ def opr_onu_signal(params: OnuSignalInput) -> str:
     Returns:
         str: JSON com lista de {"login_id", "login", "contract_id", "signal_rx_dbm",
         "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
-        "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no", "slot_no",
-        "latitude", "longitude", "captured_at"}.
+        "transmitter_name", "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no",
+        "slot_no", "latitude", "longitude", "captured_at"}.
     """
     payload = {
         "login_ids": params.login_ids,
@@ -481,6 +491,58 @@ def opr_onu_signal(params: OnuSignalInput) -> str:
         "limit": params.limit,
     }
     return _call("infra/onu-signal", payload)
+
+
+class OnuSignalHistoryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    login_ids: list[int] = Field(default_factory=list, max_length=50, description="Lista de login_id. Informe isto ou onu_serials.")
+    onu_serials: list[str] = Field(default_factory=list, max_length=50, description="Lista de serial/MAC da ONU. Informe isto ou login_ids.")
+    date_from: str | None = Field(default=None, description="Início do período, ISO 8601 (AAAA-MM-DDTHH:MM:SS). Opcional.")
+    date_to: str | None = Field(default=None, description="Fim do período, ISO 8601. Opcional.")
+    limit: int = Field(default=500, ge=1, le=2000)
+
+
+@mcp.tool(
+    name="opr_onu_signal_history",
+    annotations={
+        "title": "Histórico de sinal óptico/ONU",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_onu_signal_history(params: OnuSignalHistoryInput) -> str:
+    """Série histórica de telemetria óptica/ONU (um ponto por captura, não só o valor mais
+    recente) - use para responder "o sinal do login/serial X estava em Y na data Z, e hoje está em
+    W". Exige pelo menos login_ids ou onu_serials - não é uma consulta de exploração livre, é a
+    série de um equipamento/login específico.
+
+    Cobertura parcial por desenho: só existem pontos para os momentos em que o login estava na
+    fila de diagnóstico daquele ciclo (offline, transição recente, ou nunca capturado - ver
+    opr_onu_signal) - ausência de ponto num período não significa sinal bom o tempo todo, significa
+    que não foi medido nesse período.
+
+    Args:
+        params (OnuSignalHistoryInput): login_ids ou onu_serials (pelo menos um), date_from/
+            date_to (opcional, ISO 8601), limit (até 2000, default 500).
+
+    Returns:
+        str: JSON com lista ordenada por captured_at (mais antigo primeiro) de {"login_id",
+        "contract_id", "signal_rx_dbm", "signal_tx_dbm", "last_drop_cause", "onu_serial",
+        "onu_model", "transmitter_id", "transmitter_name", "temperature_c", "voltage",
+        "signal_measured_at", "pon_id", "pon_no", "slot_no", "latitude", "longitude",
+        "captured_at"}.
+    """
+    payload = {
+        "login_ids": params.login_ids,
+        "onu_serials": params.onu_serials,
+        "date_from": params.date_from,
+        "date_to": params.date_to,
+        "limit": params.limit,
+    }
+    return _call("infra/onu-signal-history", payload)
 
 
 DateTimeOpDoc = (
@@ -533,7 +595,7 @@ def opr_search_logins(params: SearchLoginsInput) -> str:
 
     Returns:
         str: JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
-        "has_more": bool}. Cada item inclui login_id, login, online, regional,
+        "has_more": bool, "meta": {...}}. Cada item inclui login_id, login, online, regional,
         latitude/longitude, last_connected_at, last_disconnected_at, status_changed_at,
         captured_at, contract_id, pon_id, transmitter_id, last_drop_cause.
     """
@@ -627,8 +689,9 @@ def opr_login_aggregate(params: LoginAggregateInput) -> str:
             (filtros opcionais antes de agregar).
 
     Returns:
-        str: JSON com lista [{"label": str, "quantity": int, "percentage": float}, ...], ordenado
-        por quantidade decrescente.
+        str: JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "percentage": float},
+        ...]}, `data` ordenado por quantidade decrescente. `meta.applied_filters` mostra o que de
+        fato foi usado; `meta.source_last_sync` indica há quanto tempo o snapshot é real.
     """
     payload = {"group_by": params.group_by, "regionals": params.regionals, "online_statuses": params.online_statuses}
     return _call("infra/login-aggregate", payload)
@@ -662,8 +725,9 @@ def opr_login_outages(params: LoginOutagesInput) -> str:
         params (LoginOutagesInput): since/until (ISO8601), regionals (opcional), limit (até 1000).
 
     Returns:
-        str: JSON com lista [{"login_id", "login", "regional", "latitude", "longitude",
-        "status_changed_at", "last_disconnected_at"}, ...], mais recente primeiro.
+        str: JSON {"meta": {...}, "data": [{"login_id", "login", "regional", "latitude",
+        "longitude", "status_changed_at", "last_disconnected_at"}, ...]}, `data` mais recente
+        primeiro. `meta.warnings` avisa se o resultado foi truncado pelo teto do endpoint.
     """
     payload = {"since": params.since, "until": params.until, "regionals": params.regionals, "limit": params.limit}
     return _call("infra/login-outages", payload)
@@ -695,8 +759,8 @@ def opr_login_timeseries(params: LoginTimeseriesInput) -> str:
         params (LoginTimeseriesInput): since/until (ISO8601).
 
     Returns:
-        str: JSON com lista [{"captured_at", "connected", "disconnected", "new_drops",
-        "new_reconnects"}, ...], em ordem cronológica.
+        str: JSON {"meta": {...}, "data": [{"captured_at", "connected", "disconnected",
+        "new_drops", "new_reconnects"}, ...]}, `data` em ordem cronológica.
     """
     payload = {"since": params.since, "until": params.until}
     return _call("infra/login-timeseries", payload)
@@ -734,8 +798,8 @@ def opr_offline_login_clusters(params: OfflineLoginClustersInput) -> str:
     Returns:
         str: JSON {"radius_meters", "min_cluster_size", "window_minutes", "clusters": [{
         "center_latitude", "center_longitude", "radius_meters", "size", "logins": [{"login_id",
-        "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...]}, ordenado
-        do maior cluster pro menor.
+        "login", "online", "latitude", "longitude", "last_disconnected_at"}, ...]}, ...],
+        "meta": {...}}, `clusters` ordenado do maior pro menor.
     """
     payload = {
         "radius_meters": params.radius_meters,
@@ -779,7 +843,7 @@ def opr_login_incident_analysis(params: LoginIncidentAnalysisInput) -> str:
         str: JSON {"window_minutes", "since", "new_drops", "still_offline", "reconnects",
         "by_regional", "by_transmitter", "by_pon", "by_drop_cause": [{"label", "quantity",
         "percentage"}, ...], "geo_clusters": [{"center_latitude", "center_longitude",
-        "radius_meters", "size", "logins": [...]}, ...]}.
+        "radius_meters", "size", "logins": [...]}, ...], "meta": {...}}.
     """
     payload = {
         "window_minutes": params.window_minutes,
@@ -820,9 +884,9 @@ def opr_coordinate_quality_audit(params: CoordinateQualityInput) -> str:
             300), duplicate_threshold (default 20).
 
     Returns:
-        str: JSON com lista por regional: [{"entity", "regional", "total", "validated", "missing",
+        str: JSON {"meta": {...}, "data": [{"entity", "regional", "total", "validated", "missing",
         "invalid_range", "zero_zero", "outside_region", "suspicious_duplicates",
-        "valid_coverage_pct"}, ...].
+        "valid_coverage_pct"}, ...]}, um item de `data` por regional.
     """
     payload = {
         "entity": params.entity,
@@ -856,13 +920,16 @@ def opr_backlog_aging(params: BacklogAgingInput) -> str:
 
     Args:
         params (BacklogAgingInput): date_to (AAAA-MM-DD), group_by (uma dimensão, default
-            "regional", ver GROUP_BY_DOC), filters (ver FILTERS_DOC).
+            "regional", ver GROUP_BY_DOC), filters (ver FILTERS_DOC). Piloto do FilterContractV1
+            (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro de
+            assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com lista [{"label": str, "quantity": int, "avg_age_days": float,
+        str: JSON {"meta": {...}, "data": [{"label": str, "quantity": int, "avg_age_days": float,
         "median_age_days": float, "oldest_order_code": str, "oldest_age_days": float,
-        "over_1d": int, "over_3d": int, "over_5d": int, "over_7d": int, "over_15d": int}, ...],
-        ordenado por quantidade decrescente.
+        "over_1d": int, "over_3d": int, "over_5d": int, "over_7d": int, "over_15d": int}, ...]},
+        `data` ordenado por quantidade decrescente.
 
     Exemplos de uso:
         - "Qual bairro tem o backlog mais velho?" -> group_by="neighborhood", ordenar por avg_age_days
@@ -988,13 +1055,18 @@ def opr_warranty_analytics(params: WarrantyAnalyticsInput) -> str:
     Args:
         params (WarrantyAnalyticsInput): date_from, date_to, period_basis (opened/closed, default
             opened), denominator (closed_origins/active_origins/maintenance_total/activation_closed,
-            default active_origins), origin_excluded_diagnoses (opcional), filters (ver FILTERS_DOC).
+            default active_origins), origin_excluded_diagnoses (opcional), filters (ver
+            FILTERS_DOC). Piloto do FilterContractV1 (docs/proposta-filter-contract-v1.md):
+            `os_subjects` é o nome canônico do filtro de assunto da O.S. no lado
+            retorno/manutenção - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`. Os demais filtros de texto
+            livre/geografia/datas específicas ainda não têm efeito nesta ferramenta.
 
     Returns:
         str: JSON com numerator, denominator_count, percentage, contracts_with_warranty,
         customers_with_warranty, breakdown por diversas dimensões (by_regional, by_diagnosis,
-        by_subject, by_origin_type), items (lista plana de cada garantia encontrada) e
-        items_truncated (bool, se a lista de items foi cortada por volume).
+        by_subject, by_origin_type), items (lista plana de cada garantia encontrada),
+        items_truncated (bool, se a lista de items foi cortada por volume) e meta.
     """
     payload = {
         "date_from": params.date_from,
@@ -1062,11 +1134,15 @@ def opr_team_target_performance(params: TeamTargetPerformanceInput) -> str:
 
     Args:
         params (TeamTargetPerformanceInput): date_from, date_to, granularity (day/week/month,
-            default day), filters (ver FILTERS_DOC).
+            default day), filters (ver FILTERS_DOC). Piloto do FilterContractV1
+            (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro de
+            assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa a
+            gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
-        str: JSON com lista [{"period_start": "AAAA-MM-DD", "team_model": str, "actual": int,
-        "target": int|null, "delta": int|null, "percentage_of_target": float|null}, ...].
+        str: JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "team_model": str,
+        "actual": int, "target": int|null, "delta": int|null,
+        "percentage_of_target": float|null}, ...]}.
     """
     payload = {
         "date_from": params.date_from,

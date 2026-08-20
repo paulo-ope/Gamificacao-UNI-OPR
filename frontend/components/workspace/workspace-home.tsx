@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, BriefcaseBusiness, CalendarClock, LogOut, ShieldCheck, Trophy } from "lucide-react";
+import { BarChart3, BriefcaseBusiness, CalendarClock, Headphones, LogOut, Radar, ShieldCheck, Trophy } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { NotificationBell } from "@/components/workspace/notification-bell";
@@ -13,7 +13,7 @@ import { workspaceModules } from "@/lib/module-registry";
 import type { WorkspaceVisibleModule } from "@/lib/types";
 
 
-const icons = { gamification: Trophy, operations: BarChart3, scheduling: CalendarClock, management: BriefcaseBusiness, admin: ShieldCheck };
+const icons = { gamification: Trophy, operations: BarChart3, scheduling: CalendarClock, support: Headphones, management: BriefcaseBusiness, admin: ShieldCheck, intelligence: Radar };
 
 export function WorkspaceHome() {
   const { user, checking, error, login, logout } = useWorkspaceAuth();
