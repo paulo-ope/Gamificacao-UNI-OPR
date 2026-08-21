@@ -12,6 +12,7 @@ DESSE usuário (mesma regra de sempre - `effective_managed_regionals`), não um 
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -81,6 +82,9 @@ regional, city, neighborhood, os_type, subject, diagnosis, department, sector, p
 responsible, status, sla_status, team_model, scheduled_after_sla, sla_expired_before_schedule,
 geo_cluster (agrupa O.S. de ponto geográfico praticamente coincidente, ~111m).
 """
+
+
+logger = logging.getLogger("mcp_connector")
 
 
 def _dump(data: Any) -> str:
@@ -177,6 +181,28 @@ def build_mcp_server() -> FastMCP:
         ),
     )
 
+    # O SDK do MCP só registra /.well-known/oauth-authorization-server (RFC 8414) - achado real de
+    # 2026-08-21: o conector do ChatGPT, depois de completar authorize/token com sucesso, tenta em
+    # seguida `/.well-known/openid-configuration` (descoberta estilo OIDC) e recebe 404, o que
+    # aparentemente deixa a sessão do lado do cliente num estado ruim (chamadas de tool subsequentes
+    # nem chegam a este servidor - confirmado via nginx access.log sem nenhuma requisição externa
+    # no horário da falha). Não somos um provedor OIDC de verdade (sem id_token/userinfo), mas
+    # expor os MESMOS metadados OAuth nesse path alternativo é inofensivo e destrava o cliente.
+    from mcp.server.auth.routes import build_metadata
+
+    oauth_metadata = build_metadata(
+        issuer_url=mcp.settings.auth.issuer_url,
+        service_documentation_url=None,
+        client_registration_options=mcp.settings.auth.client_registration_options,
+        revocation_options=mcp.settings.auth.revocation_options,
+    )
+
+    @mcp.custom_route("/.well-known/openid-configuration", methods=["GET", "OPTIONS"])
+    async def openid_configuration(request):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(oauth_metadata.model_dump(mode="json", exclude_none=True))
+
     @mcp.tool(
         name="opr_aggregate_orders",
         annotations={"title": "Agregar O.S. por dimensão", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
@@ -206,14 +232,21 @@ def build_mcp_server() -> FastMCP:
             `data`, com 2-3 dimensões), `data` ordenado por quantidade decrescente.
         """
         user = _current_user()
-        with SessionLocal() as db:
-            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.aggregate_orders", "mcp")
-            return _dump(
-                ai_queries.aggregate_orders(
-                    db, user, group_by=group_by, metric=metric,
-                    date_from=_parse_date(date_from), date_to=_parse_date(date_to), **_validated_filters(filters),
+        logger.info("opr_aggregate_orders chamada: user=%s date_from=%s date_to=%s group_by=%s metric=%s", user.email, date_from, date_to, group_by, metric)
+        try:
+            with SessionLocal() as db:
+                _enforce(enforce_ai_endpoint_for_user, db, user, "ai.aggregate_orders", "mcp")
+                result = _dump(
+                    ai_queries.aggregate_orders(
+                        db, user, group_by=group_by, metric=metric,
+                        date_from=_parse_date(date_from), date_to=_parse_date(date_to), **_validated_filters(filters),
+                    )
                 )
-            )
+            logger.info("opr_aggregate_orders OK: user=%s", user.email)
+            return result
+        except Exception:
+            logger.exception("opr_aggregate_orders falhou: user=%s date_from=%s date_to=%s group_by=%s metric=%s", user.email, date_from, date_to, group_by, metric)
+            raise
 
     @mcp.tool(
         name="opr_orders_timeseries",
@@ -251,15 +284,28 @@ def build_mcp_server() -> FastMCP:
             `sla_rate` o % delas on_time).
         """
         user = _current_user()
-        with SessionLocal() as db:
-            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.orders_timeseries", "mcp")
-            return _dump(
-                ai_queries.orders_timeseries(
-                    db, user, metric=metric, granularity=granularity,
-                    date_from=_parse_date(date_from), date_to=_parse_date(date_to),
-                    group_by=group_by, **_validated_filters(filters),
+        logger.info(
+            "opr_orders_timeseries chamada: user=%s date_from=%s date_to=%s metric=%s granularity=%s group_by=%s filters=%s",
+            user.email, date_from, date_to, metric, granularity, group_by, filters,
+        )
+        try:
+            with SessionLocal() as db:
+                _enforce(enforce_ai_endpoint_for_user, db, user, "ai.orders_timeseries", "mcp")
+                result = _dump(
+                    ai_queries.orders_timeseries(
+                        db, user, metric=metric, granularity=granularity,
+                        date_from=_parse_date(date_from), date_to=_parse_date(date_to),
+                        group_by=group_by, **_validated_filters(filters),
+                    )
                 )
+            logger.info("opr_orders_timeseries OK: user=%s", user.email)
+            return result
+        except Exception:
+            logger.exception(
+                "opr_orders_timeseries falhou: user=%s date_from=%s date_to=%s metric=%s granularity=%s group_by=%s filters=%s",
+                user.email, date_from, date_to, metric, granularity, group_by, filters,
             )
+            raise
 
     @mcp.tool(
         name="opr_search_orders",
