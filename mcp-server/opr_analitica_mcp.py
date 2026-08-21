@@ -206,7 +206,7 @@ def opr_aggregate_orders(params: AggregateOrdersInput) -> str:
 
 
 class OrdersTimeseriesInput(DateRangeFilters):
-    metric: str = Field(..., description="abertas, fechadas ou saldo (abertas - fechadas).")
+    metric: str = Field(..., description="abertas, fechadas, saldo (abertas - fechadas) ou taxa_sla (% on_time das fechadas em cada bucket).")
     granularity: str = Field(default="day", description="day, week ou month.")
     group_by: str | None = Field(
         default=None, description="Dimensão opcional para quebrar cada ponto da série. " + GROUP_BY_DOC
@@ -224,24 +224,28 @@ class OrdersTimeseriesInput(DateRangeFilters):
     },
 )
 def opr_orders_timeseries(params: OrdersTimeseriesInput) -> str:
-    """Série temporal (dia/semana/mês) de O.S. abertas, fechadas, ou o saldo entre as duas -
-    para ver tendência ao longo do tempo, opcionalmente quebrada por uma dimensão.
+    """Série temporal (dia/semana/mês) de O.S. abertas, fechadas, saldo entre as duas, ou taxa de
+    SLA - para ver tendência ao longo do tempo, opcionalmente quebrada por uma dimensão. Valor de
+    metric desconhecido é rejeitado com erro explícito.
 
     Args:
-        params (OrdersTimeseriesInput): date_from, date_to, metric (abertas/fechadas/saldo),
-            granularity (day/week/month, default day), group_by (opcional, ver GROUP_BY_DOC),
-            filters (ver FILTERS_DOC). Piloto do FilterContractV1
+        params (OrdersTimeseriesInput): date_from, date_to, metric (abertas/fechadas/saldo/
+            taxa_sla), granularity (day/week/month, default day), group_by (opcional, ver
+            GROUP_BY_DOC), filters (ver FILTERS_DOC). Piloto do FilterContractV1
             (docs/proposta-filter-contract-v1.md): `os_subjects` é o nome canônico do filtro de
             assunto da O.S. - `subjects` continua funcionando (alias depreciado), só passa a
             gerar um aviso DEPRECATED_FILTER_ALIAS em `meta.warnings`.
 
     Returns:
         str: JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "quantity": int,
-        "group": str|null}, ...]}. "group" só aparece quando group_by foi informado.
+        "group": str|null, "sla_rate": float|null}, ...]}. "group" só aparece quando group_by foi
+        informado; "sla_rate" só vem preenchido com metric="taxa_sla" (quantity nesse caso é o
+        total de O.S. fechadas no bucket, sla_rate o % delas on_time).
 
     Exemplos de uso:
         - "Evolução diária de O.S. abertas em agosto" -> metric="abertas", granularity="day"
         - "O backlog está crescendo ou diminuindo por semana?" -> metric="saldo", granularity="week"
+        - "Como o SLA evoluiu mês a mês este ano?" -> metric="taxa_sla", granularity="month"
         - "Produção fechada por modelo de equipe, mês a mês" -> metric="fechadas",
           granularity="month", group_by="team_model"
     """

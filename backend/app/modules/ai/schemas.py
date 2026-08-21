@@ -172,6 +172,10 @@ class AiTimeseriesPoint(BaseModel):
     period_start: date
     quantity: int
     group: str | None = None
+    # Só preenchido quando metric="taxa_sla" (achado real da auditoria de 2026-08-21: essa
+    # métrica não existia aqui, pedido silenciosamente devolvia data: [] sem erro nenhum) -
+    # quantity nesse caso é o total de O.S. fechadas no bucket, sla_rate é o % dessas on_time.
+    sla_rate: float | None = None
 
 
 class AiTimeseriesResponse(BaseModel):

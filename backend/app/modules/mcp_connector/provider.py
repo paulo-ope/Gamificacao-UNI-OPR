@@ -48,7 +48,12 @@ from .models import (
 # aprova o consentimento está dando acesso de LEITURA à Operação Analítica, ponto.
 SCOPE = "ai:query"
 
-ACCESS_TOKEN_TTL = timedelta(hours=1)
+# 6h (era 1h) - achado real do usuário em 2026-08-21: sessões de análise mais longas (várias
+# chamadas de tool intercaladas com o pensamento da IA) esbarravam no token vencendo no meio,
+# forçando reconexão manual - o escopo é só leitura (ai:query), então o risco extra de janela
+# maior é baixo. `refresh_token` (30 dias) continua existindo pra sessões ainda mais longas -
+# isto só reduz a frequência de reconexão pro caso comum.
+ACCESS_TOKEN_TTL = timedelta(hours=6)
 REFRESH_TOKEN_TTL = timedelta(days=30)
 AUTHORIZATION_CODE_TTL = timedelta(minutes=5)
 PENDING_AUTHORIZATION_TTL = timedelta(minutes=15)
