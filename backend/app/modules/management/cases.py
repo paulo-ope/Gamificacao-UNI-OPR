@@ -30,6 +30,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import AppSetting, User
+from app.services import shift_schedule
 from app.modules.management.models import (
     MANAGEMENT_CASE_STATUSES,
     OPEN_CASE_STATUSES,
@@ -511,18 +512,18 @@ def is_scheduled_workday(member: ManagementOperationalMember, day: date) -> bool
     """`False` quando `day` cai na folga da escala alternada (12x36 etc.) desse colaborador - ver
     `MEMBER_SHIFT_PATTERNS`. Sem escala configurada (`shift_pattern` nulo/"standard", ou dados
     incompletos), sempre `True` - mesmo comportamento de antes desta função existir, pra não
-    quebrar quem já funcionava certo com a régua padrão de segunda a sexta."""
-    if member.shift_pattern != "alternating":
-        return True
-    if not member.shift_anchor_date or not member.shift_cycle_days_on or not member.shift_cycle_days_off:
-        return True
-    cycle_length = member.shift_cycle_days_on + member.shift_cycle_days_off
-    if cycle_length <= 0:
-        return True
-    # `%` do Python sempre devolve resultado no sinal do divisor (positivo aqui), então funciona
-    # tanto pra `day` depois quanto antes de `shift_anchor_date`.
-    offset = (day - member.shift_anchor_date).days % cycle_length
-    return offset < member.shift_cycle_days_on
+    quebrar quem já funcionava certo com a régua padrão de segunda a sexta.
+
+    Delega pra `app.services.shift_schedule` (lógica pura, sem banco) - o calendário mensal de
+    `operations` usa a mesma função pra pintar o dia de folga como neutro, em vez de "abaixo da
+    meta"; um só lugar calcula "é dia de folga", os dois módulos só entram com os campos."""
+    return shift_schedule.is_scheduled_workday(
+        member.shift_pattern,
+        member.shift_cycle_days_on,
+        member.shift_cycle_days_off,
+        member.shift_anchor_date,
+        day,
+    )
 
 
 # Janela de dias corridos usada pra sugerir a escala 12x36 a partir da produção real. Só a ponta
