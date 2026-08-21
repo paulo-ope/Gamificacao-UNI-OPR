@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -145,7 +145,11 @@ class DateRangeFilters(BaseModel):
 
 class AggregateOrdersInput(DateRangeFilters):
     group_by: str | list[str] = Field(..., description="Dimensão (ou lista de até 3). " + GROUP_BY_DOC)
-    metric: str = Field(
+    metric: Literal[
+        "quantidade_aberta", "quantidade_fechada", "taxa_sla", "horas_medias",
+        "quantidade_atrasada", "quantidade_backlog", "horas_abertura_agenda",
+        "horas_agenda_execucao", "horas_execucao_fechamento", "horas_abertura_fechamento",
+    ] = Field(
         ...,
         description=(
             "Métrica a calcular por grupo: quantidade_aberta, quantidade_fechada, taxa_sla, "
@@ -206,8 +210,8 @@ def opr_aggregate_orders(params: AggregateOrdersInput) -> str:
 
 
 class OrdersTimeseriesInput(DateRangeFilters):
-    metric: str = Field(..., description="abertas, fechadas, saldo (abertas - fechadas) ou taxa_sla (% on_time das fechadas em cada bucket).")
-    granularity: str = Field(default="day", description="day, week ou month.")
+    metric: Literal["abertas", "fechadas", "saldo", "taxa_sla"] = Field(..., description="abertas, fechadas, saldo (abertas - fechadas) ou taxa_sla (% on_time das fechadas em cada bucket).")
+    granularity: Literal["day", "week", "month"] = Field(default="day", description="day, week ou month.")
     group_by: str | None = Field(
         default=None, description="Dimensão opcional para quebrar cada ponto da série. " + GROUP_BY_DOC
     )

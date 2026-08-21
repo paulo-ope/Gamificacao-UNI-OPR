@@ -182,6 +182,27 @@ def update_member(
         raise HTTPException(status_code=404, detail="Colaborador operacional não encontrado.")
     before = snapshot(member)
     updates = payload.model_dump(exclude_unset=True)
+
+    # Escala alternada (12x36) só pode ser ligada em quem é desse modelo de equipe - valida contra
+    # o estado EFETIVO pós-update (o PATCH é parcial: team_model_id pode não vir no payload,
+    # sobrando o valor já salvo; ou vir junto com shift_pattern na mesma chamada).
+    effective_shift_pattern = updates.get("shift_pattern", member.shift_pattern)
+    effective_team_model_id = updates.get("team_model_id", member.team_model_id)
+    effective_team_model = (
+        db.get(OperationTeamModel, effective_team_model_id) if effective_team_model_id is not None else None
+    )
+    try:
+        management_services.validate_shift_pattern_for_team_model(effective_shift_pattern, effective_team_model)
+    except management_services.ShiftPatternNotEligibleError:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Escala alternada (dia sim, dia não) só pode ser ligada em colaboradores do "
+                "modelo de equipe 12x36. Troque o modelo de equipe junto nesta mesma chamada, ou "
+                "deixe shift_pattern como \"standard\"."
+            ),
+        )
+
     for field, value in updates.items():
         setattr(member, field, value)
     if "status" in updates and updates["status"] in {"validated_operation", "active_management"}:

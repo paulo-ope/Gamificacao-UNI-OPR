@@ -27,6 +27,7 @@ from app.core.config import get_settings
 from app.core.security import permissions_for_user
 from app.db.session import SessionLocal
 from app.modules.ai import queries as ai_queries
+from app.modules.ai.queries import AggregationMetric, Granularity, TimeseriesMetric
 from app.modules.ai.router import (
     resolve_ai_order_details_output_fields,
     resolve_ai_search_output_fields,
@@ -181,7 +182,7 @@ def build_mcp_server() -> FastMCP:
         annotations={"title": "Agregar O.S. por dimensão", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     )
     def opr_aggregate_orders(
-        date_from: str, date_to: str, group_by: str | list[str], metric: str, filters: dict[str, Any] | None = None
+        date_from: str, date_to: str, group_by: str | list[str], metric: AggregationMetric, filters: dict[str, Any] | None = None
     ) -> str:
         """Agrupa Ordens de Serviço por uma dimensão (ou até 3 combinadas) e calcula uma métrica
         por grupo - "concentração de X por Y" (backlog por bairro, O.S. por assunto, taxa de SLA
@@ -206,6 +207,7 @@ def build_mcp_server() -> FastMCP:
         """
         user = _current_user()
         with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.aggregate_orders", "mcp")
             return _dump(
                 ai_queries.aggregate_orders(
                     db, user, group_by=group_by, metric=metric,
@@ -220,8 +222,8 @@ def build_mcp_server() -> FastMCP:
     def opr_orders_timeseries(
         date_from: str,
         date_to: str,
-        metric: str,
-        granularity: str = "day",
+        metric: TimeseriesMetric,
+        granularity: Granularity = "day",
         group_by: str | None = None,
         filters: dict[str, Any] | None = None,
     ) -> str:
@@ -250,6 +252,7 @@ def build_mcp_server() -> FastMCP:
         """
         user = _current_user()
         with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.orders_timeseries", "mcp")
             return _dump(
                 ai_queries.orders_timeseries(
                     db, user, metric=metric, granularity=granularity,
