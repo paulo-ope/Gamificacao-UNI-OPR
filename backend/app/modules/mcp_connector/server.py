@@ -225,12 +225,15 @@ def build_mcp_server() -> FastMCP:
         group_by: str | None = None,
         filters: dict[str, Any] | None = None,
     ) -> str:
-        """Série temporal (dia/semana/mês) de O.S. abertas, fechadas, ou o saldo entre as duas,
-        opcionalmente quebrada por uma dimensão.
+        """Série temporal (dia/semana/mês) de O.S. abertas, fechadas, saldo entre as duas, ou taxa
+        de SLA, opcionalmente quebrada por uma dimensão. Valor de `metric` desconhecido é
+        rejeitado com erro explícito (achado real da auditoria de 2026-08-21: "taxa_sla" antes
+        não existia aqui e devolvia data: [] em silêncio, sem aviso).
 
         Args:
             date_from, date_to: AAAA-MM-DD.
-            metric: abertas, fechadas ou saldo.
+            metric: abertas, fechadas, saldo ou taxa_sla (SLA das fechadas em cada bucket - use
+                esta pra ver a evolução do SLA dia a dia/semana a semana/mês a mês).
             granularity: day, week ou month.
             group_by: dimensão opcional. """ + GROUP_BY_DOC + """
             filters: """ + FILTERS_DOC + """
@@ -241,7 +244,9 @@ def build_mcp_server() -> FastMCP:
 
         Returns:
             JSON {"meta": {...}, "data": [{"period_start": "AAAA-MM-DD", "quantity": int,
-            "group": str|null}, ...]}.
+            "group": str|null, "sla_rate": float|null}, ...]}. `sla_rate` só vem preenchido com
+            metric="taxa_sla" (nesse caso, `quantity` é o total de O.S. fechadas no bucket, e
+            `sla_rate` o % delas on_time).
         """
         user = _current_user()
         with SessionLocal() as db:

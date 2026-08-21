@@ -195,7 +195,7 @@ def _sla_stage_filter_conditions(db: Session, filters: dict) -> list:
     return conditions
 
 
-TimeseriesMetric = Literal["abertas", "fechadas", "saldo"]
+TimeseriesMetric = Literal["abertas", "fechadas", "saldo", "taxa_sla"]
 Granularity = Literal["day", "week", "month"]
 
 AI_SEARCH_MAX_PAGE_SIZE = 200
@@ -700,7 +700,20 @@ def orders_timeseries(
     `os_subjects` já era aceito pelo schema (`AiOrderFilters`), mas esta função não o
     reconhecia e o descartava em silêncio, devolvendo a base sem filtro nenhum com HTTP 200
     (nenhum erro, nenhum `ignored_filters` - só o número errado). `subjects` continua
-    funcionando sem prazo de remoção, agora com aviso em vez de ambiguidade."""
+    funcionando sem prazo de remoção, agora com aviso em vez de ambiguidade.
+
+    metric="taxa_sla" (achado real da auditoria de 2026-08-21: pedido de serie de SLA aqui
+    devolvia data: [] em silencio, sem erro - metric nunca era validado) devolve, por bucket,
+    quantity = O.S. fechadas no bucket e sla_rate = % dessas fechadas com sla_status="on_time" -
+    mesmo calculo de aggregate_orders(metric="taxa_sla"), so que ao longo do tempo em vez de por
+    dimensao."""
+    if metric not in get_args(TimeseriesMetric):
+        # Mesma classe de bug ja corrigida em aggregate_orders/_group_label - metric desconhecido
+        # nao pode cair em silencio num branch qualquer (aqui, em NENHUM branch, devolvendo lista
+        # vazia sem aviso).
+        raise ValueError(
+            f"metric inválido: '{metric}'. Métricas aceitas: {', '.join(get_args(TimeseriesMetric))}."
+        )
     filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     start, end = local_period_utc_bounds(date_from, date_to)
     opened_day = operations_queries._local_date(db, OperationOrder.opened_at)
@@ -719,6 +732,58 @@ def orders_timeseries(
             key = (row[0], str(row[1])) if label is not None else (row[0], None)
             result[key] = result.get(key, 0) + int(row[-1])
         return result
+
+    if metric == "taxa_sla":
+        # Forma diferente das outras métricas (abertas/fechadas/saldo, 1 inteiro por bucket): SLA
+        # precisa de dois agregados por bucket (fechadas e on_time) ANTES de virar percentual -
+        # calcular a % linha a linha e depois somar daria média das médias, não a taxa real do
+        # bucket. Por isso retorna direto aqui, em vez de passar pelo `buckets`/`results` genérico
+        # abaixo (que assume 1 quantidade só por bucket).
+        conditions = _dimension_conditions_with_text(db, user, filters)
+        columns = (closed_day, label) if label is not None else (closed_day,)
+        rows = db.execute(
+            select(
+                *columns,
+                func.count(OperationOrder.id),
+                func.sum(case((OperationOrder.sla_status == "on_time", 1), else_=0)),
+            )
+            .where(*conditions, OperationOrder.closed_at.between(start, end))
+            .group_by(*columns)
+        ).all()
+        bucket_totals: dict[tuple[date, str | None], int] = defaultdict(int)
+        bucket_on_time: dict[tuple[date, str | None], int] = defaultdict(int)
+        for row in rows:
+            group = str(row[1]) if label is not None else None
+            # SQLite (testes) devolve `func.date(...)` como texto, não como `date` - Postgres
+            # (produção) já devolve `date` de verdade via `cast(..., Date)`. `_period_group_start`
+            # faz aritmética (`day - timedelta`, `day.replace`) que quebra num texto.
+            row_day = row[0] if isinstance(row[0], date) else date.fromisoformat(str(row[0])[:10])
+            bucket = (operations_queries._period_group_start(row_day, granularity), group)
+            bucket_totals[bucket] += int(row[-2] or 0)
+            bucket_on_time[bucket] += int(row[-1] or 0)
+
+        sla_results = []
+        for bucket in sorted(bucket_totals, key=lambda b: (b[0], b[1] or "")):
+            period_start, group = bucket
+            total = bucket_totals[bucket]
+            item = {"period_start": period_start, "quantity": total, "sla_rate": _percentage(bucket_on_time[bucket], total)}
+            if label is not None:
+                item["group"] = group
+            sla_results.append(item)
+
+        applied_filters, composite_warnings = _composite_filter_report(filters)
+        applied_filters.update({
+            "metric": metric, "granularity": granularity,
+            "date_from": date_from, "date_to": date_to, "group_by": group_by,
+        })
+        applied_filters.pop("subjects", None)
+        if effective_os_subjects:
+            applied_filters["os_subjects"] = effective_os_subjects
+        warnings = ([alias_warning] if alias_warning else []) + composite_warnings
+        return {
+            "meta": build_meta(applied_filters=applied_filters, warnings=warnings),
+            "data": sla_results,
+        }
 
     opened_counts: dict[tuple[date, str | None], int] = {}
     closed_counts: dict[tuple[date, str | None], int] = {}
