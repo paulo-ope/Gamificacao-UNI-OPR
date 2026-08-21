@@ -94,6 +94,11 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     # continuação direta de capacidade já habilitada hoje, não uma exposição nova e desconhecida.
     ("operations.network.onu_signal_history", "Histórico de sinal óptico/ONU (GET /operations/network/onu-signal/history, opr_onu_signal_history)", "api", True),
     ("ai.onu_signal_history", "Histórico de sinal óptico/ONU para IA (POST /ai/infra/onu-signal-history)", "api", True),
+    # Novo (pedido do usuário em 2026-08-20) - diagnóstico agregado dos casos de Gestão Integrada
+    # (quem mais não bate meta, por regional/colaborador/motivo) exposto pra IA, pra facilitar essa
+    # análise sem precisar abrir a tela. `default_enabled=True`: é leitura agregada, mesmo dado que
+    # a tela de Gestão já mostra a quem tem `management:read`.
+    ("ai.management_cases_diagnostics", "Diagnóstico agregado de casos de gestão para IA (POST /ai/management/cases-diagnostics)", "api", True),
 ]
 
 

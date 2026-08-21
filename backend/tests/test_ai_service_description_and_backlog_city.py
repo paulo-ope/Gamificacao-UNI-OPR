@@ -158,6 +158,45 @@ def test_capture_backlog_snapshot_groups_by_city(db_session):
     assert by_city == {"Ji-Paraná": 1, "Presidente Médici": 1}
 
 
+def test_ai_aggregate_orders_quantidade_backlog_ignores_date_from_as_opening_floor(db_session, ai_user):
+    """Regressão: metric="quantidade_backlog" deve contar toda O.S. ainda aberta em `date_to`,
+    igual à semântica de `backlog_aging` (opened_at <= date_to, SEM usar date_from como piso de
+    abertura). Antes do fix, uma O.S. aberta antes de `date_from` e ainda aberta em `date_to`
+    desaparecia do resultado só por ter opened_at fora da janela [date_from, date_to]."""
+    old_opened_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    recent_opened_at = datetime(2026, 7, 20, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            OperationOrder(
+                source_order_id="BACKLOG-OLD-OPEN",
+                order_code="BACKLOG-OLD-OPEN",
+                os_type="Manutenção",
+                os_subject="Suporte Externo",
+                opened_at=old_opened_at,
+                is_closed=False,
+            ),
+            OperationOrder(
+                source_order_id="BACKLOG-RECENT-OPEN",
+                order_code="BACKLOG-RECENT-OPEN",
+                os_type="Manutenção",
+                os_subject="Suporte Externo",
+                opened_at=recent_opened_at,
+                is_closed=False,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    result = ai_queries.aggregate_orders(
+        db_session, ai_user, group_by="regional", metric="quantidade_backlog",
+        date_from=date(2026, 7, 15), date_to=date(2026, 7, 31),
+    )
+    total = sum(item["quantity"] for item in result["data"])
+    # As duas O.S. seguem abertas em date_to (31/07) - a antiga (aberta em 01/07, antes de
+    # date_from) não pode desaparecer só por causa do piso de date_from.
+    assert total == 2
+
+
 def test_ai_backlog_history_groups_by_city(db_session, ai_user):
     db_session.add_all(
         [
@@ -188,3 +227,33 @@ def test_ai_backlog_history_groups_by_city(db_session, ai_user):
     )
     by_group = {item["group"]: item["quantity"] for item in result}
     assert by_group == {"Ji-Paraná": 5, "Presidente Médici": 3}
+
+
+def test_ai_backlog_history_exposes_captured_at(db_session, ai_user):
+    """Achado real da auditoria de 2026-08-21: sem `captured_at`, não havia como saber se o
+    snapshot de "hoje" era recente ou de quase 24h atrás."""
+    captured_at = datetime(2026, 7, 10, 4, 5, 0, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            OperationBacklogSnapshot(
+                snapshot_date=date(2026, 7, 10),
+                regional="UNI - JI PARANA",
+                team_model="Não identificado",
+                sector="Suporte Externo Fibra",
+                city="Ji-Paraná",
+                backlog_count=5,
+                backlog_atrasado_count=1,
+                created_at=captured_at,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    result = ai_queries.backlog_history(
+        db_session, ai_user, metric="backlog", date_from=date(2026, 7, 1), date_to=date(2026, 7, 31),
+    )
+    # SQLite (usado nos testes) desserializa datetime sem tzinfo mesmo de coluna
+    # DateTime(timezone=True) - mesmo achado já documentado em operations/queries._as_utc.
+    # Postgres (produção) devolve tz-aware normalmente; comparamos sem tzinfo aqui de propósito.
+    returned = result[0]["captured_at"]
+    assert returned.replace(tzinfo=None) == captured_at.replace(tzinfo=None)

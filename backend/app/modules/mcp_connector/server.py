@@ -39,7 +39,13 @@ from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
 from app.modules.operations.login_search import get_login_detail, search_logins
-from app.modules.operations.onu_signal_snapshot import query_onu_signal_history, query_onu_signal_status
+from app.modules.management import cases as management_cases_engine
+from app.modules.management.models import OPEN_CASE_STATUSES as MANAGEMENT_OPEN_CASE_STATUSES
+from app.modules.operations.onu_signal_snapshot import (
+    query_onu_signal_coverage,
+    query_onu_signal_history,
+    query_onu_signal_status,
+)
 from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
 from app.modules.operations.schemas import OperationOrderDetailOut
 
@@ -293,10 +299,12 @@ def build_mcp_server() -> FastMCP:
         Returns:
             JSON {"items": [...], "total_encontrado": int, "page": int, "page_size": int,
             "has_more": bool, "meta": {...}}. Cada item inclui order_code, regional, city,
-            neighborhood, sector, latitude, longitude, distance_km (só com filtro de raio),
-            service_description, technical_report, service_address, datas do ciclo de vida,
-            indicadores de etapa de SLA e a meta de equipe vigente na O.S. - recortado por
-            `fields`/`response_mode` quando informados.
+            neighborhood, sector, subject, latitude, longitude, distance_km (só com filtro de
+            raio), service_description, technical_report, service_address, datas do ciclo de
+            vida, indicadores de etapa de SLA e a meta de equipe vigente na O.S. - recortado por
+            `fields`/`response_mode` quando informados. Nota: o assunto da O.S. chama-se
+            "subject" aqui e "os_subject" em opr_order_details - mesmo dado, nome diferente por
+            desenho (histórico da API de IA vs. nome real da coluna).
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -339,7 +347,9 @@ def build_mcp_server() -> FastMCP:
         Returns:
             JSON {"items": [...], "not_found_order_codes": [...], "not_found_source_order_ids": [...]}.
             Um order_code/source_order_id que não aparece em nenhuma das duas listas de resultado
-            foi encontrado normalmente (está em algum item de "items").
+            foi encontrado normalmente (está em algum item de "items"). Nota: o assunto da O.S.
+            chama-se "os_subject" aqui (nome real da coluna) e "subject" em opr_search_orders -
+            mesmo dado, nome diferente por desenho.
         """
         if not order_codes and not source_order_ids:
             raise ValueError("Informe ao menos um order_code ou source_order_id (OS_ID).")
@@ -404,6 +414,9 @@ def build_mcp_server() -> FastMCP:
             "last_connected_at", "last_disconnected_at", "status_changed_at", "captured_at"}.
             `status_changed_at` só avança quando `online` muda de valor - é o campo certo para
             "quando começou esse estado", não `captured_at` (última vez que o sistema viu o login).
+            `last_disconnected_at` fica NULL sempre que `online` != "N" (reflete o estado atual,
+            passthrough do IXC) - NÃO é "a última vez que este login já caiu historicamente"; para
+            isso, use `opr_get_login_detail` (campo `recent_events`) ou `opr_login_outages`.
         """
         if (near_latitude is None) != (near_longitude is None) or (radius_km is not None and near_latitude is None):
             raise ValueError("Informe near_latitude, near_longitude e radius_km juntos, ou nenhum dos três.")
@@ -470,10 +483,15 @@ def build_mcp_server() -> FastMCP:
             limit: até 500 (default 200).
 
         Returns:
-            JSON com lista de {"login_id", "login", "contract_id", "signal_rx_dbm",
-            "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
-            "transmitter_name", "temperature_c", "voltage", "signal_measured_at", "pon_id",
-            "pon_no", "slot_no", "latitude", "longitude", "captured_at"}.
+            Se `login_ids` for informado: JSON {"requested_count", "found_count",
+            "not_found_login_ids" (não existem em opr_login_status), "not_monitored_login_ids"
+            (existem mas nunca entraram na fila de diagnóstico ONU - sem telemetria capturada
+            ainda), "items": [...]}. Sem `login_ids`: JSON com a lista simples de {"login_id",
+            "login", "contract_id", "signal_rx_dbm", "signal_tx_dbm", "last_drop_cause",
+            "onu_serial", "onu_model", "transmitter_id", "transmitter_name", "temperature_c",
+            "voltage", "signal_measured_at", "pon_id", "pon_no", "slot_no", "latitude",
+            "longitude", "captured_at"} (mesmo formato de antes - sem `login_ids` não há como
+            calcular cobertura, então o formato não muda).
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -484,15 +502,21 @@ def build_mcp_server() -> FastMCP:
                 _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "last_drop_cause", "filterable")
             if transmitter_ids:
                 _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "transmitter_id", "filterable")
-            return _dump(
-                query_onu_signal_status(
-                    db,
-                    login_ids=login_ids or [],
-                    last_drop_causes=last_drop_causes or [],
-                    transmitter_ids=transmitter_ids or [],
-                    limit=limit,
-                )
+            items = query_onu_signal_status(
+                db,
+                login_ids=login_ids or [],
+                last_drop_causes=last_drop_causes or [],
+                transmitter_ids=transmitter_ids or [],
+                limit=limit,
             )
+            # Achado real da auditoria de 2026-08-21: sem `login_ids`, [] é ambíguo entre "login
+            # não existe" e "login existe mas nunca entrou na fila de diagnóstico ONU" - só
+            # calculamos a cobertura quando login_ids é informado (é o único caso em que dá pra
+            # comparar "pedido" com "encontrado"; sem essa lista não há o que comparar).
+            if login_ids:
+                coverage = query_onu_signal_coverage(db, login_ids)
+                return _dump({**coverage, "items": items})
+            return _dump(items)
 
     @mcp.tool(
         name="opr_onu_signal_history",
@@ -546,6 +570,60 @@ def build_mcp_server() -> FastMCP:
                     limit=limit,
                 )
             )
+
+    @mcp.tool(
+        name="opr_management_cases_diagnostics",
+        annotations={"title": "Diagnóstico de casos de gestão", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_management_cases_diagnostics(
+        status: str | None = None,
+        severity: str | None = None,
+        regional: str | None = None,
+        case_type: str | None = None,
+        reference_year: int | None = None,
+        reference_month: int | None = None,
+        only_overdue: bool = False,
+        only_open: bool = False,
+        search: str | None = None,
+    ) -> str:
+        """Diagnóstico agregado dos casos de gestão integrada (produtividade abaixo da meta) -
+        "quem mais não bate meta, por regional/colaborador/motivo". Mesmo recorte filtrado que a
+        tela de Gestão usa; a visibilidade segue a mesma regra da tela (quem não é matriz só vê o
+        que já enxergaria lá - os próprios casos ou os das regionais que gerencia).
+
+        Args:
+            status: pending, justified, in_progress, resolved ou rejected.
+            severity: high, medium ou low.
+            regional: nome da regional (normalizado, ex.: "UNI JARU").
+            case_type: productivity_below_target ou daily_performance_below_target.
+            reference_year, reference_month: competência específica.
+            only_overdue: só casos em aberto e com prazo vencido.
+            only_open: só casos ainda não encerrados (exclui resolved/rejected).
+            search: busca livre por colaborador/regional/métrica.
+
+        Returns:
+            JSON com total_cases e três listas (by_regional, by_responsible, by_reason), cada
+            item {"key", "label", "total", "open_cases", "overdue_cases"}, ordenadas do maior
+            total pro menor (até 15 por dimensão).
+        """
+        user = _current_user()
+        with SessionLocal() as db:
+            filters = management_cases_engine.ManagementCaseFilters(
+                status=status,
+                severity=severity,
+                regional=regional,
+                case_type=case_type,
+                reference_year=reference_year,
+                reference_month=reference_month,
+                only_overdue=only_overdue,
+                search=search,
+                statuses=list(MANAGEMENT_OPEN_CASE_STATUSES) if only_open else [],
+            )
+            conditions = [
+                *management_cases_engine.case_scope_conditions(user),
+                *management_cases_engine.case_filter_conditions(filters),
+            ]
+            return _dump(management_cases_engine.case_diagnostics(db, conditions))
 
     @mcp.tool(
         name="opr_search_logins",
@@ -736,11 +814,14 @@ def build_mcp_server() -> FastMCP:
             until: fim da janela - default agora.
 
         Returns:
-            JSON {"meta": {...}, "data": [{"captured_at", "connected", "disconnected", "new_drops",
-            "new_reconnects"}, ...]}, `data` em ordem cronológica. `new_drops`/`new_reconnects`
-            contam só transições NESTA captura (comparado com a captura anterior do mesmo login) -
-            o primeiro ponto da série pode superestimar se não houver captura anterior próxima o
-            bastante (~20min) para comparar.
+            JSON {"meta": {..., "warnings": [{"code": "FIRST_POINT_MAY_BE_INFLATED", ...}] se
+            aplicável}, "data": [{"captured_at", "connected", "disconnected", "new_drops",
+            "new_reconnects", "baseline_available"}, ...]}, `data` em ordem cronológica.
+            `new_drops`/`new_reconnects` contam só transições NESTA captura (comparado com a
+            captura anterior do mesmo login) - quando `baseline_available=false` (só possível no
+            primeiro ponto), não havia captura anterior próxima o bastante (~20min) para comparar,
+            então esses dois campos nesse ponto refletem o total de desconectados/conectados
+            naquele instante, não uma transição real.
         """
         user = _current_user()
         with SessionLocal() as db:
@@ -892,8 +973,12 @@ def build_mcp_server() -> FastMCP:
         date_from: str, date_to: str, metric: str, group_by: str = "none", sector_filter: dict[str, str] | None = None
     ) -> str:
         """Série histórica diária de backlog (ou backlog atrasado), lida de um snapshot capturado
-        1x por dia - só tem dado a partir do dia em que essa captura entrou em produção. Diferente
-        das outras ferramentas, só quebra/filtra por regional, team_model, sector ou city.
+        1x por dia, sempre na primeira checagem após a virada do dia em America/Porto_Velho
+        (UTC-4) - só tem dado a partir do dia em que essa captura entrou em produção. Diferente
+        das outras ferramentas, só quebra/filtra por regional, team_model, sector ou city. Para
+        combinar múltiplos setores (ex.: os 3 setores de Suporte Externo) numa única chamada, use
+        group_by="sector" (sem sector_filter) e some as linhas de interesse - sector_filter não
+        tem operador "in".
 
         Args:
             date_from, date_to: AAAA-MM-DD.
@@ -903,7 +988,12 @@ def build_mcp_server() -> FastMCP:
                 "not_equals", "value": str}.
 
         Returns:
-            JSON com lista [{"snapshot_date": "AAAA-MM-DD", "quantity": int, "group": str|null}, ...].
+            JSON com lista [{"snapshot_date": "AAAA-MM-DD", "quantity": int, "group": str|null,
+            "captured_at": "AAAA-MM-DDTHH:MM:SSZ"}, ...]. `captured_at` (UTC) é quando a captura
+            daquele dia de fato rodou - o dado de "hoje" pode estar até ~1h desatualizado em
+            relação a uma consulta "ao vivo" (ex.: opr_backlog_aging) se comparados no mesmo
+            instante; compare `captured_at` com o horário atual antes de tratar os dois números
+            como equivalentes.
         """
         user = _current_user()
         with SessionLocal() as db:

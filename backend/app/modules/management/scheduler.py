@@ -2,15 +2,22 @@
 existentes (IXC, OPA, backlog snapshot, login status snapshot, ONU signal snapshot, UNI
 Intelligence - ver app/main.py::lifespan).
 
-Antes desta task, `generate_performance_cases` (cases.py) só rodava quando alguém entrava na tela
-de Gestão e clicava em "Gerar casos do mês" - nenhum caso nascia sem essa ação manual, mesmo com
-desvio real no mês já fechado. Este loop fecha essa lacuna: uma vez por dia, verifica se o mês
-anterior (o único sempre fechado) já teve seus casos gerados e, se não, gera - sem exigir que
-ninguém entre na tela. `generate_performance_cases` já é idempotente por competência, então rodar
-este loop mais de uma vez no mesmo dia (ex.: reinício do processo) nunca duplica caso.
+Antes desta task, tanto `generate_performance_cases` (caso mensal) quanto
+`get_or_create_daily_case` (caso de um dia especifico) só rodavam sob ação manual - o primeiro
+quando alguém clicava em "Gerar casos do mês" em Gestão, o segundo quando o supervisor clicava em
+"Justificar dia" num dia vermelho do calendário. Nenhum caso nascia sozinho, mesmo com desvio real
+já visível na tela. Este loop fecha as duas lacunas, uma vez por dia cada:
 
-O botão manual "Gerar casos do mês" continua existindo na tela - útil para reprocessar uma
-competência específica ou adiantar a geração sem esperar o próximo ciclo do loop."""
+- Mensal: verifica se o mês anterior (o único sempre fechado) já teve seus casos gerados e, se
+  não, gera (`run_monthly_auto_generate_once`).
+- Diário: verifica se ontem (o último dia sempre fechado) já teve seus casos de dia-abaixo-da-meta
+  gerados e, se não, varre todo responsável/regional e abre um caso para todo dia que o calendário
+  classificaria como vermelho (`run_daily_auto_generate_once`).
+
+As duas funções de geração já são idempotentes, então rodar este loop mais de uma vez no mesmo dia
+(ex.: reinício do processo) nunca duplica caso. Os botões manuais ("Gerar casos do mês" em Gestão,
+"Justificar dia" no calendário) continuam existindo nas telas - úteis para reprocessar uma
+competência/dia específico ou adiantar a geração sem esperar o próximo ciclo do loop."""
 
 from __future__ import annotations
 
@@ -24,7 +31,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.session import SessionLocal
 from app.services.calculation import get_setting, upsert_setting
 
-from .cases import generate_performance_cases
+from .cases import generate_daily_cases_for_date, generate_performance_cases
 
 logger = logging.getLogger("management_case_scheduler")
 if not logger.handlers:
@@ -42,6 +49,7 @@ MANAGEMENT_CASE_POLL_SECONDS = 3600.0
 MANAGEMENT_TIMEZONE = ZoneInfo("America/Porto_Velho")
 AUTO_GENERATE_ENABLED_KEY = "management_case_auto_generate_enabled"
 AUTO_GENERATE_LAST_RUN_DATE_KEY = "management_case_auto_generate_last_run_date"
+DAILY_AUTO_GENERATE_LAST_RUN_DATE_KEY = "management_case_daily_auto_generate_last_run_date"
 
 
 def auto_generate_enabled() -> bool:
@@ -76,36 +84,80 @@ def previous_closed_period(today: date) -> tuple[int, int]:
     return previous_day.year, previous_day.month
 
 
-def run_auto_generate_once() -> dict | None:
-    """Roda a geração automática se ainda não rodou hoje (horário local de Rondônia). Devolve o
+def run_monthly_auto_generate_once() -> dict | None:
+    """Roda a geração mensal se ainda não rodou hoje (horário local de Rondônia). Devolve o
     resultado de `generate_performance_cases` quando roda, `None` quando pula (desligado ou já
     rodou hoje) - usado pelos testes para verificar o comportamento sem esperar o loop."""
     if not auto_generate_enabled():
+        logger.info("Geração automática de casos: desligada (management_case_auto_generate_enabled=false).")
         return None
     today = datetime.now(MANAGEMENT_TIMEZONE).date()
 
     with SessionLocal() as db:
         last_run_raw = get_setting(db, AUTO_GENERATE_LAST_RUN_DATE_KEY, "")
         if last_run_raw == today.isoformat():
+            logger.info("Geração automática de casos (mensal): já verificado hoje (%s), nada a fazer.", today.isoformat())
             return None
         year, month = previous_closed_period(today)
         result = generate_performance_cases(db, year=year, month=month, created_by=None)
         upsert_setting(db, AUTO_GENERATE_LAST_RUN_DATE_KEY, today.isoformat())
         db.commit()
-        if result["created_cases"]:
-            logger.info(
-                "Geração automática de casos: %s caso(s) aberto(s) para %02d/%s",
-                result["created_cases"],
-                month,
-                year,
-            )
+        # Sempre loga o resultado, mesmo com 0 casos criados - silêncio total no log não deixa
+        # distinguir "loop nunca rodou" de "rodou e não achou desvio", e essa distinção é
+        # exatamente o que alguém verificando o deploy precisa ver.
+        logger.info(
+            "Geração automática de casos (mensal): %s caso(s) aberto(s) para %02d/%s (%s avaliado(s), %s já tinha(m) caso).",
+            result["created_cases"],
+            month,
+            year,
+            result["evaluated_members"],
+            result["skipped_existing"],
+        )
+        return result
+
+
+# Alias: nome usado antes desta task de adicionar o caso diário - mantido para não quebrar quem já
+# chama `run_auto_generate_once` (ex.: testes existentes).
+run_auto_generate_once = run_monthly_auto_generate_once
+
+
+def run_daily_auto_generate_once() -> dict | None:
+    """Roda a geração de casos diários (dia-abaixo-da-meta) se ainda não rodou hoje. Sempre para
+    ONTEM (horário local de Rondônia) - o único dia sempre fechado; o dia corrente ainda está em
+    andamento e um caso aberto sobre produção parcial do próprio dia seria prematuro. Devolve o
+    resultado de `generate_daily_cases_for_date`, ou `None` quando pula (desligado ou já rodou
+    hoje)."""
+    if not auto_generate_enabled():
+        return None
+    today = datetime.now(MANAGEMENT_TIMEZONE).date()
+
+    with SessionLocal() as db:
+        last_run_raw = get_setting(db, DAILY_AUTO_GENERATE_LAST_RUN_DATE_KEY, "")
+        if last_run_raw == today.isoformat():
+            logger.info("Geração automática de casos (diária): já verificado hoje (%s), nada a fazer.", today.isoformat())
+            return None
+        yesterday = today - timedelta(days=1)
+        result = generate_daily_cases_for_date(db, day=yesterday, created_by=None)
+        upsert_setting(db, DAILY_AUTO_GENERATE_LAST_RUN_DATE_KEY, today.isoformat())
+        db.commit()
+        logger.info(
+            "Geração automática de casos (diária): %s caso(s) aberto(s) para %s (%s avaliado(s), %s já tinha(m) caso).",
+            result["created_cases"],
+            result["reference_date"],
+            result["evaluated_members"],
+            result["already_open_cases"],
+        )
         return result
 
 
 async def run_management_case_scheduler_loop() -> None:
     while True:
         try:
-            await asyncio.to_thread(run_auto_generate_once)
+            await asyncio.to_thread(run_monthly_auto_generate_once)
         except Exception:  # nunca derruba o loop - mesma postura dos outros 6 loops do backend.
-            logger.exception("Falha na geração automática de casos de gestão")
+            logger.exception("Falha na geração automática de casos de gestão (mensal)")
+        try:
+            await asyncio.to_thread(run_daily_auto_generate_once)
+        except Exception:
+            logger.exception("Falha na geração automática de casos de gestão (diária)")
         await asyncio.sleep(MANAGEMENT_CASE_POLL_SECONDS)

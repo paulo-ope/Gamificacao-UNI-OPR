@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.management.models import (
     JUSTIFY_TARGET_STATUSES,
+    MEMBER_SHIFT_PATTERNS,
     OPERATIONAL_MEMBER_STATUSES,
     REVIEW_TARGET_STATUSES,
 )
@@ -21,6 +22,11 @@ class ManagementOperationalMemberOut(BaseModel):
     collaborator_structure_status: str | None = None
     collaborator_supervisor_user_id: int | None = None
     collaborator_supervisor_name: str | None = None
+    # "Regional de origem" (Collaborator.regional, já usada na Gamificação) - pedido do usuário em
+    # 2026-08-21: distinta de `regional` abaixo (onde a produção desse registro foi apurada), pra
+    # nunca perder os números de quem atende outra regional ocasionalmente, mas ainda dar pra
+    # responder "quantos colaboradores temos na Regional X" sem contar quem só passou por lá.
+    collaborator_regional: str | None = None
     gamification_status: str
     ixc_employee_id: int | None
     responsible_name: str
@@ -33,6 +39,10 @@ class ManagementOperationalMemberOut(BaseModel):
     source: str
     is_active: bool
     notes: str | None
+    shift_pattern: str | None = None
+    shift_cycle_days_on: int | None = None
+    shift_cycle_days_off: int | None = None
+    shift_anchor_date: date | None = None
     last_order_at: datetime | None
     alerts: list[str] = Field(default_factory=list)
     created_at: datetime
@@ -71,6 +81,13 @@ class ManagementMemberUpdate(BaseModel):
     team_model_id: int | None = None
     status: str | None = Field(default=None, max_length=40)
     notes: str | None = None
+    # Escala 12x36/alternada (ver MEMBER_SHIFT_PATTERNS) - "standard" ou None desliga a escala
+    # alternada; "alternating" exige os outros 3 campos pra a geração automática de caso diário
+    # saber distinguir dia de trabalho de dia de folga (ver cases.is_scheduled_workday).
+    shift_pattern: str | None = Field(default=None, max_length=20)
+    shift_cycle_days_on: int | None = Field(default=None, ge=1, le=30)
+    shift_cycle_days_off: int | None = Field(default=None, ge=1, le=30)
+    shift_anchor_date: date | None = None
 
     @field_validator("status")
     @classmethod
@@ -83,6 +100,19 @@ class ManagementMemberUpdate(BaseModel):
         if text not in OPERATIONAL_MEMBER_STATUSES:
             allowed = ", ".join(OPERATIONAL_MEMBER_STATUSES)
             raise ValueError(f"Status inválido. Use um destes: {allowed}.")
+        return text
+
+    @field_validator("shift_pattern")
+    @classmethod
+    def normalize_shift_pattern(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        text = value.strip()
+        if not text:
+            return None
+        if text not in MEMBER_SHIFT_PATTERNS:
+            allowed = ", ".join(MEMBER_SHIFT_PATTERNS)
+            raise ValueError(f"Escala inválida. Use um destes: {allowed}.")
         return text
 
 
@@ -177,6 +207,21 @@ class ManagementDailyCaseRequest(BaseModel):
     actual_value: float = Field(ge=0)
 
 
+class ManagementMonthlyCaseRequest(BaseModel):
+    """Abre (ou devolve, se já existir) o caso de justificativa mensal de UM colaborador, a partir
+    do detalhe operacional mensal do calendário da Operação Analítica. `expected_value`/
+    `actual_value` vêm calculados pelo frontend com os MESMOS números já exibidos na tela (meta
+    mensal do modelo de equipe, total de O.S. no mês) - o backend não recalcula, só reaproveita,
+    pra nunca mostrar um número na tela e gravar outro no caso."""
+
+    responsible_name: str = Field(min_length=1, max_length=180)
+    regional: str = Field(min_length=1, max_length=160)
+    reference_year: int = Field(ge=2020, le=2100)
+    reference_month: int = Field(ge=1, le=12)
+    expected_value: float | None = None
+    actual_value: float = Field(ge=0)
+
+
 class ManagementCaseJustification(BaseModel):
     reason_id: int | None = None
     justification_text: str = Field(min_length=3)
@@ -208,6 +253,44 @@ class ManagementCaseReview(BaseModel):
             allowed = ", ".join(REVIEW_TARGET_STATUSES)
             raise ValueError(f"Status inválido para revisão. Use um destes: {allowed}.")
         return value
+
+
+class ManagementCaseBulkReview(BaseModel):
+    """Mesma decisão de `ManagementCaseReview`, aplicada de uma vez a vários casos - pedido do
+    usuário em 2026-08-20: matriz não quer abrir um por um pra aprovar em lote."""
+
+    case_ids: list[int] = Field(min_length=1, max_length=200)
+    status: str
+    review_note: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        if value not in REVIEW_TARGET_STATUSES:
+            allowed = ", ".join(REVIEW_TARGET_STATUSES)
+            raise ValueError(f"Status inválido para revisão. Use um destes: {allowed}.")
+        return value
+
+
+class ManagementCaseBulkReviewResult(BaseModel):
+    updated_cases: int
+    skipped_pending: int
+    not_found: int
+
+
+class ManagementCaseDiagnosticsBucket(BaseModel):
+    key: str
+    label: str
+    total: int
+    open_cases: int
+    overdue_cases: int
+
+
+class ManagementCaseDiagnosticsOut(BaseModel):
+    total_cases: int
+    by_regional: list[ManagementCaseDiagnosticsBucket]
+    by_responsible: list[ManagementCaseDiagnosticsBucket]
+    by_reason: list[ManagementCaseDiagnosticsBucket]
 
 
 class ManagementCaseCommentOut(BaseModel):

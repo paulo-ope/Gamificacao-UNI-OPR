@@ -433,7 +433,9 @@ def opr_login_status(params: LoginStatusInput) -> str:
         "longitude", "last_connected_at", "last_disconnected_at", "status_changed_at",
         "captured_at"}. `status_changed_at` só avança quando `online` muda de valor - é o campo
         certo para "quando começou esse estado", não `captured_at` (última vez que o sistema viu o
-        login).
+        login). `last_disconnected_at` fica NULL sempre que `online` != "N" (reflete o estado
+        atual, passthrough do IXC) - NÃO é o histórico do último evento de queda; para isso, use
+        opr_get_login_detail (recent_events) ou opr_login_outages.
     """
     payload = {
         "logins": params.logins,
@@ -483,6 +485,10 @@ def opr_onu_signal(params: OnuSignalInput) -> str:
         "signal_tx_dbm", "last_drop_cause", "onu_serial", "onu_model", "transmitter_id",
         "transmitter_name", "temperature_c", "voltage", "signal_measured_at", "pon_id", "pon_no",
         "slot_no", "latitude", "longitude", "captured_at"}.
+
+    Nota (achado real da auditoria de 2026-08-21): lista vazia é ambígua entre "login_id não
+    existe" e "login_id existe mas nunca entrou na fila de diagnóstico ONU" (sem telemetria
+    capturada ainda) - "monitorado por opr_login_status" não garante telemetria disponível.
     """
     payload = {
         "login_ids": params.login_ids,
@@ -543,6 +549,59 @@ def opr_onu_signal_history(params: OnuSignalHistoryInput) -> str:
         "limit": params.limit,
     }
     return _call("infra/onu-signal-history", payload)
+
+
+class ManagementCaseDiagnosticsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str | None = Field(default=None, description="pending, justified, in_progress, resolved ou rejected.")
+    severity: str | None = Field(default=None, description="high, medium ou low.")
+    regional: str | None = Field(default=None, description="Nome da regional (normalizado, ex.: 'UNI JARU').")
+    case_type: str | None = Field(default=None, description="productivity_below_target ou daily_performance_below_target.")
+    reference_year: int | None = None
+    reference_month: int | None = Field(default=None, ge=1, le=12)
+    only_overdue: bool = False
+    only_open: bool = False
+    search: str | None = Field(default=None, description="Busca livre por colaborador/regional/métrica.")
+
+
+@mcp.tool(
+    name="opr_management_cases_diagnostics",
+    annotations={
+        "title": "Diagnóstico de casos de gestão",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_management_cases_diagnostics(params: ManagementCaseDiagnosticsInput) -> str:
+    """Diagnóstico agregado dos casos de Gestão Integrada (produtividade abaixo da meta) - "quem
+    mais não bate meta, por regional/colaborador/motivo". Visão de matriz (sem recorte por
+    supervisor): mesmo dado agregado que a tela de Gestão mostra.
+
+    Args:
+        params (ManagementCaseDiagnosticsInput): filtros opcionais - status, severity, regional,
+            case_type, reference_year/reference_month (competência), only_overdue, only_open,
+            search.
+
+    Returns:
+        str: JSON com total_cases e três listas (by_regional, by_responsible, by_reason), cada
+        item {"key", "label", "total", "open_cases", "overdue_cases"}, ordenadas do maior total
+        pro menor (até 15 por dimensão).
+    """
+    payload = {
+        "status": params.status,
+        "severity": params.severity,
+        "regional": params.regional,
+        "case_type": params.case_type,
+        "reference_year": params.reference_year,
+        "reference_month": params.reference_month,
+        "only_overdue": params.only_overdue,
+        "only_open": params.only_open,
+        "search": params.search,
+    }
+    return _call("management/cases-diagnostics", payload)
 
 
 DateTimeOpDoc = (
@@ -759,8 +818,12 @@ def opr_login_timeseries(params: LoginTimeseriesInput) -> str:
         params (LoginTimeseriesInput): since/until (ISO8601).
 
     Returns:
-        str: JSON {"meta": {...}, "data": [{"captured_at", "connected", "disconnected",
-        "new_drops", "new_reconnects"}, ...]}, `data` em ordem cronológica.
+        str: JSON {"meta": {..., "warnings": [{"code": "FIRST_POINT_MAY_BE_INFLATED", ...}] se
+        aplicável}, "data": [{"captured_at", "connected", "disconnected", "new_drops",
+        "new_reconnects", "baseline_available"}, ...]}, `data` em ordem cronológica.
+        `baseline_available=false` (só possível no primeiro ponto) significa que não havia
+        captura anterior o bastante pra comparar - new_drops/new_reconnects desse ponto refletem
+        o total de desconectados/conectados naquele instante, não uma transição real.
     """
     payload = {"since": params.since, "until": params.until}
     return _call("infra/login-timeseries", payload)
@@ -969,16 +1032,21 @@ class BacklogHistoryInput(BaseModel):
 )
 def opr_backlog_history(params: BacklogHistoryInput) -> str:
     """Série histórica diária de backlog (ou backlog atrasado), lida de um snapshot capturado 1x
-    por dia - só tem dado a partir do dia em que essa captura entrou em produção, sem
-    retroatividade. Diferente das outras ferramentas, só quebra/filtra por regional, team_model,
-    sector ou city (o snapshot já vem pré-agregado só por essas quatro dimensões).
+    por dia, sempre na primeira checagem após a virada do dia em America/Porto_Velho (UTC-4) - só
+    tem dado a partir do dia em que essa captura entrou em produção, sem retroatividade. Diferente
+    das outras ferramentas, só quebra/filtra por regional, team_model, sector ou city (o snapshot
+    já vem pré-agregado só por essas quatro dimensões). Para combinar múltiplos setores numa única
+    chamada, use group_by="sector" (sem sector_filter) e some as linhas de interesse.
 
     Args:
         params (BacklogHistoryInput): date_from, date_to, metric (backlog/backlog_atrasado),
             group_by (none/regional/team_model/sector/city, default none), sector_filter (opcional).
 
     Returns:
-        str: JSON com lista [{"snapshot_date": "AAAA-MM-DD", "quantity": int, "group": str|null}, ...].
+        str: JSON com lista [{"snapshot_date": "AAAA-MM-DD", "quantity": int, "group": str|null,
+        "captured_at": "AAAA-MM-DDTHH:MM:SSZ"}, ...]. `captured_at` (UTC) é quando a captura
+        daquele dia de fato rodou - o dado de "hoje" pode estar até ~1h desatualizado em relação a
+        uma consulta "ao vivo" (ex.: opr_backlog_aging) se comparados no mesmo instante.
 
     Exemplos de uso:
         - "O backlog atrasado por cidade está subindo esse mês?" -> metric="backlog_atrasado",

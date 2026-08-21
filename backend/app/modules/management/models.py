@@ -1,3 +1,29 @@
+"""Mapa de identidade de pessoa neste módulo (reorganização pedida pelo usuário em 2026-08-21,
+plano em generic-riding-petal.md) - existem 4 representações da "mesma pessoa" no sistema, cada
+uma com ciclo de vida e fonte de dado próprios; nenhuma foi fundida numa entidade só de propósito:
+
+  Collaborator (app/models.py)               -> cadastro oficial da Gamificação (RH, foto,
+                                                 supervisor, "regional de origem" - nunca usada em
+                                                 regra de negócio aqui, só exibição).
+  OperationIxcCollaborator (operations)       -> espelho do funcionário sincronizado do IXC
+                                                 (fonte externa, read-only pra este módulo).
+  OperationResponsibleAssignment (operations) -> cadastro manual responsável x regional x equipe,
+                                                 mantido pela tela de Operação.
+  ManagementOperationalMember (aqui)          -> visão do management: candidato + status de
+                                                 validação/supervisor/escala. Populado por
+                                                 `refresh_operational_members` (services.py) a
+                                                 partir de `resolve_responsible_regional_candidates`
+                                                 (operations/responsible_regional.py) - ESSA é a
+                                                 fonte única de "regional operacional" hoje;
+                                                 cadastro manual (OperationResponsibleAssignment)
+                                                 tem prioridade sobre histórico de O.S.
+
+Chave de casamento entre elas: nome normalizado (`_norm`/`_norm_name`, casefold + colapsa espaço),
+mais `ixc_employee_id` quando disponível - não há FK direta entre `ManagementOperationalMember` e
+`OperationResponsibleAssignment`/`OperationOrder`. Uma pessoa pode ter mais de uma linha de
+`ManagementOperationalMember` (uma por regional em que teve cadastro/atividade) - "regional
+canônica de uma pessoa pelo nome" é resolvida por `cases.py:_resolve_member_for_case`, não por
+uma FK única."""
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -48,6 +74,17 @@ REVIEW_TARGET_STATUSES = ("resolved", "rejected", "in_progress")
 # `overdue` nunca é gravado: é derivado de `due_date` na leitura (ver cases.is_overdue). Gravar
 # exigiria varredura periódica, que ficaria errada entre execuções.
 
+# Escala de trabalho do colaborador - pedido do usuário em 2026-08-20: equipes 12x36 (trabalha um
+# dia, folga no seguinte) tinham dia de folga tratado como "produção zero num dia esperado" pela
+# geração automática de caso diário (achado real: gerava caso indevido no dia de folga). "standard"
+# (default/None) é a régua atual - segunda a sexta (ou sábado/domingo com regra própria do modelo
+# de equipe), sem folga alternada. "alternating" usa `shift_cycle_days_on`/`shift_cycle_days_off` a
+# partir de `shift_anchor_date` (um dia CONHECIDO de trabalho) pra saber se um dia qualquer é de
+# trabalho ou de folga - ver `cases.is_scheduled_workday`. Fica em `ManagementOperationalMember`
+# (não em `OperationTeamModel`) porque dois colaboradores da MESMA equipe 12x36 costumam estar em
+# fases opostas do ciclo (um trabalha enquanto o outro descansa, pra cobrir os dois dias).
+MEMBER_SHIFT_PATTERNS = ("standard", "alternating")
+
 
 class ManagementOperationalMember(Base):
     __tablename__ = "management_operational_members"
@@ -70,6 +107,12 @@ class ManagementOperationalMember(Base):
     last_order_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     validated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Escala 12x36/alternada - ver MEMBER_SHIFT_PATTERNS acima. `shift_pattern` nulo/"standard"
+    # significa "sem folga alternada", os outros 3 campos ficam vazios.
+    shift_pattern: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    shift_cycle_days_on: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shift_cycle_days_off: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shift_anchor_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 

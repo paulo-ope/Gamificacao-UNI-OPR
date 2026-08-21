@@ -5,10 +5,12 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential libpq-dev \
-  && rm -rf /var/lib/apt/lists/*
-
+# Sem build-essential/libpq-dev de propósito (pedido do usuário em 2026-08-21, imagem mais leve
+# pra VM): todas as deps de requirements.txt, incluindo psycopg[binary] e as libs com extensão C
+# de uvicorn[standard] (uvloop, httptools) e cryptography, já instalam de wheel pré-compilada
+# nesta combinação de imagem/arquitetura (confirmado num build real - nenhum "Building wheel for"
+# apareceu no log). Se uma dependência futura exigir compilar do zero, o build vai falhar aqui de
+# forma clara (ModuleNotFoundError não, e sim erro do pip) - reinstale as duas nesse caso.
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

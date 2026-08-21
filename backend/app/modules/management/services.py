@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.models import Collaborator, User
 from app.modules.management.models import ManagementCase, ManagementOperationalMember
 from app.modules.management.schemas import ManagementOperationalMemberOut, ManagementSummaryOut
-from app.modules.operations.models import OperationOrder, OperationResponsibleAssignment, OperationTeamModel
+from app.modules.operations.models import OperationTeamModel
+from app.modules.operations.responsible_regional import resolve_responsible_regional_candidates
 from app.services.regional import normalize_regional
 
 
@@ -65,50 +66,9 @@ def refresh_operational_members(db: Session) -> int:
     now = datetime.now(timezone.utc)
     touched = 0
 
-    last_orders = {
-        (row.responsible_name, row.regional): row
-        for row in db.execute(
-            select(
-                OperationOrder.responsible.label("responsible_name"),
-                OperationOrder.regional.label("regional"),
-                func.max(OperationOrder.responsible_ixc_id).label("ixc_employee_id"),
-                func.max(func.coalesce(OperationOrder.closed_at, OperationOrder.opened_at)).label("last_order_at"),
-            )
-            .where(OperationOrder.responsible.is_not(None), OperationOrder.responsible != "")
-            .where(OperationOrder.regional.is_not(None), OperationOrder.regional != "")
-            .group_by(OperationOrder.responsible, OperationOrder.regional)
-        ).all()
-    }
-
-    assignments = db.scalars(select(OperationResponsibleAssignment)).all()
-    candidates: dict[tuple[str, str], dict] = {}
-    for assignment in assignments:
-        key = (assignment.responsible_name, assignment.regional)
-        order_info = last_orders.get(key)
-        candidates[key] = {
-            "responsible_name": assignment.responsible_name,
-            "regional": assignment.regional,
-            "team_model_id": assignment.team_model_id,
-            "ixc_employee_id": int(order_info.ixc_employee_id) if order_info and order_info.ixc_employee_id else None,
-            "last_order_at": order_info.last_order_at if order_info else None,
-            "source": "assignment",
-        }
-
-    for key, order_info in last_orders.items():
-        if key in candidates:
-            continue
-        candidates[key] = {
-            "responsible_name": order_info.responsible_name,
-            "regional": order_info.regional,
-            "team_model_id": None,
-            "ixc_employee_id": int(order_info.ixc_employee_id) if order_info.ixc_employee_id else None,
-            "last_order_at": order_info.last_order_at,
-            "source": "orders",
-        }
-
-    for candidate in candidates.values():
-        responsible_name = str(candidate["responsible_name"]).strip()
-        regional = normalize_regional(str(candidate["regional"]))
+    for candidate in resolve_responsible_regional_candidates(db):
+        responsible_name = candidate.responsible_name.strip()
+        regional = normalize_regional(candidate.regional)
         if not responsible_name or regional == "NAO IDENTIFICADO":
             continue
         member = db.scalar(
@@ -117,15 +77,15 @@ def refresh_operational_members(db: Session) -> int:
                 ManagementOperationalMember.regional == regional,
             )
         )
-        collaborator = _find_collaborator(db, responsible_name, candidate["ixc_employee_id"])
+        collaborator = _find_collaborator(db, responsible_name, candidate.ixc_employee_id)
         status = "pending_validation"
-        if candidate["team_model_id"] and not collaborator:
+        if candidate.team_model_id and not collaborator:
             status = "without_supervisor"
         if member:
-            if member.team_model_id is None and candidate["team_model_id"] is not None:
-                member.team_model_id = candidate["team_model_id"]
-            if member.ixc_employee_id is None and candidate["ixc_employee_id"] is not None:
-                member.ixc_employee_id = candidate["ixc_employee_id"]
+            if member.team_model_id is None and candidate.team_model_id is not None:
+                member.team_model_id = candidate.team_model_id
+            if member.ixc_employee_id is None and candidate.ixc_employee_id is not None:
+                member.ixc_employee_id = candidate.ixc_employee_id
             if member.collaborator_id is None and collaborator:
                 member.collaborator_id = collaborator.id
             if member.supervisor_user_id is None and collaborator and collaborator.supervisor_user_id is not None:
@@ -134,31 +94,54 @@ def refresh_operational_members(db: Session) -> int:
                 member.status = "outside_operation"
             elif collaborator and collaborator.structure_status == "validated" and member.status == "pending_validation":
                 member.status = "without_team_model" if member.team_model_id is None else "validated_operation"
-            if candidate["last_order_at"] and (member.last_order_at is None or candidate["last_order_at"] > member.last_order_at):
-                member.last_order_at = candidate["last_order_at"]
+            if candidate.last_order_at and (member.last_order_at is None or candidate.last_order_at > member.last_order_at):
+                member.last_order_at = candidate.last_order_at
             member.updated_at = now
         else:
             member_supervisor_id = collaborator.supervisor_user_id if collaborator and collaborator.supervisor_user_id else None
             if collaborator and collaborator.structure_status == "outside_operation":
                 status = "outside_operation"
             elif collaborator and collaborator.structure_status == "validated":
-                status = "without_team_model" if candidate["team_model_id"] is None else "validated_operation"
+                status = "without_team_model" if candidate.team_model_id is None else "validated_operation"
             db.add(
                 ManagementOperationalMember(
                     responsible_name=responsible_name,
                     regional=regional,
-                    team_model_id=candidate["team_model_id"],
+                    team_model_id=candidate.team_model_id,
                     supervisor_user_id=member_supervisor_id,
-                    ixc_employee_id=candidate["ixc_employee_id"],
+                    ixc_employee_id=candidate.ixc_employee_id,
                     collaborator_id=collaborator.id if collaborator else None,
-                    last_order_at=candidate["last_order_at"],
+                    last_order_at=candidate.last_order_at,
                     status=status,
-                    source=candidate["source"],
+                    source=candidate.source if candidate.source != "order_history" else "orders",
                 )
             )
             touched += 1
     db.flush()
     return touched
+
+
+class MemberAlreadyClaimedError(Exception):
+    """Levantado quando alguém tenta reivindicar um colaborador que já tem outro supervisor -
+    "roubar" colaborador de outro supervisor não é o objetivo desta ação (ver `claim_member`);
+    reatribuir deliberadamente continua sendo tarefa de quem tem `management:manage_structure`."""
+
+
+def claim_member(db: Session, *, member: ManagementOperationalMember, claimer: User) -> ManagementOperationalMember:
+    """Reivindica um colaborador operacional ainda SEM supervisor pra base do próprio supervisor/
+    gerente de base que chama - pedido do usuário em 2026-08-20: montar o organograma de campo
+    sem depender da matriz. Só funciona pra quem está sem supervisor (ou já é o próprio claimer);
+    já ter outro supervisor exige a ação administrativa de `management:manage_structure`, não esta."""
+    if member.supervisor_user_id is not None and member.supervisor_user_id != claimer.id:
+        raise MemberAlreadyClaimedError()
+    member.supervisor_user_id = claimer.id
+    # Mesma transição que `refresh_operational_members` já usa ao sair de "pendente" - sem
+    # supervisor era exatamente o que bloqueava a validação.
+    if member.status in {"pending_validation", "without_supervisor"}:
+        member.status = "without_team_model" if member.team_model_id is None else "validated_operation"
+    member.updated_at = datetime.now(timezone.utc)
+    db.flush()
+    return member
 
 
 def member_out(member: ManagementOperationalMember) -> ManagementOperationalMemberOut:
@@ -173,6 +156,7 @@ def member_out(member: ManagementOperationalMember) -> ManagementOperationalMemb
         collaborator_structure_status=collaborator.structure_status if collaborator else None,
         collaborator_supervisor_user_id=collaborator.supervisor_user_id if collaborator else None,
         collaborator_supervisor_name=collaborator.supervisor_user.name if collaborator and collaborator.supervisor_user else None,
+        collaborator_regional=collaborator.regional if collaborator else None,
         gamification_status=_member_status(member, collaborator),
         ixc_employee_id=member.ixc_employee_id,
         responsible_name=member.responsible_name,
@@ -185,6 +169,10 @@ def member_out(member: ManagementOperationalMember) -> ManagementOperationalMemb
         source=member.source,
         is_active=member.is_active,
         notes=member.notes,
+        shift_pattern=member.shift_pattern,
+        shift_cycle_days_on=member.shift_cycle_days_on,
+        shift_cycle_days_off=member.shift_cycle_days_off,
+        shift_anchor_date=member.shift_anchor_date,
         last_order_at=member.last_order_at,
         alerts=_member_alerts(member, collaborator),
         created_at=member.created_at,
@@ -213,6 +201,7 @@ def visible_member_filters(
     supervisor_user_id: int | None = None,
     status: str | None = None,
     search: str | None = None,
+    collaborator_regional: str | None = None,
 ):
     filters = []
     if regional:
@@ -221,6 +210,15 @@ def visible_member_filters(
         filters.append(ManagementOperationalMember.supervisor_user_id == supervisor_user_id)
     if status:
         filters.append(ManagementOperationalMember.status == status)
+    if collaborator_regional:
+        # "Regional de origem" (Collaborator.regional) - distinta da regional operacional acima
+        # (onde a produção foi apurada). Subquery em vez de join, pra não mudar a forma como o
+        # restante da consulta já é montada (ver `list_members`/`dashboard`, router.py).
+        filters.append(
+            ManagementOperationalMember.collaborator_id.in_(
+                select(Collaborator.id).where(Collaborator.regional == normalize_regional(collaborator_regional))
+            )
+        )
     if search:
         pattern = f"%{search.strip()}%"
         filters.append(

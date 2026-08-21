@@ -9,6 +9,7 @@ from app.modules.operations.onu_signal_snapshot import (
     _parse_ixc_datetime,
     _parse_ixc_float,
     _parse_ixc_text,
+    query_onu_signal_coverage,
     query_onu_signal_status,
 )
 from app.services.ixc_client import fetch_onu_signal_by_login_ids
@@ -86,6 +87,31 @@ def test_query_onu_signal_status_filters_by_drop_cause(db_session):
 
     results = query_onu_signal_status(db_session, last_drop_causes=["Power Fail"])
     assert [row["login"] for row in results] == ["login-b"]
+
+
+def test_query_onu_signal_coverage_distinguishes_not_found_from_not_monitored(db_session):
+    """Achado real da auditoria de 2026-08-21: login inexistente e login existente sem
+    telemetria capturada davam a mesma lista vazia em query_onu_signal_status - a cobertura
+    precisa diferenciar os dois casos."""
+    _make_login(db_session, 1, "com-sinal")
+    _make_signal(db_session, 1)
+    _make_login(db_session, 2, "sem-sinal-ainda")
+    db_session.commit()
+
+    coverage = query_onu_signal_coverage(db_session, [1, 2, 999999])
+    assert coverage["requested_count"] == 3
+    assert coverage["found_count"] == 1
+    assert coverage["not_found_login_ids"] == [999999]
+    assert coverage["not_monitored_login_ids"] == [2]
+
+
+def test_query_onu_signal_coverage_empty_login_ids():
+    assert query_onu_signal_coverage(db=None, login_ids=[]) == {
+        "requested_count": 0,
+        "found_count": 0,
+        "not_found_login_ids": [],
+        "not_monitored_login_ids": [],
+    }
 
 
 def test_onu_signal_endpoint_disabled_by_default(client):

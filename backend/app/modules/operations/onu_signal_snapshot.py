@@ -227,6 +227,34 @@ def query_onu_signal_status(
     ]
 
 
+def query_onu_signal_coverage(db: Session, login_ids: list[int]) -> dict:
+    """Para os `login_ids` pedidos, diferencia por que cada um pode estar ausente do resultado de
+    `query_onu_signal_status` - achado real da auditoria de 2026-08-21: um login que NÃO EXISTE em
+    `OperationLoginCurrentStatus` e um login que existe mas nunca entrou na fila de diagnóstico
+    ONU (ver `_onu_signal_watchlist_login_ids` - offline/transição recente/nunca capturado)
+    produzem exatamente a mesma lista vazia em `query_onu_signal_status`, o que é ambíguo pra quem
+    consome (pode interpretar "sem telemetria" como "sem sinal"). Usado só pela tool MCP
+    `opr_onu_signal` quando `login_ids` é informado - não altera o contrato de
+    `query_onu_signal_status`/`OperationOnuSignalOut` usado pelas rotas REST existentes."""
+    requested = set(login_ids)
+    if not requested:
+        return {"requested_count": 0, "found_count": 0, "not_found_login_ids": [], "not_monitored_login_ids": []}
+    monitored = set(
+        db.scalars(
+            select(OperationLoginCurrentStatus.login_id).where(OperationLoginCurrentStatus.login_id.in_(requested))
+        )
+    )
+    has_signal = set(
+        db.scalars(select(OperationOnuSignalCurrent.login_id).where(OperationOnuSignalCurrent.login_id.in_(requested)))
+    )
+    return {
+        "requested_count": len(requested),
+        "found_count": len(has_signal),
+        "not_found_login_ids": sorted(requested - monitored),
+        "not_monitored_login_ids": sorted(monitored - has_signal),
+    }
+
+
 # Mesmo limite defensivo de `MAX_ONU_SIGNAL_RESULTS`, mas maior - histórico cobre vários pontos
 # no tempo POR login/serial (não 1 linha cada), então o mesmo número de entidades filtradas gera
 # mais linhas de resposta.

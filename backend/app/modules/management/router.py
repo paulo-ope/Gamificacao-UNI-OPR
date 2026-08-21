@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import case as sql_case, func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -31,13 +31,17 @@ from app.modules.management.models import (
 from app.modules.management.schemas import (
     ManagementAutoGenerateSettingsOut,
     ManagementAutoGenerateSettingsUpdate,
+    ManagementCaseBulkReview,
+    ManagementCaseBulkReviewResult,
     ManagementCaseCommentCreate,
     ManagementCaseCommentOut,
     ManagementCaseCreate,
+    ManagementCaseDiagnosticsOut,
     ManagementCaseGenerateRequest,
     ManagementCaseGenerateResult,
     ManagementCaseJustification,
     ManagementDailyCaseRequest,
+    ManagementMonthlyCaseRequest,
     ManagementCaseOut,
     ManagementCasePage,
     ManagementCaseReasonCreate,
@@ -47,6 +51,7 @@ from app.modules.management.schemas import (
     ManagementCaseSummaryOut,
     ManagementDashboardOut,
     ManagementMemberUpdate,
+    ManagementOperationalMemberOut,
     ManagementOptionOut,
     ManagementOptionsOut,
     ManagementSettingsUpdate,
@@ -56,6 +61,7 @@ from app.modules.management.scheduler import (
     auto_generate_enabled,
     set_auto_generate_enabled,
 )
+from app.modules.management import services as management_services
 from app.modules.management.services import member_out, refresh_operational_members, summarize_members, visible_member_filters
 from app.modules.operations.models import OperationTeamModel
 from app.services import notifications as notifications_service
@@ -93,10 +99,11 @@ def dashboard(
     supervisor_user_id: int | None = None,
     status: str | None = None,
     search: str | None = None,
+    collaborator_regional: str | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("management:read")),
 ):
-    filters = visible_member_filters(regional, supervisor_user_id, status, search)
+    filters = visible_member_filters(regional, supervisor_user_id, status, search, collaborator_regional)
     scope = cases_engine.member_scope_conditions(user)
     members = db.scalars(
         select(ManagementOperationalMember)
@@ -132,6 +139,35 @@ def refresh_structure(
     record_audit_log(db, user, "refresh", "management_operational_members", "structure", None, {"created_candidates": created})
     db.commit()
     return {"created_candidates": created}
+
+
+@router.post("/members/{member_id}/claim", response_model=ManagementOperationalMemberOut)
+def claim_member(
+    member_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:claim_member")),
+):
+    """Supervisor/gerente de base reivindica um colaborador SEM supervisor pra própria base -
+    monta o próprio "organograma" de campo sem depender da matriz clicar em algo.
+
+    Sem restrição por `member_scope_conditions` de propósito: essa restrição usa
+    `managed_regionals`, que nem todo supervisor/gerente de base tem configurado - exigi-la aqui
+    tornaria a reivindicação impossível justamente para quem mais precisa dela. A única guarda
+    necessária é a de ownership (`MemberAlreadyClaimedError`, abaixo): reivindicar só funciona
+    enquanto ninguém mais é o supervisor - "roubar" colaborador de outro exige a ação
+    administrativa (`management:manage_structure`), não esta."""
+    member = db.get(ManagementOperationalMember, member_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="Colaborador operacional não encontrado.")
+    before = snapshot(member)
+    try:
+        management_services.claim_member(db, member=member, claimer=user)
+    except management_services.MemberAlreadyClaimedError:
+        raise HTTPException(status_code=409, detail="Este colaborador já pertence à base de outro supervisor.")
+    record_audit_log(db, user, "claim", "management_operational_members", member.id, before, snapshot(member))
+    db.commit()
+    db.refresh(member)
+    return member_out(member)
 
 
 @router.patch("/members/{member_id}", response_model=dict)
@@ -209,7 +245,10 @@ def list_cases(
         search=search,
         statuses=list(OPEN_CASE_STATUSES) if only_open else [],
     )
-    conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+    try:
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     total = db.scalar(select(func.count(ManagementCase.id)).where(*conditions)) or 0
     rows = db.scalars(
         select(ManagementCase)
@@ -234,6 +273,154 @@ def list_cases(
         page=page,
         page_size=page_size,
     )
+
+
+def _diagnostics_filters(
+    status: str | None,
+    severity: str | None,
+    regional: str | None,
+    supervisor_user_id: int | None,
+    case_type: str | None,
+    reference_year: int | None,
+    reference_month: int | None,
+    only_overdue: bool,
+    only_open: bool,
+    search: str | None,
+) -> cases_engine.ManagementCaseFilters:
+    return cases_engine.ManagementCaseFilters(
+        status=status,
+        severity=severity,
+        regional=regional,
+        supervisor_user_id=supervisor_user_id,
+        case_type=case_type,
+        reference_year=reference_year,
+        reference_month=reference_month,
+        only_overdue=only_overdue,
+        search=search,
+        statuses=list(OPEN_CASE_STATUSES) if only_open else [],
+    )
+
+
+@router.get("/cases/export")
+def export_cases(
+    status: str | None = None,
+    severity: str | None = None,
+    regional: str | None = None,
+    supervisor_user_id: int | None = None,
+    case_type: str | None = None,
+    reference_year: int | None = None,
+    reference_month: int | None = Query(default=None, ge=1, le=12),
+    only_overdue: bool = False,
+    only_open: bool = False,
+    search: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:read")),
+):
+    """Exporta em CSV o MESMO recorte filtrado hoje na tabela de casos - sem paginação (a tela
+    lista só `page_size` por vez, o export precisa de todo o recorte). Escopo de visibilidade
+    aplicado igual à listagem: quem não é matriz só exporta o que já enxergaria na tela."""
+    import csv
+    import io
+
+    filters = _diagnostics_filters(
+        status, severity, regional, supervisor_user_id, case_type, reference_year, reference_month,
+        only_overdue, only_open, search,
+    )
+    try:
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    rows = db.scalars(
+        select(ManagementCase)
+        .options(selectinload(ManagementCase.supervisor), selectinload(ManagementCase.reason))
+        .where(*conditions)
+        .order_by(ManagementCase.created_at.desc())
+    ).all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, delimiter=";")
+    writer.writerow([
+        "id", "tipo", "responsavel", "regional", "competencia", "metrica", "esperado", "realizado",
+        "desvio_pct", "severidade", "status", "em_atraso", "motivo", "justificativa", "prazo",
+        "supervisor", "criado_em", "justificado_em", "revisado_em",
+    ])
+    for item in rows:
+        writer.writerow([
+            item.id,
+            item.case_type,
+            item.responsible_name or "",
+            item.regional or "",
+            f"{item.reference_month:02d}/{item.reference_year}" if item.reference_month and item.reference_year else "",
+            item.metric_name,
+            item.expected_value if item.expected_value is not None else "",
+            item.actual_value if item.actual_value is not None else "",
+            item.deviation_value if item.deviation_value is not None else "",
+            item.severity,
+            item.status,
+            "sim" if cases_engine.is_overdue(item) else "não",
+            item.reason.name if item.reason else "",
+            (item.justification_text or "").replace("\n", " "),
+            item.due_date.isoformat() if item.due_date else "",
+            item.supervisor.name if item.supervisor else "",
+            item.created_at.isoformat(),
+            item.justified_at.isoformat() if item.justified_at else "",
+            item.reviewed_at.isoformat() if item.reviewed_at else "",
+        ])
+    csv_content = "﻿" + buffer.getvalue()  # BOM: Excel abre acentuação corretamente
+    return Response(
+        content=csv_content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=casos_gestao.csv"},
+    )
+
+
+@router.get("/cases/diagnostics", response_model=ManagementCaseDiagnosticsOut)
+def case_diagnostics(
+    status: str | None = None,
+    severity: str | None = None,
+    regional: str | None = None,
+    supervisor_user_id: int | None = None,
+    case_type: str | None = None,
+    reference_year: int | None = None,
+    reference_month: int | None = Query(default=None, ge=1, le=12),
+    only_overdue: bool = False,
+    only_open: bool = False,
+    search: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:read")),
+):
+    """Diagnóstico agregado (quem mais falha, por regional/responsável/motivo) do MESMO recorte
+    filtrado na tela - pedido do usuário em 2026-08-20 pra não precisar contar caso por caso."""
+    filters = _diagnostics_filters(
+        status, severity, regional, supervisor_user_id, case_type, reference_year, reference_month,
+        only_overdue, only_open, search,
+    )
+    try:
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ManagementCaseDiagnosticsOut(**cases_engine.case_diagnostics(db, conditions))
+
+
+@router.post("/cases/bulk-review", response_model=ManagementCaseBulkReviewResult)
+def bulk_review_cases(
+    payload: ManagementCaseBulkReview,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:review")),
+):
+    """Aprova/rejeita/devolve vários casos de uma vez - pedido do usuário em 2026-08-20 pra matriz
+    não precisar abrir caso por caso quando o motivo é o mesmo pra todos."""
+    result = cases_engine.bulk_review_cases(
+        db,
+        case_ids=payload.case_ids,
+        status=payload.status,
+        review_note=payload.review_note,
+        reviewer_id=user.id,
+        scope_conditions=cases_engine.case_scope_conditions(user),
+    )
+    record_audit_log(db, user, "bulk_review", "management_cases", "batch", None, {**result, "case_ids": payload.case_ids, "status": payload.status})
+    db.commit()
+    return ManagementCaseBulkReviewResult(**result)
 
 
 @router.get("/cases/{case_id}", response_model=ManagementCaseOut)
@@ -302,11 +489,50 @@ def open_daily_case(
     return cases_engine.case_out(item, comment_count=counts.get(item.id, 0))
 
 
+@router.post("/cases/monthly", response_model=ManagementCaseOut)
+def open_monthly_case(
+    payload: ManagementMonthlyCaseRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:write_justification")),
+):
+    """Abre (ou devolve) o caso mensal de UM colaborador a partir do "Detalhe Operacional Mensal"
+    do calendário - mesma permissão de quem justifica, mesmo racional de `open_daily_case`: o
+    supervisor abre a justificativa do próprio colaborador sem depender da matriz clicar em "Gerar
+    casos do mês"."""
+    today = date.today()
+    if (payload.reference_year, payload.reference_month) >= (today.year, today.month):
+        raise HTTPException(
+            status_code=400,
+            detail="Só é possível justificar um mês já fechado - o mês corrente ainda está em andamento.",
+        )
+    item, was_created = cases_engine.get_or_create_monthly_case(
+        db,
+        responsible_name=payload.responsible_name,
+        regional=payload.regional,
+        reference_year=payload.reference_year,
+        reference_month=payload.reference_month,
+        expected_value=payload.expected_value,
+        actual_value=payload.actual_value,
+        created_by=user.id,
+    )
+    scope = cases_engine.case_scope_conditions(user)
+    if scope:
+        in_scope = db.scalar(select(ManagementCase.id).where(ManagementCase.id == item.id, *scope))
+        if not in_scope:
+            raise HTTPException(status_code=404, detail="Caso de gestão não encontrado.")
+    if was_created:
+        record_audit_log(db, user, "open_monthly", "management_cases", item.id, None, snapshot(item))
+    db.commit()
+    db.refresh(item)
+    counts = cases_engine.comment_counts(db, [item.id])
+    return cases_engine.case_out(item, comment_count=counts.get(item.id, 0))
+
+
 @router.post("/cases/generate", response_model=ManagementCaseGenerateResult)
 def generate_cases(
     payload: ManagementCaseGenerateRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("management:review")),
+    user: User = Depends(require_permission("management:generate_cases")),
 ):
     """Varre a competência e abre casos de produtividade abaixo da meta. Idempotente: rodar de novo
     no mesmo mês não duplica caso."""
@@ -563,8 +789,10 @@ def update_auto_generate_settings(
     user: User = Depends(require_permission("management:admin")),
 ):
     """Liga/desliga a geração automática (diária) dos casos de produtividade do mês anterior
-    fechado - ver `modules/management/scheduler.py`. O botão manual "Gerar casos do mês" continua
-    disponível mesmo com o automático ligado, para reprocessar uma competência específica."""
+    fechado E dos casos de dia abaixo da meta de ontem - ver `modules/management/scheduler.py`
+    (um único toggle controla os dois). Os botões manuais ("Gerar casos do mês" em Gestão,
+    "Justificar dia" no calendário) continuam disponíveis mesmo com o automático ligado, para
+    reprocessar uma competência/dia específico."""
     set_auto_generate_enabled(payload.enabled)
     record_audit_log(db, user, "update", "management_settings", "auto_generate", None, {"enabled": payload.enabled})
     db.commit()

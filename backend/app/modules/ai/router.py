@@ -31,6 +31,9 @@ from app.modules.ai_governance.gate import (
     enforce_requested_fields,
 )
 from app.modules.ai_governance.policy import EffectivePolicy
+from app.modules.management import cases as management_cases_engine
+from app.modules.management.models import OPEN_CASE_STATUSES as MANAGEMENT_OPEN_CASE_STATUSES
+from app.modules.management.schemas import ManagementCaseDiagnosticsOut
 from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
@@ -52,6 +55,7 @@ from app.modules.ai.schemas import (
     AiLoginOutagesRequest,
     AiLoginStatusRequest,
     AiLoginTimeseriesRequest,
+    AiManagementCaseDiagnosticsRequest,
     AiSearchLoginsRequest,
     AiOfflineLoginClustersRequest,
     AiOnuSignalRequest,
@@ -583,6 +587,48 @@ def onu_signal_history_route(
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return results
+
+
+@router.post("/management/cases-diagnostics", response_model=ManagementCaseDiagnosticsOut)
+def management_cases_diagnostics_route(
+    payload: AiManagementCaseDiagnosticsRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> dict:
+    """Diagnóstico agregado dos casos de Gestão Integrada (produtividade abaixo da meta) - "quem
+    mais não bate meta, por regional/colaborador/motivo". Visão de matriz (sem recorte por
+    supervisor): mesmo dado agregado que a tela de Gestão mostra, não uma visão pessoal de um
+    supervisor específico."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "management.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.management_cases_diagnostics", "api")
+    filters = management_cases_engine.ManagementCaseFilters(
+        status=payload.status,
+        severity=payload.severity,
+        regional=payload.regional,
+        case_type=payload.case_type,
+        reference_year=payload.reference_year,
+        reference_month=payload.reference_month,
+        only_overdue=payload.only_overdue,
+        search=payload.search,
+        statuses=list(MANAGEMENT_OPEN_CASE_STATUSES) if payload.only_open else [],
+    )
+    try:
+        conditions = management_cases_engine.case_filter_conditions(filters)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = management_cases_engine.case_diagnostics(db, conditions)
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.management_cases_diagnostics",
+        user=context.user,
+        token_id=context.token_id,
+        filters=payload.model_dump(exclude_none=True),
+        result_count=result["total_cases"],
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
 
 
 @router.post("/backlog-aging", response_model=AiBacklogAgingResponse)
