@@ -55,6 +55,7 @@ from app.modules.management.schemas import (
     ManagementOptionOut,
     ManagementOptionsOut,
     ManagementSettingsUpdate,
+    ManagementShiftPatternSuggestionOut,
 )
 from app.modules.management.scheduler import (
     AUTO_GENERATE_LAST_RUN_DATE_KEY,
@@ -168,6 +169,22 @@ def claim_member(
     db.commit()
     db.refresh(member)
     return member_out(member)
+
+
+@router.get("/members/{member_id}/shift-pattern-suggestion", response_model=ManagementShiftPatternSuggestionOut)
+def get_member_shift_pattern_suggestion(
+    member_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:manage_structure")),
+):
+    """Sugestão de escala 12x36 a partir da produção real dos últimos dias - só análise, não
+    aplica nada. Ver `cases_engine.suggest_shift_pattern` pra a lógica e o porquê de nunca inferir
+    "folga" a partir de um buraco grande de produção."""
+    member = db.get(ManagementOperationalMember, member_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="Colaborador operacional não encontrado.")
+    suggestion = cases_engine.suggest_shift_pattern(db, member)
+    return ManagementShiftPatternSuggestionOut(**vars(suggestion))
 
 
 @router.patch("/members/{member_id}", response_model=dict)

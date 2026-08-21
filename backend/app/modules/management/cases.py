@@ -525,6 +525,137 @@ def is_scheduled_workday(member: ManagementOperationalMember, day: date) -> bool
     return offset < member.shift_cycle_days_on
 
 
+# Janela de dias corridos usada pra sugerir a escala 12x36 a partir da produção real. Só a ponta
+# mais recente entra na análise (não os 45 dias inteiros) porque a produção de um técnico pode
+# mudar de padrão no meio do caminho (trocou de turma, voltou de férias) - olhar só os últimos dias
+# reflete a realidade atual, que é o que o supervisor precisa confirmar.
+SHIFT_SUGGESTION_WINDOW_DAYS = 21
+# Sequência de dias seguidos sem nenhuma O.S. fechada, terminando hoje, que faz a sugestão desistir
+# de propor uma escala alternada e virar só um aviso. Numa 12x36 real o maior "buraco" possível é 1
+# dia (a folga) - uma sequência bem maior que isso é sinal de afastamento/desligamento, não de
+# escala, e sugerir "dia sim, dia não" nesse caso mascararia um caso real (achado da auditoria de
+# 2026-08-21 com Diolvane/Thalison: 17-18 dias corridos sem produção).
+SHIFT_SUGGESTION_MAX_TRAILING_GAP_DAYS = 4
+# Fração mínima de dias da janela que precisa bater com o padrão dia-sim/dia-não candidato pra a
+# sugestão ser considerada confiável o bastante pra preencher o formulário.
+SHIFT_SUGGESTION_MIN_MATCH_RATIO = 0.8
+
+
+@dataclass
+class ShiftPatternSuggestion:
+    suggested_pattern: str  # "alternating" | "inconclusive"
+    suggested_cycle_days_on: int | None
+    suggested_cycle_days_off: int | None
+    suggested_anchor_date: date | None
+    confidence: float
+    message: str
+    daily_production: list[dict]  # [{"date": date, "quantity": int}, ...] - evidência p/ o supervisor conferir
+
+
+def suggest_shift_pattern(db: Session, member: ManagementOperationalMember, *, today: date | None = None) -> ShiftPatternSuggestion:
+    """Analisa a produção real dos últimos `SHIFT_SUGGESTION_WINDOW_DAYS` dias desse colaborador e
+    propõe uma escala alternada 1x1 (dia sim, dia não) quando o padrão bate de forma consistente.
+
+    Decisão de produto (pedido do usuário em 2026-08-21, "sistema sugere, supervisor confirma"): a
+    função NUNCA grava nada - só devolve uma sugestão pra o formulário de edição vir pré-preenchido.
+    O supervisor ainda precisa clicar em salvar (que passa pela validação normal de
+    `services.validate_shift_pattern_for_team_model`). Também nunca infere "folga" a partir de uma
+    sequência longa de dias sem produção - isso é tratado como possível afastamento e devolvido como
+    aviso (`suggested_pattern="inconclusive"`), não como sugestão de escala.
+    """
+    reference = today or date.today()
+    window_start = reference - timedelta(days=SHIFT_SUGGESTION_WINDOW_DAYS - 1)
+
+    start = datetime(window_start.year, window_start.month, window_start.day, tzinfo=timezone.utc) - timedelta(days=1)
+    end = datetime(reference.year, reference.month, reference.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+
+    closed_day = _local_closed_date(db)
+    target_name = _norm(member.responsible_name)
+    rows = db.execute(
+        select(OperationOrder.responsible, closed_day, func.count(OperationOrder.id))
+        .where(
+            OperationOrder.closed_at.is_not(None),
+            OperationOrder.closed_at.between(start, end),
+            OperationOrder.responsible.is_not(None),
+            OperationOrder.responsible != "",
+        )
+        .group_by(OperationOrder.responsible, closed_day)
+    ).all()
+
+    # Normaliza em Python (não no SQL) pra usar exatamente a mesma função `_norm` já usada em
+    # `generate_performance_cases` pra casar responsável - mantém as duas rotas consistentes.
+    quantities_by_day: dict[date, int] = {}
+    for responsible, day, quantity in rows:
+        if _norm(responsible) != target_name:
+            continue
+        local_day = _as_date(day)
+        if local_day is None or local_day < window_start or local_day > reference:
+            continue
+        quantities_by_day[local_day] = quantities_by_day.get(local_day, 0) + int(quantity or 0)
+
+    daily_production = [
+        {"date": window_start + timedelta(days=offset), "quantity": quantities_by_day.get(window_start + timedelta(days=offset), 0)}
+        for offset in range(SHIFT_SUGGESTION_WINDOW_DAYS)
+    ]
+    worked = [entry["quantity"] > 0 for entry in daily_production]
+
+    trailing_gap = 0
+    for has_production in reversed(worked):
+        if has_production:
+            break
+        trailing_gap += 1
+    if trailing_gap >= SHIFT_SUGGESTION_MAX_TRAILING_GAP_DAYS:
+        return ShiftPatternSuggestion(
+            suggested_pattern="inconclusive",
+            suggested_cycle_days_on=None,
+            suggested_cycle_days_off=None,
+            suggested_anchor_date=None,
+            confidence=0.0,
+            message=(
+                f"Sem nenhuma O.S. fechada nos últimos {trailing_gap} dias corridos - isso é maior do "
+                "que uma folga normal de 12x36 e pode ser afastamento, desligamento ou troca de função. "
+                "Confirme a situação do colaborador antes de configurar a escala manualmente."
+            ),
+            daily_production=daily_production,
+        )
+
+    best_offset, best_ratio = 0, -1.0
+    for offset in (0, 1):
+        matches = sum(1 for index, has_production in enumerate(worked) if has_production == (index % 2 == offset))
+        ratio = matches / len(worked)
+        if ratio > best_ratio:
+            best_offset, best_ratio = offset, ratio
+
+    if best_ratio < SHIFT_SUGGESTION_MIN_MATCH_RATIO:
+        return ShiftPatternSuggestion(
+            suggested_pattern="inconclusive",
+            suggested_cycle_days_on=None,
+            suggested_cycle_days_off=None,
+            suggested_anchor_date=None,
+            confidence=best_ratio,
+            message=(
+                "A produção dos últimos dias não mostra um padrão de dia sim/dia não consistente. "
+                "Configure a escala manualmente conferindo o histórico abaixo."
+            ),
+            daily_production=daily_production,
+        )
+
+    anchor_date = window_start + timedelta(days=best_offset)
+    return ShiftPatternSuggestion(
+        suggested_pattern="alternating",
+        suggested_cycle_days_on=1,
+        suggested_cycle_days_off=1,
+        suggested_anchor_date=anchor_date,
+        confidence=best_ratio,
+        message=(
+            f"Produção dos últimos {SHIFT_SUGGESTION_WINDOW_DAYS} dias bate com escala 12x36 (dia sim, "
+            f"dia não) em {round(best_ratio * 100)}% dos dias, ancorada em {anchor_date.isoformat()}. "
+            "Confira o histórico abaixo e salve pra confirmar."
+        ),
+        daily_production=daily_production,
+    )
+
+
 def generate_daily_cases_for_date(
     db: Session,
     *,

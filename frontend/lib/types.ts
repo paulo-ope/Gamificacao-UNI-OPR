@@ -147,6 +147,16 @@ export type ManagementOperationalMember = {
   updated_at: string;
 };
 
+export type ManagementShiftPatternSuggestion = {
+  suggested_pattern: "alternating" | "inconclusive" | string;
+  suggested_cycle_days_on: number | null;
+  suggested_cycle_days_off: number | null;
+  suggested_anchor_date: string | null;
+  confidence: number;
+  message: string;
+  daily_production: { date: string; quantity: number }[];
+};
+
 export type WorkspaceVisibleModule = {
   key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin";
   name: string;
