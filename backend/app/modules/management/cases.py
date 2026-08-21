@@ -224,10 +224,10 @@ def generate_performance_cases(
     ).all()
     team_models = {model.id: model for model in db.scalars(select(OperationTeamModel)).all()}
 
-    existing_keys = {
-        (case_type, _norm(responsible_name), _norm(regional))
-        for case_type, responsible_name, regional in db.execute(
-            select(ManagementCase.case_type, ManagementCase.responsible_name, ManagementCase.regional).where(
+    existing_by_key = {
+        (_norm(item.responsible_name), _norm(item.regional)): item
+        for item in db.scalars(
+            select(ManagementCase).where(
                 ManagementCase.case_type == CASE_TYPE_PRODUCTIVITY,
                 ManagementCase.reference_year == year,
                 ManagementCase.reference_month == month,
@@ -256,13 +256,21 @@ def generate_performance_cases(
         # performance excelente, que inflava desvio e severidade de quem só estava "na média".
         expected = float(model.median_from_quantity)
         actual = bucket["total"] / bucket["days"]
+
+        existing_case = existing_by_key.get(key)
+        if existing_case is not None:
+            # Recalcula um caso já aberto ENQUANTO ele ainda está "pending" - achado real de
+            # 2026-08-21: O.S. que chegam atrasadas depois da geração automática deixavam a
+            # média/desvio congelados no número velho, mesmo o calendário já mostrando a
+            # produção atualizada. Ver `_refresh_pending_case`.
+            _refresh_pending_case(db, existing_case, expected_value=round(expected, 2), actual_value=round(actual, 2), settings=settings)
+            skipped_existing += 1
+            continue
+
         if actual >= expected:
             continue
         deviation_pct = (expected - actual) / expected * 100
         if deviation_pct < min_deviation:
-            continue
-        if (CASE_TYPE_PRODUCTIVITY, key[0], key[1]) in existing_keys:
-            skipped_existing += 1
             continue
         db.add(
             ManagementCase(
@@ -328,6 +336,43 @@ def _resolve_member_for_case(db: Session, responsible_name: str) -> ManagementOp
     return candidates[0]
 
 
+# Nota gravada (como justificativa + comentário) quando um caso automático é resolvido sozinho
+# por já não representar desvio depois de recalculado - pedido do usuário em 2026-08-21, achado
+# real com O.S. que chegam atrasadas (sincronização do IXC) pra uma data cujo caso já tinha sido
+# aberto: o calendário já mostrava a produção atualizada, mas o caso ficava congelado no número
+# velho, cobrando justificativa por um desvio que já não existia.
+CASE_AUTO_REFRESHED_RESOLVED_NOTE = (
+    "Resolvido automaticamente: a produção deste período foi atualizada (ex.: O.S. sincronizada "
+    "com atraso) e já atinge ou supera a meta - não há mais desvio a justificar."
+)
+
+
+def _refresh_pending_case(db: Session, case: ManagementCase, *, expected_value: float | None, actual_value: float, settings: dict[str, str]) -> None:
+    """Atualiza um caso automático (diário ou mensal) com a produção mais recente ENQUANTO ele
+    ainda está "pending" - ninguém justificou ainda, então não há histórico a preservar. Um caso já
+    justificado/em análise/resolvido/rejeitado nunca é tocado aqui: alguém já agiu sobre ele, e o
+    registro do que foi cobrado na época precisa continuar valendo (mesma razão pela qual a
+    idempotência de `get_or_create_daily_case`/`get_or_create_monthly_case`/
+    `generate_performance_cases` nunca reabria caso já decidido).
+
+    Quando a produção atualizada já bate ou supera a meta, o caso é resolvido sozinho - manter
+    "pending" cobrando um desvio que já não existe só gera ruído pro supervisor."""
+    if case.status != "pending":
+        return
+    case.actual_value = actual_value
+    if not expected_value:
+        return
+    case.expected_value = expected_value
+    deviation_pct = round(max(0.0, (expected_value - actual_value) / expected_value * 100), 1)
+    case.deviation_value = deviation_pct
+    case.severity = severity_for(deviation_pct, settings)
+    if actual_value >= expected_value:
+        case.status = "resolved"
+        case.justification_text = CASE_AUTO_REFRESHED_RESOLVED_NOTE
+        case.justified_at = datetime.now(timezone.utc)
+        db.add(ManagementCaseComment(case_id=case.id, user_id=None, comment=CASE_AUTO_REFRESHED_RESOLVED_NOTE))
+
+
 def get_or_create_daily_case(
     db: Session,
     *,
@@ -354,6 +399,7 @@ def get_or_create_daily_case(
     member = _resolve_member_for_case(db, responsible_name)
     canonical_regional = member.regional if member else normalize_regional(regional)
     target_key = (_norm(responsible_name), _norm(canonical_regional))
+    settings = load_settings(db)
     same_day_cases = db.scalars(
         select(ManagementCase).where(
             ManagementCase.case_type == CASE_TYPE_DAILY_BELOW,
@@ -362,9 +408,9 @@ def get_or_create_daily_case(
     ).all()
     for candidate in same_day_cases:
         if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key:
+            _refresh_pending_case(db, candidate, expected_value=expected_value, actual_value=actual_value, settings=settings)
             return candidate, False
 
-    settings = load_settings(db)
     due_days = int(_setting_float(settings, "management_case_due_days"))
     deviation_pct = None
     severity = "medium"
@@ -424,6 +470,7 @@ def get_or_create_monthly_case(
     member = _resolve_member_for_case(db, responsible_name)
     canonical_regional = member.regional if member else normalize_regional(regional)
     target_key = (_norm(responsible_name), _norm(canonical_regional))
+    settings = load_settings(db)
     same_month_cases = db.scalars(
         select(ManagementCase).where(
             ManagementCase.case_type == CASE_TYPE_PRODUCTIVITY,
@@ -433,9 +480,9 @@ def get_or_create_monthly_case(
     ).all()
     for candidate in same_month_cases:
         if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key:
+            _refresh_pending_case(db, candidate, expected_value=expected_value, actual_value=actual_value, settings=settings)
             return candidate, False
 
-    settings = load_settings(db)
     due_days = int(_setting_float(settings, "management_case_due_days"))
     deviation_pct = None
     severity = "medium"
@@ -761,6 +808,116 @@ def generate_daily_cases_for_date(
         "evaluated_members": evaluated,
         "reference_date": day.isoformat(),
     }
+
+
+def refresh_pending_cases(db: Session) -> dict:
+    """Varre todo caso automático ainda "pending" (diário ou mensal) e recalcula a produção contra
+    o que já está fechado no banco hoje - pedido do usuário em 2026-08-21, achado real com O.S. que
+    chegam atrasadas (sincronização do IXC) pra uma data cujo caso já tinha sido aberto: o
+    calendário já mostrava a produção atualizada, mas o caso ficava congelado no número velho,
+    cobrando justificativa por um desvio que já não existia.
+
+    Chamado uma vez por dia pelo scheduler (`run_refresh_pending_cases_once`) - além do refresh
+    pontual que já acontece toda vez que alguém reabre o mesmo caso (`get_or_create_daily_case`/
+    `get_or_create_monthly_case`) ou que a geração mensal em lote roda de novo
+    (`generate_performance_cases`). Só toca caso "pending": já justificado/em análise/resolvido/
+    rejeitado é histórico e nunca é reescrito aqui (mesma regra de `_refresh_pending_case`)."""
+    settings = load_settings(db)
+    team_models = {model.id: model for model in db.scalars(select(OperationTeamModel)).all()}
+    closed_day = _local_closed_date(db)
+    counts = {"daily_refreshed": 0, "daily_resolved": 0, "monthly_refreshed": 0, "monthly_resolved": 0}
+
+    pending_daily = db.scalars(
+        select(ManagementCase).where(ManagementCase.case_type == CASE_TYPE_DAILY_BELOW, ManagementCase.status == "pending")
+    ).all()
+    daily_by_date: dict[date, list[ManagementCase]] = {}
+    for case in pending_daily:
+        if case.reference_date is not None:
+            daily_by_date.setdefault(case.reference_date, []).append(case)
+
+    for day, cases_for_day in daily_by_date.items():
+        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc) - timedelta(days=1)
+        end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+        rows = db.execute(
+            select(OperationOrder.responsible, closed_day, func.count(OperationOrder.id))
+            .where(
+                OperationOrder.closed_at.is_not(None),
+                OperationOrder.closed_at.between(start, end),
+                OperationOrder.responsible.is_not(None),
+                OperationOrder.responsible != "",
+            )
+            .group_by(OperationOrder.responsible, closed_day)
+        ).all()
+        quantity_by_name: dict[str, int] = {}
+        for responsible, closed_date, quantity in rows:
+            if _as_date(closed_date) != day:
+                continue
+            norm_name = _norm(responsible)
+            quantity_by_name[norm_name] = quantity_by_name.get(norm_name, 0) + int(quantity or 0)
+
+        for case in cases_for_day:
+            model = team_models.get(case.team_model_id)
+            expected_value = case.expected_value
+            if model is not None:
+                rule = _rule_for_day(_team_model_dict(model), day)
+                if rule is not None:
+                    expected_value = float(rule["median_from_quantity"])
+            actual_value = float(quantity_by_name.get(_norm(case.responsible_name), 0))
+            _refresh_pending_case(db, case, expected_value=expected_value, actual_value=actual_value, settings=settings)
+            if case.status == "resolved":
+                counts["daily_resolved"] += 1
+            else:
+                counts["daily_refreshed"] += 1
+
+    pending_monthly = db.scalars(
+        select(ManagementCase).where(ManagementCase.case_type == CASE_TYPE_PRODUCTIVITY, ManagementCase.status == "pending")
+    ).all()
+    monthly_by_period: dict[tuple[int, int], list[ManagementCase]] = {}
+    for case in pending_monthly:
+        if case.reference_year is not None and case.reference_month is not None:
+            monthly_by_period.setdefault((case.reference_year, case.reference_month), []).append(case)
+
+    for (year, month), cases_for_month in monthly_by_period.items():
+        month_start = date(year, month, 1)
+        month_end = date(year, month, calendar_module.monthrange(year, month)[1])
+        start = datetime(month_start.year, month_start.month, month_start.day, tzinfo=timezone.utc) - timedelta(days=1)
+        end = datetime(month_end.year, month_end.month, month_end.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+        rows = db.execute(
+            select(OperationOrder.responsible, closed_day, func.count(OperationOrder.id))
+            .where(
+                OperationOrder.closed_at.is_not(None),
+                OperationOrder.closed_at.between(start, end),
+                OperationOrder.responsible.is_not(None),
+                OperationOrder.responsible != "",
+            )
+            .group_by(OperationOrder.responsible, closed_day)
+        ).all()
+        produced: dict[str, dict] = {}
+        for responsible, day_value, quantity in rows:
+            local_day = _as_date(day_value)
+            if local_day is None or local_day < month_start or local_day > month_end:
+                continue
+            bucket = produced.setdefault(_norm(responsible), {"total": 0, "days": 0})
+            bucket["total"] += int(quantity or 0)
+            bucket["days"] += 1
+
+        for case in cases_for_month:
+            bucket = produced.get(_norm(case.responsible_name))
+            if bucket is None or bucket["days"] == 0:
+                # Sem produção nenhuma registrada ainda pro mês - não é motivo pra recalcular a
+                # média pra zero, só preserva o que já foi cobrado até haver dado novo.
+                continue
+            model = team_models.get(case.team_model_id)
+            expected_value = float(model.median_from_quantity) if model and model.median_from_quantity else case.expected_value
+            actual_value = round(bucket["total"] / bucket["days"], 2)
+            _refresh_pending_case(db, case, expected_value=round(expected_value, 2) if expected_value else expected_value, actual_value=actual_value, settings=settings)
+            if case.status == "resolved":
+                counts["monthly_resolved"] += 1
+            else:
+                counts["monthly_refreshed"] += 1
+
+    db.flush()
+    return counts
 
 
 # --- Escopo de visibilidade -------------------------------------------------------------------
