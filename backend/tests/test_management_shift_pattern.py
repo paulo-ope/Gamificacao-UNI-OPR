@@ -6,7 +6,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+
 from app.modules.management import cases as cases_engine
+from app.modules.management import services as management_services
 from app.modules.management.models import ManagementCase, ManagementOperationalMember
 from app.modules.operations.models import OperationTeamModel
 
@@ -121,8 +124,13 @@ def test_generate_daily_cases_still_evaluates_a_scheduled_workday_for_an_alterna
 # --- Endpoint de atualização (PATCH /members/{id}) ----------------------------------------------
 
 
-def test_update_member_endpoint_accepts_shift_pattern_fields(client, db_session):
-    member = _member()
+def test_update_member_endpoint_accepts_shift_pattern_fields_for_a_12x36_member(client, db_session):
+    """Achado real da auditoria de 2026-08-21: escala alternada só pode ser ligada em quem é do
+    modelo de equipe 12x36 - este teste já cadastra o membro nesse modelo antes do PATCH."""
+    model = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, median_from_quantity=5, good_from_quantity=6, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member(team_model_id=model.id)
     db_session.add(member)
     db_session.commit()
 
@@ -145,10 +153,86 @@ def test_update_member_endpoint_accepts_shift_pattern_fields(client, db_session)
 
 
 def test_update_member_endpoint_rejects_an_unknown_shift_pattern(client, db_session):
-    member = _member()
+    model = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member(team_model_id=model.id)
     db_session.add(member)
     db_session.commit()
 
     response = client.patch(f"/api/management/members/{member.id}", json={"shift_pattern": "nao-existe"})
 
     assert response.status_code == 422
+
+
+def test_update_member_endpoint_rejects_alternating_without_a_12x36_team_model(client, db_session):
+    """Membro sem modelo de equipe nenhum - não pode ligar escala alternada."""
+    member = _member()
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(f"/api/management/members/{member.id}", json={"shift_pattern": "alternating"})
+
+    assert response.status_code == 422
+
+
+def test_update_member_endpoint_rejects_alternating_for_a_non_12x36_team_model(client, db_session):
+    model = OperationTeamModel(name="SUPORTE MOTO", daily_target=7, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member(team_model_id=model.id)
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(f"/api/management/members/{member.id}", json={"shift_pattern": "alternating"})
+
+    assert response.status_code == 422
+
+
+def test_update_member_endpoint_allows_setting_team_model_and_shift_pattern_together(client, db_session):
+    """Membro ainda sem modelo de equipe - troca pra 12x36 e liga a escala alternada na MESMA
+    chamada (o efetivo pós-update precisa ser validado, não o estado antes do PATCH)."""
+    model = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member()
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(
+        f"/api/management/members/{member.id}",
+        json={"team_model_id": model.id, "shift_pattern": "alternating", "shift_cycle_days_on": 1, "shift_cycle_days_off": 1, "shift_anchor_date": MONDAY.isoformat()},
+    )
+
+    assert response.status_code == 200
+    db_session.refresh(member)
+    assert member.team_model_id == model.id
+    assert member.shift_pattern == "alternating"
+
+
+def test_update_member_endpoint_rejects_switching_team_model_away_while_alternating_stays_set(client, db_session):
+    """Membro já 12x36 com escala alternada ligada - trocar o modelo de equipe pra outro SEM
+    também voltar shift_pattern pra "standard" na mesma chamada é rejeitado (senão o colaborador
+    ficaria com "alternating" travado num modelo que não é mais 12x36)."""
+    model_12x36 = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, active=True)
+    other_model = OperationTeamModel(name="SUPORTE MOTO", daily_target=7, active=True)
+    db_session.add_all([model_12x36, other_model])
+    db_session.flush()
+    member = _member(team_model_id=model_12x36.id, shift_pattern="alternating", shift_cycle_days_on=1, shift_cycle_days_off=1, shift_anchor_date=MONDAY)
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(f"/api/management/members/{member.id}", json={"team_model_id": other_model.id})
+
+    assert response.status_code == 422
+
+
+def test_validate_shift_pattern_for_team_model_helper():
+    model = OperationTeamModel(name="TECNICO 12/36H")
+    other = OperationTeamModel(name="SUPORTE MOTO")
+    management_services.validate_shift_pattern_for_team_model("standard", None)
+    management_services.validate_shift_pattern_for_team_model("alternating", model)
+    with pytest.raises(management_services.ShiftPatternNotEligibleError):
+        management_services.validate_shift_pattern_for_team_model("alternating", other)
+    with pytest.raises(management_services.ShiftPatternNotEligibleError):
+        management_services.validate_shift_pattern_for_team_model("alternating", None)

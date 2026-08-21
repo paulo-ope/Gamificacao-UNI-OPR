@@ -85,6 +85,14 @@ REVIEW_TARGET_STATUSES = ("resolved", "rejected", "in_progress")
 # fases opostas do ciclo (um trabalha enquanto o outro descansa, pra cobrir os dois dias).
 MEMBER_SHIFT_PATTERNS = ("standard", "alternating")
 
+# Nomes de OperationTeamModel.name elegiveis pra escala alternada - pedido do usuario em
+# 2026-08-21: "alternating" (dia sim, dia nao) so faz sentido pra quem e 12x36; os demais modelos
+# de equipe ja sao comercial (segunda a sabado, via OperationTeamTargetRule por modelo) e nao
+# devem poder ligar a folga alternada. Casamento por NOME (nao ha campo proprio em
+# OperationTeamModel pra marcar "e 12x36") - unico registro hoje e "TECNICO 12/36H"; se outro
+# modelo 12x36 for cadastrado depois com nome diferente, precisa entrar neste set tambem.
+ALTERNATING_SHIFT_ELIGIBLE_TEAM_MODEL_NAMES = frozenset({"TECNICO 12/36H"})
+
 
 class ManagementOperationalMember(Base):
     __tablename__ = "management_operational_members"

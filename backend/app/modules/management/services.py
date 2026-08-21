@@ -7,7 +7,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Collaborator, User
-from app.modules.management.models import ManagementCase, ManagementOperationalMember
+from app.modules.management.models import (
+    ALTERNATING_SHIFT_ELIGIBLE_TEAM_MODEL_NAMES,
+    ManagementCase,
+    ManagementOperationalMember,
+)
 from app.modules.management.schemas import ManagementOperationalMemberOut, ManagementSummaryOut
 from app.modules.operations.models import OperationTeamModel
 from app.modules.operations.responsible_regional import resolve_responsible_regional_candidates
@@ -119,6 +123,20 @@ def refresh_operational_members(db: Session) -> int:
             touched += 1
     db.flush()
     return touched
+
+
+class ShiftPatternNotEligibleError(Exception):
+    """Levantado quando alguém tenta ligar a escala alternada (`shift_pattern="alternating"`) num
+    colaborador cujo modelo de equipe não é 12x36 - pedido do usuário em 2026-08-21: só quem é
+    12x36 pode ter dia sim/dia não, os demais modelos já são comercial (segunda a sábado) e não
+    devem poder sair dessa régua."""
+
+
+def validate_shift_pattern_for_team_model(shift_pattern: str | None, team_model: OperationTeamModel | None) -> None:
+    if shift_pattern != "alternating":
+        return
+    if team_model is None or team_model.name not in ALTERNATING_SHIFT_ELIGIBLE_TEAM_MODEL_NAMES:
+        raise ShiftPatternNotEligibleError()
 
 
 class MemberAlreadyClaimedError(Exception):
