@@ -64,21 +64,27 @@ function dailyCaseKey(responsibleName: string, referenceDate: string): string {
   return `${responsibleName.trim().toLowerCase().replace(/\s+/g, " ")}|${referenceDate}`;
 }
 
+// "pending" (caso aberto, ainda não justificado) fica de fora deste mapa de propósito: ele usa o
+// MESMO estilo (branco com anel vermelho) do estado "abaixo da meta, nenhum caso aberto ainda" -
+// pedido do usuário em 2026-08-20, pra não distinguir visualmente duas situações que, pra quem
+// olha o calendário, significam a mesma coisa ("ainda falta justificar esse dia/mês"). Ver o
+// bloco que renderiza a bolinha de cada dia, mais abaixo.
 const DAILY_CASE_STATUS_DOT: Record<string, string> = {
-  pending: "bg-amber-500",
-  justified: "bg-blue-500",
-  in_progress: "bg-violet-500",
+  justified: "bg-yellow-400",
+  in_progress: "bg-yellow-400",
   resolved: "bg-emerald-500",
   rejected: "bg-slate-400",
 };
 
 const DAILY_CASE_STATUS_LABEL: Record<string, string> = {
-  pending: "Aguardando justificativa",
-  justified: "Justificado, aguardando decisão da matriz",
-  in_progress: "Em andamento",
+  justified: "Aguardando matriz",
+  in_progress: "Aguardando matriz",
   resolved: "Resolvido pela matriz",
   rejected: "Rejeitado pela matriz",
 };
+
+const PENDING_JUSTIFICATION_DOT_CLASS = "bg-white ring-2 ring-red-500";
+const PENDING_JUSTIFICATION_LABEL = "Abaixo da meta - ainda não justificado";
 
 const WEEKDAYS = ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"];
 const EMPTY_PAGE: OperationOrderPage = {
@@ -292,10 +298,19 @@ export function OperationsMonthlyCalendar({
   const [dailyCaseId, setDailyCaseId] = useState<number | null>(null);
   const [openingCase, setOpeningCase] = useState(false);
   const [openCaseError, setOpenCaseError] = useState<string | null>(null);
+  // Mesmo padrao do caso diario, mas pro "Detalhe Operacional Mensal" - abre/recupera o caso
+  // mensal (CASE_TYPE_PRODUCTIVITY) de UM colaborador direto de onde o supervisor ja esta vendo
+  // o desvio, sem depender da matriz clicar em "Gerar casos do mes" (achado real, 2026-08-20).
+  const [monthlyCaseId, setMonthlyCaseId] = useState<number | null>(null);
+  const [openingMonthlyCase, setOpeningMonthlyCase] = useState(false);
+  const [openMonthlyCaseError, setOpenMonthlyCaseError] = useState<string | null>(null);
   // Status do caso de cada dia ja justificado/em analise neste mes - sem isso o supervisor so
   // descobre que um dia ja foi tratado clicando nele de novo, um por um (achado real, 2026-08-13).
   // Chave: responsavel normalizado + data (a mesma dupla que identifica um caso diario no backend).
   const [dailyCaseStatusByKey, setDailyCaseStatusByKey] = useState<Map<string, string>>(new Map());
+  // Mesmo indicador do caso diário, mas pro caso mensal (uma bolinha só, na coluna de total do
+  // mês) - pedido do usuário em 2026-08-20: mesmo formato visual dos dois.
+  const [monthlyCaseStatusByKey, setMonthlyCaseStatusByKey] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!canJustifyManagement) return;
@@ -324,6 +339,32 @@ export function OperationsMonthlyCalendar({
     }
   }, [canJustifyManagement, data.competence]);
 
+  const loadMonthlyCaseStatuses = useCallback(async () => {
+    if (!canJustifyManagement || !data.competence) return;
+    const [year, month] = data.competence.split("-").map(Number);
+    if (!year || !month) return;
+    try {
+      const page = await api.managementCases({
+        case_type: "productivity_below_target",
+        reference_year: year,
+        reference_month: month,
+        page_size: 200,
+      });
+      const next = new Map<string, string>();
+      for (const item of page.items) {
+        if (!item.responsible_name) continue;
+        next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), item.status);
+      }
+      setMonthlyCaseStatusByKey(next);
+    } catch {
+      // Indicador e so um reforco visual - falha aqui nao deve travar o calendario.
+    }
+  }, [canJustifyManagement, data.competence]);
+
+  useEffect(() => {
+    void loadMonthlyCaseStatuses();
+  }, [loadMonthlyCaseStatuses]);
+
   useEffect(() => {
     void loadDailyCaseStatuses();
   }, [loadDailyCaseStatuses]);
@@ -332,7 +373,10 @@ export function OperationsMonthlyCalendar({
     setOpeningCase(true);
     setOpenCaseError(null);
     try {
-      const expected = dayTarget(cell.teamModel, weekdayOf(cell.day))?.target_quantity ?? null;
+      // "Esperado" é o piso da faixa "boa" (median_from_quantity), não o teto do dia
+      // (target_quantity) - decisão do usuário em 2026-08-20, mesma régua do backend
+      // (generate_performance_cases/generate_daily_cases_for_date).
+      const expected = dayTarget(cell.teamModel, weekdayOf(cell.day))?.median_from_quantity ?? null;
       const managementCase = await api.openDailyManagementCase({
         responsible_name: cell.responsible,
         regional: cell.referenceRegional ?? cell.regional,
@@ -350,6 +394,45 @@ export function OperationsMonthlyCalendar({
       setOpenCaseError(reason instanceof Error ? reason.message : "Não foi possível abrir a justificativa deste dia.");
     } finally {
       setOpeningCase(false);
+    }
+  }
+
+  // Só mês já fechado pode ser justificado (mesma regra do backend, ver POST /cases/monthly) - o
+  // mês corrente ainda está em andamento, cobrar desvio em cima de dado parcial seria prematuro.
+  const competenceIsClosed = useMemo(() => {
+    const [year, month] = (data.competence || "").split("-").map(Number);
+    if (!year || !month) return false;
+    const now = new Date();
+    return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth() + 1);
+  }, [data.competence]);
+
+  async function openMonthlyJustification(item: SelectedMonthly) {
+    const [year, month] = (data.competence || "").split("-").map(Number);
+    if (!year || !month) return;
+    setOpeningMonthlyCase(true);
+    setOpenMonthlyCaseError(null);
+    try {
+      // "Esperado" é o piso da faixa "boa" (median_from_quantity), não o teto (target_quantity) -
+      // mesma decisão do caso diário, acima. Sem regra mensal própria, cai no piso do modelo.
+      const expected = item.teamModel
+        ? ruleFor(item.teamModel, "monthly")?.median_from_quantity ?? item.teamModel.median_from_quantity ?? null
+        : null;
+      const managementCase = await api.openMonthlyManagementCase({
+        responsible_name: item.responsible,
+        regional: item.referenceRegional ?? item.regional,
+        reference_year: year,
+        reference_month: month,
+        expected_value: expected,
+        actual_value: item.quantity,
+      });
+      setMonthlyCaseId(managementCase.id);
+      // Mesmo motivo do caso diário: fecha o Sheet do detalhe mensal ao abrir a justificativa,
+      // senão o Radix marca o dialog (portal) como inerte e ele fica impossível de clicar.
+      setSelectedMonthly(null);
+    } catch (reason) {
+      setOpenMonthlyCaseError(reason instanceof Error ? reason.message : "Não foi possível abrir a justificativa deste mês.");
+    } finally {
+      setOpeningMonthlyCase(false);
     }
   }
 
@@ -668,12 +751,12 @@ export function OperationsMonthlyCalendar({
         ) : null}
         {legendOpen && canJustifyManagement ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3" aria-label="Legenda de status de justificativa">
-            <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">Bolinha no dia = status na Gestão Integrada</p>
+            <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">Bolinha no dia/mês = status na Gestão Integrada</p>
             <span className="flex items-center gap-1 text-[9px] font-semibold text-slate-600">
-              <span className="h-2 w-2 rounded-full bg-white ring-2 ring-red-500" />
-              Abaixo da meta, ainda sem caso aberto
+              <span className={cn("h-2 w-2 rounded-full", PENDING_JUSTIFICATION_DOT_CLASS)} />
+              {PENDING_JUSTIFICATION_LABEL}
             </span>
-            {Object.entries(DAILY_CASE_STATUS_LABEL).map(([status, label]) => (
+            {Array.from(new Map(Object.entries(DAILY_CASE_STATUS_LABEL).map(([status, label]) => [label, status]))).map(([label, status]) => (
               <span key={status} className="flex items-center gap-1 text-[9px] font-semibold text-slate-600">
                 <span className={cn("h-2 w-2 rounded-full", DAILY_CASE_STATUS_DOT[status])} />
                 {label}
@@ -1028,7 +1111,7 @@ export function OperationsMonthlyCalendar({
                                   ) : (
                                     <span className="text-slate-300">—</span>
                                   )}
-                                  {dailyCaseStatus ? (
+                                  {dailyCaseStatus && dailyCaseStatus !== "pending" ? (
                                     <span
                                       className={cn(
                                         "pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full ring-1 ring-white",
@@ -1037,15 +1120,17 @@ export function OperationsMonthlyCalendar({
                                       aria-hidden="true"
                                       title={DAILY_CASE_STATUS_LABEL[dailyCaseStatus] ?? dailyCaseStatus}
                                     />
-                                  ) : canJustifyManagement && performance === "below" ? (
-                                    // Distingue "abaixo da meta e ninguem verificou ainda" de "ja
-                                    // tem caso aberto" (bolinha colorida acima) - sem isso, os dois
-                                    // casos pareciam iguais (nenhum marcador), escondendo o que
-                                    // realmente falta tratar (achado real, 2026-08-14).
+                                  ) : (dailyCaseStatus === "pending" || (canJustifyManagement && performance === "below")) ? (
+                                    // Mesmo visual pra "caso aberto mas ainda não justificado" e
+                                    // "abaixo da meta, nenhum caso aberto ainda" - pra quem olha o
+                                    // calendário, as duas significam a mesma coisa: falta
+                                    // justificar (pedido do usuário, 2026-08-20). Achado real
+                                    // anterior (2026-08-14): sem NENHUM marcador aqui, os dois
+                                    // casos pareciam iguais ao dia sem meta configurada.
                                     <span
-                                      className="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-white ring-2 ring-red-500"
+                                      className={cn("pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full", PENDING_JUSTIFICATION_DOT_CLASS)}
                                       aria-hidden="true"
-                                      title="Abaixo da meta - ainda sem caso aberto na Gestão Integrada"
+                                      title={PENDING_JUSTIFICATION_LABEL}
                                     />
                                   ) : null}
                                 </td>
@@ -1133,6 +1218,36 @@ export function OperationsMonthlyCalendar({
                             >
                               {collaborator.total}
                             </button>
+                            {(() => {
+                              const monthlyCaseStatus = monthlyCaseStatusByKey.get(
+                                collaborator.responsible.trim().toLowerCase().replace(/\s+/g, " "),
+                              );
+                              if (monthlyCaseStatus && monthlyCaseStatus !== "pending") {
+                                return (
+                                  <span
+                                    className={cn(
+                                      "pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full ring-1 ring-white",
+                                      DAILY_CASE_STATUS_DOT[monthlyCaseStatus] ?? "bg-slate-400",
+                                    )}
+                                    aria-hidden="true"
+                                    title={DAILY_CASE_STATUS_LABEL[monthlyCaseStatus] ?? monthlyCaseStatus}
+                                  />
+                                );
+                              }
+                              if (
+                                monthlyCaseStatus === "pending" ||
+                                (canJustifyManagement && collaborator.monthly_performance === "below")
+                              ) {
+                                return (
+                                  <span
+                                    className={cn("pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full", PENDING_JUSTIFICATION_DOT_CLASS)}
+                                    aria-hidden="true"
+                                    title={PENDING_JUSTIFICATION_LABEL}
+                                  />
+                                );
+                              }
+                              return null;
+                            })()}
                           </td>
                         </tr>
                       ))}
@@ -1537,6 +1652,34 @@ export function OperationsMonthlyCalendar({
                   </p>
                 </div>
               </div>
+              {selectedMonthly.performance === "below" &&
+              selectedMonthly.responsible !== ALL_RESPONSIBLES &&
+              competenceIsClosed &&
+              canJustifyManagement ? (
+                <div className="flex flex-col gap-2 border-b border-red-100 bg-red-50/60 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+                  <p className="text-xs text-red-800">
+                    Mês abaixo da meta - registre uma justificativa na Gestão Integrada.
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 shrink-0 border-red-300 bg-white text-xs text-red-700 hover:bg-red-100"
+                    disabled={openingMonthlyCase}
+                    onClick={() => void openMonthlyJustification(selectedMonthly)}
+                  >
+                    {openingMonthlyCase ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ShieldAlert className="h-3.5 w-3.5" />
+                    )}
+                    Justificar mês
+                  </Button>
+                </div>
+              ) : null}
+              {openMonthlyCaseError ? (
+                <p className="border-b border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700 sm:px-4">{openMonthlyCaseError}</p>
+              ) : null}
               <OperationsCalendarDayMetricsPanel metrics={monthlyPanelMetrics} />
               <div className="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-4">
                 <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
@@ -1681,6 +1824,16 @@ export function OperationsMonthlyCalendar({
           canReview={canReviewManagement}
           onClose={() => setDailyCaseId(null)}
           onChanged={() => void loadDailyCaseStatuses()}
+        />
+      ) : null}
+      {monthlyCaseId !== null ? (
+        <CaseDetailDialog
+          caseId={monthlyCaseId}
+          reasons={caseReasons}
+          canJustify={canJustifyManagement}
+          canReview={canReviewManagement}
+          onClose={() => setMonthlyCaseId(null)}
+          onChanged={() => void loadMonthlyCaseStatuses()}
         />
       ) : null}
     </div>
