@@ -1156,6 +1156,11 @@ class OperationLoginTimeseriesPointOut(BaseModel):
     disconnected: int
     new_drops: int
     new_reconnects: int
+    # False só no primeiro ponto quando não existe nenhuma captura anterior dentro do buffer de
+    # lookback (_LOOKBACK_BUFFER) - nesse caso new_drops/new_reconnects contam TODO login
+    # desconectado/conectado como "novo" (LAG sem valor anterior), inflando os números desse ponto
+    # especificamente (achado real da auditoria de 2026-08-21). True em todos os outros pontos.
+    baseline_available: bool = True
 
 
 class OperationLoginAggregateResponseOut(BaseModel):

@@ -8,6 +8,10 @@ const isDev = process.env.NODE_ENV !== "production";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Gera .next/standalone (server + só as deps de node_modules realmente usadas em runtime,
+  // via tracing de import) - o Dockerfile passa a copiar isso em vez do node_modules inteiro,
+  // cortando o tamanho da imagem final (pedido do usuário em 2026-08-21, deploy mais leve na VM).
+  output: "standalone",
   reactStrictMode: true,
   devIndicators: false,
   allowedDevOrigins: ["127.0.0.1", "192.168.2.100", "192.168.137.1"],

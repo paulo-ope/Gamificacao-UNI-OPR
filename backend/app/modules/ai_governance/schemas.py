@@ -94,7 +94,9 @@ class AiProfileFieldGrantUpsert(BaseModel):
 # "orders.detail" (opr_order_details) são de fato aplicados hoje (ver `ai/auth.py:enforce_token_scope`
 # nas duas rotas correspondentes) - os demais ficam reservados para quando outros endpoints
 # passarem a checar escopo, sem precisar de migration nova (a coluna já é uma lista livre).
-AI_API_TOKEN_SCOPES = ["orders.read", "orders.detail", "orders.sla", "orders.aggregate", "infra.read", "users.read"]
+AI_API_TOKEN_SCOPES = [
+    "orders.read", "orders.detail", "orders.sla", "orders.aggregate", "infra.read", "users.read", "management.read",
+]
 
 
 class AiApiKeyOut(BaseModel):

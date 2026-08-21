@@ -24,13 +24,17 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV INTERNAL_API_URL=http://backend:8000
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
+# `output: "standalone"` (next.config.mjs) faz o build já rastrear e copiar só as dependências de
+# node_modules realmente usadas em runtime (tracing de import), num server.js autocontido - corta
+# a imagem final de ~1,2GB (node_modules inteiro) pra uma fração disso. .next/standalone já inclui
+# uma cópia própria de next.config.mjs/package.json - não precisa copiar de novo.
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.mjs ./next.config.mjs
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0"]
+CMD ["node", "server.js"]

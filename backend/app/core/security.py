@@ -47,6 +47,24 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         # (ver operations/router.py:_team_scope_for_user).
         "operations:manage_own_team_members",
     },
+    # Novo (pedido do usuário em 2026-08-20): perfil de quem monta o próprio "organograma" de
+    # campo - reivindica colaboradores pra própria base (management:claim_member) sem precisar da
+    # matriz. Mesmo conjunto de leitura do gestor regional; a diferença é só essa permissão extra.
+    "base_manager": {
+        "portal:read_self",
+        "portal:update_self_profile",
+        "portal:read_regional_ranking",
+        "portal:simulate_self",
+        "portal:read_rules",
+        "portal:read_regional_summary",
+        "operations:read",
+        "operations:view_openings",
+        "operations:views:read_global",
+        "management:read",
+        "management:write_justification",
+        "management:claim_member",
+        "operations:manage_own_team_members",
+    },
     "viewer": {
         "dashboard:read",
         "audit:read",
@@ -88,6 +106,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         # casos dela. Revisar/encerrar continua exclusivo da matriz (`management:review`).
         "management:read",
         "management:write_justification",
+        # Pedido do usuário em 2026-08-20: o supervisor monta o próprio "organograma" de campo,
+        # reivindicando colaboradores pra sua base sem depender da matriz.
+        "management:claim_member",
         "operations:manage_own_team_members",
     },
     "admin": {
@@ -138,7 +159,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "management:read",
         "management:manage_structure",
         "management:write_justification",
+        "management:claim_member",
         "management:review",
+        "management:generate_cases",
         "management:admin",
         "admin:users:read",
         "admin:users:write",
@@ -212,7 +235,9 @@ PERMISSION_LABELS: dict[str, str] = {
     "management:read": "Gestão: acessar módulo",
     "management:manage_structure": "Gestão: administrar estrutura operacional",
     "management:write_justification": "Gestão: justificar pendências",
+    "management:claim_member": "Gestão: reivindicar colaborador para a própria base",
     "management:review": "Gestão: revisar casos",
+    "management:generate_cases": "Gestão: gerar casos do mês",
     "management:admin": "Gestão: administração avançada",
     "admin:users:read": "Administração: listar usuários",
     "admin:users:write": "Administração: criar/editar usuários",
@@ -237,6 +262,7 @@ PROFILE_LABELS: dict[str, tuple[str, str]] = {
     "regional_manager_viewer": ("Gestor Regional Portal", "Acompanha portal e operação das regionais vinculadas."),
     "viewer": ("Leitor Operacional", "Consulta dashboards, auditoria e operação sem alterações críticas."),
     "operator": ("Operador Operacional", "Opera importações e rotinas da operação com acesso gerencial."),
+    "base_manager": ("Gerente de Base", "Monta o organograma da própria base de campo e justifica os casos da equipe."),
     "admin": ("Admin Ecossistema", "Controle total de módulos, usuários, perfis e configurações."),
     "ai_service": ("Serviço de IA", "Credencial de máquina para consulta analítica de O.S. por uma IA (MCP/Actions)."),
 }

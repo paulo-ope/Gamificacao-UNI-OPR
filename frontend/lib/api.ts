@@ -35,13 +35,16 @@ import type {
   LeadershipRoleProfile,
   LoginResult,
   ManagementCase,
+  ManagementCaseBulkReviewResult,
   ManagementCaseComment,
+  ManagementCaseDiagnostics,
   ManagementCaseFilters,
   ManagementCaseGenerateResult,
   ManagementAutoGenerateSettings,
   ManagementCasePage,
   ManagementCaseReason,
   ManagementDashboard,
+  ManagementOperationalMember,
   ManagementOptions,
   Notification,
   EcosystemPermission,
@@ -288,12 +291,19 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
-  managementDashboard: (filters?: { regional?: string; supervisor_user_id?: number; status?: string; search?: string }) => {
+  managementDashboard: (filters?: {
+    regional?: string;
+    supervisor_user_id?: number;
+    status?: string;
+    search?: string;
+    collaborator_regional?: string;
+  }) => {
     const params = new URLSearchParams();
     if (filters?.regional) params.set("regional", filters.regional);
     if (filters?.supervisor_user_id) params.set("supervisor_user_id", String(filters.supervisor_user_id));
     if (filters?.status) params.set("status", filters.status);
     if (filters?.search) params.set("search", filters.search);
+    if (filters?.collaborator_regional) params.set("collaborator_regional", filters.collaborator_regional);
     const query = params.toString();
     return request<ManagementDashboard>(`/management/dashboard${query ? `?${query}` : ""}`);
   },
@@ -303,11 +313,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify({})
     }),
-  updateManagementMember: (id: number, payload: { supervisor_user_id?: number | null; team_model_id?: number | null; status?: string; notes?: string | null }) =>
+  updateManagementMember: (
+    id: number,
+    payload: {
+      supervisor_user_id?: number | null;
+      team_model_id?: number | null;
+      status?: string;
+      notes?: string | null;
+      shift_pattern?: "standard" | "alternating" | null;
+      shift_cycle_days_on?: number | null;
+      shift_cycle_days_off?: number | null;
+      shift_anchor_date?: string | null;
+    }
+  ) =>
     request<{ status: string }>(`/management/members/${id}`, {
       method: "PATCH",
       body: JSON.stringify(payload)
     }),
+  claimManagementMember: (id: number) =>
+    request<ManagementOperationalMember>(`/management/members/${id}/claim`, { method: "POST" }),
   managementCases: (filters?: ManagementCaseFilters) => {
     const params = new URLSearchParams();
     Object.entries(filters ?? {}).forEach(([key, value]) => {
@@ -342,6 +366,15 @@ export const api = {
     actual_value: number;
   }) =>
     request<ManagementCase>("/management/cases/daily", { method: "POST", body: JSON.stringify(payload) }),
+  openMonthlyManagementCase: (payload: {
+    responsible_name: string;
+    regional: string;
+    reference_year: number;
+    reference_month: number;
+    expected_value?: number | null;
+    actual_value: number;
+  }) =>
+    request<ManagementCase>("/management/cases/monthly", { method: "POST", body: JSON.stringify(payload) }),
   generateManagementCases: (reference_year: number, reference_month: number) =>
     request<ManagementCaseGenerateResult>("/management/cases/generate", {
       method: "POST",
@@ -372,6 +405,24 @@ export const api = {
   managementSettings: () => request<Record<string, string>>("/management/settings"),
   updateManagementSettings: (values: Record<string, string>) =>
     request<Record<string, string>>("/management/settings", { method: "PUT", body: JSON.stringify(values) }),
+  exportManagementCases: (filters: ManagementCaseFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "" || key === "page" || key === "page_size") return;
+      params.set(key, String(value));
+    });
+    return requestBlob(`/management/cases/export?${params.toString()}`);
+  },
+  managementCaseDiagnostics: (filters: ManagementCaseFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "" || key === "page" || key === "page_size") return;
+      params.set(key, String(value));
+    });
+    return request<ManagementCaseDiagnostics>(`/management/cases/diagnostics?${params.toString()}`);
+  },
+  bulkReviewManagementCases: (payload: { case_ids: number[]; status: string; review_note?: string | null }) =>
+    request<ManagementCaseBulkReviewResult>("/management/cases/bulk-review", { method: "POST", body: JSON.stringify(payload) }),
   managementAutoGenerateSettings: () =>
     request<ManagementAutoGenerateSettings>("/management/settings/auto-generate"),
   updateManagementAutoGenerateSettings: (enabled: boolean) =>

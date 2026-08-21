@@ -14,6 +14,11 @@ from app.modules.management.models import ManagementCase, ManagementOperationalM
 from app.modules.operations.models import OperationOrder, OperationTeamModel
 from app.models import Collaborator, User
 
+# Segunda-feira real (verificado com date(2026, 7, 6).weekday() == 0) - a classificação diária usa
+# meta diferente por dia da semana, então um teste com data fixa precisa garantir que cai num dia
+# de semana "normal" (sem isso o teste ficaria dependente de qual dia do mês foi escolhido).
+MONDAY = date(2026, 7, 6)
+
 
 class SessionLocalStub:
     def __init__(self, session):
@@ -114,3 +119,175 @@ def test_run_auto_generate_once_respects_disabled_setting(db_session, operation_
 
 def test_auto_generate_enabled_defaults_to_true(db_session):
     assert scheduler.auto_generate_enabled() is True
+
+
+@pytest.fixture()
+def daily_case_setup(db_session):
+    """Colaborador com 2 O.S. numa segunda-feira contra meta de 5/dia (median=3) - fica "below" no
+    mesmo critério do calendário (`classify_daily_performance`)."""
+    model = OperationTeamModel(name="Suporte Moto", daily_target=5, median_from_quantity=3, good_from_quantity=4, active=True)
+    db_session.add(model)
+    db_session.flush()
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Joao Campo",
+            regional="UNI JARU",
+            team_model_id=model.id,
+            status="validated_operation",
+            is_active=True,
+        )
+    )
+    for index in range(2):
+        closed = datetime(MONDAY.year, MONDAY.month, MONDAY.day, 15, 0, tzinfo=timezone.utc)
+        db_session.add(
+            OperationOrder(
+                source="ixc",
+                source_order_id=f"OS-daily-{index}",
+                order_code=f"OS-daily-{index}",
+                regional="UNI JARU",
+                os_type="Suporte",
+                os_subject="Fibra",
+                responsible="Joao Campo",
+                opened_at=closed,
+                closed_at=closed,
+                is_closed=True,
+                raw_payload={},
+            )
+        )
+    db_session.flush()
+    return {"model": model}
+
+
+def test_generate_daily_cases_for_date_opens_case_for_below_target_day(db_session, daily_case_setup):
+    result = cases_engine.generate_daily_cases_for_date(db_session, day=MONDAY)
+
+    assert result["created_cases"] == 1
+    assert result["evaluated_members"] == 1
+    case = db_session.query(ManagementCase).one()
+    assert case.case_type == cases_engine.CASE_TYPE_DAILY_BELOW
+    assert case.reference_date == MONDAY
+    assert case.actual_value == 2.0
+    assert case.expected_value == 3.0
+    assert case.created_by is None
+
+
+def test_generate_daily_cases_for_date_is_idempotent(db_session, daily_case_setup):
+    first = cases_engine.generate_daily_cases_for_date(db_session, day=MONDAY)
+    second = cases_engine.generate_daily_cases_for_date(db_session, day=MONDAY)
+
+    assert first["created_cases"] == 1
+    assert second["created_cases"] == 0
+    assert second["already_open_cases"] == 1
+    assert db_session.query(ManagementCase).count() == 1
+
+
+def test_generate_daily_cases_for_date_opens_case_for_zero_production(db_session):
+    """Decisão de produto: zero produção num dia com meta ativa SEMPRE abre caso, mesmo sem saber
+    se foi falta, férias ou atestado - cabe ao colaborador/supervisor explicar o motivo na
+    justificativa, não ao sistema adivinhar antes de abrir o caso."""
+    model = OperationTeamModel(name="Suporte Moto", daily_target=5, median_from_quantity=3, good_from_quantity=4, active=True)
+    db_session.add(model)
+    db_session.flush()
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Maria Ferias",
+            regional="UNI JARU",
+            team_model_id=model.id,
+            status="validated_operation",
+            is_active=True,
+        )
+    )
+    db_session.flush()
+    # Nenhuma OperationOrder criada para "Maria Ferias" nessa segunda-feira - zero produção.
+
+    result = cases_engine.generate_daily_cases_for_date(db_session, day=MONDAY)
+
+    assert result["created_cases"] == 1
+    case = db_session.query(ManagementCase).one()
+    assert case.responsible_name == "Maria Ferias"
+    assert case.actual_value == 0.0
+    assert case.expected_value == 3.0
+
+
+def test_generate_daily_cases_for_date_skips_sunday_without_a_target_rule(db_session):
+    """Sem regra própria para domingo, o modelo não espera produção nesse dia (mesmo fallback do
+    calendário) - zero produção num domingo não é "esperado produzir" e não deve abrir caso."""
+    sunday = date(2026, 7, 5)
+    model = OperationTeamModel(name="Suporte Moto", daily_target=5, median_from_quantity=3, good_from_quantity=4, active=True)
+    db_session.add(model)
+    db_session.flush()
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Joao Campo",
+            regional="UNI JARU",
+            team_model_id=model.id,
+            status="validated_operation",
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    result = cases_engine.generate_daily_cases_for_date(db_session, day=sunday)
+
+    assert result["created_cases"] == 0
+    assert result["evaluated_members"] == 0
+    assert db_session.query(ManagementCase).count() == 0
+
+
+def test_generate_daily_cases_for_date_skips_members_at_or_above_target(db_session, daily_case_setup):
+    # Sobe pra 5 O.S. (== daily_target) - não é "below" nesse critério.
+    for index in range(3):
+        closed = datetime(MONDAY.year, MONDAY.month, MONDAY.day, 16, index, tzinfo=timezone.utc)
+        db_session.add(
+            OperationOrder(
+                source="ixc",
+                source_order_id=f"OS-daily-extra-{index}",
+                order_code=f"OS-daily-extra-{index}",
+                regional="UNI JARU",
+                os_type="Suporte",
+                os_subject="Fibra",
+                responsible="Joao Campo",
+                opened_at=closed,
+                closed_at=closed,
+                is_closed=True,
+                raw_payload={},
+            )
+        )
+    db_session.flush()
+
+    result = cases_engine.generate_daily_cases_for_date(db_session, day=MONDAY)
+
+    assert result["created_cases"] == 0
+    assert db_session.query(ManagementCase).count() == 0
+
+
+def test_run_daily_auto_generate_once_targets_yesterday(db_session, daily_case_setup, monkeypatch):
+    tuesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 1, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
+    monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: tuesday)}))
+
+    result = scheduler.run_daily_auto_generate_once()
+
+    assert result is not None
+    assert result["created_cases"] == 1
+    assert result["reference_date"] == MONDAY.isoformat()
+
+
+def test_run_daily_auto_generate_once_skips_second_call_same_day(db_session, daily_case_setup, monkeypatch):
+    tuesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 1, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
+    monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: tuesday)}))
+
+    first = scheduler.run_daily_auto_generate_once()
+    second = scheduler.run_daily_auto_generate_once()
+
+    assert first is not None
+    assert second is None
+    assert db_session.query(ManagementCase).count() == 1
+
+
+def test_run_daily_auto_generate_once_respects_disabled_setting(db_session, daily_case_setup):
+    scheduler.set_auto_generate_enabled(False)
+
+    result = scheduler.run_daily_auto_generate_once()
+
+    assert result is None
+    assert db_session.query(ManagementCase).count() == 0

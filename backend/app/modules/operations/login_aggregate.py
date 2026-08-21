@@ -195,6 +195,21 @@ def login_timeseries(db: Session, *, since: datetime, until: datetime | None = N
     until = until or datetime.now(timezone.utc)
     lookback_start = since - _LOOKBACK_BUFFER
     rows = db.execute(_TIMESERIES_SQL, {"lookback_start": lookback_start, "since": since, "until": until}).all()
+    # Achado real da auditoria de 2026-08-21: quando não existe NENHUMA captura entre
+    # lookback_start e since (início real da coleta de dados, ou gap de captura > 20min antes de
+    # `since`), o LAG() da query não tem "antes" pra comparar - toda linha da primeira captura
+    # dentro da janela é contada como transição nova, inflando new_drops/new_reconnects do
+    # primeiro ponto pro total de desconectados/conectados daquele instante. Checagem simples e
+    # barata (EXISTS) pra sinalizar isso de forma estruturada, em vez de só documentar em prosa.
+    has_baseline = bool(
+        db.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM operations_login_status_snapshots "
+                "WHERE captured_at >= :lookback_start AND captured_at < :since)"
+            ),
+            {"lookback_start": lookback_start, "since": since},
+        ).scalar()
+    )
     data = [
         {
             "captured_at": row.captured_at,
@@ -202,12 +217,25 @@ def login_timeseries(db: Session, *, since: datetime, until: datetime | None = N
             "disconnected": int(row.disconnected),
             "new_drops": int(row.new_drops),
             "new_reconnects": int(row.new_reconnects),
+            "baseline_available": has_baseline or index > 0,
         }
-        for row in rows
+        for index, row in enumerate(rows)
     ]
+    warnings = []
+    if data and not has_baseline:
+        warnings.append({
+            "code": "FIRST_POINT_MAY_BE_INFLATED",
+            "detail": (
+                "Não há captura de status de login antes do início do período pedido (dentro do "
+                "buffer de lookback de 20min) - new_drops/new_reconnects do primeiro ponto podem "
+                "refletir o total de desconectados/conectados naquele instante, não uma transição "
+                "real. Ver campo baseline_available por ponto."
+            ),
+        })
     return {
         "meta": build_meta(
             applied_filters={"since": since, "until": until},
+            warnings=warnings,
             source_last_sync=_login_source_last_sync(db),
         ),
         "data": data,

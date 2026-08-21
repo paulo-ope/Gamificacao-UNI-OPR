@@ -4,9 +4,9 @@ Um "caso" é uma cobrança formal da matriz sobre um desvio operacional. Ele nas
 
 - **Automática** (`generate_performance_cases`): varre um mês fechado e abre um caso para cada
   colaborador que ficou abaixo da meta diária do seu modelo de equipe. O comparativo é
-  `média diária realizada` vs `OperationTeamModel.daily_target` - a mesma régua que o calendário
-  de performance da Operação Analítica já usa na tela, para o número cobrado ser o mesmo número
-  que o supervisor vê lá.
+  `média diária realizada` vs `OperationTeamModel.median_from_quantity` (o piso da faixa "boa",
+  não o teto que separa "boa" de "excelente") - decisão do usuário em 2026-08-20, pra não cobrar
+  como se a régua fosse a performance excelente.
 - **Manual**: a matriz abre o caso pela tela quando o desvio não é de produtividade (conduta,
   processo, retrabalho) - por isso `metric_name` é texto livre, não um enum.
 
@@ -44,7 +44,7 @@ from app.modules.operations.models import OperationOrder, OperationTeamModel
 # Importa o helper de data local da Operação Analítica de propósito: ele encapsula a aritmética de
 # fuso que difere entre PostgreSQL (produção) e SQLite (testes). Reimplementar aqui significaria
 # duas verdades sobre "que dia essa O.S. fechou" - exatamente o tipo de divergência que faria o caso
-# gerado não bater com o calendário que o supervisor abre para conferir.
+# gerado não bater com o calendário que o supervisor acessa para conferir.
 from app.modules.operations.queries import _local_closed_date
 from app.services.regional import effective_managed_regionals, normalize_regional
 
@@ -241,7 +241,7 @@ def generate_performance_cases(
 
     for member in members:
         model = team_models.get(member.team_model_id)
-        if model is None or not model.daily_target:
+        if model is None or not model.median_from_quantity:
             continue
         key = (_norm(member.responsible_name), _norm(member.regional))
         bucket = produced.get(key)
@@ -249,7 +249,11 @@ def generate_performance_cases(
             skipped_insufficient_data += 1
             continue
         evaluated += 1
-        expected = float(model.daily_target)
+        # "Esperado" usa o piso da faixa "boa" (median_from_quantity), não o teto do modelo
+        # (daily_target/target_quantity, que separa "boa" de "excelente") - decisão do usuário em
+        # 2026-08-20: cobrar como se o piso da média fosse a régua justa, não a régua da
+        # performance excelente, que inflava desvio e severidade de quem só estava "na média".
+        expected = float(model.median_from_quantity)
         actual = bucket["total"] / bucket["days"]
         if actual >= expected:
             continue
@@ -294,6 +298,35 @@ def generate_performance_cases(
     }
 
 
+def _resolve_member_for_case(db: Session, responsible_name: str) -> ManagementOperationalMember | None:
+    """Acha o `ManagementOperationalMember` de uma pessoa só pelo NOME - não pela regional que a
+    tela de origem (calendário) estava mostrando no momento do clique. Achado real da auditoria de
+    2026-08-21: casar por (nome, regional recebida) fazia o caso nascer sem member/collaborator_id/
+    supervisor_user_id sempre que a regional do calendário divergia da regional canônica do membro
+    (ex.: pessoa com cadastro manual numa regional mas histórico de O.S. recente noutra).
+
+    Uma pessoa pode ter mais de uma linha (uma por regional em que teve cadastro/atividade, ver
+    `resolve_responsible_regional_candidates`) - entre elas, prioriza a que vem de cadastro manual
+    (`source="assignment"`) sobre a inferida por histórico de O.S.; entre iguais, a mais recente
+    por `last_order_at`."""
+    normalized_name = _norm(responsible_name)
+    candidates = [
+        candidate
+        for candidate in db.scalars(select(ManagementOperationalMember)).all()
+        if _norm(candidate.responsible_name) == normalized_name
+    ]
+    if not candidates:
+        return None
+
+    def sort_key(candidate: ManagementOperationalMember) -> tuple[int, float]:
+        is_manual = 0 if candidate.source == "assignment" else 1
+        recency = -(candidate.last_order_at.timestamp() if candidate.last_order_at else 0)
+        return (is_manual, recency)
+
+    candidates.sort(key=sort_key)
+    return candidates[0]
+
+
 def get_or_create_daily_case(
     db: Session,
     *,
@@ -312,12 +345,14 @@ def get_or_create_daily_case(
 
     Diferente de `generate_performance_cases` (varredura em lote do mês fechado), este é criado
     sob demanda, um dia de cada vez, a partir do que o supervisor está vendo no drill."""
-    normalized_regional = normalize_regional(regional)
-    target_key = (_norm(responsible_name), _norm(normalized_regional))
-    # Compara em Python (via `_norm`, que casefold + colapsa espaços) em vez de SQL - mesmo
-    # criterio de idempotencia que `generate_performance_cases` ja usa para este mesmo par de
-    # campos, para as duas formas de abrir caso nunca divergirem sobre o que conta como "o mesmo"
-    # responsavel/regional.
+    # Regional CANÔNICA (do membro, quando existir) em vez da regional que o calendário estava
+    # mostrando no clique - decisão do usuário em 2026-08-21: o caso reflete a regional oficial do
+    # colaborador, mesmo que divirja do que a tela de origem exibia naquele momento (ver
+    # generic-riding-petal.md, Fase 3). A idempotência abaixo usa a mesma chave canônica, então
+    # duas aberturas da mesma pessoa/dia nunca duplicam caso só por causa de drift na tela.
+    member = _resolve_member_for_case(db, responsible_name)
+    canonical_regional = member.regional if member else normalize_regional(regional)
+    target_key = (_norm(responsible_name), _norm(canonical_regional))
     same_day_cases = db.scalars(
         select(ManagementCase).where(
             ManagementCase.case_type == CASE_TYPE_DAILY_BELOW,
@@ -336,22 +371,13 @@ def get_or_create_daily_case(
         deviation_pct = round(max(0.0, (expected_value - actual_value) / expected_value * 100), 1)
         severity = severity_for(deviation_pct, settings)
 
-    member = next(
-        (
-            candidate
-            for candidate in db.scalars(select(ManagementOperationalMember)).all()
-            if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key
-        ),
-        None,
-    )
-
     item = ManagementCase(
         case_type=CASE_TYPE_DAILY_BELOW,
         source_module="operations_calendar",
         reference_date=reference_date,
         reference_month=reference_date.month,
         reference_year=reference_date.year,
-        regional=normalized_regional,
+        regional=canonical_regional,
         collaborator_id=member.collaborator_id if member else None,
         responsible_name=responsible_name,
         supervisor_user_id=member.supervisor_user_id if member else None,
@@ -368,6 +394,241 @@ def get_or_create_daily_case(
     db.add(item)
     db.flush()
     return item, True
+
+
+def get_or_create_monthly_case(
+    db: Session,
+    *,
+    responsible_name: str,
+    regional: str,
+    reference_year: int,
+    reference_month: int,
+    expected_value: float | None,
+    actual_value: float,
+    created_by: int | None = None,
+) -> tuple[ManagementCase, bool]:
+    """Abre (ou devolve, se já existir) o caso mensal de produtividade de UM colaborador, sob
+    demanda, a partir do detalhe mensal do calendário - mesmo espírito de `get_or_create_daily_case`,
+    mas para `CASE_TYPE_PRODUCTIVITY`. Antes desta função, o caso mensal só nascia em lote (clique
+    em "Gerar casos do mês" pela matriz, ou o loop automático) - não havia como abrir o caso de UM
+    colaborador específico direto de onde o supervisor já está vendo o desvio.
+
+    `reference_year`/`reference_month` precisam ser um mês já fechado (mês corrente em diante é
+    rejeitado pelo chamador antes de chegar aqui - ver router). Idempotente pela MESMA chave de
+    `generate_performance_cases` (tipo, responsável normalizado, regional normalizada,
+    competência): rodar a geração em lote depois de um caso já aberto por aqui nunca duplica, e
+    vice-versa."""
+    # Ver comentário equivalente em `get_or_create_daily_case` - regional canônica do membro em
+    # vez da regional que o calendário mostrava no clique.
+    member = _resolve_member_for_case(db, responsible_name)
+    canonical_regional = member.regional if member else normalize_regional(regional)
+    target_key = (_norm(responsible_name), _norm(canonical_regional))
+    same_month_cases = db.scalars(
+        select(ManagementCase).where(
+            ManagementCase.case_type == CASE_TYPE_PRODUCTIVITY,
+            ManagementCase.reference_year == reference_year,
+            ManagementCase.reference_month == reference_month,
+        )
+    ).all()
+    for candidate in same_month_cases:
+        if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key:
+            return candidate, False
+
+    settings = load_settings(db)
+    due_days = int(_setting_float(settings, "management_case_due_days"))
+    deviation_pct = None
+    severity = "medium"
+    if expected_value:
+        deviation_pct = round(max(0.0, (expected_value - actual_value) / expected_value * 100), 1)
+        severity = severity_for(deviation_pct, settings)
+
+    month_end = date(reference_year, reference_month, calendar_module.monthrange(reference_year, reference_month)[1])
+    item = ManagementCase(
+        case_type=CASE_TYPE_PRODUCTIVITY,
+        source_module="operations_calendar",
+        reference_date=month_end,
+        reference_month=reference_month,
+        reference_year=reference_year,
+        regional=canonical_regional,
+        collaborator_id=member.collaborator_id if member else None,
+        responsible_name=responsible_name,
+        supervisor_user_id=member.supervisor_user_id if member else None,
+        team_model_id=member.team_model_id if member else None,
+        metric_name=METRIC_DAILY_AVERAGE,
+        expected_value=expected_value,
+        actual_value=actual_value,
+        deviation_value=deviation_pct,
+        severity=severity,
+        status="pending",
+        due_date=date.today() + timedelta(days=due_days),
+        created_by=created_by,
+    )
+    db.add(item)
+    db.flush()
+    return item, True
+
+
+def _team_model_dict(model: OperationTeamModel) -> dict:
+    """Serializa só o que `classify_daily_performance` precisa - a mesma forma que
+    `operations.services.monthly_calendar` monta para o calendário, para as duas nunca lerem os
+    campos de jeitos diferentes."""
+    return {
+        "daily_target": model.daily_target,
+        "median_from_quantity": model.median_from_quantity,
+        "good_from_quantity": model.good_from_quantity,
+        "target_rules": [
+            {
+                "period_type": rule.period_type,
+                "enabled": rule.enabled,
+                "median_from_quantity": rule.median_from_quantity,
+                "good_from_quantity": rule.good_from_quantity,
+                "target_quantity": rule.target_quantity,
+            }
+            for rule in model.target_rules
+        ],
+    }
+
+
+def _rule_for_day(model_dict: dict, day: date) -> dict | None:
+    """Regra de meta aplicavel ao dia da semana de `day`, ou `None` quando o modelo nao espera
+    produção nesse período (ex.: fim de semana sem regra própria) - mesmo critério de
+    `lib/operations-calendar-helpers.ts:dayTarget`."""
+    period_type = "sunday" if day.weekday() == 6 else "saturday" if day.weekday() == 5 else "weekday"
+    rule = next((item for item in model_dict["target_rules"] if item["period_type"] == period_type), None)
+    if rule is not None:
+        return rule if rule["enabled"] else None
+    if day.weekday() < 5:
+        return {
+            "enabled": True,
+            "median_from_quantity": model_dict["median_from_quantity"],
+            "good_from_quantity": model_dict["good_from_quantity"],
+            "target_quantity": model_dict["daily_target"],
+        }
+    return None
+
+
+def is_scheduled_workday(member: ManagementOperationalMember, day: date) -> bool:
+    """`False` quando `day` cai na folga da escala alternada (12x36 etc.) desse colaborador - ver
+    `MEMBER_SHIFT_PATTERNS`. Sem escala configurada (`shift_pattern` nulo/"standard", ou dados
+    incompletos), sempre `True` - mesmo comportamento de antes desta função existir, pra não
+    quebrar quem já funcionava certo com a régua padrão de segunda a sexta."""
+    if member.shift_pattern != "alternating":
+        return True
+    if not member.shift_anchor_date or not member.shift_cycle_days_on or not member.shift_cycle_days_off:
+        return True
+    cycle_length = member.shift_cycle_days_on + member.shift_cycle_days_off
+    if cycle_length <= 0:
+        return True
+    # `%` do Python sempre devolve resultado no sinal do divisor (positivo aqui), então funciona
+    # tanto pra `day` depois quanto antes de `shift_anchor_date`.
+    offset = (day - member.shift_anchor_date).days % cycle_length
+    return offset < member.shift_cycle_days_on
+
+
+def generate_daily_cases_for_date(
+    db: Session,
+    *,
+    day: date,
+    created_by: int | None = None,
+) -> dict:
+    """Abre automaticamente o caso "dia abaixo da meta" (`CASE_TYPE_DAILY_BELOW`) para todo
+    responsável/regional com meta ativa no dia informado (segundo o modelo de equipe e o dia da
+    semana) que produziu abaixo do limiar "below" - **incluindo produção zero**. Decisão de
+    produto: ao contrário de `classify_daily_performance` (usado pelo calendário, que trata 0 como
+    "neutro" para não pintar de vermelho quem estava de férias/atestado), aqui zero SEMPRE conta -
+    o caso nasce e cabe ao colaborador/supervisor justificar o motivo (inclusive "estava de
+    férias"), em vez de o sistema tentar adivinhar antes de abrir o caso.
+
+    Antes desta função, esse caso só nascia quando o supervisor clicava em "Justificar dia" no
+    drill do calendário - nenhum caso nascia sozinho, nem para quem produziu abaixo da meta nem
+    para quem não produziu nada num dia esperado.
+
+    Respeita a escala alternada (12x36 etc.) de quem tem uma configurada - dia de folga não é
+    avaliado (ver `is_scheduled_workday`), achado real 2026-08-20: sem essa checagem, a folga de
+    equipes 12x36 virava caso de "produção zero num dia esperado" indevidamente.
+
+    Idempotente via `get_or_create_daily_case`: rodar de novo para o mesmo dia nunca duplica caso,
+    e um caso já justificado/resolvido não é reaberto."""
+    start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc) - timedelta(days=1)
+    end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+    closed_day = _local_closed_date(db)
+    rows = db.execute(
+        select(OperationOrder.responsible, OperationOrder.regional, closed_day, func.count(OperationOrder.id))
+        .where(
+            OperationOrder.closed_at.is_not(None),
+            OperationOrder.closed_at.between(start, end),
+            OperationOrder.responsible.is_not(None),
+            OperationOrder.responsible != "",
+        )
+        .group_by(OperationOrder.responsible, OperationOrder.regional, closed_day)
+    ).all()
+
+    produced: dict[tuple[str, str], dict] = {}
+    for responsible, regional, closed_date, quantity in rows:
+        local_day = _as_date(closed_date)
+        if local_day != day:
+            continue
+        normalized_regional = normalize_regional(str(regional or ""))
+        key = (_norm(responsible), _norm(normalized_regional))
+        # Mesmo (responsavel, regional) pode aparecer em mais de uma linha se o recorte de fuso
+        # de `_local_closed_date` colidir por acaso com outra regional grafada diferente antes da
+        # normalizacao - soma em vez de sobrescrever, mesmo tratamento do agregado mensal.
+        bucket = produced.setdefault(key, {"responsible": responsible, "regional": normalized_regional, "quantity": 0})
+        bucket["quantity"] += int(quantity or 0)
+
+    # Base é a estrutura operacional ativa, não quem produziu algo no dia - só assim um dia com
+    # produção ZERO (ninguém aparece nas linhas de `produced`) também é avaliado.
+    members = db.scalars(
+        select(ManagementOperationalMember).where(
+            ManagementOperationalMember.is_active.is_(True),
+            ManagementOperationalMember.team_model_id.is_not(None),
+            ManagementOperationalMember.status.not_in(("outside_operation", "inactive")),
+        )
+    ).all()
+    team_models = {model.id: model for model in db.scalars(select(OperationTeamModel)).all() if model.active}
+
+    created = 0
+    already_open = 0
+    evaluated = 0
+    for member in members:
+        if not is_scheduled_workday(member, day):
+            continue
+        model = team_models.get(member.team_model_id)
+        if model is None:
+            continue
+        model_dict = _team_model_dict(model)
+        rule = _rule_for_day(model_dict, day)
+        if rule is None:
+            continue
+        key = (_norm(member.responsible_name), _norm(member.regional))
+        info = produced.get(key)
+        quantity = info["quantity"] if info else 0
+        evaluated += 1
+        if quantity >= int(rule["median_from_quantity"]):
+            continue
+        _, was_created = get_or_create_daily_case(
+            db,
+            responsible_name=info["responsible"] if info else member.responsible_name,
+            regional=info["regional"] if info else member.regional,
+            reference_date=day,
+            # "Esperado" é o piso da faixa "boa" (median_from_quantity), não o teto do dia
+            # (target_quantity) - mesma decisão do agregado mensal, acima.
+            expected_value=float(rule["median_from_quantity"]),
+            actual_value=float(quantity),
+            created_by=created_by,
+        )
+        if was_created:
+            created += 1
+        else:
+            already_open += 1
+
+    db.flush()
+    return {
+        "created_cases": created,
+        "already_open_cases": already_open,
+        "evaluated_members": evaluated,
+        "reference_date": day.isoformat(),
+    }
 
 
 # --- Escopo de visibilidade -------------------------------------------------------------------
@@ -424,6 +685,16 @@ class ManagementCaseFilters:
 
 
 def case_filter_conditions(filters: ManagementCaseFilters) -> list:
+    if filters.status and filters.statuses and filters.status not in filters.statuses:
+        # status="resolved"/"rejected" + only_open=true (que popula `statuses` com os status
+        # abertos) é uma contradição lógica: o AND das duas condições é sempre vazio. Sem esse
+        # aviso, a chamada "tem sucesso" com 0 casos e quem chamou (humano ou IA) lê isso como
+        # "não há casos", quando na verdade o filtro está mal formado.
+        raise ValueError(
+            f"Filtro contraditório: status={filters.status!r} não está entre os status abertos "
+            f"{sorted(filters.statuses)!r} exigidos por only_open=true. Remova only_open ou "
+            "escolha um status aberto (pending/justified/in_progress)."
+        )
     conditions: list = []
     if filters.status:
         conditions.append(ManagementCase.status == filters.status)
@@ -529,6 +800,97 @@ def summarize_cases(db: Session, base_conditions: list) -> dict:
         "resolved_cases": resolved,
         "overdue_cases": overdue,
         "high_severity_open": high_severity,
+    }
+
+
+def bulk_review_cases(
+    db: Session,
+    *,
+    case_ids: list[int],
+    status: str,
+    review_note: str | None,
+    reviewer_id: int,
+    scope_conditions: list,
+) -> dict:
+    """Aplica a MESMA decisão (`review_case`, um por um) a vários casos de uma vez - pedido do
+    usuário em 2026-08-20: matriz não quer abrir caso por caso pra aprovar em lote quando o motivo
+    é o mesmo pra todos. Casos fora do escopo do revisor ou ainda "pending" (sem justificativa -
+    mesma regra do endpoint individual, não dá pra resolver o que não foi justificado) são
+    pulados, não erram a chamada inteira."""
+    rows = db.scalars(
+        select(ManagementCase).where(ManagementCase.id.in_(case_ids), *scope_conditions)
+    ).all()
+    found_ids = {item.id for item in rows}
+    not_found = len(set(case_ids)) - len(found_ids)
+
+    updated = 0
+    skipped_pending = 0
+    now = datetime.now(timezone.utc)
+    for item in rows:
+        if item.status == "pending" and status == "resolved":
+            skipped_pending += 1
+            continue
+        item.status = status
+        item.reviewed_by = reviewer_id
+        item.reviewed_at = now
+        if review_note:
+            db.add(ManagementCaseComment(case_id=item.id, user_id=reviewer_id, comment=review_note.strip()))
+        updated += 1
+
+    return {"updated_cases": updated, "skipped_pending": skipped_pending, "not_found": not_found}
+
+
+_DIAGNOSTICS_TOP_N = 15
+
+
+def _diagnostics_bucket(rows: list[tuple[str, str, date | None]]) -> list[dict]:
+    """`rows` é uma lista de (chave, status, due_date) já filtrada por uma dimensão (regional,
+    responsável ou motivo) - agrega em memória em vez de uma query agregada por dimensão, porque o
+    volume de casos é pequeno (nunca mais que alguns milhares) e assim as três dimensões
+    compartilham a MESMA leitura do banco (ver `case_diagnostics`)."""
+    today = date.today()
+    buckets: dict[str, dict] = {}
+    for key, status, due_date in rows:
+        bucket = buckets.setdefault(key, {"key": key, "total": 0, "open_cases": 0, "overdue_cases": 0})
+        bucket["total"] += 1
+        if status in OPEN_CASE_STATUSES:
+            bucket["open_cases"] += 1
+            if due_date is not None and due_date < today:
+                bucket["overdue_cases"] += 1
+    ordered = sorted(buckets.values(), key=lambda item: (-item["total"], item["key"]))
+    return ordered[:_DIAGNOSTICS_TOP_N]
+
+
+def case_diagnostics(db: Session, conditions: list) -> dict:
+    """Diagnóstico agregado dos casos no recorte filtrado - "quem mais falha, por regional/
+    motivo", pedido do usuário em 2026-08-20 pra matriz não precisar contar caso por caso na
+    tabela. Mesmo recorte (`conditions`) da listagem/resumo, pra os três nunca divergirem."""
+    rows = db.execute(
+        select(
+            ManagementCase.regional,
+            ManagementCase.responsible_name,
+            ManagementCaseReason.name,
+            ManagementCase.status,
+            ManagementCase.due_date,
+        )
+        .outerjoin(ManagementCaseReason, ManagementCaseReason.id == ManagementCase.reason_id)
+        .where(*conditions)
+    ).all()
+    total = len(rows)
+    by_regional = _diagnostics_bucket(
+        [(regional or "Não identificada", status, due_date) for regional, _, _, status, due_date in rows]
+    )
+    by_responsible = _diagnostics_bucket(
+        [(responsible or "Não identificado", status, due_date) for _, responsible, _, status, due_date in rows]
+    )
+    by_reason = _diagnostics_bucket(
+        [(reason, status, due_date) for _, _, reason, status, due_date in rows if reason]
+    )
+    return {
+        "total_cases": total,
+        "by_regional": [{**bucket, "label": bucket["key"]} for bucket in by_regional],
+        "by_responsible": [{**bucket, "label": bucket["key"]} for bucket in by_responsible],
+        "by_reason": [{**bucket, "label": bucket["key"]} for bucket in by_reason],
     }
 
 

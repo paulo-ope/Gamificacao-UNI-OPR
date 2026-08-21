@@ -4,7 +4,7 @@ import math
 import statistics
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, get_args
 
 from sqlalchemy import Numeric, String, and_, case, cast, func, literal, or_, select
 from sqlalchemy.orm import Session
@@ -543,6 +543,19 @@ def aggregate_orders(
     conectores configurados). Com 2+ dimensões, `label` some e cada dimensão pedida aparece como
     sua própria chave (ex.: `{"regional": "...", "subject": "...", "quantity": ...}`) - aditivo,
     não quebra quem já chama com 1 dimensão só."""
+    if metric not in get_args(AggregationMetric):
+        # Mesma classe de bug já corrigida em `_group_label` para `group_by` (ver comentário ali,
+        # "Bug real encontrado e corrigido em 2026-08-15"): um `metric` desconhecido caía
+        # silenciosamente no `else` final (branch "quantidade_fechada"), devolvendo HTTP 200 com
+        # números plausíveis mas errados, sem aviso nenhum. A rota REST (`AiAggregationRequest.metric`,
+        # `Literal`) já rejeitava isso com 422 - só a tool MCP (`opr_aggregate_orders`, que chama
+        # `aggregate_orders` direto, sem passar pelo schema Pydantic) não validava. Corrigido aqui,
+        # na função raiz usada por ambos os caminhos, para nunca mais divergir entre API/MCP.
+        raise ValueError(
+            f"metric inválido: '{metric}'. Métricas aceitas: "
+            f"{', '.join(get_args(AggregationMetric))}."
+        )
+
     filters, effective_os_subjects, alias_warning = _normalize_os_subjects_alias(filters)
     dims = _group_labels(group_by)
     labels = [_group_label(db, dim) for dim in dims]
@@ -588,13 +601,16 @@ def aggregate_orders(
         entries = [(row[:-1], int(row[-1]), float(row[-1])) for row in rows]
 
     elif metric == "quantidade_backlog":
+        # Backlog é "o que ainda está aberto até `end`" (mesma semântica de `backlog_aging`,
+        # que usa só opened_at <= reference_at) - NÃO usar `start` como piso de abertura, senão
+        # O.S. antigas ainda abertas somem do resultado só por terem sido abertas antes do período.
         conditions = _dimension_conditions_with_text(db, user, filters)
         rows = db.execute(
             select(*labels, func.count(OperationOrder.id))
             .where(
                 *conditions,
                 OperationOrder.is_closed.is_(False),
-                OperationOrder.opened_at.between(start, end),
+                OperationOrder.opened_at <= end,
             )
             .group_by(*labels)
         ).all()
@@ -1154,11 +1170,19 @@ def backlog_history(
     }.get(group_by)
 
     columns = (OperationBacklogSnapshot.snapshot_date, group_column) if group_column is not None else (OperationBacklogSnapshot.snapshot_date,)
-    rows = db.execute(select(*columns, func.sum(count_column)).where(*conditions).group_by(*columns)).all()
+    rows = db.execute(
+        select(*columns, func.sum(count_column), func.max(OperationBacklogSnapshot.created_at))
+        .where(*conditions)
+        .group_by(*columns)
+    ).all()
 
     results = []
     for row in rows:
-        item = {"snapshot_date": row[0], "quantity": int(row[-1] or 0)}
+        # `captured_at` = quando a captura diária de fato rodou (OperationBacklogSnapshot.created_at,
+        # antes gravado mas nunca lido/retornado) - achado real da auditoria de 2026-08-21: sem
+        # isso, não há como saber se o snapshot de "hoje" tem 5 minutos ou quase 24h, nem comparar
+        # com segurança contra um número "ao vivo" (ex.: opr_backlog_aging, que expõe generated_at).
+        item = {"snapshot_date": row[0], "quantity": int(row[-2] or 0), "captured_at": row[-1]}
         if group_column is not None:
             item["group"] = row[1]
         results.append(item)

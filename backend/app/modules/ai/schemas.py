@@ -377,6 +377,10 @@ class AiBacklogHistoryPoint(BaseModel):
     snapshot_date: date
     quantity: int
     group: str | None = None
+    # Quando a captura diária deste snapshot de fato rodou (UTC) - permite saber se o dado de
+    # "hoje" está fresco (rodou há minutos) ou desatualizado (rodou há quase 24h), e comparar com
+    # segurança contra um número "ao vivo" (ex.: opr_backlog_aging, que expõe generated_at).
+    captured_at: datetime
 
 
 class AiWarrantyAnalyticsRequest(BaseModel):
@@ -500,6 +504,24 @@ class AiOnuSignalHistoryRequest(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
     limit: int = Field(default=500, ge=1, le=2000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AiManagementCaseDiagnosticsRequest(BaseModel):
+    """Diagnóstico agregado de casos de Gestão Integrada (produtividade abaixo da meta) - "quem
+    mais não bate meta, por regional/colaborador/motivo" - pedido do usuário em 2026-08-20 pra
+    facilitar essa análise pela IA sem precisar abrir a tela. Mesmos filtros da tela de Gestão."""
+
+    status: str | None = None
+    severity: str | None = None
+    regional: str | None = None
+    case_type: str | None = None
+    reference_year: int | None = None
+    reference_month: int | None = Field(default=None, ge=1, le=12)
+    only_overdue: bool = False
+    only_open: bool = False
+    search: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 

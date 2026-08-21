@@ -366,6 +366,12 @@ class OperationLoginStatusSnapshot(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Passthrough direto de `ultima_conexao_final` do IXC (achado real da auditoria de
+    # 2026-08-21) - fica NULL enquanto o login está online AGORA (reflete o estado/sessão atual,
+    # é zerado pelo próprio IXC ao reconectar). NÃO é "a última vez que este login já caiu
+    # historicamente" - pra isso, usar o histórico append-only desta mesma tabela
+    # (OperationLoginStatusSnapshot, filtrando captured_at) ou `recent_events` de
+    # `opr_get_login_detail`.
     last_disconnected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -397,6 +403,8 @@ class OperationLoginCurrentStatus(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Ver docstring equivalente em OperationLoginStatusSnapshot.last_disconnected_at acima - mesma
+    # semântica (passthrough de ultima_conexao_final, NULL enquanto online, não é histórico).
     last_disconnected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Só muda quando `online` muda de valor em relação à captura anterior - NÃO é "última vez que
     # vimos esse login" (isso é `captured_at`). É o campo que a detecção de transição usa.

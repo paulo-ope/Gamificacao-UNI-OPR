@@ -45,7 +45,9 @@ export type Permission =
   | "management:read"
   | "management:manage_structure"
   | "management:write_justification"
+  | "management:claim_member"
   | "management:review"
+  | "management:generate_cases"
   | "management:admin"
   | "admin:users:read"
   | "admin:users:write"
@@ -122,6 +124,7 @@ export type ManagementOperationalMember = {
   collaborator_structure_status: string | null;
   collaborator_supervisor_user_id: number | null;
   collaborator_supervisor_name: string | null;
+  collaborator_regional: string | null;
   gamification_status: "registered" | "pending" | "missing" | "inactive" | string;
   ixc_employee_id: number | null;
   responsible_name: string;
@@ -134,6 +137,10 @@ export type ManagementOperationalMember = {
   source: string;
   is_active: boolean;
   notes: string | null;
+  shift_pattern: "standard" | "alternating" | null;
+  shift_cycle_days_on: number | null;
+  shift_cycle_days_off: number | null;
+  shift_anchor_date: string | null;
   last_order_at: string | null;
   alerts: string[];
   created_at: string;
@@ -536,6 +543,27 @@ export type ManagementCaseGenerateResult = {
 export type ManagementAutoGenerateSettings = {
   enabled: boolean;
   last_run_date: string | null;
+};
+
+export type ManagementCaseBulkReviewResult = {
+  updated_cases: number;
+  skipped_pending: number;
+  not_found: number;
+};
+
+export type ManagementCaseDiagnosticsBucket = {
+  key: string;
+  label: string;
+  total: number;
+  open_cases: number;
+  overdue_cases: number;
+};
+
+export type ManagementCaseDiagnostics = {
+  total_cases: number;
+  by_regional: ManagementCaseDiagnosticsBucket[];
+  by_responsible: ManagementCaseDiagnosticsBucket[];
+  by_reason: ManagementCaseDiagnosticsBucket[];
 };
 
 export type LoginResult = {

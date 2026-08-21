@@ -11,7 +11,7 @@ from app.services.audit_log import record_audit_log, snapshot
 from app.services.regional import effective_managed_regionals, normalize_regional
 
 router = APIRouter(prefix="/users", tags=["users"])
-ALLOWED_ROLES = {"viewer", "operator", "admin", "collaborator", "regional_manager_viewer", "workspace_restricted"}
+ALLOWED_ROLES = {"viewer", "operator", "admin", "collaborator", "regional_manager_viewer", "base_manager", "workspace_restricted"}
 
 
 def _resolve_collaborator_link(db: Session, collaborator_id: int | None, current_user_id: int | None) -> Collaborator | None:

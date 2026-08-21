@@ -65,7 +65,16 @@ def normalize_regional(value: str | None) -> str:
     raw = value.strip()
     if raw in INVALID_REGIONAL_CODES:
         return "NAO IDENTIFICADO"
-    return REGIONAL_CODE_MAP.get(raw, raw)
+    mapped = REGIONAL_CODE_MAP.get(raw)
+    if mapped is not None:
+        return mapped
+    # id_filial numérico desconhecido (fora do mapa e não marcado como inválido): não deixar
+    # vazar como pseudo-regional isolada em filter_options - cai em "NAO IDENTIFICADO" até ser
+    # mapeado em REGIONAL_CODE_MAP. Valores não puramente numéricos (ex.: já vindo como nome de
+    # regional) continuam passando cru.
+    if raw.isdigit():
+        return "NAO IDENTIFICADO"
+    return raw
 
 
 def normalize_regional_grouped(value: str | None) -> str:

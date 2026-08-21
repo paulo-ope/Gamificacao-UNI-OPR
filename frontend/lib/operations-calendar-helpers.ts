@@ -26,7 +26,9 @@ export function dayTarget(model: OperationCalendarTeamModel | null, weekday: num
   if (!model) return null;
   const rule = ruleFor(model, dayPeriod(weekday));
   if (rule) return rule.enabled ? rule : null;
-  return weekday < 5 ? { target_quantity: model.daily_target } : null;
+  return weekday < 5
+    ? { target_quantity: model.daily_target, median_from_quantity: model.median_from_quantity, good_from_quantity: model.good_from_quantity }
+    : null;
 }
 
 export function modelLegend(model: OperationCalendarTeamModel) {

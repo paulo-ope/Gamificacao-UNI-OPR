@@ -25,6 +25,22 @@ def test_sao_felipe_keeps_its_own_identity_for_operacao_analitica():
     assert normalize_regional("13") == "UNI - SAO FELIPE DOESTE"
 
 
+def test_unknown_numeric_filial_code_does_not_leak_as_pseudo_regional():
+    """Bug confirmado: id_filial numerico fora de REGIONAL_CODE_MAP e fora de
+    INVALID_REGIONAL_CODES (ex.: "20", "23") vazava cru como se fosse nome de regional,
+    aparecendo como uma opcao de filtro extra e desconectada em filter_options. Deve cair em
+    "NAO IDENTIFICADO" até ser mapeado."""
+    assert normalize_regional("20") == "NAO IDENTIFICADO"
+    assert normalize_regional("23") == "NAO IDENTIFICADO"
+    assert normalize_regional("999") == "NAO IDENTIFICADO"
+
+
+def test_non_numeric_unmapped_value_still_passes_through():
+    """Nomes de regional que já vêm como texto (não códigos numéricos crus) continuam
+    passando sem alteração - a mudança é restrita a códigos puramente numéricos."""
+    assert normalize_regional("UNI - JI PARANA") == "UNI - JI PARANA"
+
+
 def test_sao_francisco_grouping_still_works_after_adding_rolim_alias():
     """Sanity check: adicionar o agrupamento de Sao Felipe/Rolim nao pode ter quebrado o
     agrupamento existente de Sao Francisco (Sao Miguel + Seringueiras + Sao Francisco do

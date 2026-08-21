@@ -56,7 +56,8 @@ def operation_setup(db_session):
 
 
 def test_engine_opens_case_for_member_below_daily_target(db_session, operation_setup):
-    # 6 dias trabalhados, 2 O.S./dia contra meta de 5 => desvio de 60%, severidade alta.
+    # 6 dias trabalhados, 2 O.S./dia contra o piso "boa" (median_from_quantity=3, default do
+    # modelo) => desvio de 33,3%, severidade media (limiares padrão: alta >=35%, media >=25%).
     for day in range(1, 7):
         for index in range(2):
             db_session.add(_order("Joao Campo", "UNI JARU", day, index))
@@ -69,10 +70,10 @@ def test_engine_opens_case_for_member_below_daily_target(db_session, operation_s
     case = db_session.query(ManagementCase).one()
     assert case.case_type == cases_engine.CASE_TYPE_PRODUCTIVITY
     assert case.status == "pending"
-    assert case.severity == "high"
-    assert case.expected_value == 5.0
+    assert case.severity == "medium"
+    assert case.expected_value == 3.0
     assert case.actual_value == 2.0
-    assert case.deviation_value == 60.0
+    assert case.deviation_value == 33.3
     assert case.supervisor_user_id == operation_setup["supervisor"].id
     assert case.due_date is not None
 
@@ -121,6 +122,10 @@ def test_engine_skips_member_with_insufficient_days_worked(db_session, operation
 def test_engine_counts_orders_closed_late_on_the_last_local_day(db_session, operation_setup):
     """O.S. fechada 22h do dia 31 (local) cai no dia 1 do mês seguinte em UTC. Ela precisa contar
     na competência de julho - senão o colaborador aparece produzindo menos do que produziu."""
+    # "Esperado" é median_from_quantity, não daily_target - sobe pra 5 aqui só pra manter os
+    # números originais deste teste (o que ele valida é a borda de fuso, não o limiar em si).
+    operation_setup["model"].median_from_quantity = 5
+    db_session.flush()
     for day in range(1, 6):
         for index in range(5):
             db_session.add(_order("Joao Campo", "UNI JARU", day, index))
@@ -157,6 +162,10 @@ def test_engine_counts_orders_closed_late_on_the_last_local_day(db_session, oper
 
 
 def test_engine_respects_configured_threshold(db_session, operation_setup):
+    # "Esperado" é median_from_quantity, não daily_target - sobe pra 5 aqui só pra manter os
+    # números originais deste teste (o que ele valida é o limiar configurável, não o piso em si).
+    operation_setup["model"].median_from_quantity = 5
+    db_session.flush()
     # 6 dias com 4,5/dia => desvio de 10%, abaixo do limiar padrão de 15%.
     for day in range(1, 7):
         for index in range(4 if day % 2 else 5):
@@ -329,6 +338,34 @@ def test_admin_sees_every_regional(client, db_session, operation_setup):
     assert [item["severity"] for item in body["items"]] == ["high", "low"]
 
 
+def test_filter_conditions_reject_terminal_status_with_only_open():
+    """status="resolved"/"rejected" + only_open=true é uma contradição lógica (only_open só
+    aceita pending/justified/in_progress): antes, isso passava batido e devolvia 0 casos em
+    silêncio, mesmo com casos "resolved" reais no banco. Agora deve levantar um erro claro em vez
+    de fingir sucesso."""
+    filters = cases_engine.ManagementCaseFilters(status="resolved", statuses=list(cases_engine.OPEN_CASE_STATUSES))
+    with pytest.raises(ValueError, match="resolved"):
+        cases_engine.case_filter_conditions(filters)
+
+
+def test_filter_conditions_allow_open_status_with_only_open():
+    """Um status que já é aberto (ex.: pending) não conflita com only_open - continua funcionando."""
+    filters = cases_engine.ManagementCaseFilters(status="pending", statuses=list(cases_engine.OPEN_CASE_STATUSES))
+    conditions = cases_engine.case_filter_conditions(filters)
+    assert len(conditions) == 2
+
+
+def test_cases_endpoint_rejects_contradictory_status_and_only_open(client, db_session, operation_setup):
+    """Mesma contradição, agora pela rota HTTP: deve responder 422 com mensagem clara, não 200
+    com summary/items zerados como antes."""
+    _make_case(db_session, supervisor_user_id=operation_setup["supervisor"].id, status="resolved")
+    db_session.commit()
+
+    response = client.get("/api/management/cases", params={"status": "resolved", "only_open": True})
+    assert response.status_code == 422
+    assert "resolved" in response.json()["detail"]
+
+
 def test_case_reasons_are_seeded_on_first_read(client, db_session):
     assert db_session.query(ManagementCaseReason).count() == 0
     body = client.get("/api/management/case-reasons").json()
@@ -382,6 +419,183 @@ def test_get_or_create_daily_case_is_idempotent_for_the_same_day(db_session, ope
     assert second_created is False
     assert first.id == second.id
     assert db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_DAILY_BELOW).count() == 1
+
+
+def test_get_or_create_daily_case_uses_canonical_regional_when_calendar_regional_diverges(db_session, operation_setup):
+    """Achado real da auditoria de 2026-08-21: o calendário de operations pode mostrar uma
+    regional diferente da regional canônica do membro (ex.: cadastro manual atualizado depois).
+    Antes desta correção, o caso nascia sem member/collaborator_id/supervisor_user_id porque o
+    casamento era por (nome, regional recebida) - agora casa só pelo nome e grava a canônica."""
+    case, was_created = cases_engine.get_or_create_daily_case(
+        db_session,
+        responsible_name="Joao Campo",
+        regional="UNI - JI PARANA",  # diverge da regional canônica do membro ("UNI JARU")
+        reference_date=date(2026, 7, 16),
+        expected_value=5.0,
+        actual_value=2.0,
+    )
+    db_session.commit()
+
+    assert was_created is True
+    assert case.regional == "UNI JARU"  # canônica do membro, não a recebida do calendário
+    assert case.supervisor_user_id == operation_setup["supervisor"].id
+    assert case.team_model_id == operation_setup["model"].id
+    assert case.collaborator_id == operation_setup["collaborator"].id
+
+
+def test_resolve_member_for_case_prefers_manual_assignment_over_order_history(db_session):
+    """Uma pessoa com 2 linhas (uma manual, outra por histórico de O.S. em regional diferente) -
+    o resolver precisa priorizar a manual, mesmo que a de histórico tenha sido inserida depois."""
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Maria Campo",
+            regional="UNI - ROLIM DE MOURA",
+            status="pending_validation",
+            source="orders",
+            last_order_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        )
+    )
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Maria Campo",
+            regional="UNI JARU",
+            status="pending_validation",
+            source="assignment",
+            last_order_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        )
+    )
+    db_session.flush()
+
+    resolved = cases_engine._resolve_member_for_case(db_session, "maria campo")
+    assert resolved is not None
+    assert resolved.regional == "UNI JARU"
+    assert resolved.source == "assignment"
+
+
+def test_get_or_create_monthly_case_opens_a_new_case(db_session, operation_setup):
+    case, was_created = cases_engine.get_or_create_monthly_case(
+        db_session,
+        responsible_name="Joao Campo",
+        regional="UNI JARU",
+        reference_year=2026,
+        reference_month=7,
+        expected_value=120.0,
+        actual_value=55.0,
+    )
+    db_session.commit()
+
+    assert was_created is True
+    assert case.case_type == cases_engine.CASE_TYPE_PRODUCTIVITY
+    assert case.source_module == "operations_calendar"
+    assert case.metric_name == cases_engine.METRIC_DAILY_AVERAGE
+    assert case.reference_year == 2026
+    assert case.reference_month == 7
+    assert case.expected_value == 120.0
+    assert case.actual_value == 55.0
+    assert case.deviation_value == round((120.0 - 55.0) / 120.0 * 100, 1)
+    assert case.severity == "high"
+    assert case.status == "pending"
+    assert case.supervisor_user_id == operation_setup["supervisor"].id
+    assert case.team_model_id == operation_setup["model"].id
+    assert case.collaborator_id == operation_setup["collaborator"].id
+
+
+def test_get_or_create_monthly_case_is_idempotent_for_the_same_competencia(db_session, operation_setup):
+    first, first_created = cases_engine.get_or_create_monthly_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_year=2026, reference_month=7, expected_value=120.0, actual_value=55.0,
+    )
+    db_session.commit()
+    second, second_created = cases_engine.get_or_create_monthly_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_year=2026, reference_month=7, expected_value=120.0, actual_value=55.0,
+    )
+    db_session.commit()
+
+    assert first_created is True
+    assert second_created is False
+    assert first.id == second.id
+    assert db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_PRODUCTIVITY).count() == 1
+
+
+def test_get_or_create_monthly_case_shares_idempotency_key_with_batch_generation(db_session, operation_setup):
+    """Abrir pelo detalhe mensal e depois rodar a geração em lote (ou vice-versa) não pode
+    duplicar - as duas formas de abrir caso mensal precisam concordar sobre o que é 'o mesmo'
+    responsável/regional/competência."""
+    for day in range(1, 7):
+        for index in range(2):
+            db_session.add(_order("Joao Campo", "UNI JARU", day, index))
+    db_session.flush()
+
+    manual, manual_created = cases_engine.get_or_create_monthly_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_year=YEAR, reference_month=MONTH, expected_value=5.0, actual_value=2.0,
+    )
+    db_session.commit()
+    assert manual_created is True
+
+    batch_result = cases_engine.generate_performance_cases(db_session, year=YEAR, month=MONTH)
+    db_session.commit()
+
+    assert batch_result["created_cases"] == 0
+    assert batch_result["skipped_existing"] == 1
+    assert db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_PRODUCTIVITY).count() == 1
+
+
+def test_monthly_case_endpoint_rejects_the_current_month(client, db_session, operation_setup):
+    today = date.today()
+    response = client.post(
+        "/api/management/cases/monthly",
+        json={
+            "responsible_name": "Joao Campo",
+            "regional": "UNI JARU",
+            "reference_year": today.year,
+            "reference_month": today.month,
+            "expected_value": 120.0,
+            "actual_value": 55.0,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_monthly_case_endpoint_lets_supervisor_open_and_justify_a_closed_month(client, db_session, operation_setup):
+    response = client.post(
+        "/api/management/cases/monthly",
+        json={
+            "responsible_name": "Joao Campo",
+            "regional": "UNI JARU",
+            "reference_year": 2026,
+            "reference_month": 7,
+            "expected_value": 120.0,
+            "actual_value": 55.0,
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["case_type"] == cases_engine.CASE_TYPE_PRODUCTIVITY
+    assert body["status"] == "pending"
+
+    justify = client.post(
+        f"/api/management/cases/{body['id']}/justify",
+        json={"justification_text": "Equipe reduzida por afastamento médico de um dos técnicos."},
+    )
+    assert justify.status_code == 200
+    assert justify.json()["status"] == "justified"
+
+    reopened = client.post(
+        "/api/management/cases/monthly",
+        json={
+            "responsible_name": "Joao Campo",
+            "regional": "UNI JARU",
+            "reference_year": 2026,
+            "reference_month": 7,
+            "expected_value": 120.0,
+            "actual_value": 55.0,
+        },
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["id"] == body["id"]
+    assert reopened.json()["status"] == "justified"
 
 
 def test_daily_case_endpoint_lets_supervisor_open_and_justify_their_own_day(client, db_session, operation_setup):
