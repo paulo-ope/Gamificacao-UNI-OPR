@@ -69,17 +69,17 @@ function dailyCaseKey(responsibleName: string, referenceDate: string): string {
 // pedido do usuário em 2026-08-20, pra não distinguir visualmente duas situações que, pra quem
 // olha o calendário, significam a mesma coisa ("ainda falta justificar esse dia/mês"). Ver o
 // bloco que renderiza a bolinha de cada dia, mais abaixo.
+// "resolved" de propósito fora daqui - um caso encerrado (pela matriz ou sozinho pelo recálculo)
+// não deixa bolinha nenhuma, ver loadDailyCaseStatuses/loadMonthlyCaseStatuses.
 const DAILY_CASE_STATUS_DOT: Record<string, string> = {
   justified: "bg-yellow-400",
   in_progress: "bg-yellow-400",
-  resolved: "bg-emerald-500",
   rejected: "bg-slate-400",
 };
 
 const DAILY_CASE_STATUS_LABEL: Record<string, string> = {
   justified: "Aguardando matriz",
   in_progress: "Aguardando matriz",
-  resolved: "Resolvido pela matriz",
   rejected: "Rejeitado pela matriz",
 };
 
@@ -337,11 +337,11 @@ export function OperationsMonthlyCalendar({
       const next = new Map<string, string>();
       for (const item of page.items) {
         if (!item.responsible_name || !item.reference_date) continue;
-        // Resolvido SOZINHO (reviewed_by nulo - nenhum humano decidiu nada, só a produção
-        // atualizada já batia a meta) não deixa bolinha nenhuma - achado real de 2026-08-21,
-        // confundia o supervisor a achar que ainda tinha algo pra olhar num dia que já está ok.
-        // Resolvido pela matriz (reviewed_by preenchido) continua mostrando a bolinha verde.
-        if (item.status === "resolved" && item.reviewed_by == null) continue;
+        // Caso resolvido (fechado, seja pela matriz ou sozinho pelo recálculo) não deixa bolinha
+        // nenhuma - achado real de 2026-08-21: uma vez encerrado não sobra nada pra olhar naquele
+        // dia, manter marcador aí só confundia o supervisor. Só "pending"/"justified"/
+        // "in_progress"/"rejected" (ainda pedem alguma ação) continuam com indicador.
+        if (item.status === "resolved") continue;
         next.set(dailyCaseKey(item.responsible_name, item.reference_date), item.status);
       }
       setDailyCaseStatusByKey(next);
@@ -364,8 +364,8 @@ export function OperationsMonthlyCalendar({
       const next = new Map<string, string>();
       for (const item of page.items) {
         if (!item.responsible_name) continue;
-        // Mesmo critério do caso diário acima - resolvido sozinho não deixa bolinha.
-        if (item.status === "resolved" && item.reviewed_by == null) continue;
+        // Mesmo critério do caso diário acima - resolvido não deixa bolinha, seja de quem for.
+        if (item.status === "resolved") continue;
         next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), item.status);
       }
       setMonthlyCaseStatusByKey(next);
