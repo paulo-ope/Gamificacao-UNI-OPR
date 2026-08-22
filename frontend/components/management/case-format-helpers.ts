@@ -34,7 +34,14 @@ export function statusTone(status: string) {
 
 export function formatDate(value: string | null) {
   if (!value) return "—";
-  return new Date(value).toLocaleDateString("pt-BR", { timeZone: "America/Porto_Velho" });
+  // `reference_date`/`due_date`/`last_run_date` são datas puras (YYYY-MM-DD, sem hora nem fuso) -
+  // achado real de 2026-08-22: `new Date("2026-08-06")` vira meia-noite UTC, e reformatar esse
+  // instante com `timeZone: "America/Porto_Velho"` (UTC-4) empurrava a data um dia pra trás
+  // (mostrava 05/08 pra um caso de 06/08). Formata os componentes Y-M-D direto, sem passar por
+  // `Date`/fuso nenhum - diferente de `formatDateTime`, que lida com timestamps de verdade.
+  const [year, month, day] = value.slice(0, 10).split("-");
+  if (!year || !month || !day) return "—";
+  return `${day}/${month}/${year}`;
 }
 
 export function formatDateTime(value: string | null) {
