@@ -343,3 +343,120 @@ def test_suggest_shift_pattern_endpoint_returns_the_suggestion(client, db_sessio
 def test_suggest_shift_pattern_endpoint_404s_for_an_unknown_member(client, db_session):
     response = client.get("/api/management/members/999999/shift-pattern-suggestion")
     assert response.status_code == 404
+
+
+# --- Escala e' intrinseca ao modelo 12x36 (nao e' uma config a parte) ---------------------------
+# Pedido do usuario em 2026-08-22: colocar alguem no modelo 12x36 ja liga a escala alternada
+# sozinho (so o padrao/ciclo - a data-ancora continua manual, precisa da turma/dupla de cada um).
+
+
+def test_default_shift_pattern_for_team_model_helper():
+    eligible = OperationTeamModel(name="TECNICO 12/36H")
+    other = OperationTeamModel(name="SUPORTE MOTO")
+    assert management_services.default_shift_pattern_for_team_model(eligible) == ("alternating", 1, 1)
+    assert management_services.default_shift_pattern_for_team_model(other) is None
+    assert management_services.default_shift_pattern_for_team_model(None) is None
+
+
+def test_patch_member_auto_defaults_shift_pattern_when_assigning_a_12x36_model(client, db_session):
+    model = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member()
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(f"/api/management/members/{member.id}", json={"team_model_id": model.id})
+
+    assert response.status_code == 200
+    db_session.refresh(member)
+    assert member.team_model_id == model.id
+    assert member.shift_pattern == "alternating"
+    assert member.shift_cycle_days_on == 1
+    assert member.shift_cycle_days_off == 1
+    assert member.shift_anchor_date is None  # ancora continua manual
+
+
+def test_patch_member_does_not_override_an_explicit_shift_pattern_in_the_same_call(client, db_session):
+    """Se o chamador manda um shift_pattern explicito junto (mesmo "standard"), o auto-default
+    nao pisa em cima - a escolha explicita da mesma chamada sempre vence."""
+    model = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member()
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(
+        f"/api/management/members/{member.id}",
+        json={"team_model_id": model.id, "shift_pattern": None},
+    )
+
+    assert response.status_code == 200
+    db_session.refresh(member)
+    assert member.team_model_id == model.id
+    assert member.shift_pattern is None
+
+
+def test_patch_member_does_not_touch_an_already_alternating_shift_pattern(client, db_session):
+    """Trocar de um 12x36 pra outro 12x36 (ou reenviar o mesmo team_model_id) nao mexe numa
+    escala ja configurada manualmente/pela sugestao - so o primeiro "ligamento" e' automatico."""
+    model = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member(
+        team_model_id=model.id,
+        shift_pattern="alternating",
+        shift_cycle_days_on=1,
+        shift_cycle_days_off=1,
+        shift_anchor_date=MONDAY,
+    )
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(f"/api/management/members/{member.id}", json={"team_model_id": model.id})
+
+    assert response.status_code == 200
+    db_session.refresh(member)
+    assert member.shift_anchor_date == MONDAY  # nao foi resetada
+
+
+def test_patch_member_does_not_default_shift_pattern_for_a_non_12x36_model(client, db_session):
+    model = OperationTeamModel(name="SUPORTE MOTO", daily_target=8, active=True)
+    db_session.add(model)
+    db_session.flush()
+    member = _member()
+    db_session.add(member)
+    db_session.commit()
+
+    response = client.patch(f"/api/management/members/{member.id}", json={"team_model_id": model.id})
+
+    assert response.status_code == 200
+    db_session.refresh(member)
+    assert member.shift_pattern is None
+
+
+def test_refresh_operational_members_auto_defaults_shift_pattern_for_a_new_12x36_member(db_session):
+    from app.modules.management.services import refresh_operational_members
+    from app.modules.operations.models import OperationResponsibleAssignment
+
+    model = OperationTeamModel(name="TECNICO 12/36H", daily_target=7, active=True)
+    db_session.add(model)
+    db_session.flush()
+    db_session.add(
+        OperationResponsibleAssignment(
+            responsible_name="Novo Tecnico 12x36",
+            regional="UNI JARU",
+            team_model_id=model.id,
+        )
+    )
+    db_session.commit()
+
+    refresh_operational_members(db_session)
+    db_session.commit()
+
+    member = db_session.query(ManagementOperationalMember).filter_by(responsible_name="Novo Tecnico 12x36").one()
+    assert member.shift_pattern == "alternating"
+    assert member.shift_cycle_days_on == 1
+    assert member.shift_cycle_days_off == 1
+    assert member.shift_anchor_date is None

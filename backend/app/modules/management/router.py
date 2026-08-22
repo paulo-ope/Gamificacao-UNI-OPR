@@ -200,6 +200,16 @@ def update_member(
     before = snapshot(member)
     updates = payload.model_dump(exclude_unset=True)
 
+    # Escala alternada (dia sim, dia não) é intrínseca ao modelo 12x36 - pedido do usuário em
+    # 2026-08-22: "não seja uma config a parte". Quando esta chamada está trocando o modelo de
+    # equipe pra um 12x36 e não veio junto um shift_pattern explícito, o backend já liga sozinho
+    # (só o padrão/ciclo - a data-âncora continua manual, ver default_shift_pattern_for_team_model).
+    if "team_model_id" in updates and "shift_pattern" not in updates and member.shift_pattern != "alternating":
+        new_team_model = db.get(OperationTeamModel, updates["team_model_id"]) if updates["team_model_id"] is not None else None
+        shift_defaults = management_services.default_shift_pattern_for_team_model(new_team_model)
+        if shift_defaults:
+            updates["shift_pattern"], updates["shift_cycle_days_on"], updates["shift_cycle_days_off"] = shift_defaults
+
     # Escala alternada (12x36) só pode ser ligada em quem é desse modelo de equipe - valida contra
     # o estado EFETIVO pós-update (o PATCH é parcial: team_model_id pode não vir no payload,
     # sobrando o valor já salvo; ou vir junto com shift_pattern na mesma chamada).

@@ -60,6 +60,22 @@ def _find_collaborator(db: Session, responsible_name: str, ixc_employee_id: int 
     return db.scalar(select(Collaborator).where(func.lower(Collaborator.name) == normalized))
 
 
+def default_shift_pattern_for_team_model(team_model: OperationTeamModel | None) -> tuple[str, int, int] | None:
+    """A escala alternada (dia sim, dia não) é intrínseca ao modelo de equipe 12x36 - pedido do
+    usuário em 2026-08-22: "não seja uma config a parte", pra ninguém precisar lembrar de ligar
+    manualmente pra cada colaborador novo. Devolve `(pattern, cycle_on, cycle_off)` quando o
+    modelo é elegível, `None` caso contrário - quem chama só aplica se o membro ainda não tiver
+    um `shift_pattern` explícito.
+
+    A data-âncora (qual dia específico cada colaborador trabalha) continua de fora de propósito -
+    decisão do usuário em 2026-08-21: como o 12x36 precisa de 2 turmas alternadas pra cobertura
+    diária, não dá pra adivinhar em qual turma cada pessoa está, isso exige uma decisão manual
+    (ou a sugestão de `cases.suggest_shift_pattern`, que o supervisor ainda confirma)."""
+    if team_model is None or team_model.name not in ALTERNATING_SHIFT_ELIGIBLE_TEAM_MODEL_NAMES:
+        return None
+    return "alternating", 1, 1
+
+
 def refresh_operational_members(db: Session) -> int:
     """Cria/atualiza candidatos de estrutura operacional sem apagar ajustes manuais.
 
@@ -69,6 +85,7 @@ def refresh_operational_members(db: Session) -> int:
 
     now = datetime.now(timezone.utc)
     touched = 0
+    team_models_by_id = {model.id: model for model in db.scalars(select(OperationTeamModel)).all()}
 
     for candidate in resolve_responsible_regional_candidates(db):
         responsible_name = candidate.responsible_name.strip()
@@ -88,6 +105,10 @@ def refresh_operational_members(db: Session) -> int:
         if member:
             if member.team_model_id is None and candidate.team_model_id is not None:
                 member.team_model_id = candidate.team_model_id
+                if member.shift_pattern is None:
+                    defaults = default_shift_pattern_for_team_model(team_models_by_id.get(candidate.team_model_id))
+                    if defaults:
+                        member.shift_pattern, member.shift_cycle_days_on, member.shift_cycle_days_off = defaults
             if member.ixc_employee_id is None and candidate.ixc_employee_id is not None:
                 member.ixc_employee_id = candidate.ixc_employee_id
             if member.collaborator_id is None and collaborator:
@@ -107,6 +128,7 @@ def refresh_operational_members(db: Session) -> int:
                 status = "outside_operation"
             elif collaborator and collaborator.structure_status == "validated":
                 status = "without_team_model" if candidate.team_model_id is None else "validated_operation"
+            shift_defaults = default_shift_pattern_for_team_model(team_models_by_id.get(candidate.team_model_id))
             db.add(
                 ManagementOperationalMember(
                     responsible_name=responsible_name,
@@ -118,6 +140,9 @@ def refresh_operational_members(db: Session) -> int:
                     last_order_at=candidate.last_order_at,
                     status=status,
                     source=candidate.source if candidate.source != "order_history" else "orders",
+                    shift_pattern=shift_defaults[0] if shift_defaults else None,
+                    shift_cycle_days_on=shift_defaults[1] if shift_defaults else None,
+                    shift_cycle_days_off=shift_defaults[2] if shift_defaults else None,
                 )
             )
             touched += 1
