@@ -337,6 +337,11 @@ export function OperationsMonthlyCalendar({
       const next = new Map<string, string>();
       for (const item of page.items) {
         if (!item.responsible_name || !item.reference_date) continue;
+        // Resolvido SOZINHO (reviewed_by nulo - nenhum humano decidiu nada, só a produção
+        // atualizada já batia a meta) não deixa bolinha nenhuma - achado real de 2026-08-21,
+        // confundia o supervisor a achar que ainda tinha algo pra olhar num dia que já está ok.
+        // Resolvido pela matriz (reviewed_by preenchido) continua mostrando a bolinha verde.
+        if (item.status === "resolved" && item.reviewed_by == null) continue;
         next.set(dailyCaseKey(item.responsible_name, item.reference_date), item.status);
       }
       setDailyCaseStatusByKey(next);
@@ -359,6 +364,8 @@ export function OperationsMonthlyCalendar({
       const next = new Map<string, string>();
       for (const item of page.items) {
         if (!item.responsible_name) continue;
+        // Mesmo critério do caso diário acima - resolvido sozinho não deixa bolinha.
+        if (item.status === "resolved" && item.reviewed_by == null) continue;
         next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), item.status);
       }
       setMonthlyCaseStatusByKey(next);
