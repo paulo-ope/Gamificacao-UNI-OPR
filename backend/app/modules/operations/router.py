@@ -25,6 +25,7 @@ from app.services.ixc_scheduler import (
 )
 from app.services.ixc_client import IxcApiError, IxcQueryLimitError, get_ixc_client
 
+from app.modules.management import services as management_services
 from app.modules.management.models import ManagementOperationalMember
 from app.modules.ai_governance.audit import record_ai_access
 from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
@@ -2134,12 +2135,21 @@ def assign_team_member(
     # refresh_operational_members, que só preenche quando ainda está nulo) - sem este ajuste, uma
     # reatribuição feita aqui nunca chegaria lá, e o painel de Gestão continuaria mostrando o
     # modelo antigo (ou "sem modelo de equipe") pro colaborador reatribuído.
+    # Escala alternada (dia sim, dia não) e' intrinseca ao modelo 12x36 - pedido do usuario em
+    # 2026-08-22: reatribuir o modelo aqui tambem liga a escala sozinho quando o novo modelo e'
+    # 12x36 e o colaborador ainda nao tem shift_pattern explicito (mesmo criterio de
+    # management/router.py::update_member, ver default_shift_pattern_for_team_model).
+    shift_defaults = (
+        management_services.default_shift_pattern_for_team_model(model) if payload.team_model_id is not None else None
+    )
     for member in db.scalars(
         select(ManagementOperationalMember).where(
             func.lower(ManagementOperationalMember.responsible_name) == responsible_name.casefold()
         )
     ):
         member.team_model_id = payload.team_model_id
+        if shift_defaults and member.shift_pattern != "alternating":
+            member.shift_pattern, member.shift_cycle_days_on, member.shift_cycle_days_off = shift_defaults
     record_audit_log(db, user, "update", "operations_responsible_assignments", item.id, before, snapshot(item))
     db.commit()
 
