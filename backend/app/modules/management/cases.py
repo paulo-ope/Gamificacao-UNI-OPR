@@ -346,6 +346,15 @@ CASE_AUTO_REFRESHED_RESOLVED_NOTE = (
     "com atraso) e já atinge ou supera a meta - não há mais desvio a justificar."
 )
 
+# Nota gravada quando um caso diário "pending" é resolvido sozinho porque a escala alternada
+# (12x36 etc.) do colaborador foi configurada DEPOIS do caso já ter sido aberto, e essa data virou
+# folga - o caso nasceu antes de o sistema saber que esse dia não era mais um dia de trabalho
+# esperado (ver `refresh_pending_cases`).
+CASE_NOT_A_WORKDAY_NOTE = (
+    "Resolvido automaticamente: esta data não é mais um dia de trabalho esperado pela escala "
+    "alternada (12x36) configurada para este colaborador - não há desvio a justificar."
+)
+
 
 def _refresh_pending_case(db: Session, case: ManagementCase, *, expected_value: float | None, actual_value: float, settings: dict[str, str]) -> None:
     """Atualiza um caso automático (diário ou mensal) com a produção mais recente ENQUANTO ele
@@ -856,6 +865,18 @@ def refresh_pending_cases(db: Session) -> dict:
             quantity_by_name[norm_name] = quantity_by_name.get(norm_name, 0) + int(quantity or 0)
 
         for case in cases_for_day:
+            # A escala alternada (12x36 etc.) pode ter sido configurada DEPOIS do caso já aberto -
+            # achado real de 2026-08-21: um caso de produção zero num dia que passou a ser folga
+            # não vira desvio nenhum só porque foi aberto antes da escala existir no cadastro.
+            member = _resolve_member_for_case(db, case.responsible_name)
+            if member is not None and not is_scheduled_workday(member, day):
+                case.status = "resolved"
+                case.justification_text = CASE_NOT_A_WORKDAY_NOTE
+                case.justified_at = datetime.now(timezone.utc)
+                db.add(ManagementCaseComment(case_id=case.id, user_id=None, comment=CASE_NOT_A_WORKDAY_NOTE))
+                counts["daily_resolved"] += 1
+                continue
+
             model = team_models.get(case.team_model_id)
             expected_value = case.expected_value
             if model is not None:

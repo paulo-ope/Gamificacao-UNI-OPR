@@ -635,6 +635,33 @@ def test_refresh_pending_cases_resolves_a_daily_case_once_late_orders_close_the_
     assert case.actual_value == 6.0
 
 
+def test_refresh_pending_cases_resolves_a_daily_case_once_shift_pattern_configured_makes_it_a_rest_day(db_session, operation_setup):
+    """Achado real de 2026-08-21: caso aberto ANTES de a escala alternada (12x36) do colaborador
+    ser configurada não vira desvio nenhum só porque nasceu antes - uma vez que o dia passa a ser
+    folga da escala, o caso pendente se resolve sozinho."""
+    cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=0.0,
+    )
+    db_session.commit()
+
+    member = operation_setup["member"]
+    member.shift_pattern = "alternating"
+    member.shift_cycle_days_on = 1
+    member.shift_cycle_days_off = 1
+    member.shift_anchor_date = date(2026, 7, 14)  # ancora e' dia de trabalho, entao 1 dia depois (15) e' folga (ciclo 1x1)
+    db_session.commit()
+
+    result = cases_engine.refresh_pending_cases(db_session)
+    db_session.commit()
+
+    assert result["daily_resolved"] == 1
+    case = db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_DAILY_BELOW).one()
+    assert case.status == "resolved"
+    assert case.justification_text == cases_engine.CASE_NOT_A_WORKDAY_NOTE
+    assert case.actual_value == 0.0  # nao recalcula producao - a razao de fechar e' outra
+
+
 def test_refresh_pending_cases_does_not_touch_a_resolved_case(db_session, operation_setup):
     case = _make_case(
         db_session,
