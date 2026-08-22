@@ -337,11 +337,6 @@ export function OperationsMonthlyCalendar({
       const next = new Map<string, string>();
       for (const item of page.items) {
         if (!item.responsible_name || !item.reference_date) continue;
-        // Caso resolvido (fechado, seja pela matriz ou sozinho pelo recálculo) não deixa bolinha
-        // nenhuma - achado real de 2026-08-21: uma vez encerrado não sobra nada pra olhar naquele
-        // dia, manter marcador aí só confundia o supervisor. Só "pending"/"justified"/
-        // "in_progress"/"rejected" (ainda pedem alguma ação) continuam com indicador.
-        if (item.status === "resolved") continue;
         next.set(dailyCaseKey(item.responsible_name, item.reference_date), item.status);
       }
       setDailyCaseStatusByKey(next);
@@ -364,8 +359,6 @@ export function OperationsMonthlyCalendar({
       const next = new Map<string, string>();
       for (const item of page.items) {
         if (!item.responsible_name) continue;
-        // Mesmo critério do caso diário acima - resolvido não deixa bolinha, seja de quem for.
-        if (item.status === "resolved") continue;
         next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), item.status);
       }
       setMonthlyCaseStatusByKey(next);
@@ -1125,7 +1118,15 @@ export function OperationsMonthlyCalendar({
                                   ) : (
                                     <span className="text-slate-300">—</span>
                                   )}
-                                  {dailyCaseStatus && dailyCaseStatus !== "pending" ? (
+                                  {dailyCaseStatus === "resolved" ? (
+                                    // Caso encerrado (pela matriz ou sozinho pelo recálculo) não
+                                    // deixa bolinha nenhuma - achado real de 2026-08-22: sem essa
+                                    // checagem explícita, um dia resolvido cuja produção real
+                                    // ainda ficava abaixo da meta caía no fallback de "abaixo da
+                                    // meta, sem justificativa" logo abaixo e voltava a mostrar o
+                                    // vermelho, como se o caso nunca tivesse sido tratado.
+                                    null
+                                  ) : dailyCaseStatus && dailyCaseStatus !== "pending" ? (
                                     <span
                                       className={cn(
                                         "pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full ring-1 ring-white",
@@ -1236,6 +1237,11 @@ export function OperationsMonthlyCalendar({
                               const monthlyCaseStatus = monthlyCaseStatusByKey.get(
                                 collaborator.responsible.trim().toLowerCase().replace(/\s+/g, " "),
                               );
+                              if (monthlyCaseStatus === "resolved") {
+                                // Mesmo motivo do caso diário acima - encerrado não deixa
+                                // bolinha, nem cai no fallback de "abaixo da meta" logo abaixo.
+                                return null;
+                              }
                               if (monthlyCaseStatus && monthlyCaseStatus !== "pending") {
                                 return (
                                   <span
