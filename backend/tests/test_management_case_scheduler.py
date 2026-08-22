@@ -291,3 +291,65 @@ def test_run_daily_auto_generate_once_respects_disabled_setting(db_session, dail
 
     assert result is None
     assert db_session.query(ManagementCase).count() == 0
+
+
+# --- Recálculo diário de casos "pending" (app/modules/management/scheduler.run_refresh_pending_cases_once) ----
+# Achado real de 2026-08-21: O.S. atrasadas deixavam caso "pending" congelado num número velho -
+# este loop recalcula contra a produção fechada até agora, uma vez por dia.
+
+
+def test_run_refresh_pending_cases_once_resolves_a_case_once_production_catches_up(db_session, daily_case_setup, monkeypatch):
+    tuesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 1, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
+    monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: tuesday)}))
+
+    generated = scheduler.run_daily_auto_generate_once()
+    assert generated["created_cases"] == 1
+    case = db_session.query(ManagementCase).one()
+    assert case.status == "pending"
+    assert case.actual_value == 2.0
+
+    first_refresh = scheduler.run_refresh_pending_cases_once()
+    assert first_refresh is not None
+    assert first_refresh["daily_refreshed"] == 1  # ainda abaixo da meta (2 de 5), so refresh, sem resolver
+    db_session.refresh(case)
+    assert case.status == "pending"
+
+    same_day_again = scheduler.run_refresh_pending_cases_once()
+    assert same_day_again is None  # ja rodou hoje, nada a fazer
+
+    # O.S. "chegou atrasada" pro mesmo dia (mesma data-alvo do caso, MONDAY).
+    for index in range(2, 6):
+        db_session.add(
+            OperationOrder(
+                source="ixc",
+                source_order_id=f"OS-late-{index}",
+                order_code=f"OS-late-{index}",
+                regional="UNI JARU",
+                os_type="Suporte",
+                os_subject="Fibra",
+                responsible="Joao Campo",
+                opened_at=datetime(MONDAY.year, MONDAY.month, MONDAY.day, 15, 0, tzinfo=timezone.utc),
+                closed_at=datetime(MONDAY.year, MONDAY.month, MONDAY.day, 15, 0, tzinfo=timezone.utc),
+                is_closed=True,
+                raw_payload={},
+            )
+        )
+    db_session.commit()
+
+    wednesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 2, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
+    monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: wednesday)}))
+
+    second_refresh = scheduler.run_refresh_pending_cases_once()
+    assert second_refresh is not None
+    assert second_refresh["daily_resolved"] == 1
+    db_session.refresh(case)
+    assert case.status == "resolved"
+    assert case.actual_value == 6.0
+
+
+def test_run_refresh_pending_cases_once_respects_disabled_setting(db_session, daily_case_setup):
+    scheduler.set_auto_generate_enabled(False)
+
+    result = scheduler.run_refresh_pending_cases_once()
+
+    assert result is None

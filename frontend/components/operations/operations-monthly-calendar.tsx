@@ -175,6 +175,12 @@ type SelectedCell = {
   performance: OperationPerformanceBand;
   teamModel: OperationCalendarTeamModel | null;
   referenceRegional: string | null;
+  // Status do caso automático já aberto pra este dia (se houver) - achado real de 2026-08-21: um
+  // dia com produção ZERO sempre classifica como "neutral" (decisão de propósito, pra não pintar
+  // de vermelho quem estava de férias/atestado), então o botão "Justificar dia" abaixo, que só
+  // olhava `performance === "below"`, nunca aparecia pra um caso pendente de produção zero -
+  // parecia que "abrir o dia não tinha nada", mesmo já existindo cobrança de justificativa.
+  dailyCaseStatus?: string;
 };
 
 const ALL_RESPONSIBLES = "__ALL__";
@@ -1066,6 +1072,7 @@ export function OperationsMonthlyCalendar({
                               collaborator.team_model,
                               day.weekday,
                             );
+                            const dailyCaseStatus = dailyCaseStatusByKey.get(dailyCaseKey(collaborator.responsible, day.date));
                             const cell: SelectedCell = {
                               day: day.date,
                               regional: regional.regional,
@@ -1075,8 +1082,8 @@ export function OperationsMonthlyCalendar({
                               teamModel: collaborator.team_model,
                               referenceRegional:
                                 collaborator.reference_regional,
+                              dailyCaseStatus,
                             };
-                            const dailyCaseStatus = dailyCaseStatusByKey.get(dailyCaseKey(collaborator.responsible, day.date));
                             return (
                               <Fragment key={day.date}>
                                 <td
@@ -1361,7 +1368,7 @@ export function OperationsMonthlyCalendar({
             </div>
           ) : null}
           {selected &&
-          selected.performance === "below" &&
+          (selected.performance === "below" || selected.dailyCaseStatus === "pending") &&
           selected.responsible !== ALL_RESPONSIBLES &&
           (!selected.periodEnd || selected.periodEnd === selected.day) &&
           canJustifyManagement ? (

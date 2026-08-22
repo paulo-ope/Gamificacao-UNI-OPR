@@ -54,6 +54,18 @@ def test_calendar_uses_specific_weekend_and_monthly_rules():
     assert classify_daily_performance(3, model, date(2026, 7, 19)) == "neutral"
 
 
+def test_calendar_daily_performance_is_neutral_on_a_non_scheduled_day():
+    """Achado real de 2026-08-21: a folga da escala alternada (12x36 etc.) virava "abaixo da
+    meta" no calendário sempre que a produção ficava abaixo do limiar nesse dia - mesmo o motor
+    de casos automáticos já pulando esse dia (`management.cases.is_scheduled_workday`)."""
+    model = {"median_from_quantity": 3, "good_from_quantity": 4, "daily_target": 5}
+
+    assert classify_daily_performance(2, model, is_scheduled_workday=False) == "neutral"
+    assert classify_daily_performance(0, model, is_scheduled_workday=False) == "neutral"
+    # Dia de trabalho normal continua avaliado do jeito de sempre.
+    assert classify_daily_performance(2, model, is_scheduled_workday=True) == "below"
+
+
 def test_work_schedule_supports_regular_and_overnight_shifts():
     from app.modules.operations.services import _outside_schedule
 
@@ -1364,6 +1376,85 @@ def test_team_model_assignment_is_returned_by_monthly_calendar(client, db_sessio
     assert person["team_model"]["daily_target"] == 6
     assert person["team_model"]["excellent_color"] == "#bfdbfe"
     assert person["daily_performance"][date_to.isoformat()] == "below"
+
+
+def test_calendar_marks_a_12x36_rest_day_as_neutral_instead_of_below(client, db_session):
+    """Achado real de 2026-08-21: o calendário não sabia nada sobre a escala alternada individual
+    (só olhava modelo de equipe + dia da semana) - a folga do 12x36 virava "abaixo da meta" com o
+    círculo vermelho de cobrança sempre que a produção residual desse dia ficasse abaixo do
+    limiar. Ver `_shift_info_by_identity` (operations/router.py) e `classify_daily_performance`
+    (operations/services.py)."""
+    from app.modules.management.models import ManagementOperationalMember
+
+    date_from, date_to = current_month_bounds()
+    db_session.add(
+        OperationOrder(
+            source="ixc",
+            source_order_id="rest-day-order",
+            order_code="IXC-REST-1",
+            regional="UNI - MACHADINHO DOESTE",
+            sector="Suporte Externo Fibra",
+            os_type="Manutenção",
+            responsible="Tecnico Doze Trinta Seis",
+            status="Finalizada",
+            status_code="F",
+            is_closed=True,
+            sla_status="on_time",
+            opened_at=_utc_at(date_to, 8),
+            closed_at=_utc_at(date_to, 12),
+            raw_payload={},
+        )
+    )
+    db_session.flush()
+
+    created = client.post(
+        "/api/operations/team-models",
+        json={
+            "name": "TECNICO 12/36H",
+            "daily_target": 6,
+            "median_from_quantity": 4,
+            "good_from_quantity": 5,
+        },
+    )
+    assert created.status_code == 201
+    model_id = created.json()["id"]
+
+    assigned = client.put(
+        "/api/operations/team-members",
+        json={
+            "responsible_name": "Tecnico Doze Trinta Seis",
+            "regional": "UNI - MACHADINHO DOESTE",
+            "team_model_id": model_id,
+        },
+    )
+    assert assigned.status_code == 204
+
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Tecnico Doze Trinta Seis",
+            regional="UNI - MACHADINHO DOESTE",
+            is_active=True,
+            status="validated_operation",
+            team_model_id=model_id,
+            shift_pattern="alternating",
+            shift_cycle_days_on=1,
+            shift_cycle_days_off=1,
+            shift_anchor_date=date_to + timedelta(days=1),  # date_to fica na folga (ver conta no cabecalho do teste)
+        )
+    )
+    db_session.commit()
+
+    calendar = client.get(
+        "/api/operations/calendar",
+        params={
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "regionals": "UNI - MACHADINHO DOESTE",
+        },
+    )
+    assert calendar.status_code == 200
+    person = calendar.json()["regionals"][0]["collaborators"][0]
+    assert person["daily_performance"][date_to.isoformat()] == "neutral"
 
 
 def test_team_model_rejects_overlapping_color_thresholds(client):

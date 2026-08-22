@@ -378,6 +378,33 @@ def _supervised_identities(db: Session, user: User) -> set[str]:
     return {_responsible_identity(name) for name in names}
 
 
+def _shift_info_by_identity(db: Session) -> dict[str, dict]:
+    """Escala alternada (12x36 etc.) de cada colaborador com `shift_pattern="alternating"`, por
+    nome normalizado - pedido do usuário em 2026-08-21: o calendário mensal (`services.
+    monthly_calendar`) pintava o dia de folga do 12x36 como "abaixo da meta" porque não tinha
+    acesso a esse cadastro (fica em `management`, não em `operations`). `management` já importa
+    de `operations` (nunca o contrário) nas camadas de query/serviço - esta função busca aqui, no
+    router, que é o único lugar que pode depender dos dois módulos."""
+    rows = db.execute(
+        select(
+            ManagementOperationalMember.responsible_name,
+            ManagementOperationalMember.shift_pattern,
+            ManagementOperationalMember.shift_cycle_days_on,
+            ManagementOperationalMember.shift_cycle_days_off,
+            ManagementOperationalMember.shift_anchor_date,
+        ).where(ManagementOperationalMember.shift_pattern == "alternating")
+    ).all()
+    return {
+        _responsible_identity(responsible_name): {
+            "shift_pattern": shift_pattern,
+            "shift_cycle_days_on": shift_cycle_days_on,
+            "shift_cycle_days_off": shift_cycle_days_off,
+            "shift_anchor_date": shift_anchor_date,
+        }
+        for responsible_name, shift_pattern, shift_cycle_days_on, shift_cycle_days_off, shift_anchor_date in rows
+    }
+
+
 def _filter_params(
     team_models: list[str] = Query(default_factory=list),
     companies: list[str] = Query(default_factory=list),
@@ -986,7 +1013,9 @@ def calendar_view(
     user: User = Depends(get_current_user),
 ):
     _validated_period(date_from, date_to)
-    return services.monthly_calendar(db, date_to, user, group_by=group_by, **selected_filters)
+    return services.monthly_calendar(
+        db, date_to, user, group_by=group_by, shift_info_by_identity=_shift_info_by_identity(db), **selected_filters
+    )
 
 
 @router.get("/calendar/orders", response_model=OperationOrderPage, dependencies=[Depends(require_permission("operations:view_calendar")), Depends(require_permission("operations:view_order_details"))])

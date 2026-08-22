@@ -116,6 +116,25 @@ class ManagementMemberUpdate(BaseModel):
         return text
 
 
+class ManagementShiftPatternDailyProductionOut(BaseModel):
+    date: date
+    quantity: int
+
+
+class ManagementShiftPatternSuggestionOut(BaseModel):
+    """Sugestão de escala 12x36 a partir da produção real - pedido do usuário em 2026-08-21
+    ("sistema sugere, supervisor confirma"). Nunca é aplicada sozinha: o frontend só usa isto pra
+    pré-preencher o formulário de edição, que segue exigindo salvar pra valer."""
+
+    suggested_pattern: str
+    suggested_cycle_days_on: int | None = None
+    suggested_cycle_days_off: int | None = None
+    suggested_anchor_date: date | None = None
+    confidence: float
+    message: str
+    daily_production: list[ManagementShiftPatternDailyProductionOut] = Field(default_factory=list)
+
+
 class ManagementCaseReasonOut(BaseModel):
     id: int
     name: str

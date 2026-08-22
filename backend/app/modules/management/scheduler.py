@@ -31,7 +31,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.session import SessionLocal
 from app.services.calculation import get_setting, upsert_setting
 
-from .cases import generate_daily_cases_for_date, generate_performance_cases
+from .cases import generate_daily_cases_for_date, generate_performance_cases, refresh_pending_cases
 
 logger = logging.getLogger("management_case_scheduler")
 if not logger.handlers:
@@ -50,6 +50,7 @@ MANAGEMENT_TIMEZONE = ZoneInfo("America/Porto_Velho")
 AUTO_GENERATE_ENABLED_KEY = "management_case_auto_generate_enabled"
 AUTO_GENERATE_LAST_RUN_DATE_KEY = "management_case_auto_generate_last_run_date"
 DAILY_AUTO_GENERATE_LAST_RUN_DATE_KEY = "management_case_daily_auto_generate_last_run_date"
+REFRESH_PENDING_LAST_RUN_DATE_KEY = "management_case_refresh_pending_last_run_date"
 
 
 def auto_generate_enabled() -> bool:
@@ -150,6 +151,36 @@ def run_daily_auto_generate_once() -> dict | None:
         return result
 
 
+def run_refresh_pending_cases_once() -> dict | None:
+    """Recalcula todo caso ainda "pending" contra a produção fechada até agora, uma vez por dia -
+    pedido do usuário em 2026-08-21: O.S. que chegam atrasadas (sincronização do IXC) pra uma data
+    cujo caso automático já tinha sido aberto deixavam o caso congelado num número velho, mesmo o
+    calendário já mostrando a produção atualizada. Ver `cases.refresh_pending_cases`. Usa a MESMA
+    chave de desligar (`AUTO_GENERATE_ENABLED_KEY`) da geração automática - não faz sentido manter
+    isso ligado se a geração em si está desligada."""
+    if not auto_generate_enabled():
+        return None
+    today = datetime.now(MANAGEMENT_TIMEZONE).date()
+
+    with SessionLocal() as db:
+        last_run_raw = get_setting(db, REFRESH_PENDING_LAST_RUN_DATE_KEY, "")
+        if last_run_raw == today.isoformat():
+            logger.info("Recálculo de casos pendentes: já verificado hoje (%s), nada a fazer.", today.isoformat())
+            return None
+        result = refresh_pending_cases(db)
+        upsert_setting(db, REFRESH_PENDING_LAST_RUN_DATE_KEY, today.isoformat())
+        db.commit()
+        logger.info(
+            "Recálculo de casos pendentes: %s diário(s) atualizado(s) (%s resolvido(s) sozinho(s)), "
+            "%s mensal(is) atualizado(s) (%s resolvido(s) sozinho(s)).",
+            result["daily_refreshed"],
+            result["daily_resolved"],
+            result["monthly_refreshed"],
+            result["monthly_resolved"],
+        )
+        return result
+
+
 async def run_management_case_scheduler_loop() -> None:
     while True:
         try:
@@ -160,4 +191,8 @@ async def run_management_case_scheduler_loop() -> None:
             await asyncio.to_thread(run_daily_auto_generate_once)
         except Exception:
             logger.exception("Falha na geração automática de casos de gestão (diária)")
+        try:
+            await asyncio.to_thread(run_refresh_pending_cases_once)
+        except Exception:
+            logger.exception("Falha no recálculo de casos pendentes de gestão")
         await asyncio.sleep(MANAGEMENT_CASE_POLL_SECONDS)

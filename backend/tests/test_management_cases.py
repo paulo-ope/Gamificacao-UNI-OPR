@@ -542,6 +542,151 @@ def test_get_or_create_monthly_case_shares_idempotency_key_with_batch_generation
     assert db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_PRODUCTIVITY).count() == 1
 
 
+# --- Recálculo de caso "pending" contra produção atualizada -------------------------------------
+# Achado real de 2026-08-21: O.S. que chegam atrasadas (sincronização do IXC) pra uma data cujo
+# caso automático já tinha sido aberto deixavam o caso congelado no número velho, mesmo o
+# calendário já mostrando a produção atualizada.
+
+
+def test_get_or_create_daily_case_refreshes_actual_value_while_still_pending(db_session, operation_setup):
+    first, _ = cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=1.0,
+    )
+    db_session.commit()
+    assert first.deviation_value == 80.0
+
+    second, was_created = cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=3.0,
+    )
+    db_session.commit()
+
+    assert was_created is False
+    assert second.id == first.id
+    assert second.actual_value == 3.0
+    assert second.deviation_value == 40.0
+    assert second.status == "pending"
+
+
+def test_get_or_create_daily_case_auto_resolves_when_refreshed_actual_meets_expected(db_session, operation_setup):
+    cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=0.0,
+    )
+    db_session.commit()
+
+    refreshed, was_created = cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=6.0,
+    )
+    db_session.commit()
+
+    assert was_created is False
+    assert refreshed.status == "resolved"
+    assert refreshed.actual_value == 6.0
+    assert refreshed.deviation_value == 0.0
+    assert refreshed.justification_text == cases_engine.CASE_AUTO_REFRESHED_RESOLVED_NOTE
+    assert refreshed.justified_at is not None
+
+
+def test_get_or_create_daily_case_never_refreshes_a_case_someone_already_justified(db_session, operation_setup):
+    case = _make_case(
+        db_session,
+        case_type=cases_engine.CASE_TYPE_DAILY_BELOW,
+        metric_name=cases_engine.METRIC_DAILY_COUNT,
+        reference_date=date(2026, 7, 15),
+        status="justified",
+        expected_value=5.0,
+        actual_value=1.0,
+    )
+    db_session.commit()
+
+    same, was_created = cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=9.0,
+    )
+    db_session.commit()
+
+    assert was_created is False
+    assert same.id == case.id
+    assert same.status == "justified"
+    assert same.actual_value == 1.0  # nao foi tocado - alguem ja justificou, e' historico
+
+
+def test_refresh_pending_cases_resolves_a_daily_case_once_late_orders_close_the_gap(db_session, operation_setup):
+    cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=0.0,
+    )
+    db_session.commit()
+
+    # O.S. "chegou atrasada" pro mesmo dia depois do caso ja ter sido aberto.
+    for index in range(6):
+        db_session.add(_order("Joao Campo", "UNI JARU", 15, index))
+    db_session.commit()
+
+    result = cases_engine.refresh_pending_cases(db_session)
+    db_session.commit()
+
+    assert result["daily_resolved"] == 1
+    case = db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_DAILY_BELOW).one()
+    assert case.status == "resolved"
+    assert case.actual_value == 6.0
+
+
+def test_refresh_pending_cases_resolves_a_daily_case_once_shift_pattern_configured_makes_it_a_rest_day(db_session, operation_setup):
+    """Achado real de 2026-08-21: caso aberto ANTES de a escala alternada (12x36) do colaborador
+    ser configurada não vira desvio nenhum só porque nasceu antes - uma vez que o dia passa a ser
+    folga da escala, o caso pendente se resolve sozinho."""
+    cases_engine.get_or_create_daily_case(
+        db_session, responsible_name="Joao Campo", regional="UNI JARU",
+        reference_date=date(2026, 7, 15), expected_value=5.0, actual_value=0.0,
+    )
+    db_session.commit()
+
+    member = operation_setup["member"]
+    member.shift_pattern = "alternating"
+    member.shift_cycle_days_on = 1
+    member.shift_cycle_days_off = 1
+    member.shift_anchor_date = date(2026, 7, 14)  # ancora e' dia de trabalho, entao 1 dia depois (15) e' folga (ciclo 1x1)
+    db_session.commit()
+
+    result = cases_engine.refresh_pending_cases(db_session)
+    db_session.commit()
+
+    assert result["daily_resolved"] == 1
+    case = db_session.query(ManagementCase).filter_by(case_type=cases_engine.CASE_TYPE_DAILY_BELOW).one()
+    assert case.status == "resolved"
+    assert case.justification_text == cases_engine.CASE_NOT_A_WORKDAY_NOTE
+    assert case.actual_value == 0.0  # nao recalcula producao - a razao de fechar e' outra
+
+
+def test_refresh_pending_cases_does_not_touch_a_resolved_case(db_session, operation_setup):
+    case = _make_case(
+        db_session,
+        case_type=cases_engine.CASE_TYPE_DAILY_BELOW,
+        metric_name=cases_engine.METRIC_DAILY_COUNT,
+        reference_date=date(2026, 7, 15),
+        status="resolved",
+        expected_value=5.0,
+        actual_value=1.0,
+    )
+    db_session.commit()
+
+    for index in range(6):
+        db_session.add(_order("Joao Campo", "UNI JARU", 15, index))
+    db_session.commit()
+
+    result = cases_engine.refresh_pending_cases(db_session)
+    db_session.commit()
+
+    assert result == {"daily_refreshed": 0, "daily_resolved": 0, "monthly_refreshed": 0, "monthly_resolved": 0}
+    db_session.refresh(case)
+    assert case.actual_value == 1.0
+    assert case.status == "resolved"
+
+
 def test_monthly_case_endpoint_rejects_the_current_month(client, db_session, operation_setup):
     today = date.today()
     response = client.post(

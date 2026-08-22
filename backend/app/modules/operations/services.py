@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import User
+from app.services import shift_schedule
 
 from . import queries
 from .models import OperationResponsibleAssignment, OperationTeamModel
@@ -138,7 +139,20 @@ def _classify_quantity(quantity: int, rule: dict | None) -> PerformanceBand:
     return "excellent"
 
 
-def classify_daily_performance(quantity: int, team_model: dict | None, day: date | None = None) -> PerformanceBand:
+def classify_daily_performance(
+    quantity: int,
+    team_model: dict | None,
+    day: date | None = None,
+    *,
+    is_scheduled_workday: bool = True,
+) -> PerformanceBand:
+    # Achado real de 2026-08-21: sem essa checagem, a folga da escala alternada (12x36 etc.) de um
+    # colaborador virava "abaixo da meta" no calendário sempre que ele produzia algo abaixo do
+    # limiar nesse dia - mesmo já não sendo avaliado pelo motor de casos automáticos
+    # (`management.cases.is_scheduled_workday`, que pula esse dia). Um dia de folga é sempre
+    # neutro aqui, igual já é o comportamento pra produção zero.
+    if not is_scheduled_workday:
+        return "neutral"
     if team_model is None:
         return "neutral"
     period_type = "sunday" if day and day.weekday() == 6 else "saturday" if day and day.weekday() == 5 else "weekday"
@@ -159,16 +173,34 @@ def monthly_calendar(
     user: User,
     *,
     group_by: Literal["regional", "collaborator"] = "regional",
+    # Escala alternada (12x36 etc.) por responsável normalizado (`_normalized_identity`), vinda de
+    # `ManagementOperationalMember` - `operations` não pode importar `management` nas camadas de
+    # query/serviço (é o contrário que vale, ver `management/services.py`), então quem já tem
+    # acesso aos dois módulos (o router) busca e injeta aqui. `None`/ausente = ninguém tem escala
+    # configurada, mesmo comportamento de antes desse parâmetro existir.
+    shift_info_by_identity: dict[str, dict] | None = None,
     **filters,
 ) -> dict:
     calendar = deepcopy(queries.monthly_calendar(db, competence, user, group_by=group_by, **filters))
     for regional in calendar["regionals"]:
         for collaborator in regional["collaborators"]:
+            shift_info = (shift_info_by_identity or {}).get(_normalized_identity(collaborator["responsible"]))
             collaborator["daily_performance"] = {
                 day["date"].isoformat(): classify_daily_performance(
                     int(collaborator["daily_counts"].get(day["date"].isoformat(), 0)),
                     collaborator["team_model"],
                     day["date"],
+                    is_scheduled_workday=(
+                        shift_schedule.is_scheduled_workday(
+                            shift_info["shift_pattern"],
+                            shift_info["shift_cycle_days_on"],
+                            shift_info["shift_cycle_days_off"],
+                            shift_info["shift_anchor_date"],
+                            day["date"],
+                        )
+                        if shift_info
+                        else True
+                    ),
                 )
                 for day in calendar["days"]
             }

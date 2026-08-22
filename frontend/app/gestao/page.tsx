@@ -16,7 +16,12 @@ import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
-import type { ManagementDashboard, ManagementOperationalMember, ManagementOptions } from "@/lib/types";
+import type { ManagementDashboard, ManagementOperationalMember, ManagementOptions, ManagementShiftPatternSuggestion } from "@/lib/types";
+
+// Nome do modelo de equipe elegível pra escala alternada, espelhando
+// ALTERNATING_SHIFT_ELIGIBLE_TEAM_MODEL_NAMES do backend (management/models.py) - só serve pra
+// decidir se mostra o botão "Sugerir escala" aqui; quem valida de fato é o backend no PATCH.
+const ALTERNATING_ELIGIBLE_TEAM_MODEL_NAME = "TECNICO 12/36H";
 
 const statusLabels: Record<string, string> = {
   pending_validation: "Pendente",
@@ -566,6 +571,37 @@ function MemberRow({
   onClaim: (id: number) => Promise<void>;
 }) {
   const situation = memberSituation(member);
+  // Sugestão de escala 12x36 a partir da produção real - pedido do usuário em 2026-08-21
+  // ("sistema sugere, supervisor confirma"): só preenche o formulário quando o supervisor clica em
+  // "Aplicar sugestão"; buscar a sugestão nunca salva nada por conta própria.
+  const [shiftSuggestion, setShiftSuggestion] = useState<ManagementShiftPatternSuggestion | null>(null);
+  const [suggestingShift, setSuggestingShift] = useState(false);
+  const [shiftSuggestionError, setShiftSuggestionError] = useState<string | null>(null);
+
+  const requestShiftSuggestion = async () => {
+    setSuggestingShift(true);
+    setShiftSuggestionError(null);
+    try {
+      const result = await api.suggestManagementMemberShiftPattern(member.id);
+      setShiftSuggestion(result);
+    } catch (error) {
+      setShiftSuggestionError(error instanceof Error ? error.message : "Não foi possível calcular a sugestão.");
+    } finally {
+      setSuggestingShift(false);
+    }
+  };
+
+  const applyShiftSuggestion = async () => {
+    if (!shiftSuggestion || shiftSuggestion.suggested_pattern !== "alternating") return;
+    await onUpdate(member.id, {
+      shift_pattern: "alternating",
+      shift_cycle_days_on: shiftSuggestion.suggested_cycle_days_on,
+      shift_cycle_days_off: shiftSuggestion.suggested_cycle_days_off,
+      shift_anchor_date: shiftSuggestion.suggested_anchor_date,
+    });
+    setShiftSuggestion(null);
+  };
+
   return (
     <TableRow>
       {canManage ? (
@@ -642,6 +678,30 @@ function MemberRow({
                 disabled={isSaving}
                 onChange={(event) => void onUpdate(member.id, { shift_anchor_date: event.target.value || null })}
               />
+            ) : null}
+            {member.team_model_name === ALTERNATING_ELIGIBLE_TEAM_MODEL_NAME ? (
+              <div className="grid gap-1">
+                <Button type="button" size="sm" variant="outline" className="h-7 text-xs" disabled={isSaving || suggestingShift} onClick={() => void requestShiftSuggestion()}>
+                  {suggestingShift ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                  Sugerir escala
+                </Button>
+                {shiftSuggestionError ? <span className="text-xs text-red-600">{shiftSuggestionError}</span> : null}
+                {shiftSuggestion ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
+                    <p>{shiftSuggestion.message}</p>
+                    <div className="mt-1.5 flex gap-1.5">
+                      {shiftSuggestion.suggested_pattern === "alternating" ? (
+                        <Button type="button" size="sm" className="h-6 text-xs" disabled={isSaving} onClick={() => void applyShiftSuggestion()}>
+                          Aplicar sugestão
+                        </Button>
+                      ) : null}
+                      <Button type="button" size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setShiftSuggestion(null)}>
+                        Descartar
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : member.shift_pattern === "alternating" ? (

@@ -46,6 +46,7 @@ import type {
   ManagementDashboard,
   ManagementOperationalMember,
   ManagementOptions,
+  ManagementShiftPatternSuggestion,
   Notification,
   EcosystemPermission,
   Permission,
@@ -332,6 +333,8 @@ export const api = {
     }),
   claimManagementMember: (id: number) =>
     request<ManagementOperationalMember>(`/management/members/${id}/claim`, { method: "POST" }),
+  suggestManagementMemberShiftPattern: (id: number) =>
+    request<ManagementShiftPatternSuggestion>(`/management/members/${id}/shift-pattern-suggestion`),
   managementCases: (filters?: ManagementCaseFilters) => {
     const params = new URLSearchParams();
     Object.entries(filters ?? {}).forEach(([key, value]) => {

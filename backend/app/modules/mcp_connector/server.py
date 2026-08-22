@@ -120,6 +120,23 @@ def _validated_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
     try:
         return AiOrderFilters.model_validate(filters or {}).model_dump()
     except ValidationError as exc:
+        # Achado real de 2026-08-21: um cliente MCP tentou 3 formatos errados em sequência pra
+        # filtro parcial de setor (`sector`, `sector_contains`, `{"sector": {...}}`) antes de
+        # acertar `sectors: [...]` - a mensagem padrão do pydantic pra chave desconhecida
+        # ("Extra inputs are not permitted") não aponta pro formato certo. Detecta esse caso
+        # (extra_forbidden na raiz de `filters`) e devolve um erro acionável na hora, em vez de
+        # obrigar o cliente a adivinhar de novo.
+        unknown_keys = sorted(
+            str(err["loc"][0]) for err in exc.errors() if err["type"] == "extra_forbidden" and len(err["loc"]) == 1
+        )
+        if unknown_keys:
+            raise ValueError(
+                f"Chave(s) de filtro não reconhecida(s): {', '.join(unknown_keys)}. "
+                "Filtro exato (valor precisa bater igual) usa o nome no PLURAL como lista - ex.: "
+                'sectors: ["Suporte Externo"]. Filtro parcial ("contém"/"começa com"/"termina com") '
+                'usa text_filters: [{"field": "sector", "operator": "contains", "value": "..."}] - '
+                "não existe chave solta tipo 'sector'/'sector_contains' no nível raiz de filters."
+            ) from exc
         raise ValueError(f"filters inválido: {exc}") from exc
 
 

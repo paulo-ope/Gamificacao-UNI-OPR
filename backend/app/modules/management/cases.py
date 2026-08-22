@@ -30,6 +30,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import AppSetting, User
+from app.services import shift_schedule
 from app.modules.management.models import (
     MANAGEMENT_CASE_STATUSES,
     OPEN_CASE_STATUSES,
@@ -223,10 +224,10 @@ def generate_performance_cases(
     ).all()
     team_models = {model.id: model for model in db.scalars(select(OperationTeamModel)).all()}
 
-    existing_keys = {
-        (case_type, _norm(responsible_name), _norm(regional))
-        for case_type, responsible_name, regional in db.execute(
-            select(ManagementCase.case_type, ManagementCase.responsible_name, ManagementCase.regional).where(
+    existing_by_key = {
+        (_norm(item.responsible_name), _norm(item.regional)): item
+        for item in db.scalars(
+            select(ManagementCase).where(
                 ManagementCase.case_type == CASE_TYPE_PRODUCTIVITY,
                 ManagementCase.reference_year == year,
                 ManagementCase.reference_month == month,
@@ -255,13 +256,21 @@ def generate_performance_cases(
         # performance excelente, que inflava desvio e severidade de quem só estava "na média".
         expected = float(model.median_from_quantity)
         actual = bucket["total"] / bucket["days"]
+
+        existing_case = existing_by_key.get(key)
+        if existing_case is not None:
+            # Recalcula um caso já aberto ENQUANTO ele ainda está "pending" - achado real de
+            # 2026-08-21: O.S. que chegam atrasadas depois da geração automática deixavam a
+            # média/desvio congelados no número velho, mesmo o calendário já mostrando a
+            # produção atualizada. Ver `_refresh_pending_case`.
+            _refresh_pending_case(db, existing_case, expected_value=round(expected, 2), actual_value=round(actual, 2), settings=settings)
+            skipped_existing += 1
+            continue
+
         if actual >= expected:
             continue
         deviation_pct = (expected - actual) / expected * 100
         if deviation_pct < min_deviation:
-            continue
-        if (CASE_TYPE_PRODUCTIVITY, key[0], key[1]) in existing_keys:
-            skipped_existing += 1
             continue
         db.add(
             ManagementCase(
@@ -327,6 +336,52 @@ def _resolve_member_for_case(db: Session, responsible_name: str) -> ManagementOp
     return candidates[0]
 
 
+# Nota gravada (como justificativa + comentário) quando um caso automático é resolvido sozinho
+# por já não representar desvio depois de recalculado - pedido do usuário em 2026-08-21, achado
+# real com O.S. que chegam atrasadas (sincronização do IXC) pra uma data cujo caso já tinha sido
+# aberto: o calendário já mostrava a produção atualizada, mas o caso ficava congelado no número
+# velho, cobrando justificativa por um desvio que já não existia.
+CASE_AUTO_REFRESHED_RESOLVED_NOTE = (
+    "Resolvido automaticamente: a produção deste período foi atualizada (ex.: O.S. sincronizada "
+    "com atraso) e já atinge ou supera a meta - não há mais desvio a justificar."
+)
+
+# Nota gravada quando um caso diário "pending" é resolvido sozinho porque a escala alternada
+# (12x36 etc.) do colaborador foi configurada DEPOIS do caso já ter sido aberto, e essa data virou
+# folga - o caso nasceu antes de o sistema saber que esse dia não era mais um dia de trabalho
+# esperado (ver `refresh_pending_cases`).
+CASE_NOT_A_WORKDAY_NOTE = (
+    "Resolvido automaticamente: esta data não é mais um dia de trabalho esperado pela escala "
+    "alternada (12x36) configurada para este colaborador - não há desvio a justificar."
+)
+
+
+def _refresh_pending_case(db: Session, case: ManagementCase, *, expected_value: float | None, actual_value: float, settings: dict[str, str]) -> None:
+    """Atualiza um caso automático (diário ou mensal) com a produção mais recente ENQUANTO ele
+    ainda está "pending" - ninguém justificou ainda, então não há histórico a preservar. Um caso já
+    justificado/em análise/resolvido/rejeitado nunca é tocado aqui: alguém já agiu sobre ele, e o
+    registro do que foi cobrado na época precisa continuar valendo (mesma razão pela qual a
+    idempotência de `get_or_create_daily_case`/`get_or_create_monthly_case`/
+    `generate_performance_cases` nunca reabria caso já decidido).
+
+    Quando a produção atualizada já bate ou supera a meta, o caso é resolvido sozinho - manter
+    "pending" cobrando um desvio que já não existe só gera ruído pro supervisor."""
+    if case.status != "pending":
+        return
+    case.actual_value = actual_value
+    if not expected_value:
+        return
+    case.expected_value = expected_value
+    deviation_pct = round(max(0.0, (expected_value - actual_value) / expected_value * 100), 1)
+    case.deviation_value = deviation_pct
+    case.severity = severity_for(deviation_pct, settings)
+    if actual_value >= expected_value:
+        case.status = "resolved"
+        case.justification_text = CASE_AUTO_REFRESHED_RESOLVED_NOTE
+        case.justified_at = datetime.now(timezone.utc)
+        db.add(ManagementCaseComment(case_id=case.id, user_id=None, comment=CASE_AUTO_REFRESHED_RESOLVED_NOTE))
+
+
 def get_or_create_daily_case(
     db: Session,
     *,
@@ -353,6 +408,7 @@ def get_or_create_daily_case(
     member = _resolve_member_for_case(db, responsible_name)
     canonical_regional = member.regional if member else normalize_regional(regional)
     target_key = (_norm(responsible_name), _norm(canonical_regional))
+    settings = load_settings(db)
     same_day_cases = db.scalars(
         select(ManagementCase).where(
             ManagementCase.case_type == CASE_TYPE_DAILY_BELOW,
@@ -361,9 +417,9 @@ def get_or_create_daily_case(
     ).all()
     for candidate in same_day_cases:
         if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key:
+            _refresh_pending_case(db, candidate, expected_value=expected_value, actual_value=actual_value, settings=settings)
             return candidate, False
 
-    settings = load_settings(db)
     due_days = int(_setting_float(settings, "management_case_due_days"))
     deviation_pct = None
     severity = "medium"
@@ -423,6 +479,7 @@ def get_or_create_monthly_case(
     member = _resolve_member_for_case(db, responsible_name)
     canonical_regional = member.regional if member else normalize_regional(regional)
     target_key = (_norm(responsible_name), _norm(canonical_regional))
+    settings = load_settings(db)
     same_month_cases = db.scalars(
         select(ManagementCase).where(
             ManagementCase.case_type == CASE_TYPE_PRODUCTIVITY,
@@ -432,9 +489,9 @@ def get_or_create_monthly_case(
     ).all()
     for candidate in same_month_cases:
         if (_norm(candidate.responsible_name), _norm(candidate.regional)) == target_key:
+            _refresh_pending_case(db, candidate, expected_value=expected_value, actual_value=actual_value, settings=settings)
             return candidate, False
 
-    settings = load_settings(db)
     due_days = int(_setting_float(settings, "management_case_due_days"))
     deviation_pct = None
     severity = "medium"
@@ -511,18 +568,149 @@ def is_scheduled_workday(member: ManagementOperationalMember, day: date) -> bool
     """`False` quando `day` cai na folga da escala alternada (12x36 etc.) desse colaborador - ver
     `MEMBER_SHIFT_PATTERNS`. Sem escala configurada (`shift_pattern` nulo/"standard", ou dados
     incompletos), sempre `True` - mesmo comportamento de antes desta função existir, pra não
-    quebrar quem já funcionava certo com a régua padrão de segunda a sexta."""
-    if member.shift_pattern != "alternating":
-        return True
-    if not member.shift_anchor_date or not member.shift_cycle_days_on or not member.shift_cycle_days_off:
-        return True
-    cycle_length = member.shift_cycle_days_on + member.shift_cycle_days_off
-    if cycle_length <= 0:
-        return True
-    # `%` do Python sempre devolve resultado no sinal do divisor (positivo aqui), então funciona
-    # tanto pra `day` depois quanto antes de `shift_anchor_date`.
-    offset = (day - member.shift_anchor_date).days % cycle_length
-    return offset < member.shift_cycle_days_on
+    quebrar quem já funcionava certo com a régua padrão de segunda a sexta.
+
+    Delega pra `app.services.shift_schedule` (lógica pura, sem banco) - o calendário mensal de
+    `operations` usa a mesma função pra pintar o dia de folga como neutro, em vez de "abaixo da
+    meta"; um só lugar calcula "é dia de folga", os dois módulos só entram com os campos."""
+    return shift_schedule.is_scheduled_workday(
+        member.shift_pattern,
+        member.shift_cycle_days_on,
+        member.shift_cycle_days_off,
+        member.shift_anchor_date,
+        day,
+    )
+
+
+# Janela de dias corridos usada pra sugerir a escala 12x36 a partir da produção real. Só a ponta
+# mais recente entra na análise (não os 45 dias inteiros) porque a produção de um técnico pode
+# mudar de padrão no meio do caminho (trocou de turma, voltou de férias) - olhar só os últimos dias
+# reflete a realidade atual, que é o que o supervisor precisa confirmar.
+SHIFT_SUGGESTION_WINDOW_DAYS = 21
+# Sequência de dias seguidos sem nenhuma O.S. fechada, terminando hoje, que faz a sugestão desistir
+# de propor uma escala alternada e virar só um aviso. Numa 12x36 real o maior "buraco" possível é 1
+# dia (a folga) - uma sequência bem maior que isso é sinal de afastamento/desligamento, não de
+# escala, e sugerir "dia sim, dia não" nesse caso mascararia um caso real (achado da auditoria de
+# 2026-08-21 com Diolvane/Thalison: 17-18 dias corridos sem produção).
+SHIFT_SUGGESTION_MAX_TRAILING_GAP_DAYS = 4
+# Fração mínima de dias da janela que precisa bater com o padrão dia-sim/dia-não candidato pra a
+# sugestão ser considerada confiável o bastante pra preencher o formulário.
+SHIFT_SUGGESTION_MIN_MATCH_RATIO = 0.8
+
+
+@dataclass
+class ShiftPatternSuggestion:
+    suggested_pattern: str  # "alternating" | "inconclusive"
+    suggested_cycle_days_on: int | None
+    suggested_cycle_days_off: int | None
+    suggested_anchor_date: date | None
+    confidence: float
+    message: str
+    daily_production: list[dict]  # [{"date": date, "quantity": int}, ...] - evidência p/ o supervisor conferir
+
+
+def suggest_shift_pattern(db: Session, member: ManagementOperationalMember, *, today: date | None = None) -> ShiftPatternSuggestion:
+    """Analisa a produção real dos últimos `SHIFT_SUGGESTION_WINDOW_DAYS` dias desse colaborador e
+    propõe uma escala alternada 1x1 (dia sim, dia não) quando o padrão bate de forma consistente.
+
+    Decisão de produto (pedido do usuário em 2026-08-21, "sistema sugere, supervisor confirma"): a
+    função NUNCA grava nada - só devolve uma sugestão pra o formulário de edição vir pré-preenchido.
+    O supervisor ainda precisa clicar em salvar (que passa pela validação normal de
+    `services.validate_shift_pattern_for_team_model`). Também nunca infere "folga" a partir de uma
+    sequência longa de dias sem produção - isso é tratado como possível afastamento e devolvido como
+    aviso (`suggested_pattern="inconclusive"`), não como sugestão de escala.
+    """
+    reference = today or date.today()
+    window_start = reference - timedelta(days=SHIFT_SUGGESTION_WINDOW_DAYS - 1)
+
+    start = datetime(window_start.year, window_start.month, window_start.day, tzinfo=timezone.utc) - timedelta(days=1)
+    end = datetime(reference.year, reference.month, reference.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+
+    closed_day = _local_closed_date(db)
+    target_name = _norm(member.responsible_name)
+    rows = db.execute(
+        select(OperationOrder.responsible, closed_day, func.count(OperationOrder.id))
+        .where(
+            OperationOrder.closed_at.is_not(None),
+            OperationOrder.closed_at.between(start, end),
+            OperationOrder.responsible.is_not(None),
+            OperationOrder.responsible != "",
+        )
+        .group_by(OperationOrder.responsible, closed_day)
+    ).all()
+
+    # Normaliza em Python (não no SQL) pra usar exatamente a mesma função `_norm` já usada em
+    # `generate_performance_cases` pra casar responsável - mantém as duas rotas consistentes.
+    quantities_by_day: dict[date, int] = {}
+    for responsible, day, quantity in rows:
+        if _norm(responsible) != target_name:
+            continue
+        local_day = _as_date(day)
+        if local_day is None or local_day < window_start or local_day > reference:
+            continue
+        quantities_by_day[local_day] = quantities_by_day.get(local_day, 0) + int(quantity or 0)
+
+    daily_production = [
+        {"date": window_start + timedelta(days=offset), "quantity": quantities_by_day.get(window_start + timedelta(days=offset), 0)}
+        for offset in range(SHIFT_SUGGESTION_WINDOW_DAYS)
+    ]
+    worked = [entry["quantity"] > 0 for entry in daily_production]
+
+    trailing_gap = 0
+    for has_production in reversed(worked):
+        if has_production:
+            break
+        trailing_gap += 1
+    if trailing_gap >= SHIFT_SUGGESTION_MAX_TRAILING_GAP_DAYS:
+        return ShiftPatternSuggestion(
+            suggested_pattern="inconclusive",
+            suggested_cycle_days_on=None,
+            suggested_cycle_days_off=None,
+            suggested_anchor_date=None,
+            confidence=0.0,
+            message=(
+                f"Sem nenhuma O.S. fechada nos últimos {trailing_gap} dias corridos - isso é maior do "
+                "que uma folga normal de 12x36 e pode ser afastamento, desligamento ou troca de função. "
+                "Confirme a situação do colaborador antes de configurar a escala manualmente."
+            ),
+            daily_production=daily_production,
+        )
+
+    best_offset, best_ratio = 0, -1.0
+    for offset in (0, 1):
+        matches = sum(1 for index, has_production in enumerate(worked) if has_production == (index % 2 == offset))
+        ratio = matches / len(worked)
+        if ratio > best_ratio:
+            best_offset, best_ratio = offset, ratio
+
+    if best_ratio < SHIFT_SUGGESTION_MIN_MATCH_RATIO:
+        return ShiftPatternSuggestion(
+            suggested_pattern="inconclusive",
+            suggested_cycle_days_on=None,
+            suggested_cycle_days_off=None,
+            suggested_anchor_date=None,
+            confidence=best_ratio,
+            message=(
+                "A produção dos últimos dias não mostra um padrão de dia sim/dia não consistente. "
+                "Configure a escala manualmente conferindo o histórico abaixo."
+            ),
+            daily_production=daily_production,
+        )
+
+    anchor_date = window_start + timedelta(days=best_offset)
+    return ShiftPatternSuggestion(
+        suggested_pattern="alternating",
+        suggested_cycle_days_on=1,
+        suggested_cycle_days_off=1,
+        suggested_anchor_date=anchor_date,
+        confidence=best_ratio,
+        message=(
+            f"Produção dos últimos {SHIFT_SUGGESTION_WINDOW_DAYS} dias bate com escala 12x36 (dia sim, "
+            f"dia não) em {round(best_ratio * 100)}% dos dias, ancorada em {anchor_date.isoformat()}. "
+            "Confira o histórico abaixo e salve pra confirmar."
+        ),
+        daily_production=daily_production,
+    )
 
 
 def generate_daily_cases_for_date(
@@ -629,6 +817,128 @@ def generate_daily_cases_for_date(
         "evaluated_members": evaluated,
         "reference_date": day.isoformat(),
     }
+
+
+def refresh_pending_cases(db: Session) -> dict:
+    """Varre todo caso automático ainda "pending" (diário ou mensal) e recalcula a produção contra
+    o que já está fechado no banco hoje - pedido do usuário em 2026-08-21, achado real com O.S. que
+    chegam atrasadas (sincronização do IXC) pra uma data cujo caso já tinha sido aberto: o
+    calendário já mostrava a produção atualizada, mas o caso ficava congelado no número velho,
+    cobrando justificativa por um desvio que já não existia.
+
+    Chamado uma vez por dia pelo scheduler (`run_refresh_pending_cases_once`) - além do refresh
+    pontual que já acontece toda vez que alguém reabre o mesmo caso (`get_or_create_daily_case`/
+    `get_or_create_monthly_case`) ou que a geração mensal em lote roda de novo
+    (`generate_performance_cases`). Só toca caso "pending": já justificado/em análise/resolvido/
+    rejeitado é histórico e nunca é reescrito aqui (mesma regra de `_refresh_pending_case`)."""
+    settings = load_settings(db)
+    team_models = {model.id: model for model in db.scalars(select(OperationTeamModel)).all()}
+    closed_day = _local_closed_date(db)
+    counts = {"daily_refreshed": 0, "daily_resolved": 0, "monthly_refreshed": 0, "monthly_resolved": 0}
+
+    pending_daily = db.scalars(
+        select(ManagementCase).where(ManagementCase.case_type == CASE_TYPE_DAILY_BELOW, ManagementCase.status == "pending")
+    ).all()
+    daily_by_date: dict[date, list[ManagementCase]] = {}
+    for case in pending_daily:
+        if case.reference_date is not None:
+            daily_by_date.setdefault(case.reference_date, []).append(case)
+
+    for day, cases_for_day in daily_by_date.items():
+        start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc) - timedelta(days=1)
+        end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+        rows = db.execute(
+            select(OperationOrder.responsible, closed_day, func.count(OperationOrder.id))
+            .where(
+                OperationOrder.closed_at.is_not(None),
+                OperationOrder.closed_at.between(start, end),
+                OperationOrder.responsible.is_not(None),
+                OperationOrder.responsible != "",
+            )
+            .group_by(OperationOrder.responsible, closed_day)
+        ).all()
+        quantity_by_name: dict[str, int] = {}
+        for responsible, closed_date, quantity in rows:
+            if _as_date(closed_date) != day:
+                continue
+            norm_name = _norm(responsible)
+            quantity_by_name[norm_name] = quantity_by_name.get(norm_name, 0) + int(quantity or 0)
+
+        for case in cases_for_day:
+            # A escala alternada (12x36 etc.) pode ter sido configurada DEPOIS do caso já aberto -
+            # achado real de 2026-08-21: um caso de produção zero num dia que passou a ser folga
+            # não vira desvio nenhum só porque foi aberto antes da escala existir no cadastro.
+            member = _resolve_member_for_case(db, case.responsible_name)
+            if member is not None and not is_scheduled_workday(member, day):
+                case.status = "resolved"
+                case.justification_text = CASE_NOT_A_WORKDAY_NOTE
+                case.justified_at = datetime.now(timezone.utc)
+                db.add(ManagementCaseComment(case_id=case.id, user_id=None, comment=CASE_NOT_A_WORKDAY_NOTE))
+                counts["daily_resolved"] += 1
+                continue
+
+            model = team_models.get(case.team_model_id)
+            expected_value = case.expected_value
+            if model is not None:
+                rule = _rule_for_day(_team_model_dict(model), day)
+                if rule is not None:
+                    expected_value = float(rule["median_from_quantity"])
+            actual_value = float(quantity_by_name.get(_norm(case.responsible_name), 0))
+            _refresh_pending_case(db, case, expected_value=expected_value, actual_value=actual_value, settings=settings)
+            if case.status == "resolved":
+                counts["daily_resolved"] += 1
+            else:
+                counts["daily_refreshed"] += 1
+
+    pending_monthly = db.scalars(
+        select(ManagementCase).where(ManagementCase.case_type == CASE_TYPE_PRODUCTIVITY, ManagementCase.status == "pending")
+    ).all()
+    monthly_by_period: dict[tuple[int, int], list[ManagementCase]] = {}
+    for case in pending_monthly:
+        if case.reference_year is not None and case.reference_month is not None:
+            monthly_by_period.setdefault((case.reference_year, case.reference_month), []).append(case)
+
+    for (year, month), cases_for_month in monthly_by_period.items():
+        month_start = date(year, month, 1)
+        month_end = date(year, month, calendar_module.monthrange(year, month)[1])
+        start = datetime(month_start.year, month_start.month, month_start.day, tzinfo=timezone.utc) - timedelta(days=1)
+        end = datetime(month_end.year, month_end.month, month_end.day, 23, 59, 59, tzinfo=timezone.utc) + timedelta(days=1)
+        rows = db.execute(
+            select(OperationOrder.responsible, closed_day, func.count(OperationOrder.id))
+            .where(
+                OperationOrder.closed_at.is_not(None),
+                OperationOrder.closed_at.between(start, end),
+                OperationOrder.responsible.is_not(None),
+                OperationOrder.responsible != "",
+            )
+            .group_by(OperationOrder.responsible, closed_day)
+        ).all()
+        produced: dict[str, dict] = {}
+        for responsible, day_value, quantity in rows:
+            local_day = _as_date(day_value)
+            if local_day is None or local_day < month_start or local_day > month_end:
+                continue
+            bucket = produced.setdefault(_norm(responsible), {"total": 0, "days": 0})
+            bucket["total"] += int(quantity or 0)
+            bucket["days"] += 1
+
+        for case in cases_for_month:
+            bucket = produced.get(_norm(case.responsible_name))
+            if bucket is None or bucket["days"] == 0:
+                # Sem produção nenhuma registrada ainda pro mês - não é motivo pra recalcular a
+                # média pra zero, só preserva o que já foi cobrado até haver dado novo.
+                continue
+            model = team_models.get(case.team_model_id)
+            expected_value = float(model.median_from_quantity) if model and model.median_from_quantity else case.expected_value
+            actual_value = round(bucket["total"] / bucket["days"], 2)
+            _refresh_pending_case(db, case, expected_value=round(expected_value, 2) if expected_value else expected_value, actual_value=actual_value, settings=settings)
+            if case.status == "resolved":
+                counts["monthly_resolved"] += 1
+            else:
+                counts["monthly_refreshed"] += 1
+
+    db.flush()
+    return counts
 
 
 # --- Escopo de visibilidade -------------------------------------------------------------------
