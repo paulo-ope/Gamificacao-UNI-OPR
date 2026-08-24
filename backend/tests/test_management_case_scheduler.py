@@ -4,7 +4,7 @@ Mesmo padrão de test_intelligence_scheduler.py: monkeypatch de SessionLocal por
 sempre devolve a MESMA sessão de teste (in-memory sqlite)."""
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -261,20 +261,34 @@ def test_generate_daily_cases_for_date_skips_members_at_or_above_target(db_sessi
     assert db_session.query(ManagementCase).count() == 0
 
 
+def _mark_covered_through_sunday(db_session):
+    """Simula um scheduler já em regime (sem lacuna de backfill) marcando a véspera de MONDAY
+    como já coberta - os testes abaixo verificam o comportamento de "só o dia novo", não o
+    backfill em si (ver `test_run_daily_auto_generate_once_backfills_missed_days`)."""
+    scheduler.upsert_setting(
+        db_session,
+        scheduler.DAILY_AUTO_GENERATE_LAST_COVERED_DATE_KEY,
+        (MONDAY - timedelta(days=1)).isoformat(),
+    )
+    db_session.commit()
+
+
 def test_run_daily_auto_generate_once_targets_yesterday(db_session, daily_case_setup, monkeypatch):
     tuesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 1, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
     monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: tuesday)}))
+    _mark_covered_through_sunday(db_session)
 
     result = scheduler.run_daily_auto_generate_once()
 
     assert result is not None
     assert result["created_cases"] == 1
-    assert result["reference_date"] == MONDAY.isoformat()
+    assert result["reference_date"] == f"{MONDAY.isoformat()}..{MONDAY.isoformat()}"
 
 
 def test_run_daily_auto_generate_once_skips_second_call_same_day(db_session, daily_case_setup, monkeypatch):
     tuesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 1, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
     monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: tuesday)}))
+    _mark_covered_through_sunday(db_session)
 
     first = scheduler.run_daily_auto_generate_once()
     second = scheduler.run_daily_auto_generate_once()
@@ -293,6 +307,30 @@ def test_run_daily_auto_generate_once_respects_disabled_setting(db_session, dail
     assert db_session.query(ManagementCase).count() == 0
 
 
+def test_run_daily_auto_generate_once_backfills_missed_days(db_session, daily_case_setup, monkeypatch):
+    """Achado real 2026-08-24: antes, o job só cobria "ontem" - qualquer dia mais antigo que o
+    loop nunca tinha processado (app fora do ar, feature recém-ligada) nunca ganhava caso, e sem
+    caso o calendário nunca oferece "Justificar dia" pra um dia de produção zero mais antigo. Sem
+    `DAILY_AUTO_GENERATE_LAST_COVERED_DATE_KEY` registrado, a primeira execução deve varrer para
+    trás até o teto (`DAILY_AUTO_GENERATE_BACKFILL_CAP_DAYS`), abrindo caso pra todo dia de semana
+    sem produção nesse intervalo - não só o dia mais recente."""
+    tuesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 1, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
+    monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: tuesday)}))
+
+    result = scheduler.run_daily_auto_generate_once()
+
+    assert result is not None
+    yesterday = MONDAY
+    expected_start = yesterday - timedelta(days=scheduler.DAILY_AUTO_GENERATE_BACKFILL_CAP_DAYS - 1)
+    assert result["reference_date"] == f"{expected_start.isoformat()}..{yesterday.isoformat()}"
+    # Segunda (com 2 O.S., abaixo da meta) mais todo outro dia de semana no intervalo sem nenhuma
+    # producao (a fixture só cria O.S. para MONDAY) - cada um vira um caso de produção zero.
+    assert result["created_cases"] > 1
+    case_dates = {case.reference_date for case in db_session.query(ManagementCase).all()}
+    assert MONDAY in case_dates
+    assert all(day.weekday() != 6 for day in case_dates)  # domingo nunca abre caso (sem regra própria)
+
+
 # --- Recálculo diário de casos "pending" (app/modules/management/scheduler.run_refresh_pending_cases_once) ----
 # Achado real de 2026-08-21: O.S. atrasadas deixavam caso "pending" congelado num número velho -
 # este loop recalcula contra a produção fechada até agora, uma vez por dia.
@@ -301,6 +339,7 @@ def test_run_daily_auto_generate_once_respects_disabled_setting(db_session, dail
 def test_run_refresh_pending_cases_once_resolves_a_case_once_production_catches_up(db_session, daily_case_setup, monkeypatch):
     tuesday = datetime(MONDAY.year, MONDAY.month, MONDAY.day + 1, 12, 0, tzinfo=scheduler.MANAGEMENT_TIMEZONE)
     monkeypatch.setattr(scheduler, "datetime", type("_FixedDatetime", (), {"now": staticmethod(lambda tz=None: tuesday)}))
+    _mark_covered_through_sunday(db_session)
 
     generated = scheduler.run_daily_auto_generate_once()
     assert generated["created_cases"] == 1

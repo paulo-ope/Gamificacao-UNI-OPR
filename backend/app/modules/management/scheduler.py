@@ -50,7 +50,18 @@ MANAGEMENT_TIMEZONE = ZoneInfo("America/Porto_Velho")
 AUTO_GENERATE_ENABLED_KEY = "management_case_auto_generate_enabled"
 AUTO_GENERATE_LAST_RUN_DATE_KEY = "management_case_auto_generate_last_run_date"
 DAILY_AUTO_GENERATE_LAST_RUN_DATE_KEY = "management_case_daily_auto_generate_last_run_date"
+DAILY_AUTO_GENERATE_LAST_COVERED_DATE_KEY = "management_case_daily_auto_generate_last_covered_date"
 REFRESH_PENDING_LAST_RUN_DATE_KEY = "management_case_refresh_pending_last_run_date"
+
+# Teto de quantos dias o backfill diário anda pra trás quando não há uma data de cobertura
+# registrada ainda (primeira execução, ou o processo passou tempo demais parado/desligado) -
+# achado real 2026-08-24: o job só cobria "ontem", então qualquer dia mais antigo que o loop não
+# processou (app fora do ar, feature recém-ligada, `management_case_auto_generate_enabled=false`
+# por um tempo) nunca ganhava caso - e sem caso, o calendário nunca oferece "Justificar dia" pra um
+# dia de produção zero mais antigo. Sem teto, a primeira execução depois de um período desligado
+# varreria toda a história de O.S., o que é lento e reabre desvios de antes da própria feature
+# existir. 31 dias cobre confortavelmente um mês corrido de lacuna.
+DAILY_AUTO_GENERATE_BACKFILL_CAP_DAYS = 31
 
 
 def auto_generate_enabled() -> bool:
@@ -123,10 +134,20 @@ run_auto_generate_once = run_monthly_auto_generate_once
 
 
 def run_daily_auto_generate_once() -> dict | None:
-    """Roda a geração de casos diários (dia-abaixo-da-meta) se ainda não rodou hoje. Sempre para
-    ONTEM (horário local de Rondônia) - o único dia sempre fechado; o dia corrente ainda está em
-    andamento e um caso aberto sobre produção parcial do próprio dia seria prematuro. Devolve o
-    resultado de `generate_daily_cases_for_date`, ou `None` quando pula (desligado ou já rodou
+    """Roda a geração de casos diários (dia-abaixo-da-meta) se ainda não rodou hoje. Cobre todo dia
+    pendente desde a última data já coberta até ONTEM (horário local de Rondônia) - o único dia
+    sempre fechado; o dia corrente ainda está em andamento e um caso aberto sobre produção parcial
+    do próprio dia seria prematuro.
+
+    Antes, isso só processava "ontem" e nada mais - qualquer dia mais antigo que o loop não tivesse
+    coberto (app fora do ar, feature recém-ligada, geração desligada por um tempo) nunca ganhava
+    caso, e sem caso o calendário nunca oferece "Justificar dia" pra ele, mesmo sendo produção zero
+    (achado real 2026-08-24). Agora o backfill anda dia a dia desde a última cobertura registrada,
+    limitado a `DAILY_AUTO_GENERATE_BACKFILL_CAP_DAYS` na primeira execução (ou após uma lacuna
+    maior que isso) pra não varrer toda a história de uma vez.
+
+    Devolve o resultado agregado (mesmo formato de `generate_daily_cases_for_date`, com
+    `reference_date` sendo o intervalo coberto), ou `None` quando pula (desligado ou já rodou
     hoje)."""
     if not auto_generate_enabled():
         return None
@@ -138,17 +159,41 @@ def run_daily_auto_generate_once() -> dict | None:
             logger.info("Geração automática de casos (diária): já verificado hoje (%s), nada a fazer.", today.isoformat())
             return None
         yesterday = today - timedelta(days=1)
-        result = generate_daily_cases_for_date(db, day=yesterday, created_by=None)
+
+        last_covered_raw = get_setting(db, DAILY_AUTO_GENERATE_LAST_COVERED_DATE_KEY, "")
+        cap_start = yesterday - timedelta(days=DAILY_AUTO_GENERATE_BACKFILL_CAP_DAYS - 1)
+        if last_covered_raw:
+            start_day = max(date.fromisoformat(last_covered_raw) + timedelta(days=1), cap_start)
+        else:
+            start_day = cap_start
+
+        if start_day > yesterday:
+            upsert_setting(db, DAILY_AUTO_GENERATE_LAST_RUN_DATE_KEY, today.isoformat())
+            db.commit()
+            logger.info("Geração automática de casos (diária): sem dia pendente até %s, nada a fazer.", yesterday.isoformat())
+            return None
+
+        totals = {"created_cases": 0, "already_open_cases": 0, "evaluated_members": 0}
+        day = start_day
+        while day <= yesterday:
+            result = generate_daily_cases_for_date(db, day=day, created_by=None)
+            totals["created_cases"] += result["created_cases"]
+            totals["already_open_cases"] += result["already_open_cases"]
+            totals["evaluated_members"] += result["evaluated_members"]
+            day += timedelta(days=1)
+
         upsert_setting(db, DAILY_AUTO_GENERATE_LAST_RUN_DATE_KEY, today.isoformat())
+        upsert_setting(db, DAILY_AUTO_GENERATE_LAST_COVERED_DATE_KEY, yesterday.isoformat())
         db.commit()
+        totals["reference_date"] = f"{start_day.isoformat()}..{yesterday.isoformat()}"
         logger.info(
             "Geração automática de casos (diária): %s caso(s) aberto(s) para %s (%s avaliado(s), %s já tinha(m) caso).",
-            result["created_cases"],
-            result["reference_date"],
-            result["evaluated_members"],
-            result["already_open_cases"],
+            totals["created_cases"],
+            totals["reference_date"],
+            totals["evaluated_members"],
+            totals["already_open_cases"],
         )
-        return result
+        return totals
 
 
 def run_refresh_pending_cases_once() -> dict | None:

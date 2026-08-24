@@ -69,17 +69,20 @@ function dailyCaseKey(responsibleName: string, referenceDate: string): string {
 // pedido do usuário em 2026-08-20, pra não distinguir visualmente duas situações que, pra quem
 // olha o calendário, significam a mesma coisa ("ainda falta justificar esse dia/mês"). Ver o
 // bloco que renderiza a bolinha de cada dia, mais abaixo.
-// "resolved" de propósito fora daqui - um caso encerrado (pela matriz ou sozinho pelo recálculo)
-// não deixa bolinha nenhuma, ver loadDailyCaseStatuses/loadMonthlyCaseStatuses.
+// "resolved_auto" (ver loadDailyCaseStatuses/loadMonthlyCaseStatuses) de propósito fora daqui -
+// resolvido SOZINHO pelo recálculo (ninguém decidiu nada) não deixa bolinha nenhuma. "resolved"
+// de verdade (decisão da matriz) continua com a bolinha verde normalmente.
 const DAILY_CASE_STATUS_DOT: Record<string, string> = {
   justified: "bg-yellow-400",
   in_progress: "bg-yellow-400",
+  resolved: "bg-emerald-500",
   rejected: "bg-slate-400",
 };
 
 const DAILY_CASE_STATUS_LABEL: Record<string, string> = {
   justified: "Aguardando matriz",
   in_progress: "Aguardando matriz",
+  resolved: "Resolvido pela matriz",
   rejected: "Rejeitado pela matriz",
 };
 
@@ -328,16 +331,31 @@ export function OperationsMonthlyCalendar({
     const [year, month] = data.competence.split("-").map(Number);
     if (!year || !month) return;
     try {
-      const page = await api.managementCases({
-        case_type: "daily_performance_below_target",
-        reference_year: year,
-        reference_month: month,
-        page_size: 200,
-      });
+      const pageSize = 200;
       const next = new Map<string, string>();
-      for (const item of page.items) {
-        if (!item.responsible_name || !item.reference_date) continue;
-        next.set(dailyCaseKey(item.responsible_name, item.reference_date), item.status);
+      // Paginado: um mes inteiro (todas as regionais) ja passou de 1700 casos depois do backfill
+      // diario (ver scheduler.py) - buscar só a pagina 1 deixava caso de dia mais antigo (ordenado
+      // por id/data) de fora do mapa, e o dia ficava sem a bolinha de pendencia mesmo tendo caso
+      // aberto no banco (achado real, 2026-08-24). Segue buscando enquanto houver mais paginas.
+      let page = 1;
+      for (;;) {
+        const result = await api.managementCases({
+          case_type: "daily_performance_below_target",
+          reference_year: year,
+          reference_month: month,
+          page,
+          page_size: pageSize,
+        });
+        for (const item of result.items) {
+          if (!item.responsible_name || !item.reference_date) continue;
+          // "resolved" sem reviewed_by = ninguém decidiu nada, foi o recálculo automático que já
+          // encontrou a produção batendo a meta - marca como "resolved_auto" (sem bolinha) pra
+          // distinguir de "resolved" de verdade (decisão da matriz, mantém a bolinha verde).
+          const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
+          next.set(dailyCaseKey(item.responsible_name, item.reference_date), status);
+        }
+        if (page * pageSize >= result.total || result.items.length === 0) break;
+        page += 1;
       }
       setDailyCaseStatusByKey(next);
     } catch {
@@ -350,16 +368,26 @@ export function OperationsMonthlyCalendar({
     const [year, month] = data.competence.split("-").map(Number);
     if (!year || !month) return;
     try {
-      const page = await api.managementCases({
-        case_type: "productivity_below_target",
-        reference_year: year,
-        reference_month: month,
-        page_size: 200,
-      });
+      const pageSize = 200;
       const next = new Map<string, string>();
-      for (const item of page.items) {
-        if (!item.responsible_name) continue;
-        next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), item.status);
+      // Mesmo motivo do paginado acima (loadDailyCaseStatuses).
+      let page = 1;
+      for (;;) {
+        const result = await api.managementCases({
+          case_type: "productivity_below_target",
+          reference_year: year,
+          reference_month: month,
+          page,
+          page_size: pageSize,
+        });
+        for (const item of result.items) {
+          if (!item.responsible_name) continue;
+          // Mesmo critério do caso diário acima.
+          const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
+          next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), status);
+        }
+        if (page * pageSize >= result.total || result.items.length === 0) break;
+        page += 1;
       }
       setMonthlyCaseStatusByKey(next);
     } catch {
@@ -1118,13 +1146,15 @@ export function OperationsMonthlyCalendar({
                                   ) : (
                                     <span className="text-slate-300">—</span>
                                   )}
-                                  {dailyCaseStatus === "resolved" ? (
-                                    // Caso encerrado (pela matriz ou sozinho pelo recálculo) não
+                                  {dailyCaseStatus === "resolved_auto" ? (
+                                    // Resolvido SOZINHO pelo recálculo (ninguém decidiu nada) não
                                     // deixa bolinha nenhuma - achado real de 2026-08-22: sem essa
-                                    // checagem explícita, um dia resolvido cuja produção real
-                                    // ainda ficava abaixo da meta caía no fallback de "abaixo da
-                                    // meta, sem justificativa" logo abaixo e voltava a mostrar o
-                                    // vermelho, como se o caso nunca tivesse sido tratado.
+                                    // checagem explícita, um dia assim cuja produção real ainda
+                                    // ficava abaixo da meta caía no fallback de "abaixo da meta,
+                                    // sem justificativa" logo abaixo e voltava a mostrar o
+                                    // vermelho, como se o caso nunca tivesse sido tratado. Um
+                                    // "resolved" de verdade (decisão da matriz) cai no branch de
+                                    // baixo e mantém a bolinha verde normalmente.
                                     null
                                   ) : dailyCaseStatus && dailyCaseStatus !== "pending" ? (
                                     <span
@@ -1237,8 +1267,8 @@ export function OperationsMonthlyCalendar({
                               const monthlyCaseStatus = monthlyCaseStatusByKey.get(
                                 collaborator.responsible.trim().toLowerCase().replace(/\s+/g, " "),
                               );
-                              if (monthlyCaseStatus === "resolved") {
-                                // Mesmo motivo do caso diário acima - encerrado não deixa
+                              if (monthlyCaseStatus === "resolved_auto") {
+                                // Mesmo motivo do caso diário acima - resolvido sozinho não deixa
                                 // bolinha, nem cai no fallback de "abaixo da meta" logo abaixo.
                                 return null;
                               }
