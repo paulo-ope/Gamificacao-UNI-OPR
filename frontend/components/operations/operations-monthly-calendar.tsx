@@ -331,20 +331,31 @@ export function OperationsMonthlyCalendar({
     const [year, month] = data.competence.split("-").map(Number);
     if (!year || !month) return;
     try {
-      const page = await api.managementCases({
-        case_type: "daily_performance_below_target",
-        reference_year: year,
-        reference_month: month,
-        page_size: 200,
-      });
+      const pageSize = 200;
       const next = new Map<string, string>();
-      for (const item of page.items) {
-        if (!item.responsible_name || !item.reference_date) continue;
-        // "resolved" sem reviewed_by = ninguém decidiu nada, foi o recálculo automático que já
-        // encontrou a produção batendo a meta - marca como "resolved_auto" (sem bolinha) pra
-        // distinguir de "resolved" de verdade (decisão da matriz, mantém a bolinha verde).
-        const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
-        next.set(dailyCaseKey(item.responsible_name, item.reference_date), status);
+      // Paginado: um mes inteiro (todas as regionais) ja passou de 1700 casos depois do backfill
+      // diario (ver scheduler.py) - buscar só a pagina 1 deixava caso de dia mais antigo (ordenado
+      // por id/data) de fora do mapa, e o dia ficava sem a bolinha de pendencia mesmo tendo caso
+      // aberto no banco (achado real, 2026-08-24). Segue buscando enquanto houver mais paginas.
+      let page = 1;
+      for (;;) {
+        const result = await api.managementCases({
+          case_type: "daily_performance_below_target",
+          reference_year: year,
+          reference_month: month,
+          page,
+          page_size: pageSize,
+        });
+        for (const item of result.items) {
+          if (!item.responsible_name || !item.reference_date) continue;
+          // "resolved" sem reviewed_by = ninguém decidiu nada, foi o recálculo automático que já
+          // encontrou a produção batendo a meta - marca como "resolved_auto" (sem bolinha) pra
+          // distinguir de "resolved" de verdade (decisão da matriz, mantém a bolinha verde).
+          const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
+          next.set(dailyCaseKey(item.responsible_name, item.reference_date), status);
+        }
+        if (page * pageSize >= result.total || result.items.length === 0) break;
+        page += 1;
       }
       setDailyCaseStatusByKey(next);
     } catch {
@@ -357,18 +368,26 @@ export function OperationsMonthlyCalendar({
     const [year, month] = data.competence.split("-").map(Number);
     if (!year || !month) return;
     try {
-      const page = await api.managementCases({
-        case_type: "productivity_below_target",
-        reference_year: year,
-        reference_month: month,
-        page_size: 200,
-      });
+      const pageSize = 200;
       const next = new Map<string, string>();
-      for (const item of page.items) {
-        if (!item.responsible_name) continue;
-        // Mesmo critério do caso diário acima.
-        const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
-        next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), status);
+      // Mesmo motivo do paginado acima (loadDailyCaseStatuses).
+      let page = 1;
+      for (;;) {
+        const result = await api.managementCases({
+          case_type: "productivity_below_target",
+          reference_year: year,
+          reference_month: month,
+          page,
+          page_size: pageSize,
+        });
+        for (const item of result.items) {
+          if (!item.responsible_name) continue;
+          // Mesmo critério do caso diário acima.
+          const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
+          next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), status);
+        }
+        if (page * pageSize >= result.total || result.items.length === 0) break;
+        page += 1;
       }
       setMonthlyCaseStatusByKey(next);
     } catch {
