@@ -26,14 +26,16 @@ import {
   X,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCheckbox } from "@/components/ui/checkbox";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { Input } from "@/components/ui/input";
+import { MultiSelect as SharedMultiSelect } from "@/components/ui/multi-select";
 import { AppRadio } from "@/components/ui/radio";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -51,6 +53,8 @@ import {
   type SchedulingOrderSort,
   type SchedulingOrderSortKey,
   type SchedulingOrderTimeline,
+  type SchedulingRescheduleByOperatorItem,
+  type SchedulingRescheduleByTechnicianItem,
   type SchedulingSavedFilter,
   type SchedulingSavedFilterValues,
   type SchedulingSyncStatus,
@@ -67,9 +71,22 @@ const EMPTY_OPTIONS: SchedulingFilterOptions = {
   setores: [],
   assuntos: [],
   operators: [],
+  technicians: [],
   data_available_from: null,
   data_available_to: null,
 };
+
+// Resumo visual de quais filtros de recorte estão ligados - achado real de 2026-08-24: a tela não
+// tinha nenhuma indicação de "quantos filtros estão ativos", diferente do padrão de Operações
+// (FilterSummary em operations-filter-panel.tsx). Período e modo de contagem ficam de fora de
+// propósito - sempre têm um valor, não são "recorte" no mesmo sentido.
+const ACTIVE_FILTER_CHIPS: Array<{ key: string; label: string; get: (filters: SchedulingFilterState) => unknown[] }> = [
+  { key: "filial", label: "Filial", get: (filters) => filters.filial_ids },
+  { key: "setor", label: "Setor", get: (filters) => filters.setor_ids },
+  { key: "assunto", label: "Assunto", get: (filters) => filters.assunto_ids },
+  { key: "operador", label: "Operador", get: (filters) => filters.operator_ids },
+  { key: "tecnico", label: "Técnico", get: (filters) => filters.technician_ids },
+];
 
 function isoDate(value: Date) {
   return value.toISOString().slice(0, 10);
@@ -188,79 +205,60 @@ function MetricCard({
   );
 }
 
-function MultiSelect({
+// Wrapper fino sobre o `MultiSelect` compartilhado (`@/components/ui/multi-select`) - achado real
+// de 2026-08-24: esta tela reimplementava o próprio multi-select do zero (popover manual,
+// `<input type="checkbox">` cru) só porque as opções são objetos `{id, name, is_team_member}`, não
+// strings soltas como o resto do sistema usa. O componente compartilhado agora aceita isso via
+// `getValue`/`formatOption` genéricos - aqui só resta o rótulo e o toggle "só equipe" (usado só
+// pelo filtro de Operador), que não fazem parte do componente genérico de propósito.
+function SchedulingMultiSelect({
   label,
   options,
   selected,
   onChange,
-  disabled,
   showTeamFilter,
 }: {
   label: string;
   options: Array<{ id: string | number; name: string; is_team_member?: boolean | null }>;
   selected: Array<string | number>;
   onChange: (next: Array<string | number>) => void;
-  disabled?: boolean;
   showTeamFilter?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [teamOnly, setTeamOnly] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
   const visibleOptions = showTeamFilter && teamOnly ? options.filter((option) => option.is_team_member) : options;
-
-  useEffect(() => {
-    function close(event: PointerEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false);
-    }
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, []);
-
-  function toggle(id: string | number) {
-    onChange(selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id]);
-  }
+  const values = selected.map(String);
+  const isNumeric = options.some((option) => typeof option.id === "number");
 
   return (
-    <div ref={containerRef} className="relative">
-      <label className="mb-1 block text-[11px] font-medium text-slate-500">{label}</label>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        className="flex w-full min-w-36 items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 disabled:opacity-60"
-      >
-        <span className="truncate">{selected.length ? `${selected.length} selecionado(s)` : "Todos"}</span>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-      </button>
-      {open ? (
-        <div className="absolute z-40 mt-1 max-h-72 w-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-          {showTeamFilter ? (
-            <label className="mb-1 flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5 text-xs font-medium text-slate-600">
-              <input type="checkbox" checked={teamOnly} onChange={(event) => setTeamOnly(event.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300" />
-              Somente equipe de agendamento
-            </label>
-          ) : null}
-          {selected.length ? (
-            <button type="button" onClick={() => onChange([])} className="mb-1 w-full rounded-lg px-2 py-1.5 text-left text-xs font-medium text-blue-700 hover:bg-blue-50">
-              Limpar seleção
-            </button>
-          ) : null}
-          {visibleOptions.length ? (
-            visibleOptions.map((option) => (
-              <label key={String(option.id)} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
-                <input type="checkbox" checked={selected.includes(option.id)} onChange={() => toggle(option.id)} className="h-4 w-4 rounded border-slate-300" />
-                <span className="truncate">{option.name}</span>
-                {option.is_team_member ? <Badge className="ml-auto shrink-0 border-blue-200 bg-blue-50 text-[10px] text-blue-700">Equipe</Badge> : null}
-              </label>
-            ))
-          ) : (
-            <p className="px-2 py-3 text-center text-xs text-slate-500">
-              {showTeamFilter && teamOnly ? "Nenhum membro da equipe encontrado." : "Sem opções (sincronize os dados)."}
-            </p>
-          )}
-        </div>
-      ) : null}
-    </div>
+    <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-500">
+      <span className="flex items-center justify-between gap-2">
+        {label}
+        {showTeamFilter ? (
+          <span className="flex cursor-pointer items-center gap-1.5 text-[10px] font-normal normal-case text-slate-500">
+            <AppCheckbox
+              checked={teamOnly}
+              onCheckedChange={setTeamOnly}
+              ariaLabel="Mostrar só equipe de agendamento"
+              className="h-3.5 w-3.5"
+            />
+            Só equipe
+          </span>
+        ) : null}
+      </span>
+      <SharedMultiSelect
+        ariaLabel={`Filtrar por ${label}`}
+        values={values}
+        options={visibleOptions}
+        getValue={(option) => String(option.id)}
+        formatOption={(option) => option.name}
+        renderMeta={(option) =>
+          option.is_team_member ? (
+            <Badge className="border-blue-200 bg-blue-50 text-[10px] text-blue-700">Equipe</Badge>
+          ) : null
+        }
+        onChange={(next) => onChange(isNumeric ? next.map(Number) : next)}
+      />
+    </label>
   );
 }
 
@@ -279,6 +277,7 @@ export default function AgendamentoPage() {
     setor_ids: [],
     assunto_ids: [],
     operator_ids: [],
+    technician_ids: [],
     count_mode: "all_events",
   });
   const [appliedFilters, setAppliedFilters] = useState<SchedulingFilterState>(filters);
@@ -299,17 +298,25 @@ export default function AgendamentoPage() {
   const [selectedSavedFilterId, setSelectedSavedFilterId] = useState<number | null>(null);
   const [filterName, setFilterName] = useState("");
   const [savedFilterVisibility, setSavedFilterVisibility] = useState<"personal" | "global">("personal");
+  const [reschedulesByTechnician, setReschedulesByTechnician] = useState<SchedulingRescheduleByTechnicianItem[]>([]);
+  const [reschedulesByOperator, setReschedulesByOperator] = useState<SchedulingRescheduleByOperatorItem[]>([]);
+  const [technicianRankingExpanded, setTechnicianRankingExpanded] = useState(false);
+  const [operatorRankingExpanded, setOperatorRankingExpanded] = useState(false);
 
   const loadDashboard = useCallback(async (next: SchedulingFilterState, signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const [nextDashboard, nextBacklog] = await Promise.all([
+      const [nextDashboard, nextBacklog, nextByTechnician, nextByOperator] = await Promise.all([
         schedulingApi.dashboard(next, signal),
         schedulingApi.backlog(next, 100, signal),
+        schedulingApi.reschedulesByTechnician(next, signal),
+        schedulingApi.reschedulesByOperator(next, signal),
       ]);
       setDashboard(nextDashboard);
       setBacklog(nextBacklog);
+      setReschedulesByTechnician(nextByTechnician.items);
+      setReschedulesByOperator(nextByOperator.items);
       setAppliedFilters(next);
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
@@ -342,6 +349,7 @@ export default function AgendamentoPage() {
       setor_ids: current.setor_ids,
       assunto_ids: current.assunto_ids,
       operator_ids: current.operator_ids,
+      technician_ids: current.technician_ids,
       count_mode: current.count_mode,
     };
   }
@@ -368,6 +376,7 @@ export default function AgendamentoPage() {
       setor_ids: saved.filters.setor_ids,
       assunto_ids: saved.filters.assunto_ids,
       operator_ids: saved.filters.operator_ids,
+      technician_ids: saved.filters.technician_ids,
       count_mode: saved.filters.count_mode,
     };
     setFilterName(saved.name);
@@ -555,6 +564,8 @@ export default function AgendamentoPage() {
             dateFrom={filters.date_from}
             dateTo={filters.date_to}
             onChange={(key, value) => setFilters((current) => ({ ...current, [key]: value }))}
+            min={options.data_available_from ? isoDate(new Date(options.data_available_from)) : undefined}
+            max={options.data_available_to ? isoDate(new Date(options.data_available_to)) : undefined}
             presets={[
               {
                 label: "Mês atual",
@@ -584,30 +595,36 @@ export default function AgendamentoPage() {
               },
             ]}
           />
-          <MultiSelect
+          <SchedulingMultiSelect
             label="Filial"
             options={options.filiais}
             selected={filters.filial_ids}
             onChange={(next) => setFilters((current) => ({ ...current, filial_ids: next as string[] }))}
           />
-          <MultiSelect
+          <SchedulingMultiSelect
             label="Setor"
             options={options.setores}
             selected={filters.setor_ids}
             onChange={(next) => setFilters((current) => ({ ...current, setor_ids: next as string[] }))}
           />
-          <MultiSelect
+          <SchedulingMultiSelect
             label="Assunto"
             options={options.assuntos}
             selected={filters.assunto_ids}
             onChange={(next) => setFilters((current) => ({ ...current, assunto_ids: next as string[] }))}
           />
-          <MultiSelect
+          <SchedulingMultiSelect
             label="Operador"
             options={options.operators}
             selected={filters.operator_ids}
             onChange={(next) => setFilters((current) => ({ ...current, operator_ids: next as number[] }))}
             showTeamFilter
+          />
+          <SchedulingMultiSelect
+            label="Técnico"
+            options={options.technicians}
+            selected={filters.technician_ids}
+            onChange={(next) => setFilters((current) => ({ ...current, technician_ids: next as number[] }))}
           />
           <div>
             <label className="mb-1 block text-[11px] font-medium text-slate-500">Contagem</label>
@@ -649,6 +666,38 @@ export default function AgendamentoPage() {
             </p>
           ) : null}
         </div>
+        {ACTIVE_FILTER_CHIPS.some(({ get }) => get(filters).length) ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-slate-400">Filtros ativos:</span>
+            {ACTIVE_FILTER_CHIPS.map(({ key, label, get }) => {
+              const count = get(filters).length;
+              if (!count) return null;
+              return (
+                <Badge key={key} className="border-slate-200 bg-slate-100 text-[11px] text-slate-700">
+                  {label}: {count}
+                </Badge>
+              );
+            })}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] text-blue-700"
+              onClick={() =>
+                setFilters((current) => ({
+                  ...current,
+                  filial_ids: [],
+                  setor_ids: [],
+                  assunto_ids: [],
+                  operator_ids: [],
+                  technician_ids: [],
+                }))
+              }
+            >
+              Limpar filtros
+            </Button>
+          </div>
+        ) : null}
       </section>
 
       <section className="space-y-4 px-4 py-5 lg:px-7">
@@ -964,6 +1013,103 @@ export default function AgendamentoPage() {
                 </ul>
               ) : (
                 <p className="py-6 text-center text-xs text-slate-400">Sem volume suficiente no recorte.</p>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-2">
+          <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+            <CardHeader className="pb-2">
+              <span className="flex items-center gap-1.5">
+                <CardTitle className="text-base font-semibold text-slate-950">Reagendamentos por técnico</CardTitle>
+                <InfoHint
+                  ariaLabel="Ajuda sobre reagendamentos por técnico"
+                  side="bottom"
+                  title="Instabilidade por colaborador"
+                  description="Quantas das O.S. de CADA técnico de campo precisaram de reagendamento no período - mede retrabalho/instabilidade na rota, não quem clicou em reagendar."
+                />
+              </span>
+              <p className="text-xs text-slate-500">O.S. distintas reagendadas ao menos 1x, por técnico responsável.</p>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              {reschedulesByTechnician.length ? (
+                <>
+                  <ul className="space-y-1.5">
+                    {(technicianRankingExpanded ? reschedulesByTechnician : reschedulesByTechnician.slice(0, 8)).map((item) => (
+                      <li
+                        key={item.technician_id ?? "sem-tecnico"}
+                        className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm"
+                      >
+                        <span className="min-w-0 truncate text-slate-700">{item.technician_name}</span>
+                        <span className="flex shrink-0 items-center gap-3 text-xs text-slate-500">
+                          <span>{item.total_orders} O.S.</span>
+                          <span className={`font-semibold ${(item.reschedule_rate ?? 0) >= 50 ? "text-red-600" : "text-slate-700"}`}>
+                            {item.rescheduled_orders} reagendada(s){item.reschedule_rate !== null ? ` · ${item.reschedule_rate}%` : ""}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {reschedulesByTechnician.length > 8 ? (
+                    <button
+                      type="button"
+                      onClick={() => setTechnicianRankingExpanded((current) => !current)}
+                      className="mt-2 w-full rounded-lg px-2 py-1.5 text-left text-xs font-medium text-blue-700 hover:bg-slate-50"
+                    >
+                      {technicianRankingExpanded ? "Mostrar menos" : `Mostrar todos os ${reschedulesByTechnician.length} técnicos`}
+                    </button>
+                  ) : null}
+                </>
+              ) : (
+                <p className="py-6 text-center text-xs text-slate-400">Sem O.S. com técnico definido no recorte.</p>
+              )}
+            </CardContent>
+          </Card>
+          <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+            <CardHeader className="pb-2">
+              <span className="flex items-center gap-1.5">
+                <CardTitle className="text-base font-semibold text-slate-950">Reagendamentos por operador</CardTitle>
+                <InfoHint
+                  ariaLabel="Ajuda sobre reagendamentos por operador"
+                  side="bottom"
+                  title="Ações de reagendamento"
+                  description="Quantas AÇÕES de reagendamento (nunca o 1º agendamento) cada operador do backoffice/agendamento registrou no período."
+                />
+              </span>
+              <p className="text-xs text-slate-500">Conta cada ação de reagendar, não O.S. distintas - uma mesma O.S. reagendada 2x pelo mesmo operador soma 2.</p>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              {reschedulesByOperator.length ? (
+                <>
+                  <ul className="space-y-1.5">
+                    {(operatorRankingExpanded ? reschedulesByOperator : reschedulesByOperator.slice(0, 8)).map((item) => (
+                      <li
+                        key={item.operator_id ?? "sem-operador"}
+                        className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm"
+                      >
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-slate-700">{item.operator_name}</span>
+                          {item.is_team_member ? (
+                            <Badge className="shrink-0 border-blue-200 bg-blue-50 text-[10px] text-blue-700">Equipe</Badge>
+                          ) : null}
+                        </span>
+                        <span className="shrink-0 text-xs font-semibold text-slate-700">{item.reschedule_events} reagendamento(s)</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {reschedulesByOperator.length > 8 ? (
+                    <button
+                      type="button"
+                      onClick={() => setOperatorRankingExpanded((current) => !current)}
+                      className="mt-2 w-full rounded-lg px-2 py-1.5 text-left text-xs font-medium text-blue-700 hover:bg-slate-50"
+                    >
+                      {operatorRankingExpanded ? "Mostrar menos" : `Mostrar todos os ${reschedulesByOperator.length} operadores`}
+                    </button>
+                  ) : null}
+                </>
+              ) : (
+                <p className="py-6 text-center text-xs text-slate-400">Nenhum reagendamento no recorte.</p>
               )}
             </CardContent>
           </Card>
@@ -1844,11 +1990,11 @@ function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSaved: ()
             {SETTINGS_FIELDS.map((field) => (
               <label key={field.key} className="block">
                 <span className="text-xs font-medium text-slate-600">{field.label}</span>
-                <input
+                <Input
                   type={field.type}
                   value={values[field.key] ?? ""}
                   onChange={(event) => setValues((current) => ({ ...(current || {}), [field.key]: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  className="mt-1"
                 />
                 <span className="mt-0.5 block text-[11px] text-slate-400">{field.helper}</span>
               </label>
@@ -1916,33 +2062,55 @@ function TeamDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => 
           <Button type="button" size="sm" variant="ghost" onClick={onClose} aria-label="Fechar"><X className="h-4 w-4" /></Button>
         </div>
         {error ? <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
-        <input
+        <Input
           type="search"
           placeholder="Buscar operador..."
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          className="mt-3 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          className="mt-3"
         />
         <div className="mt-2 flex-1 space-y-1 overflow-y-auto">
           {members === null ? (
             <div className="h-40 animate-pulse rounded-xl bg-slate-100" />
           ) : (
             visible.map((member) => (
-              <label key={member.ixc_user_id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
-                <input
-                  type="checkbox"
+              <div
+                key={member.ixc_user_id}
+                role="button"
+                tabIndex={0}
+                onClick={() =>
+                  setMembers((current) =>
+                    (current || []).map((item) =>
+                      item.ixc_user_id === member.ixc_user_id ? { ...item, is_team_member: !item.is_team_member } : item,
+                    ),
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setMembers((current) =>
+                      (current || []).map((item) =>
+                        item.ixc_user_id === member.ixc_user_id ? { ...item, is_team_member: !item.is_team_member } : item,
+                      ),
+                    );
+                  }
+                }}
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                <AppCheckbox
                   checked={member.is_team_member}
-                  onChange={() =>
+                  onCheckedChange={() =>
                     setMembers((current) =>
                       (current || []).map((item) =>
                         item.ixc_user_id === member.ixc_user_id ? { ...item, is_team_member: !item.is_team_member } : item,
                       ),
                     )
                   }
-                  className="h-4 w-4 rounded border-slate-300"
+                  ariaLabel={`Membro da equipe: ${member.name}`}
+                  className="h-4 w-4"
                 />
                 <span className="truncate">{member.name}</span>
-              </label>
+              </div>
             ))
           )}
         </div>

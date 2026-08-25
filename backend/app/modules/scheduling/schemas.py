@@ -240,6 +240,7 @@ class SchedulingSavedFilterValues(BaseModel):
     setor_ids: list[str] = Field(default_factory=list)
     assunto_ids: list[str] = Field(default_factory=list)
     operator_ids: list[int] = Field(default_factory=list)
+    technician_ids: list[int] = Field(default_factory=list)
     count_mode: str = "all_events"
 
 

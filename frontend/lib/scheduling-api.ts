@@ -81,8 +81,37 @@ export type SchedulingFilterOptions = {
   setores: SchedulingFilterOption[];
   assuntos: SchedulingFilterOption[];
   operators: SchedulingFilterOption[];
+  technicians: SchedulingFilterOption[];
   data_available_from: string | null;
   data_available_to: string | null;
+};
+
+export type SchedulingRescheduleByTechnicianItem = {
+  technician_id: number | null;
+  technician_name: string;
+  total_orders: number;
+  rescheduled_orders: number;
+  reschedule_events: number;
+  reschedule_rate: number | null;
+};
+
+export type SchedulingRescheduleByTechnician = {
+  date_from: string;
+  date_to: string;
+  items: SchedulingRescheduleByTechnicianItem[];
+};
+
+export type SchedulingRescheduleByOperatorItem = {
+  operator_id: number | null;
+  operator_name: string;
+  is_team_member: boolean | null;
+  reschedule_events: number;
+};
+
+export type SchedulingRescheduleByOperator = {
+  date_from: string;
+  date_to: string;
+  items: SchedulingRescheduleByOperatorItem[];
 };
 
 export type SchedulingTeamMember = { ixc_user_id: number; name: string; is_team_member: boolean };
@@ -188,6 +217,7 @@ export type SchedulingFilterState = {
   setor_ids: string[];
   assunto_ids: string[];
   operator_ids: number[];
+  technician_ids: number[];
   count_mode: SchedulingCountMode;
 };
 
@@ -196,6 +226,7 @@ export type SchedulingSavedFilterValues = {
   setor_ids: string[];
   assunto_ids: string[];
   operator_ids: number[];
+  technician_ids: number[];
   count_mode: SchedulingCountMode;
 };
 
@@ -224,7 +255,7 @@ const TOKEN_KEY = "gamification_auth_token";
 
 function authToken() {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(TOKEN_KEY);
+  return window.localStorage.getItem(TOKEN_KEY);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -256,6 +287,7 @@ function filterQuery(filters: SchedulingFilterState, extras?: Record<string, str
   filters.setor_ids.forEach((id) => params.append("setor_ids", id));
   filters.assunto_ids.forEach((id) => params.append("assunto_ids", id));
   filters.operator_ids.forEach((id) => params.append("operator_ids", String(id)));
+  filters.technician_ids.forEach((id) => params.append("technician_ids", String(id)));
   Object.entries(extras || {}).forEach(([key, value]) => params.set(key, String(value)));
   return params.toString();
 }
@@ -268,6 +300,24 @@ export const schedulingApi = {
     ),
   backlog: (filters: SchedulingFilterState, limit = 100, signal?: AbortSignal) =>
     request<SchedulingBacklogItem[]>(`/scheduling/backlog?${filterQuery(filters, { limit })}`, { signal }),
+  reschedulesByTechnician: (filters: SchedulingFilterState, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    params.set("date_from", filters.date_from);
+    params.set("date_to", filters.date_to);
+    filters.filial_ids.forEach((id) => params.append("filial_ids", id));
+    filters.setor_ids.forEach((id) => params.append("setor_ids", id));
+    filters.assunto_ids.forEach((id) => params.append("assunto_ids", id));
+    return request<SchedulingRescheduleByTechnician>(`/scheduling/reschedules-by-technician?${params.toString()}`, { signal });
+  },
+  reschedulesByOperator: (filters: SchedulingFilterState, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    params.set("date_from", filters.date_from);
+    params.set("date_to", filters.date_to);
+    filters.filial_ids.forEach((id) => params.append("filial_ids", id));
+    filters.setor_ids.forEach((id) => params.append("setor_ids", id));
+    filters.assunto_ids.forEach((id) => params.append("assunto_ids", id));
+    return request<SchedulingRescheduleByOperator>(`/scheduling/reschedules-by-operator?${params.toString()}`, { signal });
+  },
   orders: (
     filters: SchedulingFilterState,
     drill: SchedulingOrderDrillParams,
@@ -283,6 +333,7 @@ export const schedulingApi = {
     filters.setor_ids.forEach((id) => params.append("setor_ids", id));
     (drill.assunto_ids ?? filters.assunto_ids).forEach((id) => params.append("assunto_ids", id));
     (drill.operator_ids ?? filters.operator_ids).forEach((id) => params.append("operator_ids", String(id)));
+    filters.technician_ids.forEach((id) => params.append("technician_ids", String(id)));
     if (drill.status) params.set("status", drill.status);
     if (drill.sla_status) params.set("sla_status", drill.sla_status);
     if (drill.ttfa_bucket) params.set("ttfa_bucket", drill.ttfa_bucket);
