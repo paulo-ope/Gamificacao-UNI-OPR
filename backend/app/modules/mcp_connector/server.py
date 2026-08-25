@@ -1219,9 +1219,9 @@ def build_mcp_server() -> FastMCP:
         setor_ids: list[str] | None = None,
         assunto_ids: list[str] | None = None,
     ) -> str:
-        """Quantas O.S. de CADA técnico de campo precisaram de reagendamento no período - mede
-        instabilidade/retrabalho na rota de cada colaborador, não quem clicou em reagendar (isso é
-        "origem" do reagendamento, uma métrica agregada diferente, sem quebra por pessoa).
+        """Quantos REAGENDAMENTOS (evento tipo 10) CADA técnico de campo gerou pessoalmente no
+        período - corrigido em 2026-08-25 pra contar só o evento cujo `technician_id` é o próprio
+        técnico, não qualquer O.S. dele que foi reagendada por outra pessoa (operador/backoffice).
 
         Args:
             date_from, date_to: AAAA-MM-DD - por data de ABERTURA da O.S. (mesmo recorte do
@@ -1231,10 +1231,8 @@ def build_mcp_server() -> FastMCP:
 
         Returns:
             JSON {"date_from", "date_to", "items": [{"technician_id", "technician_name",
-            "total_orders", "rescheduled_orders" (O.S. distintas reagendadas pelo menos 1x),
-            "reschedule_events" (soma de reagendamentos, uma O.S. reagendada 3x conta 3),
-            "reschedule_rate" (% de rescheduled_orders/total_orders)}, ...], ordenado do técnico
-            com mais O.S. reagendadas pro com menos.
+            "reschedule_events" (quantidade de reagendamentos gerados por ele)}, ...], ordenado do
+            técnico que mais reagendou pro que menos.
         """
         from app.modules.scheduling import metrics as scheduling_metrics
 

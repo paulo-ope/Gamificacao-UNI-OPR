@@ -89,10 +89,7 @@ export type SchedulingFilterOptions = {
 export type SchedulingRescheduleByTechnicianItem = {
   technician_id: number | null;
   technician_name: string;
-  total_orders: number;
-  rescheduled_orders: number;
   reschedule_events: number;
-  reschedule_rate: number | null;
 };
 
 export type SchedulingRescheduleByTechnician = {
@@ -176,6 +173,25 @@ export type SchedulingOperatorEventItem = {
 
 export type SchedulingOperatorEventPage = {
   items: SchedulingOperatorEventItem[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type SchedulingTechnicianEventItem = {
+  ixc_os_id: number;
+  event_type: string;
+  event_label: string;
+  event_at: string;
+  window_start: string | null;
+  window_end: string | null;
+  operator_name: string | null;
+  filial: string;
+  assunto: string;
+};
+
+export type SchedulingTechnicianEventPage = {
+  items: SchedulingTechnicianEventItem[];
   total: number;
   page: number;
   page_size: number;
@@ -367,6 +383,23 @@ export const schedulingApi = {
     params.set("page", String(page));
     params.set("page_size", String(pageSize));
     return request<SchedulingOperatorEventPage>(`/scheduling/operators/${operatorId}/events?${params.toString()}`, { signal });
+  },
+  technicianEvents: (
+    technicianId: number,
+    filters: SchedulingFilterState,
+    page = 1,
+    pageSize = 50,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    params.set("date_from", filters.date_from);
+    params.set("date_to", filters.date_to);
+    filters.filial_ids.forEach((id) => params.append("filial_ids", id));
+    filters.setor_ids.forEach((id) => params.append("setor_ids", id));
+    filters.assunto_ids.forEach((id) => params.append("assunto_ids", id));
+    params.set("page", String(page));
+    params.set("page_size", String(pageSize));
+    return request<SchedulingTechnicianEventPage>(`/scheduling/technicians/${technicianId}/events?${params.toString()}`, { signal });
   },
   resolveTechnicians: () => request<{ resolved: number; pending: number }>("/scheduling/technicians/resolve", { method: "POST" }),
   filters: () => request<SchedulingFilterOptions>("/scheduling/filters"),

@@ -91,10 +91,7 @@ class SchedulingBacklogItem(BaseModel):
 class SchedulingRescheduleByTechnicianItem(BaseModel):
     technician_id: int | None
     technician_name: str
-    total_orders: int
-    rescheduled_orders: int
     reschedule_events: int
-    reschedule_rate: float | None
 
 
 class SchedulingRescheduleByTechnician(BaseModel):
@@ -208,6 +205,25 @@ class SchedulingOperatorEventItem(BaseModel):
 
 class SchedulingOperatorEventPage(BaseModel):
     items: list[SchedulingOperatorEventItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class SchedulingTechnicianEventItem(BaseModel):
+    ixc_os_id: int
+    event_type: str
+    event_label: str
+    event_at: datetime
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    operator_name: str | None = None
+    filial: str
+    assunto: str
+
+
+class SchedulingTechnicianEventPage(BaseModel):
+    items: list[SchedulingTechnicianEventItem]
     total: int
     page: int
     page_size: int

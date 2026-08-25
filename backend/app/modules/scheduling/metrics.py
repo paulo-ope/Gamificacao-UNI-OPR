@@ -222,26 +222,23 @@ def _reschedule_origins_by_order(db: Session, os_ids: set[int], team_ids: set[in
 
 
 def reschedules_by_technician(db: Session, filters: SchedulingFilters) -> dict:
-    """Reagendamentos agrupados pelo TÉCNICO DE CAMPO responsável pela O.S. - pedido do usuário em
-    2026-08-24: medir instabilidade/retrabalho na rota de cada colaborador (quantas das O.S. dele
-    precisaram de reagendamento), não quem clicou em reagendar (isso já existe separado como
-    "origem" do reagendamento em `build_dashboard`/`_classify_reschedule_origin`).
+    """Reagendamentos POR EVENTO (tipo "10" = Reagendar) atribuído ao TÉCNICO DE CAMPO do próprio
+    evento - correção de 2026-08-25: a versão anterior agrupava pela O.S. inteira
+    (`order.first_technician_id`), então um técnico aparecia com reagendamento mesmo quando quem
+    de fato reagendou foi outra pessoa (operador/backoffice) numa O.S. que só por acaso era dele.
+    Agora só conta evento cujo `SchedulingEvent.technician_id` é o próprio técnico - mesmo padrão
+    de `reschedules_by_operator`, espelhando o campo trocado (technician_id em vez de operator_id)."""
+    os_ids = {row for (row,) in db.execute(_cohort_query(filters).with_only_columns(SchedulingOrder.ixc_os_id))}
+    if not os_ids:
+        return {"date_from": filters.date_from, "date_to": filters.date_to, "items": []}
 
-    `reschedule_events` conta CADA reagendamento (uma O.S. reagendada 3 vezes soma 3), enquanto
-    `rescheduled_orders` conta O.S. distintas - mesma distinção de `order_details`
-    (`reschedule_count = schedule_event_count - 1`)."""
-    orders = list(db.execute(_cohort_query(filters)).scalars())
-    buckets: dict[int | None, dict] = {}
-    for order in orders:
-        bucket = buckets.setdefault(
-            order.first_technician_id, {"total_orders": 0, "rescheduled_orders": 0, "reschedule_events": 0}
-        )
-        bucket["total_orders"] += 1
-        if order.schedule_event_count and order.schedule_event_count > 1:
-            bucket["rescheduled_orders"] += 1
-            bucket["reschedule_events"] += order.schedule_event_count - 1
+    rows = db.execute(
+        select(SchedulingEvent.technician_id, func.count(SchedulingEvent.id))
+        .where(SchedulingEvent.ixc_os_id.in_(os_ids), SchedulingEvent.event_type == "10")
+        .group_by(SchedulingEvent.technician_id)
+    ).all()
 
-    technician_ids = {technician_id for technician_id in buckets if technician_id is not None}
+    technician_ids = {technician_id for technician_id, _ in rows if technician_id is not None}
     technician_names = _resolve_technician_names(db, technician_ids)
 
     items = [
@@ -250,16 +247,11 @@ def reschedules_by_technician(db: Session, filters: SchedulingFilters) -> dict:
             "technician_name": technician_names.get(technician_id, f"Técnico #{technician_id}")
             if technician_id is not None
             else "Sem técnico definido",
-            "total_orders": bucket["total_orders"],
-            "rescheduled_orders": bucket["rescheduled_orders"],
-            "reschedule_events": bucket["reschedule_events"],
-            "reschedule_rate": (
-                round(bucket["rescheduled_orders"] / bucket["total_orders"] * 100, 1) if bucket["total_orders"] else None
-            ),
+            "reschedule_events": count,
         }
-        for technician_id, bucket in buckets.items()
+        for technician_id, count in rows
     ]
-    items.sort(key=lambda item: item["rescheduled_orders"], reverse=True)
+    items.sort(key=lambda item: item["reschedule_events"], reverse=True)
     return {"date_from": filters.date_from, "date_to": filters.date_to, "items": items}
 
 
@@ -741,6 +733,62 @@ def operator_events(
             "window_start": event.window_start,
             "window_end": event.window_end,
             "technician_name": technician_names.get(event.technician_id) if event.technician_id else None,
+            "filial": REGIONAL_CODE_MAP.get(order.filial_id, f"Filial {order.filial_id}"),
+            "assunto": order.assunto_name or "Não informado",
+        }
+        for event, order in page_rows
+    ]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+def technician_events(
+    db: Session,
+    filters: SchedulingFilters,
+    *,
+    technician_id: int,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    """Cada REAGENDAMENTO (evento tipo "10" apenas) atribuído a esse técnico de campo no período -
+    drill do card "Reagendamentos por técnico", corrigido em 2026-08-25 pra mostrar só as O.S. que
+    ele mesmo reagendou (`SchedulingEvent.technician_id`), não qualquer O.S. dele que foi
+    reagendada por outra pessoa. Espelha `operator_events`, mas filtrando por técnico em vez de
+    operador e só o tipo 10 (nunca o 1o agendamento), e mostra quem executou a ação
+    (`operator_name`) já que o técnico já é conhecido (é o filtro)."""
+    stmt = (
+        select(SchedulingEvent, SchedulingOrder)
+        .join(SchedulingOrder, SchedulingOrder.ixc_os_id == SchedulingEvent.ixc_os_id)
+        .where(
+            SchedulingEvent.event_type == "10",
+            SchedulingEvent.technician_id == technician_id,
+            SchedulingEvent.event_at >= datetime.combine(filters.date_from, dtime.min, tzinfo=PORTO_VELHO_TZ),
+            SchedulingEvent.event_at <= datetime.combine(filters.date_to, dtime.max, tzinfo=PORTO_VELHO_TZ),
+        )
+    )
+    if filters.filial_ids:
+        stmt = stmt.where(SchedulingOrder.filial_id.in_(filters.filial_ids))
+    if filters.setor_ids:
+        stmt = stmt.where(SchedulingOrder.setor_id.in_(filters.setor_ids))
+    if filters.assunto_ids:
+        stmt = stmt.where(SchedulingOrder.assunto_id.in_(filters.assunto_ids))
+
+    rows = list(db.execute(stmt))
+    rows.sort(key=lambda pair: pair[0].event_at, reverse=True)
+    total = len(rows)
+    page_rows = rows[(page - 1) * page_size: (page - 1) * page_size + page_size]
+
+    operator_ids = {event.operator_id for event, _ in page_rows if event.operator_id}
+    operator_names = _resolve_operator_names(db, operator_ids)
+
+    items = [
+        {
+            "ixc_os_id": order.ixc_os_id,
+            "event_type": event.event_type,
+            "event_label": EVENT_TYPE_LABELS.get(event.event_type, f"Evento {event.event_type}"),
+            "event_at": event.event_at,
+            "window_start": event.window_start,
+            "window_end": event.window_end,
+            "operator_name": operator_names.get(event.operator_id) if event.operator_id else None,
             "filial": REGIONAL_CODE_MAP.get(order.filial_id, f"Filial {order.filial_id}"),
             "assunto": order.assunto_name or "Não informado",
         }

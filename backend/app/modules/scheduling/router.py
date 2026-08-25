@@ -38,6 +38,7 @@ from app.modules.scheduling.schemas import (
     SchedulingSavedFilterCreate,
     SchedulingSavedFilterOut,
     SchedulingSavedFilterUpdate,
+    SchedulingTechnicianEventPage,
     SchedulingSettingsUpdate,
     SchedulingSyncJobOut,
     SchedulingSyncRequest,
@@ -207,6 +208,26 @@ def get_operator_events(
     ele agendou primeiro)."""
     filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, [])
     return metrics_engine.operator_events(db, filters, operator_id=ixc_operator_id, page=page, page_size=page_size)
+
+
+@router.get("/technicians/{ixc_technician_id}/events", response_model=SchedulingTechnicianEventPage)
+def get_technician_events(
+    ixc_technician_id: int,
+    date_from: date,
+    date_to: date,
+    filial_ids: list[str] = Query(default_factory=list),
+    setor_ids: list[str] = Query(default_factory=list),
+    assunto_ids: list[str] = Query(default_factory=list),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Drill-through do card "Reagendamentos por técnico": só os REAGENDAMENTOS (evento tipo 10)
+    em que esse técnico é o `technician_id` do próprio evento - correção de 2026-08-25, antes o
+    drill (via /orders) mostrava qualquer O.S. dele reagendada por qualquer pessoa."""
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, [])
+    return metrics_engine.technician_events(db, filters, technician_id=ixc_technician_id, page=page, page_size=page_size)
 
 
 @router.get("/orders/{ixc_os_id}/timeline", response_model=SchedulingOrderTimeline)

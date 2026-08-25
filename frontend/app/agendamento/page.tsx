@@ -48,6 +48,7 @@ import {
   type SchedulingFilterOptions,
   type SchedulingFilterState,
   type SchedulingOperatorEventPage,
+  type SchedulingTechnicianEventPage,
   type SchedulingOrderDetailPage,
   type SchedulingOrderDrillParams,
   type SchedulingOrderSort,
@@ -293,6 +294,7 @@ export default function AgendamentoPage() {
   const [teamOpen, setTeamOpen] = useState(false);
   const [drill, setDrill] = useState<{ title: string; subtitle: string; params: SchedulingOrderDrillParams } | null>(null);
   const [operatorEventsDrill, setOperatorEventsDrill] = useState<{ operatorId: number; title: string } | null>(null);
+  const [technicianEventsDrill, setTechnicianEventsDrill] = useState<{ technicianId: number; title: string } | null>(null);
   const [operatorsExpanded, setOperatorsExpanded] = useState(false);
   const [savedFilters, setSavedFilters] = useState<SchedulingSavedFilter[]>([]);
   const [selectedSavedFilterId, setSelectedSavedFilterId] = useState<number | null>(null);
@@ -1026,11 +1028,11 @@ export default function AgendamentoPage() {
                 <InfoHint
                   ariaLabel="Ajuda sobre reagendamentos por técnico"
                   side="bottom"
-                  title="Instabilidade por colaborador"
-                  description="Quantas das O.S. de CADA técnico de campo precisaram de reagendamento no período - mede retrabalho/instabilidade na rota, não quem clicou em reagendar."
+  title="Reagendamentos gerados pelo técnico"
+                  description="Quantos REAGENDAMENTOS (evento tipo 10) cada técnico de campo gerou pessoalmente no período - só conta quando ele mesmo é o técnico do evento, não qualquer O.S. dele reagendada por outra pessoa."
                 />
               </span>
-              <p className="text-xs text-slate-500">O.S. distintas reagendadas ao menos 1x, por técnico responsável.</p>
+              <p className="text-xs text-slate-500">Conta cada reagendamento gerado pelo próprio técnico, não O.S. distintas.</p>
             </CardHeader>
             <CardContent className="px-4 pb-4">
               {reschedulesByTechnician.length ? (
@@ -1041,29 +1043,17 @@ export default function AgendamentoPage() {
                         {item.technician_id !== null ? (
                           <button
                             type="button"
-                            onClick={() =>
-                              openDrill(`Reagendamentos de ${item.technician_name}`, "O.S. desse técnico que precisaram de reagendamento no período", {
-                                technician_ids: [item.technician_id as number],
-                                only_rescheduled: true,
-                              })
-                            }
+                            onClick={() => setTechnicianEventsDrill({ technicianId: item.technician_id as number, title: item.technician_name })}
                             className="flex w-full items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-left text-sm transition hover:border-blue-200 hover:bg-blue-50/60"
+                            title="Ver os reagendamentos que esse técnico gerou pessoalmente no período"
                           >
                             <span className="min-w-0 truncate text-slate-700">{item.technician_name}</span>
-                            <span className="flex shrink-0 items-center gap-3 text-xs text-slate-500">
-                              <span>{item.total_orders} O.S.</span>
-                              <span className={`font-semibold ${(item.reschedule_rate ?? 0) >= 50 ? "text-red-600" : "text-slate-700"}`}>
-                                {item.rescheduled_orders} reagendada(s){item.reschedule_rate !== null ? ` · ${item.reschedule_rate}%` : ""}
-                              </span>
-                            </span>
+                            <span className="shrink-0 text-xs font-semibold text-slate-700">{item.reschedule_events} reagendamento(s)</span>
                           </button>
                         ) : (
                           <div className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm">
                             <span className="min-w-0 truncate text-slate-500">{item.technician_name}</span>
-                            <span className="flex shrink-0 items-center gap-3 text-xs text-slate-500">
-                              <span>{item.total_orders} O.S.</span>
-                              <span>{item.rescheduled_orders} reagendada(s){item.reschedule_rate !== null ? ` · ${item.reschedule_rate}%` : ""}</span>
-                            </span>
+                            <span className="shrink-0 text-xs font-semibold text-slate-500">{item.reschedule_events} reagendamento(s)</span>
                           </div>
                         )}
                       </li>
@@ -1226,6 +1216,14 @@ export default function AgendamentoPage() {
           title={operatorEventsDrill.title}
           filters={appliedFilters}
           onClose={() => setOperatorEventsDrill(null)}
+        />
+      ) : null}
+      {technicianEventsDrill ? (
+        <TechnicianEventsDrillPanel
+          technicianId={technicianEventsDrill.technicianId}
+          title={technicianEventsDrill.title}
+          filters={appliedFilters}
+          onClose={() => setTechnicianEventsDrill(null)}
         />
       ) : null}
     </main>
@@ -1835,6 +1833,112 @@ function OperatorEventsDrillPanel({
                 {data && !data.items.length ? (
                   <TableRow>
                     <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">Nenhuma ação encontrada para este recorte.</TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+        {data && data.total > data.page_size ? <DrillPagination page={page} totalPages={totalPages} onChange={setPage} /> : null}
+      </div>
+      {timelineOsId !== null ? (
+        <OrderTimelinePanel ixcOsId={timelineOsId} onClose={() => setTimelineOsId(null)} />
+      ) : null}
+    </div>
+  );
+}
+
+function TechnicianEventsDrillPanel({
+  technicianId,
+  title,
+  filters,
+  onClose,
+}: {
+  technicianId: number;
+  title: string;
+  filters: SchedulingFilterState;
+  onClose: () => void;
+}) {
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<SchedulingTechnicianEventPage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [timelineOsId, setTimelineOsId] = useState<number | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    schedulingApi
+      .technicianEvents(technicianId, filters, page, DRILL_PAGE_SIZE, controller.signal)
+      .then(setData)
+      .catch((reason) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setError(reason instanceof Error ? reason.message : "Falha ao carregar os reagendamentos do técnico.");
+      })
+      .finally(() => setLoading(false));
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [technicianId, page, filters.date_from, filters.date_to]);
+
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <div className="flex max-h-[85vh] w-full max-w-5xl flex-col rounded-2xl bg-white shadow-2xl">
+        <DrillPanelHeader
+          icon={CalendarClock}
+          title={title}
+          subtitle={`Reagendamentos gerados pessoalmente por este técnico no período${data ? ` · ${new Intl.NumberFormat("pt-BR").format(data.total)} reagendamento(s) no total` : ""}`}
+          onClose={onClose}
+        />
+        <div className="flex-1 overflow-auto">
+          {error ? <p className="m-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+          {loading ? (
+            <div className="m-4 h-64 animate-pulse rounded-xl bg-slate-100" />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>O.S.</TableHead>
+                  <TableHead>Ação</TableHead>
+                  <TableHead>Quando</TableHead>
+                  <TableHead>Janela</TableHead>
+                  <TableHead>Operador</TableHead>
+                  <TableHead>Filial</TableHead>
+                  <TableHead>Assunto</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(data?.items || []).map((item, index) => (
+                  <TableRow
+                    key={`${item.ixc_os_id}-${item.event_at}-${index}`}
+                    className="cursor-pointer odd:bg-slate-50/60 hover:bg-blue-50/60"
+                    onClick={() => setTimelineOsId(item.ixc_os_id)}
+                  >
+                    <TableCell className="font-medium text-slate-800">{item.ixc_os_id}</TableCell>
+                    <TableCell>
+                      <Badge className="border-amber-200 bg-amber-50 text-amber-700">{item.event_label}</Badge>
+                    </TableCell>
+                    <TableCell>{formatPortoVelho(item.event_at)}</TableCell>
+                    <TableCell>
+                      {item.window_start ? (
+                        <>
+                          {formatPortoVelho(item.window_start)}
+                          {item.window_end ? ` até ${formatPortoVelho(item.window_end)}` : ""}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                    <TableCell className="max-w-56 truncate whitespace-nowrap" title={item.operator_name || undefined}>{item.operator_name || "—"}</TableCell>
+                    <TableCell className="max-w-44 truncate whitespace-nowrap" title={item.filial}>{item.filial}</TableCell>
+                    <TableCell className="max-w-64 truncate whitespace-nowrap" title={item.assunto}>{item.assunto}</TableCell>
+                  </TableRow>
+                ))}
+                {data && !data.items.length ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">Nenhum reagendamento encontrado para este recorte.</TableCell>
                   </TableRow>
                 ) : null}
               </TableBody>
