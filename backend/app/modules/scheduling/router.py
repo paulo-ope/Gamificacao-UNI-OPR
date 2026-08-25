@@ -33,6 +33,7 @@ from app.modules.scheduling.schemas import (
     SchedulingOperatorEventPage,
     SchedulingOrderDetailPage,
     SchedulingOrderTimeline,
+    SchedulingRescheduleByOperator,
     SchedulingRescheduleByTechnician,
     SchedulingSavedFilterCreate,
     SchedulingSavedFilterOut,
@@ -59,6 +60,7 @@ def _parse_filters(
     setor_ids: list[str],
     assunto_ids: list[str],
     operator_ids: list[int],
+    technician_ids: list[int] | None = None,
 ) -> metrics_engine.SchedulingFilters:
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="A data final não pode ser anterior à inicial.")
@@ -71,6 +73,7 @@ def _parse_filters(
         setor_ids=setor_ids,
         assunto_ids=assunto_ids,
         operator_ids=operator_ids,
+        technician_ids=technician_ids or [],
     )
 
 
@@ -82,13 +85,14 @@ def get_dashboard(
     setor_ids: list[str] = Query(default_factory=list),
     assunto_ids: list[str] = Query(default_factory=list),
     operator_ids: list[int] = Query(default_factory=list),
+    technician_ids: list[int] = Query(default_factory=list),
     count_mode: str = "all_events",
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("scheduling:read")),
 ):
     if count_mode not in ("all_events", "distinct_orders"):
         raise HTTPException(status_code=400, detail=f"count_mode inválido: {count_mode!r}")
-    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, operator_ids)
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, operator_ids, technician_ids)
     return metrics_engine.build_dashboard(db, filters, count_mode=count_mode)
 
 
@@ -107,6 +111,24 @@ def get_reschedules_by_technician(
     reagendar (isso já existe como "origem" no dashboard)."""
     filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, [])
     return metrics_engine.reschedules_by_technician(db, filters)
+
+
+@router.get("/reschedules-by-operator", response_model=SchedulingRescheduleByOperator)
+def get_reschedules_by_operator(
+    date_from: date,
+    date_to: date,
+    filial_ids: list[str] = Query(default_factory=list),
+    setor_ids: list[str] = Query(default_factory=list),
+    assunto_ids: list[str] = Query(default_factory=list),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Reagendamentos POR AÇÃO de cada operador (quem clicou em reagendar, evento tipo 10) -
+    pedido do usuário em 2026-08-24: contagem por colaborador do backoffice/agendamento, sem
+    contar o 1o agendamento (evento tipo 5) nem a ação de quem só abriu/fechou a O.S. - só quem
+    de fato reagendou."""
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, [])
+    return metrics_engine.reschedules_by_operator(db, filters)
 
 
 @router.get("/backlog", response_model=list[SchedulingBacklogItem])
@@ -132,6 +154,7 @@ def get_order_details(
     setor_ids: list[str] = Query(default_factory=list),
     assunto_ids: list[str] = Query(default_factory=list),
     operator_ids: list[int] = Query(default_factory=list),
+    technician_ids: list[int] = Query(default_factory=list),
     status: str | None = Query(default=None, description='"pending" ou "scheduled"'),
     sla_status: str | None = Query(default=None, description='"late" ou "on_time" (só entre agendadas)'),
     ttfa_bucket: str | None = None,
@@ -157,7 +180,7 @@ def get_order_details(
         raise HTTPException(status_code=400, detail=f"sort_by inválido: {sort_by!r}")
     if sort_dir not in ("asc", "desc"):
         raise HTTPException(status_code=400, detail=f"sort_dir inválido: {sort_dir!r}")
-    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, operator_ids)
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, operator_ids, technician_ids)
     return metrics_engine.order_details(
         db, filters,
         status=status, sla_status=sla_status, ttfa_bucket=ttfa_bucket, backlog_bucket=backlog_bucket,

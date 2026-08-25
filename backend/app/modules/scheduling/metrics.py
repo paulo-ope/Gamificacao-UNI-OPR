@@ -139,6 +139,7 @@ class SchedulingFilters:
     setor_ids: list[str] = field(default_factory=list)
     assunto_ids: list[str] = field(default_factory=list)
     operator_ids: list[int] = field(default_factory=list)
+    technician_ids: list[int] = field(default_factory=list)
 
 
 def _percentile(sorted_values: list[float], pct: float) -> float | None:
@@ -172,6 +173,8 @@ def _cohort_query(filters: SchedulingFilters):
         stmt = stmt.where(SchedulingOrder.assunto_id.in_(filters.assunto_ids))
     if filters.operator_ids:
         stmt = stmt.where(SchedulingOrder.first_operator_id.in_(filters.operator_ids))
+    if filters.technician_ids:
+        stmt = stmt.where(SchedulingOrder.first_technician_id.in_(filters.technician_ids))
     return stmt
 
 
@@ -257,6 +260,41 @@ def reschedules_by_technician(db: Session, filters: SchedulingFilters) -> dict:
         for technician_id, bucket in buckets.items()
     ]
     items.sort(key=lambda item: item["rescheduled_orders"], reverse=True)
+    return {"date_from": filters.date_from, "date_to": filters.date_to, "items": items}
+
+
+def reschedules_by_operator(db: Session, filters: SchedulingFilters) -> dict:
+    """Reagendamentos POR AÇÃO de cada operador (evento tipo "10" = Reagendar) - pedido do usuário
+    em 2026-08-24: "quantos agendamentos ele fez, sem ser o 1o agendamento" - conta só reagendamento
+    de verdade (tipo 10), nunca o 1o agendamento (tipo 5) nem qualquer outra ação (abertura,
+    fechamento etc.). Diferente de `reschedules_by_technician`: aqui o agrupamento é por quem
+    REGISTROU o evento (o operador), não pelo técnico responsável pela O.S."""
+    os_ids = {row for (row,) in db.execute(_cohort_query(filters).with_only_columns(SchedulingOrder.ixc_os_id))}
+    if not os_ids:
+        return {"date_from": filters.date_from, "date_to": filters.date_to, "items": []}
+
+    rows = db.execute(
+        select(SchedulingEvent.operator_id, func.count(SchedulingEvent.id))
+        .where(SchedulingEvent.ixc_os_id.in_(os_ids), SchedulingEvent.event_type == "10")
+        .group_by(SchedulingEvent.operator_id)
+    ).all()
+
+    operator_ids = {operator_id for operator_id, _ in rows if operator_id is not None}
+    operator_names = _resolve_operator_names(db, operator_ids)
+    team_ids = _team_operator_ids(db)
+
+    items = [
+        {
+            "operator_id": operator_id,
+            "operator_name": operator_names.get(operator_id, f"Operador IXC {operator_id}")
+            if operator_id is not None
+            else "Operador não identificado",
+            "is_team_member": (operator_id in team_ids) if operator_id is not None else None,
+            "reschedule_events": count,
+        }
+        for operator_id, count in rows
+    ]
+    items.sort(key=lambda item: item["reschedule_events"], reverse=True)
     return {"date_from": filters.date_from, "date_to": filters.date_to, "items": items}
 
 
@@ -741,12 +779,26 @@ def filter_options(db: Session) -> dict:
         ),
         key=lambda item: item["name"],
     )
+    technician_ids = {
+        int(tid) for (tid,) in db.execute(
+            select(SchedulingOrder.first_technician_id).where(SchedulingOrder.first_technician_id.is_not(None)).distinct()
+        )
+    }
+    technician_names = _resolve_technician_names(db, technician_ids)
+    technicians = sorted(
+        (
+            {"id": tid, "name": technician_names.get(tid, f"Técnico IXC {tid}")}
+            for tid in technician_ids
+        ),
+        key=lambda item: item["name"],
+    )
     bounds = db.execute(select(func.min(SchedulingOrder.opened_at), func.max(SchedulingOrder.opened_at))).one()
     return {
         "filiais": filiais,
         "setores": setores,
         "assuntos": assuntos,
         "operators": operators,
+        "technicians": technicians,
         "data_available_from": bounds[0],
         "data_available_to": bounds[1],
     }

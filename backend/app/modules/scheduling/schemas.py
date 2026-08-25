@@ -103,6 +103,19 @@ class SchedulingRescheduleByTechnician(BaseModel):
     items: list[SchedulingRescheduleByTechnicianItem]
 
 
+class SchedulingRescheduleByOperatorItem(BaseModel):
+    operator_id: int | None
+    operator_name: str
+    is_team_member: bool | None = None
+    reschedule_events: int
+
+
+class SchedulingRescheduleByOperator(BaseModel):
+    date_from: date
+    date_to: date
+    items: list[SchedulingRescheduleByOperatorItem]
+
+
 class SchedulingFilterOption(BaseModel):
     id: str | int
     name: str
@@ -114,6 +127,7 @@ class SchedulingFilterOptions(BaseModel):
     setores: list[SchedulingFilterOption]
     assuntos: list[SchedulingFilterOption]
     operators: list[SchedulingFilterOption]
+    technicians: list[SchedulingFilterOption] = Field(default_factory=list)
     data_available_from: datetime | None = None
     data_available_to: datetime | None = None
 

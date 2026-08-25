@@ -4,7 +4,7 @@ diferente da "origem" do reagendamento (quem clicou em reagendar), que já exist
 from datetime import date, datetime
 
 from app.modules.scheduling import metrics
-from app.modules.scheduling.models import SchedulingOrder, SchedulingTechnician
+from app.modules.scheduling.models import SchedulingEvent, SchedulingOperator, SchedulingOrder, SchedulingTechnician
 from app.services.calculation_closure import PORTO_VELHO_TZ
 
 
@@ -90,3 +90,69 @@ def test_reschedules_by_technician_endpoint(client, db_session):
     body = response.json()
     assert body["items"][0]["technician_id"] == 30
     assert body["items"][0]["rescheduled_orders"] == 1
+
+
+# --- reschedules_by_operator: contagem por AÇÃO (evento tipo "10"), não por O.S. ------------------
+
+
+def test_reschedules_by_operator_counts_only_reschedule_events(db_session):
+    db_session.add_all([
+        SchedulingOperator(ixc_user_id=1, name="Ana", is_team_member=True),
+        SchedulingOperator(ixc_user_id=2, name="Beto", is_team_member=False),
+    ])
+    db_session.flush()
+
+    order_a = _make_order(db_session, ixc_os_id=3001, schedule_event_count=3)
+    order_b = _make_order(db_session, ixc_os_id=3002, schedule_event_count=2)
+    db_session.add_all([
+        # 1o agendamento (tipo 5) - NUNCA deve contar como reagendamento.
+        SchedulingEvent(ixc_message_id=1, ixc_os_id=order_a.ixc_os_id, event_type="5", event_at=_dt(1, 9), operator_id=1),
+        # 2 reagendamentos da Ana na mesma O.S.
+        SchedulingEvent(ixc_message_id=2, ixc_os_id=order_a.ixc_os_id, event_type="10", event_at=_dt(1, 10), operator_id=1),
+        SchedulingEvent(ixc_message_id=3, ixc_os_id=order_a.ixc_os_id, event_type="10", event_at=_dt(1, 11), operator_id=1),
+        # 1o agendamento + 1 reagendamento do Beto noutra O.S.
+        SchedulingEvent(ixc_message_id=4, ixc_os_id=order_b.ixc_os_id, event_type="5", event_at=_dt(1, 9), operator_id=2),
+        SchedulingEvent(ixc_message_id=5, ixc_os_id=order_b.ixc_os_id, event_type="10", event_at=_dt(1, 10), operator_id=2),
+    ])
+    db_session.commit()
+
+    filters = metrics.SchedulingFilters(date_from=date(2026, 7, 1), date_to=date(2026, 7, 31))
+    result = metrics.reschedules_by_operator(db_session, filters)
+
+    by_id = {item["operator_id"]: item for item in result["items"]}
+    assert by_id[1]["operator_name"] == "Ana"
+    assert by_id[1]["is_team_member"] is True
+    assert by_id[1]["reschedule_events"] == 2
+    assert by_id[2]["operator_name"] == "Beto"
+    assert by_id[2]["is_team_member"] is False
+    assert by_id[2]["reschedule_events"] == 1
+    # Ordenado do que mais reagendou pro que menos.
+    assert result["items"][0]["operator_id"] == 1
+
+
+def test_reschedules_by_operator_endpoint(client, db_session):
+    db_session.add(SchedulingOperator(ixc_user_id=5, name="Fabio", is_team_member=True))
+    db_session.flush()
+    order = _make_order(db_session, ixc_os_id=4001, schedule_event_count=2)
+    db_session.add(SchedulingEvent(ixc_message_id=1, ixc_os_id=order.ixc_os_id, event_type="10", event_at=_dt(1, 10), operator_id=5))
+    db_session.commit()
+
+    response = client.get(
+        "/api/scheduling/reschedules-by-operator",
+        params={"date_from": "2026-07-01", "date_to": "2026-07-31"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"][0]["operator_id"] == 5
+    assert body["items"][0]["reschedule_events"] == 1
+
+
+def test_filter_options_includes_technicians(db_session):
+    db_session.add(SchedulingTechnician(ixc_funcionario_id=40, name="Gustavo"))
+    db_session.flush()
+    _make_order(db_session, ixc_os_id=5001, schedule_event_count=1, technician_id=40)
+    db_session.commit()
+
+    options = metrics.filter_options(db_session)
+    assert {"id": 40, "name": "Gustavo"} in options["technicians"]
