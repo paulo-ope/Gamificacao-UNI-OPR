@@ -1037,17 +1037,35 @@ export default function AgendamentoPage() {
                 <>
                   <ul className="space-y-1.5">
                     {(technicianRankingExpanded ? reschedulesByTechnician : reschedulesByTechnician.slice(0, 8)).map((item) => (
-                      <li
-                        key={item.technician_id ?? "sem-tecnico"}
-                        className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm"
-                      >
-                        <span className="min-w-0 truncate text-slate-700">{item.technician_name}</span>
-                        <span className="flex shrink-0 items-center gap-3 text-xs text-slate-500">
-                          <span>{item.total_orders} O.S.</span>
-                          <span className={`font-semibold ${(item.reschedule_rate ?? 0) >= 50 ? "text-red-600" : "text-slate-700"}`}>
-                            {item.rescheduled_orders} reagendada(s){item.reschedule_rate !== null ? ` · ${item.reschedule_rate}%` : ""}
-                          </span>
-                        </span>
+                      <li key={item.technician_id ?? "sem-tecnico"}>
+                        {item.technician_id !== null ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openDrill(`Reagendamentos de ${item.technician_name}`, "O.S. desse técnico que precisaram de reagendamento no período", {
+                                technician_ids: [item.technician_id as number],
+                                only_rescheduled: true,
+                              })
+                            }
+                            className="flex w-full items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-left text-sm transition hover:border-blue-200 hover:bg-blue-50/60"
+                          >
+                            <span className="min-w-0 truncate text-slate-700">{item.technician_name}</span>
+                            <span className="flex shrink-0 items-center gap-3 text-xs text-slate-500">
+                              <span>{item.total_orders} O.S.</span>
+                              <span className={`font-semibold ${(item.reschedule_rate ?? 0) >= 50 ? "text-red-600" : "text-slate-700"}`}>
+                                {item.rescheduled_orders} reagendada(s){item.reschedule_rate !== null ? ` · ${item.reschedule_rate}%` : ""}
+                              </span>
+                            </span>
+                          </button>
+                        ) : (
+                          <div className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm">
+                            <span className="min-w-0 truncate text-slate-500">{item.technician_name}</span>
+                            <span className="flex shrink-0 items-center gap-3 text-xs text-slate-500">
+                              <span>{item.total_orders} O.S.</span>
+                              <span>{item.rescheduled_orders} reagendada(s){item.reschedule_rate !== null ? ` · ${item.reschedule_rate}%` : ""}</span>
+                            </span>
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -1084,17 +1102,28 @@ export default function AgendamentoPage() {
                 <>
                   <ul className="space-y-1.5">
                     {(operatorRankingExpanded ? reschedulesByOperator : reschedulesByOperator.slice(0, 8)).map((item) => (
-                      <li
-                        key={item.operator_id ?? "sem-operador"}
-                        className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm"
-                      >
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          <span className="truncate text-slate-700">{item.operator_name}</span>
-                          {item.is_team_member ? (
-                            <Badge className="shrink-0 border-blue-200 bg-blue-50 text-[10px] text-blue-700">Equipe</Badge>
-                          ) : null}
-                        </span>
-                        <span className="shrink-0 text-xs font-semibold text-slate-700">{item.reschedule_events} reagendamento(s)</span>
+                      <li key={item.operator_id ?? "sem-operador"}>
+                        {item.operator_id !== null ? (
+                          <button
+                            type="button"
+                            onClick={() => setOperatorEventsDrill({ operatorId: item.operator_id as number, title: item.operator_name })}
+                            className="flex w-full items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-left text-sm transition hover:border-blue-200 hover:bg-blue-50/60"
+                            title="Ver todas as ações desse operador no período (agendamentos e reagendamentos)"
+                          >
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              <span className="truncate text-slate-700">{item.operator_name}</span>
+                              {item.is_team_member ? (
+                                <Badge className="shrink-0 border-blue-200 bg-blue-50 text-[10px] text-blue-700">Equipe</Badge>
+                              ) : null}
+                            </span>
+                            <span className="shrink-0 text-xs font-semibold text-slate-700">{item.reschedule_events} reagendamento(s)</span>
+                          </button>
+                        ) : (
+                          <div className="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2 text-sm">
+                            <span className="truncate text-slate-500">{item.operator_name}</span>
+                            <span className="shrink-0 text-xs font-semibold text-slate-500">{item.reschedule_events} reagendamento(s)</span>
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>

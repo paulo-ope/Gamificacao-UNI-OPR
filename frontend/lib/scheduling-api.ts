@@ -189,6 +189,7 @@ export type SchedulingOrderDrillParams = {
   only_rescheduled?: boolean;
   reschedule_origin?: "backoffice" | "campo";
   operator_ids?: number[];
+  technician_ids?: number[];
   filial_ids?: string[];
   assunto_ids?: string[];
 };
@@ -333,7 +334,7 @@ export const schedulingApi = {
     filters.setor_ids.forEach((id) => params.append("setor_ids", id));
     (drill.assunto_ids ?? filters.assunto_ids).forEach((id) => params.append("assunto_ids", id));
     (drill.operator_ids ?? filters.operator_ids).forEach((id) => params.append("operator_ids", String(id)));
-    filters.technician_ids.forEach((id) => params.append("technician_ids", String(id)));
+    (drill.technician_ids ?? filters.technician_ids).forEach((id) => params.append("technician_ids", String(id)));
     if (drill.status) params.set("status", drill.status);
     if (drill.sla_status) params.set("sla_status", drill.sla_status);
     if (drill.ttfa_bucket) params.set("ttfa_bucket", drill.ttfa_bucket);
