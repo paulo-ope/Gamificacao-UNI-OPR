@@ -32,7 +32,15 @@ const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttributes<
   ({ className, ...props }, ref) => (
     <th
       ref={ref}
-      className={cn("h-10 px-3 text-left align-middle text-xs font-semibold uppercase text-slate-500", className)}
+      className={cn(
+        // `[&_button]:uppercase`: cabeçalho ordenável (um <button> por dentro, pra virar
+        // clicável) sem isso ficava com case diferente do resto - achado real de 2026-08-25:
+        // <button> reseta `text-transform` por padrão do navegador, então não herdava o
+        // `uppercase` daqui, e a linha de cabeçalho misturava "OPERADOR" (texto puro) com
+        // "Aberta em" (dentro de botão) na mesma tabela.
+        "h-10 px-3 text-left align-middle text-xs font-semibold uppercase text-slate-500 [&_button]:uppercase",
+        className,
+      )}
       {...props}
     />
   )

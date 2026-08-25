@@ -1626,7 +1626,7 @@ function OrderDrillPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <div className="flex max-h-[85vh] w-full max-w-6xl flex-col rounded-2xl bg-white shadow-2xl">
+      <div className="flex max-h-[85vh] w-full max-w-[92rem] flex-col rounded-2xl bg-white shadow-2xl">
         <DrillPanelHeader
           icon={ListChecks}
           title={title}
