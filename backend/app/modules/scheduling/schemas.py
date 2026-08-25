@@ -88,6 +88,21 @@ class SchedulingBacklogItem(BaseModel):
     status: str | None = None
 
 
+class SchedulingRescheduleByTechnicianItem(BaseModel):
+    technician_id: int | None
+    technician_name: str
+    total_orders: int
+    rescheduled_orders: int
+    reschedule_events: int
+    reschedule_rate: float | None
+
+
+class SchedulingRescheduleByTechnician(BaseModel):
+    date_from: date
+    date_to: date
+    items: list[SchedulingRescheduleByTechnicianItem]
+
+
 class SchedulingFilterOption(BaseModel):
     id: str | int
     name: str

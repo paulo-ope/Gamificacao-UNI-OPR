@@ -33,6 +33,7 @@ from app.modules.scheduling.schemas import (
     SchedulingOperatorEventPage,
     SchedulingOrderDetailPage,
     SchedulingOrderTimeline,
+    SchedulingRescheduleByTechnician,
     SchedulingSavedFilterCreate,
     SchedulingSavedFilterOut,
     SchedulingSavedFilterUpdate,
@@ -89,6 +90,23 @@ def get_dashboard(
         raise HTTPException(status_code=400, detail=f"count_mode inválido: {count_mode!r}")
     filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, operator_ids)
     return metrics_engine.build_dashboard(db, filters, count_mode=count_mode)
+
+
+@router.get("/reschedules-by-technician", response_model=SchedulingRescheduleByTechnician)
+def get_reschedules_by_technician(
+    date_from: date,
+    date_to: date,
+    filial_ids: list[str] = Query(default_factory=list),
+    setor_ids: list[str] = Query(default_factory=list),
+    assunto_ids: list[str] = Query(default_factory=list),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Reagendamentos por técnico de campo responsável pela O.S. - pedido do usuário em
+    2026-08-24: métrica de instabilidade/retrabalho por colaborador, não por quem clicou em
+    reagendar (isso já existe como "origem" no dashboard)."""
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, [])
+    return metrics_engine.reschedules_by_technician(db, filters)
 
 
 @router.get("/backlog", response_model=list[SchedulingBacklogItem])

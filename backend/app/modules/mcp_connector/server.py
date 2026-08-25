@@ -1209,6 +1209,55 @@ def build_mcp_server() -> FastMCP:
             return _dump(policy.field_catalog())
 
     @mcp.tool(
+        name="opr_reschedule_by_technician",
+        annotations={"title": "Reagendamentos por técnico de campo", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_reschedule_by_technician(
+        date_from: str,
+        date_to: str,
+        filial_ids: list[str] | None = None,
+        setor_ids: list[str] | None = None,
+        assunto_ids: list[str] | None = None,
+    ) -> str:
+        """Quantas O.S. de CADA técnico de campo precisaram de reagendamento no período - mede
+        instabilidade/retrabalho na rota de cada colaborador, não quem clicou em reagendar (isso é
+        "origem" do reagendamento, uma métrica agregada diferente, sem quebra por pessoa).
+
+        Args:
+            date_from, date_to: AAAA-MM-DD - por data de ABERTURA da O.S. (mesmo recorte do
+                dashboard de Agendamento), máximo 1 ano de intervalo.
+            filial_ids, setor_ids, assunto_ids: opcionais, IDs do IXC (ver opr_filter_options ou a
+                tela de Agendamento para os valores válidos).
+
+        Returns:
+            JSON {"date_from", "date_to", "items": [{"technician_id", "technician_name",
+            "total_orders", "rescheduled_orders" (O.S. distintas reagendadas pelo menos 1x),
+            "reschedule_events" (soma de reagendamentos, uma O.S. reagendada 3x conta 3),
+            "reschedule_rate" (% de rescheduled_orders/total_orders)}, ...], ordenado do técnico
+            com mais O.S. reagendadas pro com menos.
+        """
+        from app.modules.scheduling import metrics as scheduling_metrics
+
+        user = _current_user()
+        if "scheduling:read" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para consultar o Agendamento (scheduling:read).")
+        parsed_from = _parse_date(date_from)
+        parsed_to = _parse_date(date_to)
+        if parsed_to < parsed_from:
+            raise ValueError("date_to não pode ser anterior a date_from.")
+        if (parsed_to - parsed_from).days > 366:
+            raise ValueError("O período máximo de consulta é de 1 ano.")
+        filters = scheduling_metrics.SchedulingFilters(
+            date_from=parsed_from,
+            date_to=parsed_to,
+            filial_ids=filial_ids or [],
+            setor_ids=setor_ids or [],
+            assunto_ids=assunto_ids or [],
+        )
+        with SessionLocal() as db:
+            return _dump(scheduling_metrics.reschedules_by_technician(db, filters))
+
+    @mcp.tool(
         name="opr_management_cases",
         annotations={"title": "Casos de Gestão Integrada", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     )

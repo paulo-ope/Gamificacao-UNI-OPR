@@ -218,6 +218,48 @@ def _reschedule_origins_by_order(db: Session, os_ids: set[int], team_ids: set[in
     return origins_by_order
 
 
+def reschedules_by_technician(db: Session, filters: SchedulingFilters) -> dict:
+    """Reagendamentos agrupados pelo TÉCNICO DE CAMPO responsável pela O.S. - pedido do usuário em
+    2026-08-24: medir instabilidade/retrabalho na rota de cada colaborador (quantas das O.S. dele
+    precisaram de reagendamento), não quem clicou em reagendar (isso já existe separado como
+    "origem" do reagendamento em `build_dashboard`/`_classify_reschedule_origin`).
+
+    `reschedule_events` conta CADA reagendamento (uma O.S. reagendada 3 vezes soma 3), enquanto
+    `rescheduled_orders` conta O.S. distintas - mesma distinção de `order_details`
+    (`reschedule_count = schedule_event_count - 1`)."""
+    orders = list(db.execute(_cohort_query(filters)).scalars())
+    buckets: dict[int | None, dict] = {}
+    for order in orders:
+        bucket = buckets.setdefault(
+            order.first_technician_id, {"total_orders": 0, "rescheduled_orders": 0, "reschedule_events": 0}
+        )
+        bucket["total_orders"] += 1
+        if order.schedule_event_count and order.schedule_event_count > 1:
+            bucket["rescheduled_orders"] += 1
+            bucket["reschedule_events"] += order.schedule_event_count - 1
+
+    technician_ids = {technician_id for technician_id in buckets if technician_id is not None}
+    technician_names = _resolve_technician_names(db, technician_ids)
+
+    items = [
+        {
+            "technician_id": technician_id,
+            "technician_name": technician_names.get(technician_id, f"Técnico #{technician_id}")
+            if technician_id is not None
+            else "Sem técnico definido",
+            "total_orders": bucket["total_orders"],
+            "rescheduled_orders": bucket["rescheduled_orders"],
+            "reschedule_events": bucket["reschedule_events"],
+            "reschedule_rate": (
+                round(bucket["rescheduled_orders"] / bucket["total_orders"] * 100, 1) if bucket["total_orders"] else None
+            ),
+        }
+        for technician_id, bucket in buckets.items()
+    ]
+    items.sort(key=lambda item: item["rescheduled_orders"], reverse=True)
+    return {"date_from": filters.date_from, "date_to": filters.date_to, "items": items}
+
+
 def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str = "all_events") -> dict:
     settings = load_settings(db)
     window_start, window_end, active_days = _parse_business_window(settings)
