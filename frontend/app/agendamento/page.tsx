@@ -1029,10 +1029,10 @@ export default function AgendamentoPage() {
                   ariaLabel="Ajuda sobre reagendamentos por técnico"
                   side="bottom"
   title="Reagendamentos gerados pelo técnico"
-                  description="Quantos REAGENDAMENTOS (evento tipo 10) cada técnico de campo gerou pessoalmente no período - só conta quando ele mesmo é o técnico do evento, não qualquer O.S. dele reagendada por outra pessoa."
+                  description="Quantos REAGENDAMENTOS (evento tipo 10) cada técnico de campo gerou pessoalmente no período - só conta quando ele mesmo é o técnico do evento, não qualquer O.S. dele reagendada por outra pessoa. Considera só colaboradores com modelo de equipe de campo cadastrado na Gestão (exclui backoffice/agendamento)."
                 />
               </span>
-              <p className="text-xs text-slate-500">Conta cada reagendamento gerado pelo próprio técnico, não O.S. distintas.</p>
+              <p className="text-xs text-slate-500">Conta cada reagendamento gerado pelo próprio técnico, não O.S. distintas · só técnicos de campo cadastrados.</p>
             </CardHeader>
             <CardContent className="px-4 pb-4">
               {reschedulesByTechnician.length ? (

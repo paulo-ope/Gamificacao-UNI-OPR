@@ -1222,6 +1222,10 @@ def build_mcp_server() -> FastMCP:
         """Quantos REAGENDAMENTOS (evento tipo 10) CADA técnico de campo gerou pessoalmente no
         período - corrigido em 2026-08-25 pra contar só o evento cujo `technician_id` é o próprio
         técnico, não qualquer O.S. dele que foi reagendada por outra pessoa (operador/backoffice).
+        Restrito a colaboradores cadastrados no módulo de Gestão com um modelo de equipe de campo
+        (TECNICO 12/36H, FAZ TUDO etc.) - sem isso, gente do backoffice/agendamento aparecia como
+        se fosse técnico (o `id_tecnico` do IXC às vezes carrega o funcionário associado à O.S.,
+        não necessariamente um técnico de campo de verdade).
 
         Args:
             date_from, date_to: AAAA-MM-DD - por data de ABERTURA da O.S. (mesmo recorte do

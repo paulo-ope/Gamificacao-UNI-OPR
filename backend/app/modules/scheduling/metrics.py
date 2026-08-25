@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import AppSetting
+from app.modules.management.models import ManagementOperationalMember
 from app.modules.scheduling.models import SchedulingEvent, SchedulingOperator, SchedulingOrder, SchedulingTechnician
 from app.services.calculation_closure import PORTO_VELHO_TZ, now_porto_velho
 from app.services.regional import REGIONAL_CODE_MAP
@@ -192,6 +193,23 @@ def _resolve_technician_names(db: Session, technician_ids: set[int]) -> dict[int
     return {row.ixc_funcionario_id: row.name for row in rows}
 
 
+def _field_technician_ixc_ids(db: Session) -> set[int]:
+    """IDs de funcionário (mesmo espaço de `SchedulingEvent.technician_id`) dos colaboradores
+    cadastrados no módulo de Gestão com um modelo de equipe de campo (TECNICO 12/36H, FAZ TUDO
+    etc.) - achado real de 2026-08-25: `SchedulingEvent.technician_id` é o "técnico associado à
+    O.S." no IXC, e às vezes carrega o `id_tecnico` de gente do backoffice/agendamento (ex.:
+    Vandesson, que é operador de equipe e não técnico de campo) - sem esse filtro, o card
+    "Reagendamentos por técnico" listava operadores do backoffice como se fossem técnicos."""
+    rows = db.execute(
+        select(ManagementOperationalMember.ixc_employee_id).where(
+            ManagementOperationalMember.ixc_employee_id.is_not(None),
+            ManagementOperationalMember.team_model_id.is_not(None),
+            ManagementOperationalMember.is_active.is_(True),
+        ).distinct()
+    )
+    return {ixc_employee_id for (ixc_employee_id,) in rows}
+
+
 def _team_operator_ids(db: Session) -> set[int]:
     rows = db.execute(select(SchedulingOperator).where(SchedulingOperator.is_team_member.is_(True))).scalars()
     return {row.ixc_user_id for row in rows}
@@ -227,14 +245,21 @@ def reschedules_by_technician(db: Session, filters: SchedulingFilters) -> dict:
     (`order.first_technician_id`), então um técnico aparecia com reagendamento mesmo quando quem
     de fato reagendou foi outra pessoa (operador/backoffice) numa O.S. que só por acaso era dele.
     Agora só conta evento cujo `SchedulingEvent.technician_id` é o próprio técnico - mesmo padrão
-    de `reschedules_by_operator`, espelhando o campo trocado (technician_id em vez de operator_id)."""
+    de `reschedules_by_operator`, espelhando o campo trocado (technician_id em vez de operator_id).
+    Restrito a quem está cadastrado no módulo de Gestão com um modelo de equipe de campo (ver
+    `_field_technician_ixc_ids`) - sem isso, gente do backoffice/agendamento aparecia como técnico."""
     os_ids = {row for (row,) in db.execute(_cohort_query(filters).with_only_columns(SchedulingOrder.ixc_os_id))}
-    if not os_ids:
+    field_technician_ids = _field_technician_ixc_ids(db)
+    if not os_ids or not field_technician_ids:
         return {"date_from": filters.date_from, "date_to": filters.date_to, "items": []}
 
     rows = db.execute(
         select(SchedulingEvent.technician_id, func.count(SchedulingEvent.id))
-        .where(SchedulingEvent.ixc_os_id.in_(os_ids), SchedulingEvent.event_type == "10")
+        .where(
+            SchedulingEvent.ixc_os_id.in_(os_ids),
+            SchedulingEvent.event_type == "10",
+            SchedulingEvent.technician_id.in_(field_technician_ids),
+        )
         .group_by(SchedulingEvent.technician_id)
     ).all()
 
@@ -244,9 +269,7 @@ def reschedules_by_technician(db: Session, filters: SchedulingFilters) -> dict:
     items = [
         {
             "technician_id": technician_id,
-            "technician_name": technician_names.get(technician_id, f"Técnico #{technician_id}")
-            if technician_id is not None
-            else "Sem técnico definido",
+            "technician_name": technician_names.get(technician_id, f"Técnico #{technician_id}"),
             "reschedule_events": count,
         }
         for technician_id, count in rows
