@@ -69,6 +69,27 @@ class SupportOpaDimension(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
+class SupportOpaAttendantOverride(Base):
+    """Cadastro manual de classificação de atendente do OPA Suite — hoje usado só
+    pra forçar `attendant_type="bot"` (via `classification="virtual_agent"`) quando
+    a dimensão sincronizada da API (`SupportOpaDimension.payload_json.tipo`) não
+    reflete isso, seja porque o OPA nunca mandou `tipo="bot"` pra aquele atendente,
+    seja porque o atendente nem chegou a ser sincronizado como dimensão. Tem
+    prioridade sobre `payload_json.tipo` — ver `opa_attendant_overrides.resolve_attendant_type`.
+    """
+
+    __tablename__ = "support_opa_attendant_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attendant_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    attendant_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    classification: Mapped[str] = mapped_column(String(40), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class SupportOpaAttendance(Base):
     __tablename__ = "support_opa_attendances"
     __table_args__ = (
