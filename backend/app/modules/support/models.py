@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -98,6 +98,17 @@ class SupportOpaAttendance(Base):
     rating: Mapped[float | None] = mapped_column(Float, nullable=True)
     tma_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tmr_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # TMR geral: mesmo cálculo do tmr_seconds, mas conta resposta de QUALQUER
+    # atendente (bot ou humano) como resposta válida — pensado pra comparar
+    # com painéis que não distinguem bot de humano no TMR. tmr_seconds
+    # continua sendo o TMR só-humano, não foi alterado.
+    tmr_all_responses_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Nullable de propósito: NULL = atendimento ainda não classificado (histórico
+    # anterior à Fase 2, ou mensagens indisponíveis) — nunca tratar como False.
+    # Ver opa_ingestion._classify_bot_human.
+    handled_by_bot: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    reached_human: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    bot_to_human_handoff: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     raw_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     first_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
