@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import event
 
-from app.modules.support.models import SupportOpaAttendance
+from app.modules.support.models import SupportOpaAttendance, SupportOpaDimension
+from app.modules.support import opa_timeline_service
 from app.modules.support import router as support_router
-from app.modules.support.router import opa_attendance_detail, opa_attendances, opa_breakdowns, opa_overview
+from app.modules.support.router import (
+    opa_attendance_detail,
+    opa_attendance_timeline,
+    opa_attendances,
+    opa_attendant_summary,
+    opa_breakdowns,
+    opa_overview,
+)
 
 
 def _attendance(index: int, **overrides):
@@ -76,6 +84,23 @@ def _overview(db_session, admin_user, **kwargs):
     return opa_overview(**params)
 
 
+def _attendant_summary(db_session, admin_user, attendant_id, **kwargs):
+    params = {
+        "date_from": None,
+        "date_to": None,
+        "status": None,
+        "channel": None,
+        "department_id": None,
+        "reason_id": None,
+        "customer": None,
+        "search": None,
+        "db": db_session,
+        "user": admin_user,
+    }
+    params.update(kwargs)
+    return opa_attendant_summary(attendant_id, **params)
+
+
 def _breakdowns(db_session, admin_user, **kwargs):
     params = {
         "dimension": "attendant",
@@ -128,6 +153,97 @@ def test_opa_attendances_filters_by_period(db_session, admin_user):
 
     assert body["total"] == 10
     assert all(item["opened_at"].date() == datetime(2026, 8, 1).date() for item in body["items"])
+
+
+def test_opa_attendances_date_basis_opened_at_is_default_and_ignores_closed_at(db_session, admin_user):
+    # Aberto 24/08, encerrado 25/08 — com date_basis padrão (abertura), só
+    # aparece filtrando 24/08; filtrar 25/08 não deve trazer nada, exatamente
+    # o comportamento atual preservado (critério de aceite).
+    row = _attendance(
+        1,
+        opened_at=datetime(2026, 8, 24, 22, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 8, 25, 18, tzinfo=timezone.utc),
+    )
+    db_session.add(row)
+    db_session.flush()
+
+    on_open_day = _list(db_session, admin_user, date_from=date(2026, 8, 24), date_to=date(2026, 8, 24))
+    on_close_day = _list(db_session, admin_user, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25))
+
+    assert on_open_day["total"] == 1
+    assert on_close_day["total"] == 0
+
+
+def test_opa_attendances_date_basis_closed_at_finds_attendance_by_closing_day(db_session, admin_user):
+    row = _attendance(
+        1,
+        opened_at=datetime(2026, 8, 24, 22, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 8, 25, 18, tzinfo=timezone.utc),
+    )
+    db_session.add(row)
+    db_session.flush()
+
+    on_close_day = _list(
+        db_session, admin_user, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), date_basis="closed_at"
+    )
+    on_open_day = _list(
+        db_session, admin_user, date_from=date(2026, 8, 24), date_to=date(2026, 8, 24), date_basis="closed_at"
+    )
+
+    assert on_close_day["total"] == 1
+    assert on_close_day["items"][0]["id"] == row.id
+    # No dia de abertura, com date_basis=closed_at, não aparece (ainda não
+    # tinha encerrado nesse dia).
+    assert on_open_day["total"] == 0
+
+
+def test_opa_attendances_date_basis_closed_at_excludes_still_open_attendances(db_session, admin_user):
+    row = _attendance(1, opened_at=datetime(2026, 8, 25, 8, tzinfo=timezone.utc), closed_at=None)
+    db_session.add(row)
+    db_session.flush()
+
+    body = _list(
+        db_session, admin_user, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), date_basis="closed_at"
+    )
+
+    assert body["total"] == 0
+
+
+def test_opa_overview_date_basis_closed_at_counts_attendance_on_closing_day(db_session, admin_user):
+    row = _attendance(
+        1,
+        opened_at=datetime(2026, 8, 24, 22, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 8, 25, 18, tzinfo=timezone.utc),
+    )
+    db_session.add(row)
+    db_session.flush()
+
+    by_open = _overview(db_session, admin_user, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25))
+    by_close = _overview(
+        db_session, admin_user, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), date_basis="closed_at"
+    )
+
+    assert by_open["total_attendances"]["current"] == 0
+    assert by_close["total_attendances"]["current"] == 1
+
+
+def test_opa_attendant_summary_date_basis_closed_at_counts_attendance_on_closing_day(db_session, admin_user):
+    row = _attendance(
+        1,
+        attendant_id="A-1",
+        opened_at=datetime(2026, 8, 24, 22, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 8, 25, 18, tzinfo=timezone.utc),
+    )
+    db_session.add(row)
+    db_session.flush()
+
+    by_open = _attendant_summary(db_session, admin_user, "A-1", date_from=date(2026, 8, 25), date_to=date(2026, 8, 25))
+    by_close = _attendant_summary(
+        db_session, admin_user, "A-1", date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), date_basis="closed_at"
+    )
+
+    assert by_open["total_attendances"] == 0
+    assert by_close["total_attendances"] == 1
 
 
 def test_opa_attendances_filters_by_attendant(db_session, admin_user):
@@ -316,6 +432,170 @@ def test_opa_overview_previous_period_without_data_and_division_by_zero(db_sessi
     assert empty["total_attendances"]["percentage_change"] == 0.0
 
 
+def test_opa_overview_reports_status_breakdown(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, status="F"),
+            _attendance(2, status="F"),
+            _attendance(3, status="AG"),
+        ]
+    )
+    db_session.flush()
+
+    body = _overview(db_session, admin_user)
+
+    assert {item["status"]: item["total"] for item in body["by_status"]} == {"F": 2, "AG": 1}
+
+
+def test_opa_overview_reports_unique_and_recurring_customers(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, customer_id="C-1", customer_name="Cliente Um"),
+            _attendance(2, customer_id="C-1", customer_name="Cliente Um"),
+            _attendance(3, customer_id="C-2", customer_name="Cliente Dois"),
+        ]
+    )
+    db_session.flush()
+
+    body = _overview(db_session, admin_user)
+
+    customers = body["customers"]
+    assert customers["unique_customers"] == 2
+    assert customers["recurring_customers"] == 1
+    assert customers["recurring_customers_percentage"] == 50.0
+    assert customers["top_recurring_customers"][0]["customer_id"] == "C-1"
+    assert customers["top_recurring_customers"][0]["total"] == 2
+
+
+def test_opa_overview_reports_top_reasons_with_tma_and_tmr(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(1, reason_name="Sem conexão", closed_at=opened + timedelta(minutes=10), tma_seconds=600, tmr_seconds=100),
+            _attendance(2, reason_name="Sem conexão", closed_at=opened + timedelta(minutes=20), tma_seconds=1200, tmr_seconds=200),
+            _attendance(3, reason_name="Boleto", closed_at=opened + timedelta(minutes=5), tma_seconds=300, tmr_seconds=50),
+        ]
+    )
+    db_session.flush()
+
+    body = _overview(db_session, admin_user)
+
+    top = body["top_reasons"][0]
+    assert top["label"] == "Sem conexão"
+    assert top["total"] == 2
+    assert top["average_tma_seconds"] == 900
+    assert top["average_tmr_seconds"] == 150
+
+
+def test_opa_overview_reports_average_first_response_seconds(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(1, opened_at=opened, first_response_at=opened + timedelta(minutes=5)),
+            _attendance(2, opened_at=opened, first_response_at=opened + timedelta(minutes=15)),
+            _attendance(3, opened_at=opened, first_response_at=None),
+        ]
+    )
+    db_session.flush()
+
+    body = _overview(db_session, admin_user)
+
+    assert body["average_first_response_seconds"] == 600.0
+
+
+def test_opa_overview_bot_human_percentages_use_classified_denominator_only(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, handled_by_bot=True, reached_human=True, bot_to_human_handoff=True),
+            _attendance(2, handled_by_bot=False, reached_human=True, bot_to_human_handoff=False),
+            _attendance(3, handled_by_bot=None, reached_human=None, bot_to_human_handoff=None),
+        ]
+    )
+    db_session.flush()
+
+    body = _overview(db_session, admin_user)
+    bot_human = body["bot_human"]
+
+    assert bot_human["total_attendances"] == 3
+    assert bot_human["classified_attendances"] == 2
+    assert bot_human["unclassified_attendances"] == 1
+    assert bot_human["with_bot"] == 1
+    assert bot_human["with_bot_percentage"] == 50.0
+    assert bot_human["reached_human"] == 2
+    assert bot_human["reached_human_percentage"] == 100.0
+    assert bot_human["bot_to_human_handoff"] == 1
+    assert bot_human["bot_to_human_handoff_percentage"] == 50.0
+
+
+def test_opa_overview_average_tmr_seconds_compares_with_previous_period(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, opened_at=datetime(2026, 8, 1, 8, tzinfo=timezone.utc), tmr_seconds=100),
+            _attendance(2, opened_at=datetime(2026, 8, 1, 9, tzinfo=timezone.utc), tmr_seconds=300),
+            _attendance(3, opened_at=datetime(2026, 7, 31, 8, tzinfo=timezone.utc), tmr_seconds=50),
+        ]
+    )
+    db_session.flush()
+
+    body = _overview(db_session, admin_user)
+
+    assert body["average_tmr_seconds"]["current"] == 200.0
+    assert body["average_tmr_seconds"]["previous"] == 50.0
+
+
+def test_opa_overview_average_tmr_all_responses_seconds_compares_with_previous_period(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, opened_at=datetime(2026, 8, 1, 8, tzinfo=timezone.utc), tmr_seconds=100, tmr_all_responses_seconds=20),
+            _attendance(2, opened_at=datetime(2026, 8, 1, 9, tzinfo=timezone.utc), tmr_seconds=300, tmr_all_responses_seconds=40),
+            _attendance(3, opened_at=datetime(2026, 7, 31, 8, tzinfo=timezone.utc), tmr_seconds=50, tmr_all_responses_seconds=10),
+        ]
+    )
+    db_session.flush()
+
+    body = _overview(db_session, admin_user)
+
+    # TMR geral e TMR humano coexistem e são independentes um do outro.
+    assert body["average_tmr_all_responses_seconds"]["current"] == 30.0
+    assert body["average_tmr_all_responses_seconds"]["previous"] == 10.0
+    assert body["average_tmr_seconds"]["current"] == 200.0
+
+
+def test_opa_attendant_summary_and_top_reasons_expose_tmr_all_responses_seconds(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(
+                1,
+                attendant_id="A-1",
+                reason_name="Sem conexão",
+                opened_at=opened,
+                tmr_seconds=400,
+                tmr_all_responses_seconds=50,
+            ),
+            _attendance(
+                2,
+                attendant_id="A-1",
+                reason_name="Sem conexão",
+                opened_at=opened,
+                tmr_seconds=200,
+                tmr_all_responses_seconds=30,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    summary = _attendant_summary(db_session, admin_user, "A-1")
+    assert summary["average_tmr_seconds"] == 300.0
+    assert summary["average_tmr_all_responses_seconds"] == 40.0
+
+    overview = _overview(db_session, admin_user)
+    top_reason = overview["top_reasons"][0]
+    assert top_reason["label"] == "Sem conexão"
+    assert top_reason["average_tmr_seconds"] == 300.0
+    assert top_reason["average_tmr_all_responses_seconds"] == 40.0
+
+
 def test_opa_overview_and_table_filters_use_same_universe(db_session, admin_user):
     _seed(db_session, 24)
 
@@ -332,6 +612,197 @@ def test_opa_overview_and_table_filters_use_same_universe(db_session, admin_user
     )
 
     assert overview["total_attendances"]["current"] == table["total"]
+
+
+def test_opa_attendant_summary_returns_totals_and_rates(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", attendant_name="Ana", closed_at=opened + timedelta(minutes=10), tma_seconds=600, rating=5),
+            _attendance(2, attendant_id="A-1", attendant_name="Ana", closed_at=None, tma_seconds=None, rating=None),
+            _attendance(3, attendant_id="A-2", attendant_name="Bruno", closed_at=opened + timedelta(minutes=20), tma_seconds=1200, rating=3),
+        ]
+    )
+    db_session.flush()
+
+    body = _attendant_summary(db_session, admin_user, "A-1")
+
+    assert body["attendant_id"] == "A-1"
+    assert body["attendant_name"] == "Ana"
+    assert body["total_attendances"] == 2
+    assert body["closed_attendances"] == 1
+    assert body["open_attendances"] == 1
+    assert body["closure_rate"] == 50.0
+    assert body["average_tma_seconds"] == 600
+    assert body["average_rating"] == 5
+    assert body["rating_count"] == 1
+
+
+def test_opa_attendant_summary_applies_global_filters(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", status="F", channel="whatsapp", department_id="D-1", reason_id="R-1"),
+            _attendance(2, attendant_id="A-1", status="A", channel="telefone", department_id="D-2", reason_id="R-2"),
+            _attendance(3, attendant_id="A-2", status="F", channel="whatsapp", department_id="D-1", reason_id="R-1"),
+        ]
+    )
+    db_session.flush()
+
+    assert _attendant_summary(db_session, admin_user, "A-1", status="F")["total_attendances"] == 1
+    assert _attendant_summary(db_session, admin_user, "A-1", channel="telefone")["total_attendances"] == 1
+    assert _attendant_summary(db_session, admin_user, "A-1", department_id="D-1")["total_attendances"] == 1
+    assert _attendant_summary(db_session, admin_user, "A-1", reason_id="R-2")["total_attendances"] == 1
+
+    combined = _attendant_summary(
+        db_session, admin_user, "A-1", status="F", channel="whatsapp", department_id="D-1", reason_id="R-1"
+    )
+    assert combined["total_attendances"] == 1
+
+
+def test_opa_attendant_summary_filters_by_period_customer_and_search(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(
+                1,
+                attendant_id="A-1",
+                opened_at=datetime(2026, 8, 1, 8, tzinfo=timezone.utc),
+                customer_id="C-1",
+                customer_name="Cliente Um",
+                protocol="PROTO-A",
+            ),
+            _attendance(
+                2,
+                attendant_id="A-1",
+                opened_at=datetime(2026, 8, 2, 8, tzinfo=timezone.utc),
+                customer_id="C-2",
+                customer_name="Cliente Dois",
+                protocol="PROTO-B",
+            ),
+        ]
+    )
+    db_session.flush()
+
+    by_period = _attendant_summary(db_session, admin_user, "A-1", date_from=date(2026, 8, 1), date_to=date(2026, 8, 1))
+    assert by_period["total_attendances"] == 1
+
+    by_customer = _attendant_summary(db_session, admin_user, "A-1", customer="Cliente Dois")
+    assert by_customer["total_attendances"] == 1
+
+    by_search = _attendant_summary(db_session, admin_user, "A-1", search="PROTO-A")
+    assert by_search["total_attendances"] == 1
+
+
+def test_opa_attendant_summary_computes_tma_tmr_and_first_response(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(
+                1,
+                attendant_id="A-1",
+                opened_at=opened,
+                closed_at=opened + timedelta(minutes=10),
+                tma_seconds=600,
+                tmr_seconds=100,
+                first_response_at=opened + timedelta(minutes=2),
+            ),
+            _attendance(
+                2,
+                attendant_id="A-1",
+                opened_at=opened,
+                closed_at=opened + timedelta(minutes=20),
+                tma_seconds=1200,
+                tmr_seconds=300,
+                first_response_at=opened + timedelta(minutes=8),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    body = _attendant_summary(db_session, admin_user, "A-1")
+
+    assert body["average_tma_seconds"] == 900
+    assert body["average_tmr_seconds"] == 200
+    assert body["average_first_response_seconds"] == 300.0
+
+
+def test_opa_attendant_summary_reports_unique_and_recurring_customers(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", customer_id="C-1"),
+            _attendance(2, attendant_id="A-1", customer_id="C-1"),
+            _attendance(3, attendant_id="A-1", customer_id="C-2"),
+        ]
+    )
+    db_session.flush()
+
+    body = _attendant_summary(db_session, admin_user, "A-1")
+
+    assert body["customers"]["unique_customers"] == 2
+    assert body["customers"]["recurring_customers"] == 1
+
+
+def test_opa_attendant_summary_reports_status_reason_and_channel_breakdown(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", status="F", reason_name="Sem conexão", channel="whatsapp"),
+            _attendance(2, attendant_id="A-1", status="F", reason_name="Sem conexão", channel="whatsapp"),
+            _attendance(3, attendant_id="A-1", status="AG", reason_name="Boleto", channel="telefone"),
+        ]
+    )
+    db_session.flush()
+
+    body = _attendant_summary(db_session, admin_user, "A-1")
+
+    assert {item["status"]: item["total"] for item in body["by_status"]} == {"F": 2, "AG": 1}
+    assert {item["label"]: item["total"] for item in body["by_reason"]} == {"Sem conexão": 2, "Boleto": 1}
+    assert {item["channel"]: item["total"] for item in body["by_channel"]} == {"whatsapp": 2, "telefone": 1}
+
+
+def test_opa_attendant_summary_bot_human_uses_classified_denominator(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", handled_by_bot=True, reached_human=True, bot_to_human_handoff=True),
+            _attendance(2, attendant_id="A-1", handled_by_bot=False, reached_human=True, bot_to_human_handoff=False),
+            _attendance(3, attendant_id="A-1", handled_by_bot=None, reached_human=None, bot_to_human_handoff=None),
+        ]
+    )
+    db_session.flush()
+
+    body = _attendant_summary(db_session, admin_user, "A-1")
+    bot_human = body["bot_human"]
+
+    assert bot_human["total_attendances"] == 3
+    assert bot_human["classified_attendances"] == 2
+    assert bot_human["unclassified_attendances"] == 1
+    assert bot_human["with_bot_percentage"] == 50.0
+    assert bot_human["reached_human_percentage"] == 100.0
+    assert bot_human["bot_to_human_handoff_percentage"] == 50.0
+
+
+def test_opa_attendant_summary_missing_attendant_returns_404(db_session, admin_user):
+    with pytest.raises(HTTPException) as exc:
+        _attendant_summary(db_session, admin_user, "NUNCA-EXISTIU")
+
+    assert exc.value.status_code == 404
+
+
+def test_opa_attendant_summary_resolves_identity_from_dimension_only(db_session, admin_user):
+    db_session.add(
+        SupportOpaDimension(
+            dimension_type="user",
+            source_id="BOT-1",
+            name="Bot Assistente",
+            payload_json={"tipo": "bot"},
+        )
+    )
+    db_session.flush()
+
+    body = _attendant_summary(db_session, admin_user, "BOT-1")
+
+    assert body["attendant_name"] == "Bot Assistente"
+    assert body["attendant_type"] == "bot"
+    assert body["total_attendances"] == 0
+    assert body["closure_rate"] == 0.0
 
 
 @pytest.mark.parametrize("dimension", ["attendant", "department", "reason", "channel", "status", "customer"])
@@ -678,3 +1149,122 @@ def test_opa_attendance_detail_keeps_local_fallback_when_external_fails(db_sessi
     assert body["enriched"] is None
     assert body["external_detail_available"] is False
     assert "OPA fora" in body["external_detail_error"]
+
+
+def test_opa_attendance_timeline_returns_structural_events_without_messages(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    row = _attendance(
+        1,
+        opened_at=opened,
+        closed_at=opened + timedelta(minutes=30),
+        first_response_at=opened + timedelta(minutes=5),
+        bot_to_human_handoff=True,
+    )
+    db_session.add(row)
+    db_session.flush()
+
+    body = opa_attendance_timeline(row.id, include_messages=False, db=db_session, user=admin_user)
+
+    assert body["attendance_id"] == row.id
+    assert body["source_id"] == row.source_id
+    assert body["messages_source"] == "not_attempted"
+    assert body["messages_error"] is None
+    assert [event["type"] for event in body["events"]] == [
+        "opened",
+        "bot_handoff",
+        "first_human_response",
+        "closed",
+    ]
+
+
+def test_opa_attendance_timeline_missing_attendance_returns_404(db_session, admin_user):
+    with pytest.raises(HTTPException) as exc:
+        opa_attendance_timeline(999999, include_messages=False, db=db_session, user=admin_user)
+
+    assert exc.value.status_code == 404
+
+
+def test_opa_attendance_timeline_includes_first_response_event(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    row = _attendance(2, opened_at=opened, first_response_at=opened + timedelta(minutes=3), closed_at=None)
+    db_session.add(row)
+    db_session.flush()
+
+    body = opa_attendance_timeline(row.id, include_messages=False, db=db_session, user=admin_user)
+
+    types = [event["type"] for event in body["events"]]
+    assert "first_human_response" in types
+    assert "closed" not in types
+
+
+def test_opa_attendance_timeline_without_first_response_has_no_event(db_session, admin_user):
+    row = _attendance(3, first_response_at=None, closed_at=None)
+    db_session.add(row)
+    db_session.flush()
+
+    body = opa_attendance_timeline(row.id, include_messages=False, db=db_session, user=admin_user)
+
+    assert [event["type"] for event in body["events"]] == ["opened"]
+
+
+def test_opa_attendance_timeline_bot_human_nullable_produces_no_handoff_event(db_session, admin_user):
+    row = _attendance(4, handled_by_bot=None, reached_human=None, bot_to_human_handoff=None)
+    db_session.add(row)
+    db_session.flush()
+
+    body = opa_attendance_timeline(row.id, include_messages=False, db=db_session, user=admin_user)
+
+    assert body["handled_by_bot"] is None
+    assert body["reached_human"] is None
+    assert body["bot_to_human_handoff"] is None
+    assert "bot_handoff" not in [event["type"] for event in body["events"]]
+
+
+def test_opa_attendance_timeline_live_messages_classify_client_bot_and_human(db_session, admin_user, monkeypatch):
+    row = _attendance(5, opened_at=datetime(2026, 8, 1, 8, tzinfo=timezone.utc))
+    db_session.add(row)
+    db_session.add_all(
+        [
+            SupportOpaDimension(dimension_type="user", source_id="BOT-1", name="Bot", payload_json={"tipo": "bot"}),
+            SupportOpaDimension(dimension_type="user", source_id="A-1", name="Ana", payload_json={"tipo": "user"}),
+        ]
+    )
+    db_session.flush()
+
+    class Client:
+        def list_messages(self, source_id):
+            assert source_id == row.source_id
+            return [
+                {"id_user": "U-1", "data": "2026-08-01T08:00:05+00:00"},
+                {"id_atend": "BOT-1", "data": "2026-08-01T08:00:10+00:00"},
+                {"id_atend": "A-1", "data": "2026-08-01T08:05:00+00:00"},
+            ]
+
+    monkeypatch.setattr(opa_timeline_service, "get_opa_client", lambda: Client())
+
+    body = opa_attendance_timeline(row.id, include_messages=True, db=db_session, user=admin_user)
+
+    assert body["messages_source"] == "live"
+    assert body["messages_error"] is None
+    message_events = [event for event in body["events"] if event["type"] == "message"]
+    assert [event["actor_type"] for event in message_events] == ["client", "bot", "human"]
+    # Nunca expõe texto de mensagem na timeline (Fase 3C: só metadado do fluxo).
+    assert all("mensagem" not in event or event.get("mensagem") is None for event in message_events)
+
+
+def test_opa_attendance_timeline_external_failure_keeps_structural_events(db_session, admin_user, monkeypatch):
+    row = _attendance(6)
+    db_session.add(row)
+    db_session.flush()
+
+    class Client:
+        def list_messages(self, source_id):
+            raise RuntimeError("OPA fora do ar")
+
+    monkeypatch.setattr(opa_timeline_service, "get_opa_client", lambda: Client())
+
+    body = opa_attendance_timeline(row.id, include_messages=True, db=db_session, user=admin_user)
+
+    assert body["messages_source"] == "unavailable"
+    assert body["messages_error"] is not None
+    assert any(event["type"] == "opened" for event in body["events"])

@@ -49,6 +49,34 @@ def db_session():
         engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _bind_opa_ingestion_session_local(request, monkeypatch):
+    """`opa_ingestion.py` abre sessões próprias e curtas (`SessionLocal()`) pra
+    commitar o status da run de importação OPA sem depender do commit/rollback do
+    chamador (ver `_create_running_import_run`/`_persist_run_terminal_status`). Em
+    produção isso aponta pro mesmo engine de sempre; em teste, `app.db.session.engine`
+    é um banco `:memory:` GLOBAL e diferente do engine isolado por teste que
+    `db_session` cria — sem este bind, `SessionLocal()` dentro de `opa_ingestion.py`
+    escreveria num banco que o teste nunca enxerga. Só ativa quando o teste usa
+    `db_session`, igual ao padrão já usado manualmente em `test_opa_scheduler.py`."""
+    if "db_session" not in request.fixturenames:
+        return
+    session = request.getfixturevalue("db_session")
+    from app.modules.support import opa_ingestion as opa_ingestion_module
+
+    class _SessionLocalStub:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            return session
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(opa_ingestion_module, "SessionLocal", _SessionLocalStub())
+
+
 @pytest.fixture()
 def admin_user(db_session):
     admin = User(name="Admin", email="admin@pytest.local", role="admin", active=True, password_hash="x")

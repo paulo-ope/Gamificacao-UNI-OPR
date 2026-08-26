@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import or_
 
 from .models import SupportOpaAttendance
+
+# Todo filtro de período do SGP interpreta "o dia" no fuso operacional da UNI, não
+# em UTC — ver docs/plano-analise-opa-suite-atendimentos.md, seção "fuso horário".
+SUPPORT_TIMEZONE_NAME = "America/Porto_Velho"
+SUPPORT_TIMEZONE = ZoneInfo(SUPPORT_TIMEZONE_NAME)
 
 
 def _selected_values(value: str | None) -> list[str]:
@@ -22,16 +28,30 @@ def validate_opa_period(date_from: date, date_to: date) -> None:
 
 
 def opa_period_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
-    return (
-        datetime.combine(date_from, time.min, tzinfo=timezone.utc),
-        datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc),
-    )
+    """Converte um intervalo de datas locais (America/Porto_Velho) nos limites
+    UTC equivalentes, usados para filtrar `opened_at` (armazenado em UTC)."""
+    start_local = datetime.combine(date_from, time.min, tzinfo=SUPPORT_TIMEZONE)
+    end_local = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=SUPPORT_TIMEZONE)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+# Colunas de data válidas para `date_basis` — controla se o período filtra por
+# abertura (padrão, comportamento histórico) ou por encerramento do
+# atendimento. Um atendimento aberto num dia e encerrado no seguinte só
+# aparece no filtro do 2º dia quando `date_basis="closed_at"` — e nesse modo,
+# atendimentos ainda em aberto (closed_at NULL) nunca aparecem, por definição.
+DATE_BASIS_COLUMNS = {
+    "opened_at": SupportOpaAttendance.opened_at,
+    "closed_at": SupportOpaAttendance.closed_at,
+}
+DEFAULT_DATE_BASIS = "opened_at"
 
 
 @dataclass(frozen=True)
 class OpaAttendanceFilters:
     date_from: date | None = None
     date_to: date | None = None
+    date_basis: str = DEFAULT_DATE_BASIS
     status: str | None = None
     channel: str | None = None
     attendant_id: str | None = None
@@ -54,6 +74,7 @@ class OpaAttendanceFilters:
         return OpaAttendanceFilters(
             date_from=previous_from,
             date_to=previous_to,
+            date_basis=self.date_basis,
             status=self.status,
             channel=self.channel,
             attendant_id=self.attendant_id,
@@ -69,17 +90,20 @@ class OpaAttendanceFilters:
 
 
 def apply_opa_attendance_filters(statement, filters: OpaAttendanceFilters):
+    date_column = DATE_BASIS_COLUMNS.get(filters.date_basis, DATE_BASIS_COLUMNS[DEFAULT_DATE_BASIS])
     clauses = []
     if filters.date_from and filters.date_to:
         validate_opa_period(filters.date_from, filters.date_to)
         start_at, end_at = opa_period_bounds(filters.date_from, filters.date_to)
-        clauses.extend([SupportOpaAttendance.opened_at >= start_at, SupportOpaAttendance.opened_at < end_at])
+        clauses.extend([date_column >= start_at, date_column < end_at])
     elif filters.date_from:
-        start_at = datetime.combine(filters.date_from, time.min, tzinfo=timezone.utc)
-        clauses.append(SupportOpaAttendance.opened_at >= start_at)
+        start_at = datetime.combine(filters.date_from, time.min, tzinfo=SUPPORT_TIMEZONE).astimezone(timezone.utc)
+        clauses.append(date_column >= start_at)
     elif filters.date_to:
-        end_at = datetime.combine(filters.date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
-        clauses.append(SupportOpaAttendance.opened_at < end_at)
+        end_at = datetime.combine(
+            filters.date_to + timedelta(days=1), time.min, tzinfo=SUPPORT_TIMEZONE
+        ).astimezone(timezone.utc)
+        clauses.append(date_column < end_at)
 
     if values := _selected_values(filters.status):
         clauses.append(SupportOpaAttendance.status.in_(values))

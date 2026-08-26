@@ -4,6 +4,7 @@ import json
 
 import httpx
 
+import app.services.opa_client as opa_client_module
 from app.services.opa_client import OpaClient
 
 
@@ -94,6 +95,46 @@ def test_opa_client_lists_dimensions_with_get_body_pagination():
 
     assert [record["_id"] for record in records] == ["U-1", "U-2"]
     assert [json.loads(request.content.decode())["options"]["skip"] for request in requests] == [0, 1]
+
+
+def test_opa_client_list_clients_does_not_truncate_past_old_50000_limit():
+    # Regressão da causa raiz identificada em
+    # docs/auditoria-divergencia-opa-suite-2026-08-25.md: a base real do OPA
+    # Suite tem mais de 100.000 clientes, mas `list_clients` cortava em
+    # 50.000. Este teste falha com o limite antigo e passa com o corrigido.
+    total = 50005
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"_id": str(i)} for i in range(total)], "total": total})
+
+    client = OpaClient(
+        base_url="https://opa.local",
+        token="secret-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    records = client.list_clients()
+
+    assert len(records) == total
+
+
+def test_opa_client_list_clients_still_respects_a_safety_ceiling(monkeypatch):
+    monkeypatch.setattr(opa_client_module, "SUPPORT_OPA_CLIENT_MAX_RECORDS", 7)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        skip = json.loads(request.content.decode())["options"]["skip"]
+        limit = json.loads(request.content.decode())["options"]["limit"]
+        return httpx.Response(200, json={"data": [{"_id": f"C-{skip + i}"} for i in range(limit)]})
+
+    client = OpaClient(
+        base_url="https://opa.local",
+        token="secret-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    records = client.list_clients()
+
+    assert len(records) == 7
 
 
 def test_opa_client_unwraps_enveloped_attendance_detail():

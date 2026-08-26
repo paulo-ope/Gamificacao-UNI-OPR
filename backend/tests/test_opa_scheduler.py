@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import select
 
 from app.models import AppSetting
+from app.modules.support import router as support_router
+from app.modules.support.models import SupportOpaImportRun
 from app.services import opa_scheduler
 
 
@@ -97,4 +100,89 @@ def test_opa_sync_once_records_failure_without_raising(monkeypatch, db_session):
     assert _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_LAST_ERROR_KEY) == "OPA indisponível"
     assert _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_LAST_ERROR_AT_KEY)
     assert _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY) == "3"
+
+
+def test_opa_sync_once_recomputes_next_allowed_at_from_finish_time_on_success(monkeypatch, db_session):
+    def fake_import(db, client, *, date_from, date_to, imported_by):
+        return {
+            "run_id": 1,
+            "status": "completed",
+            "date_from": date_from,
+            "date_to": date_to,
+            "fetched_count": 0,
+            "created_count": 0,
+            "updated_count": 0,
+            "unchanged_count": 0,
+            "rejected_count": 0,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(opa_scheduler, "SessionLocal", SessionLocalStub(db_session))
+    monkeypatch.setattr(opa_scheduler, "get_settings", lambda: _settings(opa_sync_lookback_days=0))
+    monkeypatch.setattr(opa_scheduler, "get_opa_client", lambda: "client")
+    monkeypatch.setattr(opa_scheduler, "import_opa_attendances", fake_import)
+
+    before = datetime.now(timezone.utc)
+    opa_scheduler.run_opa_sync_once(interval_minutes=20)
+    after = datetime.now(timezone.utc)
+
+    next_allowed_at = opa_scheduler._parse_sync_timestamp(
+        _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_NEXT_ALLOWED_AT_KEY)
+    )
+    # Recalculado a partir do FIM da execução (agora), não do início registrado por
+    # `_record_sync_attempt_started` — por isso cai numa janela estreita ao redor de
+    # "agora + intervalo", mesmo que a execução tenha demorado.
+    assert before + timedelta(minutes=20) <= next_allowed_at <= after + timedelta(minutes=20)
+
+
+def test_opa_sync_once_recomputes_next_allowed_at_from_finish_time_on_failure(monkeypatch, db_session):
+    def fail_import(*args, **kwargs):
+        raise RuntimeError("OPA indisponível")
+
+    monkeypatch.setattr(opa_scheduler, "SessionLocal", SessionLocalStub(db_session))
+    monkeypatch.setattr(opa_scheduler, "get_settings", lambda: _settings(opa_sync_lookback_days=0))
+    monkeypatch.setattr(opa_scheduler, "get_opa_client", lambda: "client")
+    monkeypatch.setattr(opa_scheduler, "import_opa_attendances", fail_import)
+
+    before = datetime.now(timezone.utc)
+    opa_scheduler.run_opa_sync_once(interval_minutes=20)
+    after = datetime.now(timezone.utc)
+
+    next_allowed_at = opa_scheduler._parse_sync_timestamp(
+        _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_NEXT_ALLOWED_AT_KEY)
+    )
+    assert before + timedelta(minutes=20) <= next_allowed_at <= after + timedelta(minutes=20)
+
+
+def test_opa_sync_status_reports_scheduled_run_in_progress(db_session, admin_user):
+    db_session.add(
+        SupportOpaImportRun(
+            provider="opa",
+            entity="attendance",
+            mode="scheduled",
+            date_from=datetime(2026, 8, 25).date(),
+            date_to=datetime(2026, 8, 25).date(),
+            status="running",
+            started_at=datetime(2026, 8, 25, 10, 0, tzinfo=timezone.utc),
+        )
+    )
+    db_session.flush()
+
+    status = support_router.opa_sync_status(db=db_session, user=admin_user)
+
+    assert status["sync_in_progress"] is True
+    assert status["active_run_mode"] == "scheduled"
+    # SQLite (usado nos testes) não preserva tzinfo em DateTime — compara os campos.
+    assert status["active_run_started_at"].replace(tzinfo=timezone.utc) == datetime(2026, 8, 25, 10, 0, tzinfo=timezone.utc)
+    # SQLite nos testes não tem lock consultivo do Postgres — sinal fica indefinido.
+    assert status["lock_busy"] is None
+
+
+def test_opa_sync_status_reports_no_import_in_progress_by_default(db_session, admin_user):
+    status = support_router.opa_sync_status(db=db_session, user=admin_user)
+
+    assert status["sync_in_progress"] is False
+    assert status["active_run_id"] is None
+    assert status["active_run_mode"] is None
+    assert status["next_window_delayed"] is False
 

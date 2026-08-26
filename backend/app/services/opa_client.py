@@ -22,6 +22,14 @@ class OpaApiError(RuntimeError):
     """Erro de comunicacao com a API do OPA Suite."""
 
 
+# Teto de segurança para a sincronização em lote de clientes (`list_clients`).
+# Não é o tamanho esperado da base, é só uma trava contra paginação infinita
+# se a API se comportar de forma inesperada. Ajuste aqui se a base do OPA
+# Suite crescer além disso — `list_collection` avisa via log
+# (`colecao_interrompida_por_limite`) se esse teto for atingido de verdade.
+SUPPORT_OPA_CLIENT_MAX_RECORDS = 200_000
+
+
 @dataclass
 class OpaPage:
     records: list[dict[str, Any]]
@@ -281,7 +289,20 @@ class OpaClient:
         return self.list_collection("/api/v1/etiqueta/")
 
     def list_clients(self) -> list[dict[str, Any]]:
-        return self.list_collection("/api/v1/cliente/", max_records=50000)
+        # A base real do OPA Suite tem mais de 100.000 clientes (confirmado ao
+        # vivo em 2026-08-25, ver docs/auditoria-divergencia-opa-suite-2026-08-25.md).
+        # O limite antigo de 50.000 truncava a sincronização e deixava
+        # atendimentos sem nome de cliente. Mantém uma margem de segurança bem
+        # acima do observado — `list_collection` já loga um aviso se esse teto
+        # for atingido (colecao_interrompida_por_limite).
+        return self.list_collection("/api/v1/cliente/", max_records=SUPPORT_OPA_CLIENT_MAX_RECORDS)
+
+    def list_messages(self, id_rota: str) -> list[dict[str, Any]]:
+        return self.list_collection(
+            "/api/v1/atendimento/mensagem",
+            filters={"id_rota": id_rota},
+            max_records=2000,
+        )
 
     def get_attendance_detail(self, source_id: str) -> dict[str, Any]:
         body = self._get(f"/api/v1/atendimento/{source_id}")
