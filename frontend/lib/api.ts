@@ -96,7 +96,7 @@ const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
 function readStoredToken() {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(TOKEN_KEY);
+  return window.localStorage.getItem(TOKEN_KEY);
 }
 
 let authToken: string | null = readStoredToken();
@@ -105,9 +105,9 @@ export function setAuthToken(token: string | null) {
   authToken = token;
   if (typeof window === "undefined") return;
   if (token) {
-    window.sessionStorage.setItem(TOKEN_KEY, token);
+    window.localStorage.setItem(TOKEN_KEY, token);
   } else {
-    window.sessionStorage.removeItem(TOKEN_KEY);
+    window.localStorage.removeItem(TOKEN_KEY);
   }
 }
 

@@ -301,7 +301,7 @@ const TOKEN_KEY = "gamification_auth_token";
 
 function authToken() {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(TOKEN_KEY);
+  return window.localStorage.getItem(TOKEN_KEY);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
