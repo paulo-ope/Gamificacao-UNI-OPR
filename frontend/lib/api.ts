@@ -73,6 +73,11 @@ import type {
   SupportOpaAttendanceDetail,
   SupportOpaAttendanceFilters,
   SupportOpaAttendancePage,
+  SupportOpaAttendanceTimeline,
+  SupportOpaAttendantOverride,
+  SupportOpaAttendantOverrideCreate,
+  SupportOpaAttendantOverrideUpdate,
+  SupportOpaAttendantSummary,
   SupportOpaBreakdownDimension,
   SupportOpaBreakdowns,
   SupportOpaFilters,
@@ -459,6 +464,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify(period)
     }),
+  supportOpaAttendantOverrides: () =>
+    request<SupportOpaAttendantOverride[]>("/support/opa/attendant-overrides"),
+  createSupportOpaAttendantOverride: (payload: SupportOpaAttendantOverrideCreate) =>
+    request<SupportOpaAttendantOverride>("/support/opa/attendant-overrides", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateSupportOpaAttendantOverride: (id: number, payload: SupportOpaAttendantOverrideUpdate) =>
+    request<SupportOpaAttendantOverride>(`/support/opa/attendant-overrides/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  deleteSupportOpaAttendantOverride: (id: number) =>
+    request<{ deleted: boolean }>(`/support/opa/attendant-overrides/${id}`, { method: "DELETE" }),
   supportOpaAttendances: (filters: SupportOpaAttendanceFilters) => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {
@@ -480,10 +499,23 @@ export const api = {
     return request<SupportOpaBreakdowns>(`/support/opa/breakdowns?${params.toString()}`);
   },
   supportOpaAttendanceDetail: (id: number) => request<SupportOpaAttendanceDetail>(`/support/opa/attendances/${id}`),
-  supportOpaFilters: (period?: { date_from?: string; date_to?: string }) => {
+  supportOpaAttendanceTimeline: (id: number, includeMessages = true) =>
+    request<SupportOpaAttendanceTimeline>(`/support/opa/attendances/${id}/timeline?include_messages=${includeMessages}`),
+  supportOpaAttendantSummary: (attendantId: string, filters: SupportOpaAttendanceFilters) => {
+    const params = new URLSearchParams();
+    (["date_from", "date_to", "date_basis", "status", "channel", "department_id", "reason_id", "customer", "search"] as const).forEach((key) => {
+      const value = filters[key];
+      if (value === undefined || value === null || value === "") return;
+      params.set(key, String(value));
+    });
+    const query = params.toString();
+    return request<SupportOpaAttendantSummary>(`/support/opa/attendants/${encodeURIComponent(attendantId)}/summary${query ? `?${query}` : ""}`);
+  },
+  supportOpaFilters: (period?: { date_from?: string; date_to?: string; date_basis?: "opened_at" | "closed_at" }) => {
     const params = new URLSearchParams();
     if (period?.date_from) params.set("date_from", period.date_from);
     if (period?.date_to) params.set("date_to", period.date_to);
+    if (period?.date_basis) params.set("date_basis", period.date_basis);
     const query = params.toString();
     return request<SupportOpaFilters>(`/support/opa/filters${query ? `?${query}` : ""}`);
   },

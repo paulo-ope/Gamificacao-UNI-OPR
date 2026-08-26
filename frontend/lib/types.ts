@@ -181,6 +181,35 @@ export type SupportOpaSyncStatus = SupportOpaSyncSettings & {
   last_error: string | null;
   last_error_at: string | null;
   consecutive_failures: number;
+  sync_in_progress: boolean;
+  lock_busy: boolean | null;
+  active_run_id: number | null;
+  active_run_mode: string | null;
+  active_run_started_at: string | null;
+  next_window_delayed: boolean;
+};
+
+export type SupportOpaAttendantOverride = {
+  id: number;
+  attendant_id: string;
+  attendant_name: string | null;
+  classification: "virtual_agent";
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SupportOpaAttendantOverrideCreate = {
+  attendant_id: string;
+  attendant_name?: string | null;
+  classification?: "virtual_agent";
+  active?: boolean;
+};
+
+export type SupportOpaAttendantOverrideUpdate = {
+  attendant_name?: string | null;
+  classification?: "virtual_agent";
+  active?: boolean;
 };
 
 export type SupportImportResult = {
@@ -202,6 +231,7 @@ export type SupportOpaMetricItem = {
   total: number;
   average_tma_seconds: number | null;
   average_tmr_seconds: number | null;
+  average_tmr_all_responses_seconds: number | null;
   average_rating: number | null;
 };
 
@@ -212,6 +242,7 @@ export type SupportOpaMetrics = {
   closed_attendances: number;
   average_tma_seconds: number | null;
   average_tmr_seconds: number | null;
+  average_tmr_all_responses_seconds: number | null;
   average_rating: number | null;
   by_attendant: SupportOpaMetricItem[];
   by_reason: SupportOpaMetricItem[];
@@ -234,6 +265,45 @@ export type SupportOpaOverviewPeriod = {
   date_to: string;
 };
 
+export type SupportOpaStatusCount = {
+  status: string;
+  total: number;
+};
+
+export type SupportOpaRecurringCustomer = {
+  customer_id: string | null;
+  customer_name: string | null;
+  total: number;
+};
+
+export type SupportOpaCustomerMetrics = {
+  unique_customers: number;
+  recurring_customers: number;
+  recurring_customers_percentage: number;
+  average_attendances_per_customer: number;
+  top_recurring_customers: SupportOpaRecurringCustomer[];
+};
+
+export type SupportOpaReasonMetric = {
+  label: string;
+  total: number;
+  average_tma_seconds: number | null;
+  average_tmr_seconds: number | null;
+  average_tmr_all_responses_seconds: number | null;
+};
+
+export type SupportOpaBotHumanMetrics = {
+  total_attendances: number;
+  classified_attendances: number;
+  unclassified_attendances: number;
+  with_bot: number;
+  with_bot_percentage: number | null;
+  reached_human: number;
+  reached_human_percentage: number | null;
+  bot_to_human_handoff: number;
+  bot_to_human_handoff_percentage: number | null;
+};
+
 export type SupportOpaOverview = {
   current_period: SupportOpaOverviewPeriod;
   previous_period: SupportOpaOverviewPeriod;
@@ -243,9 +313,64 @@ export type SupportOpaOverview = {
   closure_rate: SupportOpaMetricComparison;
   average_duration_seconds: SupportOpaMetricComparison;
   average_rating: SupportOpaMetricComparison;
+  average_tmr_seconds: SupportOpaMetricComparison;
+  average_tmr_all_responses_seconds: SupportOpaMetricComparison;
   distinct_attendants: SupportOpaMetricComparison;
   distinct_departments: SupportOpaMetricComparison;
   by_channel: SupportOpaChannelCount[];
+  by_status: SupportOpaStatusCount[];
+  customers: SupportOpaCustomerMetrics;
+  top_reasons: SupportOpaReasonMetric[];
+  average_first_response_seconds: number | null;
+  bot_human: SupportOpaBotHumanMetrics;
+};
+
+export type SupportOpaTimelineEvent = {
+  type: string;
+  actor_type: string;
+  occurred_at: string | null;
+  label: string;
+  description: string | null;
+};
+
+export type SupportOpaAttendanceTimeline = {
+  attendance_id: number;
+  source_id: string;
+  protocol: string | null;
+  status: string | null;
+  reason_name: string | null;
+  department_name: string | null;
+  attendant_name: string | null;
+  handled_by_bot: boolean | null;
+  reached_human: boolean | null;
+  bot_to_human_handoff: boolean | null;
+  opened_at: string;
+  closed_at: string | null;
+  first_response_at: string | null;
+  events: SupportOpaTimelineEvent[];
+  messages_source: string;
+  messages_error: string | null;
+};
+
+export type SupportOpaAttendantSummary = {
+  attendant_id: string;
+  attendant_name: string | null;
+  attendant_type: string | null;
+  total_attendances: number;
+  closed_attendances: number;
+  open_attendances: number;
+  closure_rate: number;
+  average_tma_seconds: number | null;
+  average_tmr_seconds: number | null;
+  average_tmr_all_responses_seconds: number | null;
+  average_first_response_seconds: number | null;
+  average_rating: number | null;
+  rating_count: number;
+  customers: SupportOpaCustomerMetrics;
+  by_status: SupportOpaStatusCount[];
+  by_reason: SupportOpaReasonMetric[];
+  by_channel: SupportOpaChannelCount[];
+  bot_human: SupportOpaBotHumanMetrics;
 };
 
 export type SupportOpaBreakdownDimension = "attendant" | "department" | "reason" | "channel" | "status" | "customer";
@@ -299,6 +424,7 @@ export type SupportOpaAttendanceListItem = {
   rating: number | null;
   tma_seconds: number | null;
   tmr_seconds: number | null;
+  tmr_all_responses_seconds: number | null;
 };
 
 export type SupportOpaAttendancePage = {
@@ -326,6 +452,8 @@ export type SupportOpaAttendanceDetailData = {
   closed_at: string | null;
   duration_seconds: number | null;
   tma_seconds: number | null;
+  tmr_seconds: number | null;
+  tmr_all_responses_seconds: number | null;
   rating: number | null;
   reasons: Array<Record<string, unknown>>;
   tags: Array<Record<string, unknown>>;
@@ -363,6 +491,7 @@ export type SupportOpaAttendanceFilters = {
   search?: string;
   date_from?: string;
   date_to?: string;
+  date_basis?: "opened_at" | "closed_at";
   status?: string;
   channel?: string;
   attendant_id?: string;
