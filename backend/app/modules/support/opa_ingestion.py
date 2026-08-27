@@ -4,7 +4,7 @@ import calendar
 import contextlib
 import logging
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import exists, func, or_, select, text, update
@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
+from app.services.calculation import get_setting, upsert_setting
 from app.services.opa_client import OpaClient, get_opa_client
 
 from . import opa_attendant_overrides
@@ -419,6 +420,10 @@ def _dimension_name(record: dict[str, Any]) -> str:
     return _first(record, "nome", "name", "fantasia", "razao", "razao_social", "motivo", "descricao", "description", "titulo", "title", "email")
 
 
+def _chunked(items: list[str], size: int = 2000) -> list[list[str]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
 def _sync_dimension_records(
     db: Session,
     *,
@@ -426,27 +431,45 @@ def _sync_dimension_records(
     records: list[dict[str, Any]],
     now: datetime,
 ) -> None:
-    for record in records:
+    """Upsert em lote - achado real da auditoria de performance 2026-08-27: a versão anterior
+    fazia um `SELECT` por registro pra decidir criar vs. atualizar. Pra `customer` (dimensão com
+    mais de 100 mil registros na base real do OPA Suite), isso significava mais de 100 mil
+    consultas individuais ao banco NUMA ÚNICA sincronização - o gargalo dominante do módulo
+    inteiro, maior que qualquer query de leitura da tela. Agora carrega os existentes de uma vez
+    (em lotes, pra não montar um `IN (...)` gigante numa consulta só) e decide tudo em memória."""
+    ids_by_record: dict[int, str] = {}
+    for index, record in enumerate(records):
         source_id = _dimension_id(record)
-        if not source_id:
-            continue
-        existing = db.scalar(
+        if source_id:
+            ids_by_record[index] = source_id
+
+    existing_by_id: dict[str, SupportOpaDimension] = {}
+    all_ids = list(dict.fromkeys(ids_by_record.values()))
+    for chunk in _chunked(all_ids):
+        rows = db.scalars(
             select(SupportOpaDimension).where(
                 SupportOpaDimension.dimension_type == dimension_type,
-                SupportOpaDimension.source_id == source_id,
+                SupportOpaDimension.source_id.in_(chunk),
             )
         )
+        existing_by_id.update({row.source_id: row for row in rows})
+
+    for index, record in enumerate(records):
+        source_id = ids_by_record.get(index)
+        if not source_id:
+            continue
         name = _dimension_name(record) or None
+        existing = existing_by_id.get(source_id)
         if existing is None:
-            db.add(
-                SupportOpaDimension(
-                    dimension_type=dimension_type,
-                    source_id=source_id,
-                    name=name,
-                    payload_json=record,
-                    synced_at=now,
-                )
+            new_row = SupportOpaDimension(
+                dimension_type=dimension_type,
+                source_id=source_id,
+                name=name,
+                payload_json=record,
+                synced_at=now,
             )
+            db.add(new_row)
+            existing_by_id[source_id] = new_row
         else:
             existing.name = name
             existing.payload_json = record
@@ -454,37 +477,82 @@ def _sync_dimension_records(
 
 
 def _load_dimension_map(db: Session, dimension_type: str) -> dict[str, str]:
-    rows = db.scalars(
-        select(SupportOpaDimension).where(
+    """Só as 2 colunas usadas (`source_id`/`name`) - achado real de 2026-08-27: selecionar a
+    entidade ORM inteira (via `select(SupportOpaDimension)`) hidrata também `payload_json`, que
+    ninguém usa aqui. Pra `customer` (mais de 177 mil linhas na base real), isso sozinho media
+    ~5,6s por chamada; só as 2 colunas caem pra ~0,9s - relevante porque essa função roda toda
+    vez que `_sync_opa_dimensions` é chamada, mesmo quando o throttle pula a busca na API."""
+    rows = db.execute(
+        select(SupportOpaDimension.source_id, SupportOpaDimension.name).where(
             SupportOpaDimension.dimension_type == dimension_type,
             SupportOpaDimension.name.isnot(None),
         )
     ).all()
-    return {row.source_id: row.name for row in rows if row.name}
+    return {source_id: name for source_id, name in rows if name}
 
 
-def _sync_opa_dimensions(db: Session, client: OpaClient, now: datetime) -> dict[str, dict[str, str]]:
-    collectors = {
-        "user": client.list_users,
-        "reason": client.list_reasons,
-        "department": client.list_departments,
-        "tag": client.list_tags,
-        "customer": client.list_clients,
-    }
-    for dimension_type, collector in collectors.items():
-        try:
-            records = collector()
-            logger.info("dimensao_opa_sincronizada type=%s total=%s", dimension_type, len(records))
-            _sync_dimension_records(
-                db,
-                dimension_type=dimension_type,
-                records=records,
-                now=now,
-            )
-        except Exception as exc:
-            logger.warning("falha_sincronizar_dimensao_opa type=%s erro=%s", dimension_type, exc)
-    db.flush()
-    _backfill_customer_names(db)
+SUPPORT_OPA_DIMENSIONS_LAST_SYNCED_AT_KEY = "support_opa_dimensions_last_synced_at"
+SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY = "support_opa_dimensions_refresh_hours"
+SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_DEFAULT = 24
+
+
+def _dimensions_refresh_hours(db: Session) -> int:
+    raw = get_setting(db, SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY, "")
+    try:
+        hours = int(raw)
+    except (TypeError, ValueError):
+        return SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_DEFAULT
+    return min(max(hours, 1), 168)
+
+
+def _dimensions_due_for_refresh(db: Session, now: datetime) -> bool:
+    raw = get_setting(db, SUPPORT_OPA_DIMENSIONS_LAST_SYNCED_AT_KEY, "")
+    if not raw:
+        return True
+    try:
+        last_synced = datetime.fromisoformat(raw)
+    except ValueError:
+        return True
+    if last_synced.tzinfo is None:
+        last_synced = last_synced.replace(tzinfo=timezone.utc)
+    return now - last_synced >= timedelta(hours=_dimensions_refresh_hours(db))
+
+
+def _sync_opa_dimensions(db: Session, client: OpaClient, now: datetime, *, force: bool = False) -> dict[str, dict[str, str]]:
+    """Busca usuários/motivos/departamentos/etiquetas/clientes do OPA Suite e atualiza o cache
+    local (`SupportOpaDimension`), usado só pra RESOLVER NOME a partir de id (ex.: mostrar
+    "João Silva" em vez do id bruto). Achado real de 2026-08-27: rodava em TODA importação
+    (sincronização periódica a cada ~20min, todo import manual, todo backfill) - `client.list_clients()`
+    busca o cadastro de clientes INTEIRO da API do OPA (mais de 100 mil registros na base real),
+    medido em mais de 100 segundos só pra essa dimensão, toda vez. Nomes de cliente/usuário/motivo
+    mudam raramente comparado à frequência de sincronização de atendimentos - por isso agora só
+    refaz a busca completa quando já passou `SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY` horas
+    (padrão 24h, configurável) desde a última vez, e nos ciclos intermediários só devolve o cache
+    já existente no banco (`_load_dimension_map`) - sem nenhuma chamada à API do OPA. `force=True`
+    ignora o throttle (usado pelo endpoint manual de resync de dimensões, se algum dia existir)."""
+    if force or _dimensions_due_for_refresh(db, now):
+        collectors = {
+            "user": client.list_users,
+            "reason": client.list_reasons,
+            "department": client.list_departments,
+            "tag": client.list_tags,
+            "customer": client.list_clients,
+        }
+        for dimension_type, collector in collectors.items():
+            try:
+                records = collector()
+                logger.info("dimensao_opa_sincronizada type=%s total=%s", dimension_type, len(records))
+                _sync_dimension_records(
+                    db,
+                    dimension_type=dimension_type,
+                    records=records,
+                    now=now,
+                )
+            except Exception as exc:
+                logger.warning("falha_sincronizar_dimensao_opa type=%s erro=%s", dimension_type, exc)
+        db.flush()
+        _backfill_customer_names(db)
+        upsert_setting(db, SUPPORT_OPA_DIMENSIONS_LAST_SYNCED_AT_KEY, now.isoformat())
     return {
         "user": _load_dimension_map(db, "user"),
         "reason": _load_dimension_map(db, "reason"),

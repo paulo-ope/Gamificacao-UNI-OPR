@@ -174,6 +174,7 @@ export type SupportOpaSyncSettings = {
   backfill_enabled: boolean;
   backfill_run_hour: number;
   backfill_lookback_months: number;
+  dimensions_refresh_hours: number;
 };
 
 export type SupportOpaImportMonth = {

@@ -1197,6 +1197,7 @@ export function OpaSyncPanel({
   const [lookbackDraft, setLookbackDraft] = useNumberDraft(settings?.lookback_days, 1);
   const [runHourDraft, setRunHourDraft] = useNumberDraft(settings?.backfill_run_hour, 3);
   const [backfillMonthsDraft, setBackfillMonthsDraft] = useNumberDraft(settings?.backfill_lookback_months, 3);
+  const [dimensionsRefreshDraft, setDimensionsRefreshDraft] = useNumberDraft(settings?.dimensions_refresh_hours, 24);
 
   function commit(draft: string, min: number, max: number, fallback: number, apply: (value: number) => void) {
     const parsed = Number(draft);
@@ -1236,6 +1237,7 @@ export function OpaSyncPanel({
         <StatusRow label="Status" value={syncStatus?.enabled ? "Automático ligado" : "Automático desligado"} />
         <StatusRow label="Intervalo" value={`${settings?.interval_minutes ?? 20} min`} />
         <StatusRow label="Reimportação" value={`${settings?.lookback_days ?? 1} dia(s)`} />
+        <StatusRow label="Atualizar cadastros" value={`a cada ${settings?.dimensions_refresh_hours ?? 24}h`} />
       </div>
       {syncStatus?.sync_in_progress ? (
         <div className="mt-4 flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
@@ -1305,6 +1307,26 @@ export function OpaSyncPanel({
             disabled={savingSettings || !settings}
             onChange={(event) => setLookbackDraft(event.target.value)}
             onBlur={() => commit(lookbackDraft, 1, 30, 1, (value) => onSaveSettings({ lookback_days: value }))}
+          />
+        </label>
+        <label className="block">
+          <span className="flex items-center gap-1 text-xs font-medium text-slate-600">
+            Atualizar cadastros (horas)
+            <InfoHint
+              ariaLabel="Ajuda sobre atualização de cadastros"
+              side="bottom"
+              title="Usuários, motivos, departamentos, etiquetas e clientes"
+              description="De quantas em quantas horas a sincronização refaz a busca completa desses cadastros no OPA Suite (só nomes/rótulos, não afeta os atendimentos em si). O cadastro de clientes sozinho tem mais de 100 mil registros - buscar ele em toda sincronização (a cada poucos minutos) era o maior custo do módulo. Entre uma atualização e outra, os nomes já conhecidos continuam sendo usados normalmente."
+            />
+          </span>
+          <Input
+            type="number"
+            min={1}
+            max={168}
+            value={dimensionsRefreshDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setDimensionsRefreshDraft(event.target.value)}
+            onBlur={() => commit(dimensionsRefreshDraft, 1, 168, 24, (value) => onSaveSettings({ dimensions_refresh_hours: value }))}
           />
         </label>
       </div>

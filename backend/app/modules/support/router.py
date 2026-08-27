@@ -43,6 +43,8 @@ from .opa_filters import (
     validate_opa_period,
 )
 from .opa_ingestion import (
+    SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_DEFAULT,
+    SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY,
     OpaImportInterrupted,
     _create_pending_import_run,
     _opa_import_busy_message,
@@ -269,6 +271,12 @@ def _sync_settings_response(db: Session) -> dict:
             3,
             minimum=1,
             maximum=24,
+        ),
+        "dimensions_refresh_hours": _int_setting(
+            get_setting(db, SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY, ""),
+            SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_DEFAULT,
+            minimum=1,
+            maximum=168,
         ),
     }
 
@@ -676,6 +684,13 @@ def update_opa_sync_settings(
             SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY,
             str(payload.backfill_lookback_months),
             description="Quantos meses (incluindo o atual) o backfill automático de madrugada verifica/completa.",
+        )
+    if payload.dimensions_refresh_hours is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY,
+            str(payload.dimensions_refresh_hours),
+            description="De quantas em quantas horas a sincronização refaz a busca completa de usuários/motivos/departamentos/etiquetas/clientes do OPA Suite (cache local usado nos ciclos intermediários).",
         )
     after = _sync_settings_response(db)
     record_audit_log(db, user, "update", "support_opa_sync_settings", "opa", before, after)
