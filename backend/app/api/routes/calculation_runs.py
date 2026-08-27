@@ -331,6 +331,17 @@ def _refresh_stale_draft_previews(db: Session, collaborator_ids: set[int], exclu
                 if "estimated_payment" in updated_cards:
                     updated_cards["estimated_payment"] = updated["estimated_payment"]
                 updated["cards"] = updated_cards
+            # Achado real de 2026-08-27: este ajuste corrige final_points/estimated_payment por
+            # DELTA (evita recarregar o rascunho inteiro), mas nunca tocava em cost_by_regional/
+            # cost_by_group/cost_by_subject/cost_by_collaborator - esses detalhamentos ficavam
+            # congelados com o valor de ANTES do debito ser consumido, enquanto cards/final_points
+            # já refletiam o valor de depois. GET /dashboard/summary detectava a divergência
+            # (corretamente) e recomputava tudo do zero a cada carregamento (5-7s medidos, run
+            # #1936: R$ 15.073,50 em cache vs R$ 11.967,06 reconciliado). Em vez de tentar
+            # redistribuir o delta por regional/grupo/assunto (arriscaria reintroduzir uma versão
+            # mais sutil do mesmo bug), invalida o marcador de cache - a rota já sabe recomputar
+            # os detalhamentos ao vivo quando ele está ausente.
+            updated.pop("dashboard_cache_version", None)
             stale_run.result_summary = updated
 
 
