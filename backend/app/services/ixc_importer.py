@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models import Collaborator, ImportRun, ScoringSubjectRule, ServiceOrder
@@ -72,6 +73,23 @@ IXC_IMPORT_LOCK_POLL_INTERVAL_SECONDS = 1.0
 
 class IxcImportLockTimeoutError(RuntimeError):
     """Outra importação do IXC (sincronização periódica ou retroativa) já está em andamento."""
+
+
+def ixc_import_lock_busy(db: Session) -> bool | None:
+    """Verifica se o lock consultivo de importação do IXC está ocupado, sem tirá-lo de quem já o
+    segura - mesma ideia de `opa_ingestion.opa_import_lock_busy`. Usado pelo endpoint de backfill
+    retroativo pra devolver 409 na hora em vez de enfileirar um job em background que só vai
+    descobrir 60s depois (tempo de espera do lock) que não vai conseguir rodar."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+    try:
+        acquired = bool(db.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": IXC_IMPORT_LOCK_KEY}).scalar())
+        if acquired:
+            db.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": IXC_IMPORT_LOCK_KEY})
+        return not acquired
+    except SQLAlchemyError:
+        return None
 
 
 @contextlib.contextmanager

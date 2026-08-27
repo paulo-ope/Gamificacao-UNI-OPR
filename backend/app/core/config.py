@@ -8,6 +8,16 @@ class Settings(BaseSettings):
     app_name: str = "OPR Gamificacao Operacional API"
     api_prefix: str = "/api"
     database_url: str = "postgresql+psycopg://opr:opr@db:5432/opr_gamification"
+    # Achado da auditoria de performance 2026-08-27: o processo roda com um unico worker uvicorn
+    # (sem --workers), entao o pool de conexoes do SQLAlchemy e o orcamento de conexao do processo
+    # INTEIRO. O padrao da biblioteca (5 + 10 overflow = 15) e apertado quando ha endpoints que
+    # seguram uma conexao por segundos/minutos (import sincrono do IXC/OPA) rodando ao mesmo tempo
+    # que o trafego normal de tela. Configuravel por variavel de ambiente, sem exigir redeploy pra
+    # ajustar.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout_seconds: int = 30
+    db_pool_recycle_seconds: int = 1800
     frontend_url: str = "http://localhost:3000"
     auto_seed: bool = False
     demo_seed: bool = False

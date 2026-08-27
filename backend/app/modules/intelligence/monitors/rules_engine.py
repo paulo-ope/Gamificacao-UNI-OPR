@@ -515,18 +515,26 @@ def _run_collective_outage_rule(db: Session, rule: IntelligenceAlertRule) -> lis
     regionals_filter = set(scope.get("regionals") or [])
 
     analysis = login_incident_analysis(db, window_minutes=window_minutes, regionals=None, cluster_radius_meters=radius_meters, cluster_min_size=min_count)
-    detections: list[MonitorDetection] = []
-    for cluster in analysis.get("geo_clusters", []):
-        logins = cluster.get("logins", [])
-        regional = None
-        if logins:
-            regional = db.scalar(select(OperationLoginCurrentStatus.regional).where(OperationLoginCurrentStatus.login == logins[0]))
-        if require_same_regional and logins:
-            cluster_regionals = set(
-                db.scalars(
-                    select(OperationLoginCurrentStatus.regional).where(OperationLoginCurrentStatus.login.in_(logins))
+    geo_clusters = analysis.get("geo_clusters", [])
+    # Uma unica consulta pro regional de TODOS os logins de TODOS os clusters, em vez de 2 por
+    # cluster (achado da auditoria de performance 2026-08-27) - N+1 real, so nao aparecia porque
+    # esse monitor roda em background, nunca dentro de uma requisicao HTTP.
+    all_logins = {login for cluster in geo_clusters for login in cluster.get("logins", [])}
+    regional_by_login: dict[str, str | None] = {}
+    if all_logins:
+        regional_by_login = dict(
+            db.execute(
+                select(OperationLoginCurrentStatus.login, OperationLoginCurrentStatus.regional).where(
+                    OperationLoginCurrentStatus.login.in_(all_logins)
                 )
-            )
+            ).all()
+        )
+    detections: list[MonitorDetection] = []
+    for cluster in geo_clusters:
+        logins = cluster.get("logins", [])
+        regional = regional_by_login.get(logins[0]) if logins else None
+        if require_same_regional and logins:
+            cluster_regionals = {regional_by_login.get(login) for login in logins}
             if len(cluster_regionals) > 1:
                 continue
         if regionals_filter and regional not in regionals_filter:

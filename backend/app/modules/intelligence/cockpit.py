@@ -676,11 +676,15 @@ def build_cockpit_payload(db: Session, profile: IntelligenceDashboardProfile) ->
     incidents_filters = _widget_entry(widget_entries, "active_incidents")["filters"]
     content_filters = _widget_entry(widget_entries, "cockpit_content")["filters"]
 
+    # Uma unica consulta pros alertas ativos (achado da auditoria de performance 2026-08-27):
+    # active_alerts e active_incidents so diferem pelo filtro de `kind`, aplicado em Python -
+    # antes rodava a MESMA query duas vezes seguidas contra intelligence_alerts.
+    active_alerts_rows = _active_alerts_query(db, regionals)
     active_alerts = _apply_list_post_filters(
-        [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "ALERT"], alerts_filters, "active_alerts", warnings
+        [_alert_to_summary(a) for a in active_alerts_rows if a.kind == "ALERT"], alerts_filters, "active_alerts", warnings
     )
     active_incidents = _apply_list_post_filters(
-        [_alert_to_summary(a) for a in _active_alerts_query(db, regionals) if a.kind == "INCIDENT"], incidents_filters, "active_incidents", warnings
+        [_alert_to_summary(a) for a in active_alerts_rows if a.kind == "INCIDENT"], incidents_filters, "active_incidents", warnings
     )
     display_config = profile.display_config_json or {}
     recent_alerts = [

@@ -1,17 +1,18 @@
+import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.core.security import require_permission
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.models import ImportRun, ImportServiceOrderAudit, User
 from app.schemas import ImportPreview, ImportResult, ImportRunOut, ImportServiceOrderAuditOut
 from app.services.calculation import get_setting
-from app.services.ixc_client import IxcApiError, get_ixc_client
-from app.services.ixc_importer import IxcImportLockTimeoutError, backfill_ixc_service_orders
+from app.services.ixc_client import get_ixc_client
+from app.services.ixc_importer import backfill_ixc_service_orders, ixc_import_lock_busy
 from app.services.ixc_scheduler import (
     IXC_SYNC_CONSECUTIVE_FAILURES_KEY,
     IXC_SYNC_LAST_ERROR_AT_KEY,
@@ -20,6 +21,7 @@ from app.services.ixc_scheduler import (
 )
 from app.services.upvalue_importer import build_preview, import_upvalue_service_orders, register_failed_import_run
 
+logger = logging.getLogger("imports")
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 
@@ -28,28 +30,44 @@ class IxcBackfillRequest(BaseModel):
     month: int = Field(ge=1, le=12)
 
 
-@router.post("/ixc-backfill")
+def _run_ixc_backfill_job(year: int, month: int, imported_by: int | None) -> None:
+    """Processa o backfill retroativo do IXC em background - ver POST /ixc-backfill. Acha real da
+    auditoria de performance 2026-08-27: buscar um mês inteiro da API do IXC (paginado) rodava
+    inline na requisição HTTP, sem nenhum modelo de job/status, arriscando timeout na mesma
+    classe de problema já corrigida em support/opa-imports."""
+    with SessionLocal() as db:
+        try:
+            client = get_ixc_client()
+            backfill_ixc_service_orders(db, client, year=year, month=month, imported_by=imported_by)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Falha no backfill retroativo do IXC %04d-%02d (background)", year, month)
+
+
+@router.post("/ixc-backfill", status_code=202)
 def backfill_ixc_orders(
     payload: IxcBackfillRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("orders:import")),
 ):
     """Importação retroativa sob demanda de um mês específico direto da API do IXC (fora do polling
-    periódico) - uma vez importado, esse mês fica salvo e não é mais buscado de novo automaticamente."""
-    try:
-        client = get_ixc_client()
-        result = backfill_ixc_service_orders(db, client, year=payload.year, month=payload.month, imported_by=user.id)
-        db.commit()
-        return result
-    except IxcImportLockTimeoutError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except IxcApiError as exc:
-        db.rollback()
-        raise HTTPException(status_code=502, detail=f"Falha ao comunicar com a API do IXC: {exc}") from exc
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Falha inesperada ao importar o período retroativo do IXC.") from exc
+    periódico) - uma vez importado, esse mês fica salvo e não é mais buscado de novo automaticamente.
+    Roda em BACKGROUND (devolve 202 na hora) - acompanhe o resultado em GET /imports/runs
+    (source="ixc", mais recente) em vez de esperar a resposta desta requisição."""
+    if ixc_import_lock_busy(db):
+        raise HTTPException(
+            status_code=409,
+            detail="Outra importação do IXC (sincronização automática ou retroativa) já está em andamento. Tente novamente em instantes.",
+        )
+    background_tasks.add_task(_run_ixc_backfill_job, payload.year, payload.month, user.id)
+    return {
+        "status": "queued",
+        "message": "Importação retroativa do IXC iniciada em segundo plano - acompanhe em GET /imports/runs.",
+        "year": payload.year,
+        "month": payload.month,
+    }
 
 
 @router.get("/ixc-sync-status")
