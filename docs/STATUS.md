@@ -74,14 +74,16 @@ performance do módulo OPA Suite; ver PRs abertas abaixo pras outras frentes)
   sincronização porque deliberadamente não combinei as 8 consultas
   separadas). Testes: suíte completa do módulo (179 opa/support) + 741 passed
   na suíte inteira, sem regressão.
-  **Ainda NÃO implementado** (maior risco/esforço, avaliado e adiado): combinar
-  as 8-9 consultas separadas de `expanded_overview` num recorte físico só
-  (cada uma escaneia o mesmo ~57 mil linhas independentemente — é o maior
-  ganho possível, mas mexe na forma como o módulo agrega dado); verificar se
-  `GET /support/opa-metrics` duplica o núcleo do que `/opa/overview` já
-  calcula (precisa confirmar primeiro se o frontend chama os dois na mesma
-  tela antes de mexer no backend). Decisão de quando implementar essa parte
-  ainda pendente do usuário.
+  **Descartado por decisão explícita do usuário** (não é "ainda não
+  implementado" — é "não vai ser", ver "Frentes em andamento" pro raciocínio
+  completo): combinar as 8-9 consultas separadas de `expanded_overview` num
+  recorte físico só. Só é possível com recurso Postgres-only (tabela
+  temporária ou `GROUPING SETS`, este último confirmado ausente no SQLite
+  3.46.1 usado pelos testes) — significaria código sem cobertura de teste
+  automatizado dali pra frente, pelo ganho estimado (~480ms → ~300-350ms) não
+  compensar. Ainda em aberto (motivo diferente, não bloqueado por isso):
+  verificar se `GET /support/opa-metrics` duplica o núcleo do que
+  `/opa/overview` já calcula.
 
 - **Auditoria de performance do backend — P0 e P1 corrigidos, P2 avaliado e adiado**:
   pedido do usuário "preciso de uma auditoria na velocidade do backend, como deixar
@@ -1270,13 +1272,24 @@ performance do módulo OPA Suite; ver PRs abertas abaixo pras outras frentes)
   `ANALYZE service_orders, collaborator_scores, operations_orders,
   scheduling_orders, scheduling_events, management_cases;` e
   `docker exec opr-gamification-backend python -m scripts.enable_draft_retention`.
-- **Otimização da tela de leitura do SGP Suporte/OPA Suite — parcialmente
-  implementada**: `GET /support/opa/overview` foi de ~930ms pra ~480-570ms
-  (ver entrada acima em "O que foi feito recentemente"). Falta ainda a parte
-  de maior risco/esforço: combinar as 8-9 consultas separadas de
-  `expanded_overview` num recorte físico só, e confirmar se `GET
-  /support/opa-metrics` duplica `/opa/overview` (precisa checar o frontend
-  primeiro). Decisão de quando implementar essa parte pendente do usuário.
+- **Otimização da tela de leitura do SGP Suporte/OPA Suite — concluída, com
+  uma parte deliberadamente descartada**: `GET /support/opa/overview` foi de
+  ~930ms pra ~480-570ms (ver entrada acima em "O que foi feito recentemente").
+  **Combinar as 8-9 consultas separadas de `expanded_overview` num recorte
+  físico só foi avaliado e descartado por decisão explícita do usuário**: só
+  é possível com recursos exclusivos do Postgres (tabela temporária ou
+  `GROUPING SETS`) - o SQLite usado pela suíte de testes automatizados não
+  suporta nenhum dos dois (confirmado: SQLite 3.46.1 rejeita `GROUPING SETS`
+  com erro de sintaxe). Isso significaria um trecho de código Postgres-only
+  sem NENHUMA cobertura de teste automatizado dali pra frente - só validável
+  manualmente contra a base real a cada mudança. Ganho estimado (~480ms →
+  ~300-350ms) não compensou perder a rede de segurança dos testes. **Não
+  reabrir essa discussão sem uma mudança real na composição da suíte de
+  testes** (ex.: rodar os testes deste módulo contra Postgres em vez de
+  SQLite) que resolva a lacuna de cobertura pela raiz. Verificar se
+  `GET /support/opa-metrics` duplica `/opa/overview` continua em aberto (não
+  é a mesma limitação - não depende de recurso Postgres-only, só precisa
+  checar o frontend antes).
 - **Menu lateral único — código pronto no histórico, fora de produção por
   decisão do usuário**: revertido antes do deploy (ver acima). Reativar quando
   o usuário pedir: reverter o commit de revert numa branch nova.
@@ -1314,10 +1327,11 @@ performance do módulo OPA Suite; ver PRs abertas abaixo pras outras frentes)
 
 - Mergear as 4 PRs abertas (ver "Frentes em andamento") e rodar os 2 comandos
   manuais na VM depois do deploy da P0.
-- Decidir com o usuário se/quando implementar o restante da otimização de
-  `/opa/overview` (combinar as 8-9 consultas num recorte físico só - maior
-  ganho possível, maior risco; ver se `/opa-metrics` duplica `/opa/overview`)
-  — parte já implementada, parte ainda mapeada (ver "Frentes em andamento").
+- Verificar se `GET /support/opa-metrics` duplica o núcleo do que
+  `/opa/overview` já calcula (checar o frontend primeiro) — único item de
+  performance do SGP Suporte/OPA Suite ainda em aberto; a otimização de
+  `/opa/overview` está concluída (ver "Frentes em andamento" pro item
+  descartado por decisão do usuário, e o motivo).
 - P2 da auditoria de performance geral, ainda não desenhada: cache de curto prazo em
   `GET /operations/overview` e `GET /support/opa/overview` — precisa incluir o
   escopo por usuário (gestor regional) na chave do cache, não só os filtros da
