@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.performance import performance_step
@@ -16,6 +16,8 @@ from app.models import (
     CollaboratorScore,
     GamificationConfigVersion,
     ImportRun,
+    LeadershipBonusResult,
+    PointBalanceEntry,
     ServiceOrder,
 )
 import logging
@@ -461,11 +463,137 @@ def _run_extra_summaries(db: Session, run: CalculationRun) -> dict[int, dict[str
     return summaries
 
 
+TOTAL_FIELDS_FROM_SCORES = ("gross_points", "penalty_points", "net_points", "final_points", "estimated_payment")
+
+
+def _totals_from_scores(run: CalculationRun) -> dict[str, float]:
+    return {
+        "gross_points": round(sum(float(score.gross_points) for score in run.scores), 2),
+        "penalty_points": round(sum(float(score.penalty_points) for score in run.scores), 2),
+        "net_points": round(sum(float(score.net_points) for score in run.scores), 2),
+        "final_points": round(sum(float(score.final_points) for score in run.scores), 2),
+        "estimated_payment": round(sum(float(score.estimated_payment) for score in run.scores), 2),
+    }
+
+
+def result_summary_with_totals_from_scores(run: CalculationRun) -> dict | None:
+    """Copia do `result_summary` com os totais reconciliados a partir das linhas.
+
+    NAO muta o objeto ORM - e usada em caminho de leitura, onde escrever no `run` provocaria um
+    UPDATE inesperado. Serve pra que a API nunca devolva um total que contradiz a lista de
+    colaboradores da mesma resposta, inclusive em fechamentos antigos cujo `result_summary`
+    gravado ja nasceu divergente (achado C1 - o #1601 esta assim em producao). A gravacao
+    definitiva desses totais acontece em `recompute_run_totals_from_scores`, no pagamento.
+    """
+    if not isinstance(run.result_summary, dict):
+        return run.result_summary
+
+    totals = _totals_from_scores(run)
+    summary = dict(run.result_summary)
+    summary.update(totals)
+    cards = summary.get("cards")
+    if isinstance(cards, dict):
+        updated_cards = dict(cards)
+        for field in TOTAL_FIELDS_FROM_SCORES:
+            if field in updated_cards:
+                updated_cards[field] = totals[field]
+        summary["cards"] = updated_cards
+    return summary
+
+
+def recompute_run_totals_from_scores(run: CalculationRun) -> None:
+    """Grava no `result_summary` os totais reconstruidos a partir das linhas `collaborator_scores`.
+
+    Reatribui o dicionario inteiro em vez de mutar in-place: coluna JSON do SQLAlchemy so detecta
+    mudanca por reatribuicao (ou `flag_modified` explicito) - foi exatamente essa mutacao in-place
+    invisivel que deixou o cache do #1601 divergente depois do pagamento.
+    """
+    if not isinstance(run.result_summary, dict):
+        return
+    run.result_summary = result_summary_with_totals_from_scores(run)
+
+
+def collaborator_financial_context(
+    db: Session | None, run: CalculationRun
+) -> dict[int, dict[str, float | int | str]]:
+    """Contexto por colaborador usado por `financial_breakdowns` pra proporcionalizar o valor de
+    cada O.S. O valor a pagar vem SEMPRE da linha `collaborator_scores` (fonte unica, achado C1);
+    o cache so contribui com a regional efetiva do periodo, que nao existe como coluna."""
+    summaries = cached_score_summaries(run)
+    if not summaries and db:
+        summaries = _run_extra_summaries(db, run)
+
+    context: dict[int, dict[str, float | int | str]] = {}
+    for score in run.scores:
+        if int(score.service_orders_count) <= 0:
+            continue
+        summary = summaries.get(score.collaborator_id, {})
+        context[score.collaborator_id] = {
+            "regional": summary.get("regional") or (score.collaborator.regional if score.collaborator else ""),
+            "health_multiplier": float(score.health_multiplier),
+            "gross_estimated_payment": float(summary.get("gross_estimated_payment", score.estimated_payment)),
+            "estimated_payment": float(score.estimated_payment),
+        }
+    return context
+
+
+def refresh_run_breakdowns(db: Session, run: CalculationRun) -> None:
+    """Recalcula os detalhamentos financeiros (`cost_by_*`, `penalty_distribution`,
+    `health_by_regional`) a partir dos valores ATUAIS das linhas do fechamento.
+
+    Achado C1 (agravante): marcar como pago recompunha `final_points`/`estimated_payment` mas
+    deixava todos os detalhamentos congelados com a previa do rascunho - a mesma tela mostrava o
+    card "Total a pagar" corrigido e, logo abaixo, "Valor a ser pago por regional" com o valor
+    antigo. O bonus de lideranca NAO e somado aqui: quem chama deve rodar
+    `calculate_and_store_leadership_bonus` em seguida (agora idempotente, achado C2).
+    """
+    orders = _period_orders(db, run.reference_month, run.reference_year, run.regional)
+    if not orders:
+        return
+
+    point_value = float(run.point_value)
+    details = scoring_detail.explain_orders(db, orders, default_point_value=point_value)
+    health_by_regional = scoring_detail.calculate_regional_health(
+        db, [order for order in orders if scoring_detail.counts_for_regional_health(order)]
+    )
+    health_by_regional = scoring_detail.calculate_regional_health_from_details(db, details, health_by_regional)
+    health_by_regional = _apply_cpk_adjustment(db, health_by_regional, run.reference_month, run.reference_year)
+
+    updated = dict(run.result_summary or {})
+    updated.update(
+        scoring_detail.financial_breakdowns(
+            db,
+            orders,
+            point_value,
+            details=details,
+            health_by_regional=health_by_regional,
+            collaborator_context=collaborator_financial_context(db, run),
+        )
+    )
+    updated["penalty_distribution"] = calculate_penalty_distribution(db, orders, details=details)
+    updated["health_by_regional"] = list(health_by_regional.values())
+    run.result_summary = updated
+
+
 def serialize_run(
     run: CalculationRun | None,
     db: Session | None = None,
     extra_summaries: dict[int, dict[str, float | int | str]] | None = None,
 ) -> dict | None:
+    """Serializa um fechamento lendo SEMPRE a linha `collaborator_scores` para tudo que e valor
+    persistido (pontos, pagamento, multiplicador, saldo, contagem de O.S).
+
+    Achado C1 da auditoria 2026-08-26: este serializador preferia o cache
+    `result_summary.score_summaries`, enquanto o historico de fechamentos, o extrato PDF do
+    colaborador e o bonus de lideranca ja liam a linha. Quando os dois divergiam - e divergiam:
+    o fechamento pago #1601 respondia R$ 18.191,18 aqui e R$ 18.271,68 no historico, R$ 80,50 de
+    diferenca em 18 colaboradores - nao havia como saber qual era o valor certo, e a planilha de
+    pagamento saia por este caminho enquanto o extrato entregue a pessoa saia pelo outro.
+
+    A linha e a fonte unica. O cache continua servindo apenas o que NAO existe como coluna: a
+    regional efetiva do periodo e os contadores derivados (`scored_service_orders`,
+    `warranty_service_orders`, ...), que sao informativos e nao entram em nenhuma conta de valor.
+    """
     if not run:
         return None
 
@@ -473,16 +601,8 @@ def serialize_run(
         extra_summaries = cached_score_summaries(run)
         if not extra_summaries and db:
             extra_summaries = _run_extra_summaries(db, run)
-    scores_with_orders = [
-        score
-        for score in run.scores
-        if int(extra_summaries.get(score.collaborator_id, {}).get("total_service_orders", score.service_orders_count)) > 0
-    ]
-    scores = sorted(
-        scores_with_orders,
-        key=lambda score: float(extra_summaries.get(score.collaborator_id, {}).get("final_points", score.final_points)),
-        reverse=True,
-    )
+    scores_with_orders = [score for score in run.scores if int(score.service_orders_count) > 0]
+    scores = sorted(scores_with_orders, key=lambda score: float(score.final_points), reverse=True)
     return {
         "id": run.id,
         "reference_month": run.reference_month,
@@ -492,7 +612,7 @@ def serialize_run(
         "source_import_id": run.source_import_id,
         "source_filename": run.source_filename,
         "rules_version_id": run.rules_version_id,
-        "result_summary": run.result_summary,
+        "result_summary": result_summary_with_totals_from_scores(run),
         "created_at": run.created_at,
         **serialize_run_status(run),
         "scores": [
@@ -503,18 +623,17 @@ def serialize_run(
                 "role": score.collaborator.role,
                 "regional": extra_summaries.get(score.collaborator_id, {}).get("regional", score.collaborator.regional),
                 "is_registered": bool(score.collaborator.is_registered),
-                "service_orders_count": int(extra_summaries.get(score.collaborator_id, {}).get("total_service_orders", score.service_orders_count)),
-                "gross_points": float(extra_summaries.get(score.collaborator_id, {}).get("gross_points", score.gross_points)),
-                "penalty_points": float(extra_summaries.get(score.collaborator_id, {}).get("penalty_points", score.penalty_points)),
-                "net_points": float(extra_summaries.get(score.collaborator_id, {}).get("net_points", score.net_points)),
-                "health_multiplier": float(extra_summaries.get(score.collaborator_id, {}).get("health_multiplier", score.health_multiplier)),
-                "health_status": str(extra_summaries.get(score.collaborator_id, {}).get("health_status", score.health_status)),
-                "final_points": float(extra_summaries.get(score.collaborator_id, {}).get("final_points", score.final_points)),
-                "estimated_payment": float(extra_summaries.get(score.collaborator_id, {}).get("estimated_payment", score.estimated_payment)),
-                "balance_adjustment_points": float(
-                    extra_summaries.get(score.collaborator_id, {}).get("balance_adjustment_points", score.balance_adjustment_points)
-                ),
-                "balance_after": float(extra_summaries.get(score.collaborator_id, {}).get("balance_after", score.balance_after)),
+                # Valores persistidos: sempre da linha, nunca do cache (ver docstring).
+                "service_orders_count": int(score.service_orders_count),
+                "gross_points": float(score.gross_points),
+                "penalty_points": float(score.penalty_points),
+                "net_points": float(score.net_points),
+                "health_multiplier": float(score.health_multiplier),
+                "health_status": str(score.health_status),
+                "final_points": float(score.final_points),
+                "estimated_payment": float(score.estimated_payment),
+                "balance_adjustment_points": float(score.balance_adjustment_points or 0),
+                "balance_after": float(score.balance_after or 0),
                 "scored_service_orders": int(extra_summaries.get(score.collaborator_id, {}).get("scored_service_orders", 0)),
                 "unscored_service_orders": int(extra_summaries.get(score.collaborator_id, {}).get("unscored_service_orders", 0)),
                 "penalized_service_orders": int(extra_summaries.get(score.collaborator_id, {}).get("penalized_service_orders", 0)),
@@ -537,6 +656,81 @@ def serialize_run(
             for score in scores
         ],
     }
+
+
+DRAFT_RETENTION_ENABLED_SETTING = "gamification_draft_retention_enabled"
+DRAFT_RETENTION_KEEP_SETTING = "gamification_draft_retention_keep"
+DRAFT_RETENTION_DEFAULT_KEEP = 3
+
+
+def prune_superseded_drafts(db: Session, run: CalculationRun) -> int:
+    """Apaga rascunhos antigos do MESMO periodo que `run` acabou de substituir.
+
+    Motivo (achado A1 da auditoria 2026-08-26): `recalculate_current_period` cria um
+    `CalculationRun` novo a cada ciclo do sincronizador do IXC (20 min) e nada nunca remove os
+    anteriores. A base chegou a 1.106 fechamentos e 225.121 linhas de `collaborator_scores`,
+    sendo 223.811 em rascunhos descartaveis - 779 so de julho/2026. Isso degrada toda tela do
+    modulo e, principalmente, o caminho de pagamento.
+
+    DESLIGADO POR PADRAO (`gamification_draft_retention_enabled`). E uma rotina destrutiva:
+    quem opera decide quando liga-la, depois de conferir o que seria removido. Enquanto estiver
+    desligada esta funcao nao apaga nada e devolve 0.
+
+    Nunca remove:
+      - fechamentos que nao sao `draft` (review/approved/paid/cancelled sao registro, nao cache);
+      - o proprio `run` recem-criado e os `keep` rascunhos mais recentes do periodo;
+      - rascunhos referenciados pelo ledger de saldo (`origin_calculation_run_id` ou
+        `applied_calculation_run_id`) - sao a origem rastreavel de um debito de garantia. Na base
+        real isso protege 9 rascunhos.
+    """
+    if get_setting(db, DRAFT_RETENTION_ENABLED_SETTING, "false").strip().lower() != "true":
+        return 0
+
+    keep = max(int(_safe_float(get_setting(db, DRAFT_RETENTION_KEEP_SETTING, str(DRAFT_RETENTION_DEFAULT_KEEP)), DRAFT_RETENTION_DEFAULT_KEEP)), 1)
+
+    stmt = (
+        select(CalculationRun.id)
+        .where(CalculationRun.reference_month == run.reference_month)
+        .where(CalculationRun.reference_year == run.reference_year)
+        .where(CalculationRun.status == "draft")
+        .order_by(desc(CalculationRun.created_at), desc(CalculationRun.id))
+    )
+    stmt = stmt.where(CalculationRun.regional.is_(None)) if run.regional is None else stmt.where(CalculationRun.regional == run.regional)
+
+    candidate_ids = [run_id for run_id in db.scalars(stmt) if run_id != run.id][keep:]
+    if not candidate_ids:
+        return 0
+
+    referenced = set(
+        db.scalars(
+            select(PointBalanceEntry.origin_calculation_run_id).where(
+                PointBalanceEntry.origin_calculation_run_id.in_(candidate_ids)
+            )
+        )
+    ) | set(
+        db.scalars(
+            select(PointBalanceEntry.applied_calculation_run_id).where(
+                PointBalanceEntry.applied_calculation_run_id.in_(candidate_ids)
+            )
+        )
+    )
+    removable = [run_id for run_id in candidate_ids if run_id not in referenced]
+    if not removable:
+        return 0
+
+    # `LeadershipBonusResult` tem FK para o fechamento e nao esta em cascade - precisa sair antes.
+    # `CollaboratorScore` sai junto pelo cascade="all, delete-orphan" do relacionamento.
+    db.execute(delete(LeadershipBonusResult).where(LeadershipBonusResult.calculation_run_id.in_(removable)))
+    db.execute(delete(CollaboratorScore).where(CollaboratorScore.calculation_run_id.in_(removable)))
+    db.execute(delete(CalculationRun).where(CalculationRun.id.in_(removable)))
+    logger.info(
+        "Retenção de rascunhos: %d rascunho(s) de %02d/%d removidos (mantidos os %d mais recentes).",
+        len(removable),
+        run.reference_month,
+        run.reference_year,
+        keep,
+    )
+    return len(removable)
 
 
 def recalculate_current_period(
@@ -565,6 +759,7 @@ def recalculate_current_period(
             execution_note=execution_note,
         )
         calculate_and_store_leadership_bonus(db, run)
+        prune_superseded_drafts(db, run)
         db.commit()
         logger.info("Recálculo automático do período %02d/%d concluído (run #%s).", now.month, now.year, run.id)
     except Exception:

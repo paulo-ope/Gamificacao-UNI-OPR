@@ -7,7 +7,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import get_db
-from app.core.security import require_permission
+from app.core.security import get_current_user, is_admin_user, require_permission
 from app.models import CalculationRun, Collaborator, CollaboratorPointBalance, CollaboratorScore, PointBalanceEntry, ServiceOrder, User
 from app.schemas import (
     CollaboratorCreate,
@@ -244,8 +244,22 @@ def collaborator_statement_pdf(
     collaborator_id: int,
     calculation_run_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("audit:read")),
+    user: User = Depends(get_current_user),
 ):
+    """Extrato de pagamento individual.
+
+    Achado A8 da auditoria 2026-08-26: exigia apenas `audit:read`, permissão concedida aos perfis
+    `viewer` e `operator` - qualquer leitor operacional baixava o extrato financeiro pessoal de
+    qualquer colaborador da empresa. Agora só o administrador (que conduz o fechamento) ou o
+    próprio colaborador, pelo vínculo direto `users.collaborator_id` usado no portal.
+    """
+    is_owner = user.collaborator_id is not None and user.collaborator_id == collaborator_id
+    if not is_owner and not is_admin_user(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Somente o administrador ou o próprio colaborador podem emitir este extrato de pagamento.",
+        )
+
     collaborator = db.get(Collaborator, collaborator_id)
     if not collaborator:
         raise HTTPException(status_code=404, detail="Colaborador não encontrado.")
