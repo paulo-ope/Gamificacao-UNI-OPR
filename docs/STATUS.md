@@ -46,19 +46,42 @@ performance do módulo OPA Suite; ver PRs abertas abaixo pras outras frentes)
   Testes: 6 novos (`test_opa_dimensions_throttle.py`) + 741 passed na suíte
   completa (as 13 falhas restantes são pré-existentes e alheias, módulo
   `test_ai_*`).
-  **Achados adicionais, ainda NÃO implementados** (relatório completo de um
-  agente investigador, com evidência de `EXPLAIN ANALYZE` real): `GET
-  /support/opa/overview` mede 540-930ms — não é falta de índice (confirmado
-  via `EXPLAIN ANALYZE`, os índices existem e funcionam), é **8-9 consultas
-  separadas escaneando o mesmo recorte de ~57 mil linhas** em vez de uma só;
-  `customer_metrics` e `average_first_response_seconds` puxam dezenas de
-  milhares de linhas pra Python quando o cálculo cabia inteiro em SQL (`AVG`,
-  `COUNT DISTINCT`); `COUNT(DISTINCT attendant_id)`/`COUNT(DISTINCT
-  department_id)` força um `Sort Method: external merge, Disk` de ~155ms,
-  rodando 2x por chamada (período atual + anterior); `GET /support/opa-metrics`
-  parece duplicar o núcleo do que `/opa/overview` já calcula. Nenhuma dessas
-  mexe em índice nem em dado - são só menos idas ao banco pro mesmo resultado.
-  Decisão de quando implementar essa parte ainda pendente do usuário.
+  **Segunda rodada — otimização das consultas de LEITURA de `/opa/overview`
+  (mesma branch, commit `d963b17`)**: dos achados do agente investigador (com
+  evidência de `EXPLAIN ANALYZE` real — não é falta de índice, os índices já
+  existem e funcionam), implementados os 3 mais seguros: (1)
+  `overview_metrics` — os dois `COUNT(DISTINCT attendant_id)`/`COUNT(DISTINCT
+  department_id)` no mesmo `SELECT` forçavam `Sort Method: external merge,
+  Disk` (~155ms de ~176ms da query) porque dois `COUNT(DISTINCT)` de colunas
+  diferentes não cabem no mesmo `HashAggregate` — viraram 2 subconsultas
+  escalares resolvidas em memória (~110ms); (2) `customer_metrics` — trazia
+  TODAS as linhas agrupadas por cliente pra Python (25.492 linhas medidas ao
+  vivo) só pra contar/somar/ordenar — agora só o top 10 cruza a fronteira
+  banco↔aplicação, o resto vira 2 agregados escalares em SQL; (3)
+  `average_first_response_seconds` — trazia TODO par de datas pra Python
+  (23.819 linhas medidas ao vivo) por causa de uma limitação conhecida do
+  SQLite dos testes — resolvido com uma expressão SQL por dialeto (mesmo
+  padrão já usado em `_local_day_expression`), **achado durante a correção**:
+  `julianday()` do SQLite introduzia ruído de ponto-flutuante
+  (599.9999843... em vez de 600.0) por causa da parte inteira enorme (dias
+  desde 4714 a.C.) diluir a precisão do `double` — trocado por
+  `strftime('%s', ...)` (segundos inteiros exatos).
+  **Validado número por número contra a base real** (118 mil atendimentos,
+  resultado novo comparado lado a lado com o antigo): tudo idêntico, só a
+  ordem de exibição entre 2 clientes empatados em 27 atendimentos mudou (nunca
+  foi garantida em nenhuma das duas versões). `GET /support/opa/overview` em
+  regime estável: ~930ms → **~480-570ms** (~15-25%, menor que o fix de
+  sincronização porque deliberadamente não combinei as 8 consultas
+  separadas). Testes: suíte completa do módulo (179 opa/support) + 741 passed
+  na suíte inteira, sem regressão.
+  **Ainda NÃO implementado** (maior risco/esforço, avaliado e adiado): combinar
+  as 8-9 consultas separadas de `expanded_overview` num recorte físico só
+  (cada uma escaneia o mesmo ~57 mil linhas independentemente — é o maior
+  ganho possível, mas mexe na forma como o módulo agrega dado); verificar se
+  `GET /support/opa-metrics` duplica o núcleo do que `/opa/overview` já
+  calcula (precisa confirmar primeiro se o frontend chama os dois na mesma
+  tela antes de mexer no backend). Decisão de quando implementar essa parte
+  ainda pendente do usuário.
 
 - **Auditoria de performance do backend — P0 e P1 corrigidos, P2 avaliado e adiado**:
   pedido do usuário "preciso de uma auditoria na velocidade do backend, como deixar
@@ -1247,14 +1270,13 @@ performance do módulo OPA Suite; ver PRs abertas abaixo pras outras frentes)
   `ANALYZE service_orders, collaborator_scores, operations_orders,
   scheduling_orders, scheduling_events, management_cases;` e
   `docker exec opr-gamification-backend python -m scripts.enable_draft_retention`.
-- **Otimização da tela de leitura do SGP Suporte/OPA Suite — achados
-  mapeados, ainda não implementados**: `GET /support/opa/overview` mede
-  540-930ms por causa de 8-9 consultas separadas escaneando o mesmo recorte de
-  dados (não falta de índice - confirmado via `EXPLAIN ANALYZE`), com
-  `customer_metrics`/`average_first_response_seconds` puxando dezenas de
-  milhares de linhas pra Python quando cabia em SQL. Decisão de quando
-  implementar pendente do usuário (ver entrada acima em "O que foi feito
-  recentemente").
+- **Otimização da tela de leitura do SGP Suporte/OPA Suite — parcialmente
+  implementada**: `GET /support/opa/overview` foi de ~930ms pra ~480-570ms
+  (ver entrada acima em "O que foi feito recentemente"). Falta ainda a parte
+  de maior risco/esforço: combinar as 8-9 consultas separadas de
+  `expanded_overview` num recorte físico só, e confirmar se `GET
+  /support/opa-metrics` duplica `/opa/overview` (precisa checar o frontend
+  primeiro). Decisão de quando implementar essa parte pendente do usuário.
 - **Menu lateral único — código pronto no histórico, fora de produção por
   decisão do usuário**: revertido antes do deploy (ver acima). Reativar quando
   o usuário pedir: reverter o commit de revert numa branch nova.
@@ -1292,11 +1314,10 @@ performance do módulo OPA Suite; ver PRs abertas abaixo pras outras frentes)
 
 - Mergear as 4 PRs abertas (ver "Frentes em andamento") e rodar os 2 comandos
   manuais na VM depois do deploy da P0.
-- Decidir com o usuário se/quando implementar os achados de leitura da
-  auditoria de performance do SGP Suporte/OPA Suite (combinar as 8-9 consultas
-  de `/opa/overview` num recorte só, mover `customer_metrics`/
-  `average_first_response_seconds` pra SQL, ver se `/opa-metrics` duplica
-  `/opa/overview`) — mapeado, não implementado (ver "Frentes em andamento").
+- Decidir com o usuário se/quando implementar o restante da otimização de
+  `/opa/overview` (combinar as 8-9 consultas num recorte físico só - maior
+  ganho possível, maior risco; ver se `/opa-metrics` duplica `/opa/overview`)
+  — parte já implementada, parte ainda mapeada (ver "Frentes em andamento").
 - P2 da auditoria de performance geral, ainda não desenhada: cache de curto prazo em
   `GET /operations/overview` e `GET /support/opa/overview` — precisa incluir o
   escopo por usuário (gestor regional) na chave do cache, não só os filtros da
