@@ -13,11 +13,118 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-08-26** — branch `claude/agendamentos-filtros-kpi-5xdjq1`
+**2026-08-27** — branch `claude/auditoria-performance-p1` (P0 e P1 em PR separada,
+`claude/auditoria-performance-p0`; ver PRs abertas abaixo)
 
 ## O que foi feito recentemente
 
-- **Gráficos, drill-down e filtros novos na `/suporte` (ainda sem commit)**:
+- **Auditoria de performance do backend — P0 e P1 corrigidos, P2 avaliado e adiado**:
+  pedido do usuário "preciso de uma auditoria na velocidade do backend, como deixar
+  mais rápido sem perder confiança nos dados". Relatório completo publicado como
+  artifact (achados + evidência medida ao vivo, não só leitura de código).
+  **P0 (branch `claude/auditoria-performance-p0`, aguardando merge)**:
+  - **Achado real, medido ao vivo**: `GET /dashboard/summary` levava **5-7 segundos**
+    em quase todo carregamento (reprocessando 10.685 O.S. em Python por requisição).
+    Causa raiz: `_refresh_stale_draft_previews` (calculation_runs.py) corrige
+    `final_points`/`estimated_payment` de OUTROS rascunhos quando um débito de
+    garantia compartilhado é consumido por um pagamento, mas nunca tocava em
+    `cost_by_regional`/`cost_by_group`/`cost_by_subject`/`cost_by_collaborator`
+    desses rascunhos — o detalhamento ficava congelado com o valor de ANTES do
+    débito ser consumido. A checagem de consistência do dashboard detectava
+    corretamente a divergência (medida: R$ 15.073,50 em cache contra R$ 11.967,06
+    reconciliado, run #1936) e recusava servir o cache, forçando recálculo completo
+    a cada carregamento. Corrigido invalidando `dashboard_cache_version` no
+    rascunho afetado em vez de redistribuir o delta pelos detalhamentos (arriscaria
+    uma versão mais sutil do mesmo bug) — a checagem de consistência continua
+    intacta como rede de segurança.
+  - `ANALYZE` nas 6 tabelas maiores do backend (nunca tinham sido analisadas pelo
+    planejador de consultas do Postgres, mesmo com autovacuum ligado) — ação em
+    banco, não versionável em código, **precisa rodar de novo na VM após o deploy**.
+  - Script novo `scripts/enable_draft_retention.py` liga a poda de rascunhos
+    superados (já implementada e testada na auditoria financeira de agosto, nunca
+    tinha sido ligada) — confirmado por dry-run: 1.085 dos 1.100 rascunhos hoje
+    seriam removidos, mantendo os 3 mais recentes por período e tudo que o ledger
+    financeiro ainda referencia. Ligado no ambiente local; **precisa rodar
+    `python -m scripts.enable_draft_retention` na VM após o deploy** (confirmado
+    com o usuário antes de ligar - ação destrutiva, ainda que bem protegida).
+  - Testes: 2 novos (`test_stale_draft_cache_invalidation.py`) + 78 passed na
+    varredura ampla da Gamificação.
+  **P1 (branch `claude/auditoria-performance-p1`, aguardando merge)**:
+  - `POST /imports/ixc-backfill` rodava inline na requisição HTTP (busca paginada de
+    um mês inteiro da API do IXC, sem job/status) — virou background job
+    (`BackgroundTasks.add_task` + `ixc_import_lock_busy` pra 409 imediato se já
+    tiver outra importação do IXC rodando), resultado consultável em
+    `GET /imports/runs` (já existia). Sem consumidor no frontend, sem breaking
+    change de UI.
+  - N+1 real em `rules_engine._run_collective_outage_rule` (monitor de fundo): 2
+    consultas por cluster geográfico detectado, viraram 1 consulta batendo todos os
+    logins de todos os clusters de uma vez.
+  - Query duplicada em `cockpit.build_cockpit_payload`: alertas ativos consultados
+    2x (uma pra `active_alerts`, outra pra `active_incidents`, diferindo só por um
+    filtro de `kind` em Python) — agora 1 consulta só.
+  - Pool de conexões do SQLAlchemy configurável por variável de ambiente
+    (`db_pool_size`/`db_max_overflow`/etc.) em vez do padrão da biblioteca (15
+    conexões pro processo inteiro) — o backend roda com um único worker uvicorn,
+    então esse pool é o orçamento de conexão do processo todo.
+  - Testes: 2 novos (`test_ixc_backfill_background.py`) + 728 passed na suíte
+    completa (as 13 falhas restantes são pré-existentes e alheias, módulo `test_ai_*`).
+  **Adiado deliberadamente** (avaliado, não esquecido): `POST /operations/imports`
+  (já limitado a 1 dia por chamada, converter exigiria reescrever o loop do
+  frontend) e `POST /operations/responsible-directory/sync` (ação administrativa
+  pontual, frontend espera resposta síncrona hoje) seguem síncronos. Cache em
+  `GET /operations/overview` foi avaliado e adiado de propósito: o endpoint escopa
+  o resultado pelo usuário (gestor regional só vê a própria regional) e cachear sem
+  incluir esse escopo no risco de vazar dado de uma regional pra gestor de outra —
+  precisa de desenho cuidadoso antes de implementar.
+
+- **Menu lateral único (sidebar + visão geral) — construído, depois revertido a
+  pedido do usuário antes do deploy**: Fase 1 da modernização de navegação (shell
+  único substituindo o header duplicado por módulo, customização fixar/reordenar
+  estendendo `WorkspaceModuleVisibility`, tela de Visão Geral agregando summaries
+  já existentes de cada módulo). Código funcional e testado, mas o usuário pediu
+  pra não ir pra VM ainda nesta rodada de deploy — revertido via commit dedicado
+  (`revert: menu lateral unico`, branch `claude/revert-menu-lateral`, já mergeada).
+  **Achado real durante o revert**: o commit original tinha, por acidente,
+  incorporado partes do trabalho do SGP Suporte (tipos/chamadas de API como
+  `SupportOpaTimeseries`, `tmr_all_responses_coverage`) em `frontend/lib/types.ts`
+  e `api.ts` — arquivos editados enquanto ainda havia mudanças não commitadas de
+  outra frente ali dentro. Um revert automático (`git revert`) teria quebrado os
+  gráficos/filtros salvos do Suporte junto — corrigido manualmente, mantendo todas
+  as adições do Suporte e revertendo só o que era genuinamente do menu. Pra
+  reativar o menu no futuro: reverter o commit de revert (o código já existe no
+  histórico, só está fora do que roda em produção).
+
+- **SGP Suporte — import de período em background, backfill automático de meses e
+  fix de campo numérico (branch `claude/suporte-sync-backfill-madrugada`,
+  aguardando merge)**: pedido do usuário "preciso melhorar a sincronização... ao
+  apagar números fica um 0 sempre... preciso poder agendar essas buscas pra
+  madrugada". **Bug do campo "0"**: `Number(event.target.value)` a cada tecla
+  fazia o campo de intervalo/dias de histórico mostrar "0" ao apagar (`Number("")`
+  é 0, não `NaN`) — corrigido com rascunho de texto local por campo, só
+  convertendo/gravando no blur. **Import manual virou job em background**
+  (`POST /opa-imports` blocava a requisição HTTP num mês inteiro, risco de
+  timeout) — mesmo padrão depois reaproveitado no P1 da auditoria de performance
+  pro backfill do IXC. **Backfill automático de madrugada**: tabela nova
+  `support_opa_import_months` rastreia "este mês já foi totalmente importado"
+  (não existia nenhum jeito de saber isso antes, só um MIN/MAX global da base
+  inteira); novo scheduler roda 1x por dia a partir de uma hora configurável
+  (padrão 3h) e importa os últimos N meses (padrão 3) ainda não completos; painel
+  novo na tela mostra o status de cada mês recente com botão de reimportação
+  manual. Testes: 9 novos (`test_opa_backfill.py`) + 189 passed na varredura ampla
+  (opa/support/workspace/scheduling), sem regressão.
+
+- **Reagendamentos por técnico — corrigido duas vezes na mesma rodada (já
+  mergeado)**: primeiro achado, "reagendamentos por técnico" contava qualquer O.S.
+  atribuída ao técnico que foi reagendada por QUALQUER pessoa, não só pelo próprio
+  técnico — corrigido pra contar só eventos cujo `technician_id` é o próprio
+  técnico. Segundo achado, ao validar: `SchedulingEvent.technician_id` às vezes
+  carrega o funcionário associado à O.S., não necessariamente um técnico de campo
+  de verdade — gente do backoffice/agendamento (ex.: um operador de equipe)
+  aparecia na lista como se fosse técnico. Restrito a colaboradores cadastrados no
+  módulo de Gestão com um modelo de equipe de campo de verdade (TECNICO 12/36H,
+  FAZ TUDO etc.) via `ManagementOperationalMember`.
+
+- **Gráficos, drill-down e filtros novos na `/suporte` (mergeado)**:
   rodada pedida como "preciso ter gráficos, drill-down, melhorar os filtros".
   **Filtros novos** (aditivos, em `opa_filters.py`): `tag_id` (etiqueta,
   multivalorada com semântica OU), `rating_min`/`rating_max` (faixa de nota),
@@ -81,7 +188,7 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   `types.ts`, `api.ts`, `support-chart-options.ts` (novo), `opa-charts.tsx`
   (novo), `opa-drilldown.tsx` (novo), `opa-saved-filters.tsx` (novo),
   `opa-module-components.tsx`, `page.tsx`.
-  **Ainda sem commit.**
+  **Mergeado** (parte do commit `f17e4c0`, PR #15).
 
 - **D1 corrigido (portal) + investigação do C3 + decisão dos créditos registrada**:
   seção 10.3 de
@@ -330,7 +437,7 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   Arquivos: `models.py`, `opa_ingestion.py`, `test_opa_ingestion.py`,
   `20260826_0076_support_opa_message_attendant_summary.py` (novo),
   `opa-module-components.tsx`, `page.tsx`.
-  **Ainda sem commit por decisão do usuário.**
+  **Mergeado** (parte do commit `f17e4c0`, PR #15).
 - **Bloco B3 — 1ª execução real da comparação com o OPA oficial (Recorte 1,
   25/08/2026)**: usuário informou os números oficiais do painel do OPA para
   esse dia (total 828, TMA 01:01:47, TMR 00:03:54, base = encerramento,
@@ -466,8 +573,8 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   `npm run typecheck`, `npm run test -- --run` (35 passed) e `npm run build`
   limpos. `docker compose build frontend` + `up -d` rodados.
   Arquivos: `opa-module-components.tsx`, `page.tsx`.
-  **Ainda sem commit por decisão do usuário.**
-- **Bloco B2 — janela real da base importada, visível na UI (ainda sem commit)**:
+  **Mergeado** (parte do commit `f17e4c0`, PR #15).
+- **Bloco B2 — janela real da base importada, visível na UI (mergeado)**:
   a base só tem atendimentos importados a partir de 01/08/2026 — sem essa
   informação visível, qualquer comparação com um período maior no painel
   oficial do OPA parece divergência/bug quando na verdade é ausência de
@@ -517,8 +624,7 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   cobertura parcial" / "diverge por ausência de histórico local" / "diverge
   por abertura vs encerramento" / "bug provável" depois de ter os números
   reais dos dois lados lado a lado (seção 8 do roteiro).
-  **Ainda sem commit por decisão do usuário** — mudanças na worktree,
-  preservadas junto com o B1 (que também segue sem commit).
+  **Mergeado** (parte do commit `f17e4c0`, PR #15) — junto com o B1.
 - **Bloco B1 — TMR geral ganhou denominador explícito (cobertura do histórico)**:
   auditoria anterior mediu 0% de cobertura de `tmr_all_responses_seconds` entre
   01/08–19/08 e 76–86% entre 20/08–26/08 — a UI mostrava a média sem dizer sobre
@@ -1087,6 +1193,19 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Frentes em andamento / conhecidas
 
+- **3 PRs abertas aguardando merge** (nenhuma na VM ainda):
+  `claude/suporte-sync-backfill-madrugada` (import em background + backfill de
+  meses + fix de campo numérico), `claude/auditoria-performance-p0` (fix do
+  cache do dashboard + ANALYZE + poda de rascunhos) e
+  `claude/auditoria-performance-p1` (IXC backfill em background + N+1 + query
+  duplicada + pool de conexão). **Depois do merge/deploy da P0, faltam 2
+  comandos manuais na VM** (ação em banco, não fazem parte do `docker compose up`):
+  `ANALYZE service_orders, collaborator_scores, operations_orders,
+  scheduling_orders, scheduling_events, management_cases;` e
+  `docker exec opr-gamification-backend python -m scripts.enable_draft_retention`.
+- **Menu lateral único — código pronto no histórico, fora de produção por
+  decisão do usuário**: revertido antes do deploy (ver acima). Reativar quando
+  o usuário pedir: reverter o commit de revert numa branch nova.
 - **SGP Suporte — visual ainda está cru e deve continuar evoluindo**: as 3 rodadas
   da Fase 4A melhoraram estrutura, composição e densidade, mas o resultado ainda não
   é o de um painel operacional maduro. **Toda evolução futura do módulo deve incluir
@@ -1119,6 +1238,15 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Próximos passos sugeridos
 
+- Mergear as 3 PRs abertas (ver "Frentes em andamento") e rodar os 2 comandos
+  manuais na VM depois do deploy da P0.
+- P2 da auditoria de performance, ainda não desenhada: cache de curto prazo em
+  `GET /operations/overview` e `GET /support/opa/overview` — precisa incluir o
+  escopo por usuário (gestor regional) na chave do cache, não só os filtros da
+  URL, senão risco de vazar dado de uma regional pra gestor de outra. Também
+  ficaram de fora desta rodada (avaliados, não esquecidos):
+  `POST /operations/imports` e `POST /operations/responsible-directory/sync`
+  ainda rodam síncronos dentro da requisição HTTP.
 - Comparar TMR humano e TMR geral (ambos disponíveis agora) contra o painel
   oficial do OPA pra descobrir qual fórmula ele usa — última decisão em
   aberto da auditoria de divergência.
