@@ -88,6 +88,31 @@ class SchedulingBacklogItem(BaseModel):
     status: str | None = None
 
 
+class SchedulingRescheduleByTechnicianItem(BaseModel):
+    technician_id: int | None
+    technician_name: str
+    reschedule_events: int
+
+
+class SchedulingRescheduleByTechnician(BaseModel):
+    date_from: date
+    date_to: date
+    items: list[SchedulingRescheduleByTechnicianItem]
+
+
+class SchedulingRescheduleByOperatorItem(BaseModel):
+    operator_id: int | None
+    operator_name: str
+    is_team_member: bool | None = None
+    reschedule_events: int
+
+
+class SchedulingRescheduleByOperator(BaseModel):
+    date_from: date
+    date_to: date
+    items: list[SchedulingRescheduleByOperatorItem]
+
+
 class SchedulingFilterOption(BaseModel):
     id: str | int
     name: str
@@ -99,6 +124,7 @@ class SchedulingFilterOptions(BaseModel):
     setores: list[SchedulingFilterOption]
     assuntos: list[SchedulingFilterOption]
     operators: list[SchedulingFilterOption]
+    technicians: list[SchedulingFilterOption] = Field(default_factory=list)
     data_available_from: datetime | None = None
     data_available_to: datetime | None = None
 
@@ -184,6 +210,25 @@ class SchedulingOperatorEventPage(BaseModel):
     page_size: int
 
 
+class SchedulingTechnicianEventItem(BaseModel):
+    ixc_os_id: int
+    event_type: str
+    event_label: str
+    event_at: datetime
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    operator_name: str | None = None
+    filial: str
+    assunto: str
+
+
+class SchedulingTechnicianEventPage(BaseModel):
+    items: list[SchedulingTechnicianEventItem]
+    total: int
+    page: int
+    page_size: int
+
+
 class SchedulingTimelineEvent(BaseModel):
     event_type: str
     event_label: str
@@ -211,6 +256,7 @@ class SchedulingSavedFilterValues(BaseModel):
     setor_ids: list[str] = Field(default_factory=list)
     assunto_ids: list[str] = Field(default_factory=list)
     operator_ids: list[int] = Field(default_factory=list)
+    technician_ids: list[int] = Field(default_factory=list)
     count_mode: str = "all_events"
 
 

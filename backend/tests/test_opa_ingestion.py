@@ -6,13 +6,31 @@ import pytest
 from sqlalchemy import func, select
 
 from app.modules.support.models import SupportOpaAttendance, SupportOpaAttendanceRaw, SupportOpaImportRun
-from app.modules.support.opa_ingestion import OpaImportInterrupted, import_opa_attendances, resume_opa_import_run
-from app.modules.support.router import opa_metrics
+from app.modules.support.opa_ingestion import (
+    OpaImportInterrupted,
+    _opa_import_busy_message,
+    active_opa_import_run,
+    import_opa_attendances,
+    opa_import_lock_busy,
+    resume_opa_import_run,
+)
+from app.modules.support.router import opa_metrics, opa_sync_status
 from app.services.opa_client import OpaPage
 
 
 class FakeOpaClient:
-    def __init__(self, records, users=None, reasons=None, departments=None, tags=None, clients=None, fail_on_skip=None, transient_failures=None):
+    def __init__(
+        self,
+        records,
+        users=None,
+        reasons=None,
+        departments=None,
+        tags=None,
+        clients=None,
+        fail_on_skip=None,
+        transient_failures=None,
+        messages=None,
+    ):
         self.records = records
         self.users = users or []
         self.reasons = reasons or []
@@ -21,6 +39,7 @@ class FakeOpaClient:
         self.clients = clients or []
         self.fail_on_skip = set(fail_on_skip or [])
         self.transient_failures = dict(transient_failures or {})
+        self.messages = messages or {}
         self.attendance_calls = []
 
     def iter_attendances(self, **kwargs):
@@ -51,6 +70,9 @@ class FakeOpaClient:
 
     def list_clients(self):
         return self.clients
+
+    def list_messages(self, source_id):
+        return self.messages.get(source_id, [])
 
 
 def _record(**overrides):
@@ -398,6 +420,220 @@ def test_import_opa_attendances_updates_existing_record(db_session):
     assert attendance.attendant_name == "Atendente Corrigido"
 
 
+def test_import_computes_human_tmr_first_response_and_bot_human_handoff(db_session):
+    record = _record(
+        id="OPA-HANDOFF",
+        atendente={"id": "A-1", "nome": "Atendente Um"},
+        data_abertura="2026-08-20T10:00:00+00:00",
+        data_encerramento="2026-08-20T10:30:00+00:00",
+    )
+    messages = [
+        {"id_atend": "BOT-1", "data": "2026-08-20T10:00:05+00:00"},
+        {"id_user": "U-1", "data": "2026-08-20T10:00:10+00:00"},
+        {"id_atend": "BOT-1", "data": "2026-08-20T10:00:15+00:00"},
+        {"id_user": "U-1", "data": "2026-08-20T10:05:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:10:00+00:00"},
+        {"id_user": "U-1", "data": "2026-08-20T10:15:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:20:00+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[
+            {"_id": "A-1", "nome": "Atendente Um", "tipo": "user"},
+            {"_id": "BOT-1", "nome": "Bot", "tipo": "bot"},
+        ],
+        messages={"OPA-HANDOFF": messages},
+    )
+
+    import_opa_attendances(
+        db_session,
+        client,
+        date_from=date(2026, 8, 20),
+        date_to=date(2026, 8, 20),
+        imported_by=None,
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-HANDOFF"))
+    assert attendance is not None
+    # gaps humanos: 10:00:10->10:10:00 (590s, ignora a 2a msg de cliente antes da
+    # resposta) e 10:15:00->10:20:00 (300s) -> media 445s. Mensagens do BOT-1 nao
+    # entram no calculo (nem fecham, nem resetam o intervalo pendente).
+    assert attendance.tmr_seconds == 445
+    assert attendance.first_response_at is not None
+    assert attendance.first_response_at.replace(tzinfo=None) == datetime(2026, 8, 20, 10, 10, 0)
+    assert attendance.handled_by_bot is True
+    assert attendance.reached_human is True
+    assert attendance.bot_to_human_handoff is True
+    # TMR geral conta a resposta rápida do bot também: gaps 5s (10:00:10->10:00:15,
+    # bot), 300s (10:05:00->10:10:00, humano) e 300s (10:15:00->10:20:00, humano)
+    # -> media 605/3 = 201,67 ~= 202. Deve ficar menor que o TMR humano (445),
+    # exatamente porque o bot respondeu rápido antes do humano.
+    assert attendance.tmr_all_responses_seconds == 202
+    assert attendance.tmr_all_responses_seconds < attendance.tmr_seconds
+
+
+def test_import_classifies_bot_only_attendance_without_handoff(db_session):
+    record = _record(
+        id="OPA-BOT-ONLY",
+        data_abertura="2026-08-20T10:00:00+00:00",
+        data_encerramento=None,
+        tmr_seconds=None,
+    )
+    messages = [
+        {"id_user": "U-1", "data": "2026-08-20T10:00:00+00:00"},
+        {"id_atend": "BOT-1", "data": "2026-08-20T10:00:02+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[{"_id": "BOT-1", "nome": "Bot", "tipo": "bot"}],
+        messages={"OPA-BOT-ONLY": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 20), date_to=date(2026, 8, 20), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-BOT-ONLY"))
+    assert attendance.handled_by_bot is True
+    assert attendance.reached_human is False
+    assert attendance.bot_to_human_handoff is False
+    # TMR humano fica None: nenhuma mensagem do BOT-1 conta como resposta humana.
+    assert attendance.tmr_seconds is None
+    # TMR geral, ao contrário, conta a resposta do bot: cliente 10:00:00 ->
+    # bot 10:00:02 = 2s. Atendimento só-bot pode ter TMR geral preenchido com
+    # TMR humano nulo.
+    assert attendance.tmr_all_responses_seconds == 2
+
+
+def test_import_leaves_bot_human_classification_null_without_message_data(db_session):
+    client = FakeOpaClient([_record(id="OPA-SEM-MSG")])  # sem `messages`: list_messages devolve []
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-SEM-MSG"))
+    assert attendance.handled_by_bot is None
+    assert attendance.reached_human is None
+    assert attendance.bot_to_human_handoff is None
+    assert attendance.tmr_all_responses_seconds is None
+    # Bloco de resumo por mensagem (preparação B3, seção 10.3 do roteiro) segue
+    # o mesmo critério: sem mensagem, tudo fica None, nunca vira zero.
+    assert attendance.distinct_human_attendant_ids is None
+    assert attendance.first_human_attendant_id is None
+    assert attendance.last_human_attendant_id is None
+    assert attendance.human_message_count is None
+    assert attendance.bot_message_count is None
+    assert attendance.client_message_count is None
+
+
+def test_message_attendant_summary_is_null_without_messages(db_session):
+    """Atendimento sem mensagens: `list_messages` devolve `[]` explicitamente
+    (não ausente) — mesmo assim o resumo fica todo `None`, não zero."""
+    client = FakeOpaClient([_record(id="OPA-VAZIO")], messages={"OPA-VAZIO": []})
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-VAZIO"))
+    assert attendance.distinct_human_attendant_ids is None
+    assert attendance.first_human_attendant_id is None
+    assert attendance.last_human_attendant_id is None
+    assert attendance.human_message_count is None
+    assert attendance.bot_message_count is None
+    assert attendance.client_message_count is None
+
+
+def test_message_attendant_summary_bot_only_has_zero_human_messages(db_session):
+    """Mensagens só de bot: contagem humana é um zero de verdade (dado real,
+    não "insuficiente") — diferente do caso sem mensagem nenhuma."""
+    record = _record(id="OPA-SO-BOT", data_abertura="2026-08-20T10:00:00+00:00", data_encerramento=None, tmr_seconds=None)
+    messages = [
+        {"id_user": "U-1", "data": "2026-08-20T10:00:00+00:00"},
+        {"id_atend": "BOT-1", "data": "2026-08-20T10:00:02+00:00"},
+        {"id_atend": "BOT-1", "data": "2026-08-20T10:00:05+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[{"_id": "BOT-1", "nome": "Bot", "tipo": "bot"}],
+        messages={"OPA-SO-BOT": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 20), date_to=date(2026, 8, 20), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-SO-BOT"))
+    assert attendance.distinct_human_attendant_ids is None
+    assert attendance.first_human_attendant_id is None
+    assert attendance.last_human_attendant_id is None
+    assert attendance.human_message_count == 0
+    assert attendance.bot_message_count == 2
+    assert attendance.client_message_count == 1
+
+
+def test_message_attendant_summary_single_human_attendant(db_session):
+    record = _record(id="OPA-1-HUMANO", atendente={"id": "A-1", "nome": "Atendente Um"})
+    messages = [
+        {"id_user": "U-1", "data": "2026-08-20T10:00:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:05:00+00:00"},
+        {"id_user": "U-1", "data": "2026-08-20T10:10:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:12:00+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[{"_id": "A-1", "nome": "Atendente Um", "tipo": "user"}],
+        messages={"OPA-1-HUMANO": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-1-HUMANO"))
+    assert attendance.distinct_human_attendant_ids == ["A-1"]
+    assert attendance.first_human_attendant_id == "A-1"
+    assert attendance.last_human_attendant_id == "A-1"
+    assert attendance.human_message_count == 2
+    assert attendance.bot_message_count == 0
+    assert attendance.client_message_count == 2
+
+
+def test_message_attendant_summary_multiple_human_attendants_orders_by_timestamp(db_session):
+    """Atendimento com handoff entre dois atendentes humanos: primeiro/último
+    precisam respeitar a ordem cronológica das mensagens, não a ordem em que
+    elas chegam na lista (a lista abaixo já está fora de ordem de propósito)."""
+    record = _record(id="OPA-HANDOFF-HUMANO", atendente={"id": "A-2", "nome": "Atendente Dois"})
+    messages = [
+        {"id_atend": "A-2", "data": "2026-08-20T12:00:00+00:00"},  # ultimo cronologicamente, primeiro na lista
+        {"id_user": "U-1", "data": "2026-08-20T10:00:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:05:00+00:00"},  # primeiro cronologicamente
+        {"id_user": "U-1", "data": "2026-08-20T11:00:00+00:00"},
+        {"id_atend": "A-2", "data": "2026-08-20T11:30:00+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[
+            {"_id": "A-1", "nome": "Atendente Um", "tipo": "user"},
+            {"_id": "A-2", "nome": "Atendente Dois", "tipo": "user"},
+        ],
+        messages={"OPA-HANDOFF-HUMANO": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-HANDOFF-HUMANO"))
+    assert attendance.distinct_human_attendant_ids == ["A-1", "A-2"]
+    assert attendance.first_human_attendant_id == "A-1"
+    assert attendance.last_human_attendant_id == "A-2"
+    assert attendance.human_message_count == 3
+    assert attendance.bot_message_count == 0
+    assert attendance.client_message_count == 2
+
+
 def test_opa_metrics_summarizes_imported_attendances(db_session, admin_user):
     client = FakeOpaClient([
         _record(id="OPA-1", atendente={"id": "A-1", "nome": "Ana"}, motivo={"id": "M-1", "nome": "Suporte"}, tma_seconds=600),
@@ -416,5 +652,187 @@ def test_opa_metrics_summarizes_imported_attendances(db_session, admin_user):
     assert result["total_attendances"] == 2
     assert result["closed_attendances"] == 2
     assert result["average_tma_seconds"] == 450
-    assert result["by_reason"][0]["label"] == "Suporte"
-    assert result["by_reason"][0]["total"] == 2
+
+
+def _running_run(**overrides) -> SupportOpaImportRun:
+    base = {
+        "provider": "opa",
+        "entity": "attendance",
+        "mode": "scheduled",
+        "date_from": date(2026, 8, 25),
+        "date_to": date(2026, 8, 25),
+        "status": "running",
+        "started_at": datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc),
+    }
+    base.update(overrides)
+    return SupportOpaImportRun(**base)
+
+
+def test_active_opa_import_run_returns_none_when_nothing_running(db_session):
+    assert active_opa_import_run(db_session) is None
+
+
+def test_active_opa_import_run_ignores_finished_runs(db_session):
+    db_session.add(_running_run(status="completed"))
+    db_session.flush()
+
+    assert active_opa_import_run(db_session) is None
+
+
+def test_active_opa_import_run_returns_most_recent_running_row(db_session):
+    db_session.add(_running_run(started_at=datetime(2026, 8, 25, 8, 0, tzinfo=timezone.utc)))
+    newest = _running_run(mode="manual", started_at=datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc))
+    db_session.add(newest)
+    db_session.flush()
+
+    active = active_opa_import_run(db_session)
+    assert active is not None
+    assert active.mode == "manual"
+
+
+def test_opa_import_lock_busy_is_none_outside_postgres(db_session):
+    # db_session de teste roda em SQLite — a checagem de lock não se aplica lá,
+    # igual ao comportamento pré-existente do `_support_opa_import_lock`.
+    assert opa_import_lock_busy(db_session) is None
+
+
+def test_opa_import_busy_message_mentions_automatica_when_scheduled_run_is_active(db_session):
+    db_session.add(_running_run(mode="scheduled"))
+    db_session.flush()
+
+    message = _opa_import_busy_message(db_session)
+    assert "automática" in message
+    assert "manual" in message
+
+
+def test_opa_import_busy_message_is_generic_when_active_run_is_manual(db_session):
+    db_session.add(_running_run(mode="manual"))
+    db_session.flush()
+
+    message = _opa_import_busy_message(db_session)
+    assert "automática" not in message
+
+
+def test_opa_import_busy_message_is_generic_without_any_active_run(db_session):
+    message = _opa_import_busy_message(db_session)
+    assert "automática" not in message
+    assert "em andamento" in message
+
+
+def test_opa_import_busy_message_uses_fallback_when_no_active_run_is_visible(db_session):
+    # Lock ocupado mas nenhuma run "running" visível (ex.: corrida rara entre o lock
+    # ser adquirido e a run ser commitada) — mensagem amigável específica, não a
+    # genérica de "outra importação manual".
+    message = _opa_import_busy_message(db_session)
+    assert "ainda não pôde ser identificada" in message
+
+
+def test_active_opa_import_run_is_visible_while_pages_are_still_being_fetched(db_session):
+    """Reproduz o cenário relatado: durante uma importação real, outra consulta
+    (`active_opa_import_run`, a mesma usada por `/opa-sync-status`) precisa enxergar a
+    run como `running` — não só depois que tudo termina e a transação principal
+    commita. Antes da correção, a run só existia dentro da transação em aberto de
+    `import_opa_attendances` (via `db.flush()`, nunca commitada até o fim)."""
+    seen = {}
+
+    class ProbingClient(FakeOpaClient):
+        def list_attendances(self, **kwargs):
+            if not seen:
+                active = active_opa_import_run(db_session)
+                seen["found"] = active is not None
+                seen["status"] = active.status if active else None
+                seen["mode"] = active.mode if active else None
+                seen["id"] = active.id if active else None
+            return super().list_attendances(**kwargs)
+
+    client = ProbingClient([_record(id="OPA-VISIVEL-1")])
+    result = import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), imported_by=None
+    )
+
+    assert seen["found"] is True
+    assert seen["status"] == "running"
+    assert seen["mode"] == "scheduled"
+    assert seen["id"] == result["run_id"]
+
+
+def test_import_commits_the_running_run_before_fetching_the_first_page(db_session, monkeypatch):
+    """Garante que a linha "running" é commitada ANTES do processamento longo (não só
+    no fim) — a diferença exata entre o bug relatado e a correção. Sem isso, o commit
+    só aconteceria depois de todas as páginas processadas, quando o chamador
+    (`router.py`/`opa_scheduler.py`) commita a sessão inteira."""
+    events: list[str] = []
+    original_commit = db_session.commit
+
+    def spy_commit():
+        events.append("commit")
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", spy_commit)
+
+    class ProbingClient(FakeOpaClient):
+        def list_attendances(self, **kwargs):
+            events.append("list_attendances")
+            return super().list_attendances(**kwargs)
+
+    client = ProbingClient([_record(id="OPA-ORDEM-1")])
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), imported_by=None
+    )
+
+    assert "commit" in events
+    assert "list_attendances" in events
+    assert events.index("commit") < events.index("list_attendances")
+
+
+def test_active_opa_import_run_is_none_again_after_successful_completion(db_session):
+    client = FakeOpaClient([_record(id="OPA-FIM-OK")])
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), imported_by=None
+    )
+
+    assert active_opa_import_run(db_session) is None
+
+
+def test_active_opa_import_run_is_none_after_interrupted_run_even_if_caller_rolls_back(db_session, monkeypatch):
+    """`_persist_run_terminal_status` grava o status final numa sessão à parte e já
+    commitada — precisa sobreviver mesmo se o chamador reverter a sessão principal
+    depois (o que o router faz pra qualquer exceção que não seja
+    `OpaImportInterrupted`), senão a run fica presa em "running" pra sempre."""
+    monkeypatch.setattr("app.modules.support.opa_ingestion.time.sleep", lambda _: None)
+    records = [_record(id=f"OPA-{index}") for index in range(1, 351)]
+    client = FakeOpaClient(records, fail_on_skip={300})
+
+    with pytest.raises(OpaImportInterrupted):
+        import_opa_attendances(
+            db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+        )
+
+    # Simula o `db.rollback()` que o router faria pra uma exceção não-Interrupted —
+    # aqui só pra provar que o status final já está commitado numa sessão à parte,
+    # independente do que a sessão principal faça depois.
+    db_session.rollback()
+
+    active = active_opa_import_run(db_session)
+    assert active is None
+    run = db_session.query(SupportOpaImportRun).filter_by(status="interrupted").one()
+    assert run.pages_processed == 3
+
+
+def test_opa_sync_status_endpoint_shows_active_run_during_execution(db_session, admin_user):
+    seen = {}
+
+    class ProbingClient(FakeOpaClient):
+        def list_attendances(self, **kwargs):
+            if not seen:
+                seen.update(opa_sync_status(db=db_session, user=admin_user))
+            return super().list_attendances(**kwargs)
+
+    client = ProbingClient([_record(id="OPA-STATUS-1")])
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 25), date_to=date(2026, 8, 25), imported_by=None
+    )
+
+    assert seen["sync_in_progress"] is True
+    assert seen["active_run_mode"] == "scheduled"
+    assert seen["active_run_id"] is not None

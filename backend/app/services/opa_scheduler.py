@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.modules.support.opa_filters import SUPPORT_TIMEZONE
 from app.modules.support.opa_ingestion import OpaImportInterrupted, import_opa_attendances
 from app.services.calculation import get_setting, upsert_setting
 from app.services.opa_client import get_opa_client
@@ -23,7 +23,6 @@ if not logger.handlers:
     logger.propagate = False
 
 
-SUPPORT_TIMEZONE = ZoneInfo("America/Porto_Velho")
 SUPPORT_OPA_SYNC_ENABLED_KEY = "support_opa_sync_enabled"
 SUPPORT_OPA_SYNC_INTERVAL_MINUTES_KEY = "support_opa_sync_interval_minutes"
 SUPPORT_OPA_SYNC_LOOKBACK_DAYS_KEY = "support_opa_sync_lookback_days"
@@ -120,6 +119,21 @@ def _record_sync_attempt_started(interval_minutes: int) -> None:
         db.commit()
 
 
+def _push_next_allowed_at_from_now(db: Session, interval_minutes: int) -> None:
+    """Recalcula `next_allowed_at` a partir do FIM da execução, não do início.
+
+    Antes, `next_allowed_at` era fixado em `_record_sync_attempt_started` só com base no
+    início da tentativa. Como a rotina agora busca mensagens por atendimento para TMR,
+    um ciclo pode durar mais que o intervalo configurado — nesse caso o valor calculado
+    no início já ficava no passado quando a run terminava, e a UI mostrava "próxima
+    janela" atrasada mesmo com tudo funcionando, ou o loop tentava iniciar de novo
+    imediatamente. Recalcular no fim garante que o intervalo seja respeitado a partir de
+    quando a execução anterior realmente terminou.
+    """
+    now = datetime.now(timezone.utc)
+    upsert_setting(db, SUPPORT_OPA_SYNC_NEXT_ALLOWED_AT_KEY, (now + timedelta(minutes=max(interval_minutes, 5))).isoformat())
+
+
 def run_opa_sync_once(interval_minutes: int | None = None) -> dict | None:
     settings = get_settings()
     if not settings.opa_api_base_url or not settings.opa_api_token:
@@ -140,6 +154,7 @@ def run_opa_sync_once(interval_minutes: int | None = None) -> dict | None:
             ]
             upsert_setting(db, SUPPORT_OPA_SYNC_LAST_SUCCESS_AT_KEY, datetime.now(timezone.utc).isoformat())
             upsert_setting(db, SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY, "0")
+            _push_next_allowed_at_from_now(db, current_interval)
             db.commit()
             logger.info("Sincronização OPA concluída: %s", imports)
             return {"imports": imports}
@@ -152,6 +167,7 @@ def run_opa_sync_once(interval_minutes: int | None = None) -> dict | None:
             upsert_setting(db, SUPPORT_OPA_SYNC_LAST_ERROR_KEY, f"Run #{exc.run_id} interrompido: {str(exc)[:200]}")
             upsert_setting(db, SUPPORT_OPA_SYNC_LAST_ERROR_AT_KEY, datetime.now(timezone.utc).isoformat())
             upsert_setting(db, SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY, str(failures + 1))
+            _push_next_allowed_at_from_now(db, current_interval)
             db.commit()
             return None
         except Exception as exc:
@@ -164,6 +180,7 @@ def run_opa_sync_once(interval_minutes: int | None = None) -> dict | None:
             upsert_setting(db, SUPPORT_OPA_SYNC_LAST_ERROR_KEY, str(exc)[:250])
             upsert_setting(db, SUPPORT_OPA_SYNC_LAST_ERROR_AT_KEY, datetime.now(timezone.utc).isoformat())
             upsert_setting(db, SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY, str(failures + 1))
+            _push_next_allowed_at_from_now(db, current_interval)
             db.commit()
             return None
 

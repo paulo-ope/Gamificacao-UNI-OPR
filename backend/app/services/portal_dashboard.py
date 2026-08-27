@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.services import cpk_health
 from app.services.calculation import serialize_run
+from app.services.calculation_closure import pick_run_by_status_priority
 from app.services.regional import (
     effective_managed_regionals,
     effective_managed_regionals_grouped,
@@ -68,6 +69,37 @@ def _portal_run(
     reference_month: int | None = None,
     reference_year: int | None = None,
 ) -> CalculationRun | None:
+    """Fechamento que o portal do colaborador exibe.
+
+    Usa `pick_run_by_status_priority` - pago > não cancelado > qualquer, sempre o mais recente
+    dentro de cada nível -, o MESMO critério que a tela de fechamento, o histórico e o extrato PDF
+    já usavam. Antes escolhia só pelo `created_at` mais recente, sem olhar status: como
+    `recalculate_current_period` cria um `CalculationRun` novo a cada ciclo do sincronizador do
+    IXC (20 min) e a base acumulou 1.100 rascunhos, o colaborador via o valor do último rascunho
+    automático enquanto o resto do sistema mostrava o fechamento PAGO - dois números oficiais
+    diferentes para "quanto eu recebi" (achado A9 da auditoria 2026-08-26).
+
+    Onde nada foi pago ainda (mês corrente), o rascunho mais recente continua sendo a resposta -
+    o comportamento antigo se preserva exatamente onde ele estava correto.
+
+    Sem mês/ano informados (a entrada normal do portal), o período é resolvido ANTES da prioridade
+    de status: vale o período mais recente que tenha alguma apuração não cancelada, e só dentro
+    dele o status decide. Sem isso, a prioridade global por `paid` faria o portal mostrar sempre a
+    última competência PAGA e esconder o mês corrente em andamento - medido na base real, o padrão
+    passaria de 08/2026 (rascunho, R$ 11.967,06) para 07/2026 (pago, R$ 18.271,68), trocando a
+    pergunta "como estou este mês" por "quanto recebi no mês passado". Não é o objetivo desta
+    correção e seria mudança de comportamento não pedida.
+    """
+    if reference_month is None or reference_year is None:
+        latest_period = db.execute(
+            select(CalculationRun.reference_year, CalculationRun.reference_month)
+            .where(CalculationRun.status != "cancelled")
+            .order_by(desc(CalculationRun.reference_year), desc(CalculationRun.reference_month))
+            .limit(1)
+        ).first()
+        if latest_period is not None:
+            reference_year, reference_month = latest_period
+
     statement = select(CalculationRun).options(
         selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator)
     )
@@ -75,10 +107,8 @@ def _portal_run(
         statement = statement.where(
             CalculationRun.reference_month == reference_month,
             CalculationRun.reference_year == reference_year,
-        ).order_by(desc(CalculationRun.created_at), desc(CalculationRun.id))
-    else:
-        statement = statement.order_by(desc(CalculationRun.created_at), desc(CalculationRun.id))
-    return db.scalar(statement.limit(1))
+        )
+    return pick_run_by_status_priority(db, statement)
 
 
 def _latest_run(db: Session) -> CalculationRun | None:

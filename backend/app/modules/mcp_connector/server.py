@@ -1209,6 +1209,104 @@ def build_mcp_server() -> FastMCP:
             return _dump(policy.field_catalog())
 
     @mcp.tool(
+        name="opr_reschedule_by_technician",
+        annotations={"title": "Reagendamentos por técnico de campo", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_reschedule_by_technician(
+        date_from: str,
+        date_to: str,
+        filial_ids: list[str] | None = None,
+        setor_ids: list[str] | None = None,
+        assunto_ids: list[str] | None = None,
+    ) -> str:
+        """Quantos REAGENDAMENTOS (evento tipo 10) CADA técnico de campo gerou pessoalmente no
+        período - corrigido em 2026-08-25 pra contar só o evento cujo `technician_id` é o próprio
+        técnico, não qualquer O.S. dele que foi reagendada por outra pessoa (operador/backoffice).
+        Restrito a colaboradores cadastrados no módulo de Gestão com um modelo de equipe de campo
+        (TECNICO 12/36H, FAZ TUDO etc.) - sem isso, gente do backoffice/agendamento aparecia como
+        se fosse técnico (o `id_tecnico` do IXC às vezes carrega o funcionário associado à O.S.,
+        não necessariamente um técnico de campo de verdade).
+
+        Args:
+            date_from, date_to: AAAA-MM-DD - por data de ABERTURA da O.S. (mesmo recorte do
+                dashboard de Agendamento), máximo 1 ano de intervalo.
+            filial_ids, setor_ids, assunto_ids: opcionais, IDs do IXC (ver opr_filter_options ou a
+                tela de Agendamento para os valores válidos).
+
+        Returns:
+            JSON {"date_from", "date_to", "items": [{"technician_id", "technician_name",
+            "reschedule_events" (quantidade de reagendamentos gerados por ele)}, ...], ordenado do
+            técnico que mais reagendou pro que menos.
+        """
+        from app.modules.scheduling import metrics as scheduling_metrics
+
+        user = _current_user()
+        if "scheduling:read" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para consultar o Agendamento (scheduling:read).")
+        parsed_from = _parse_date(date_from)
+        parsed_to = _parse_date(date_to)
+        if parsed_to < parsed_from:
+            raise ValueError("date_to não pode ser anterior a date_from.")
+        if (parsed_to - parsed_from).days > 366:
+            raise ValueError("O período máximo de consulta é de 1 ano.")
+        filters = scheduling_metrics.SchedulingFilters(
+            date_from=parsed_from,
+            date_to=parsed_to,
+            filial_ids=filial_ids or [],
+            setor_ids=setor_ids or [],
+            assunto_ids=assunto_ids or [],
+        )
+        with SessionLocal() as db:
+            return _dump(scheduling_metrics.reschedules_by_technician(db, filters))
+
+    @mcp.tool(
+        name="opr_reschedule_by_operator",
+        annotations={"title": "Reagendamentos por operador (backoffice)", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_reschedule_by_operator(
+        date_from: str,
+        date_to: str,
+        filial_ids: list[str] | None = None,
+        setor_ids: list[str] | None = None,
+        assunto_ids: list[str] | None = None,
+    ) -> str:
+        """Quantas AÇÕES de reagendamento (evento tipo 10) cada operador registrou no período -
+        conta só reagendamento de verdade, nunca o 1o agendamento (tipo 5) nem qualquer outra ação
+        (abertura, fechamento etc.). Diferente de opr_reschedule_by_technician: aqui agrupa por
+        quem REGISTROU o evento (operador do backoffice/agendamento), não pelo técnico de campo
+        responsável pela O.S.
+
+        Args:
+            date_from, date_to: AAAA-MM-DD - por data de ABERTURA da O.S., máximo 1 ano.
+            filial_ids, setor_ids, assunto_ids: opcionais, IDs do IXC.
+
+        Returns:
+            JSON {"date_from", "date_to", "items": [{"operator_id", "operator_name",
+            "is_team_member", "reschedule_events"}, ...], ordenado de quem mais reagendou pro que
+            menos.
+        """
+        from app.modules.scheduling import metrics as scheduling_metrics
+
+        user = _current_user()
+        if "scheduling:read" not in permissions_for_user(user):
+            raise RuntimeError("Este usuário não tem permissão para consultar o Agendamento (scheduling:read).")
+        parsed_from = _parse_date(date_from)
+        parsed_to = _parse_date(date_to)
+        if parsed_to < parsed_from:
+            raise ValueError("date_to não pode ser anterior a date_from.")
+        if (parsed_to - parsed_from).days > 366:
+            raise ValueError("O período máximo de consulta é de 1 ano.")
+        filters = scheduling_metrics.SchedulingFilters(
+            date_from=parsed_from,
+            date_to=parsed_to,
+            filial_ids=filial_ids or [],
+            setor_ids=setor_ids or [],
+            assunto_ids=assunto_ids or [],
+        )
+        with SessionLocal() as db:
+            return _dump(scheduling_metrics.reschedules_by_operator(db, filters))
+
+    @mcp.tool(
         name="opr_management_cases",
         annotations={"title": "Casos de Gestão Integrada", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     )

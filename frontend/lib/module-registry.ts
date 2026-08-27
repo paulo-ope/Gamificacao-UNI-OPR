@@ -1,3 +1,5 @@
+import { BarChart3, BriefcaseBusiness, CalendarClock, Headphones, Radar, ShieldCheck, Trophy, type LucideIcon } from "lucide-react";
+
 import type { Permission } from "@/lib/types";
 
 export type WorkspaceModuleStatus = "active" | "planned" | "disabled";
@@ -10,6 +12,7 @@ export type WorkspaceModule = {
   apiPrefix: string;
   requiredPermission: Permission;
   status: WorkspaceModuleStatus;
+  icon: LucideIcon;
 };
 
 /**
@@ -25,7 +28,8 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/gamificacao",
     apiPrefix: "/api",
     requiredPermission: "dashboard:read",
-    status: "active"
+    status: "active",
+    icon: Trophy
   },
   {
     key: "operations",
@@ -34,7 +38,8 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/operacao",
     apiPrefix: "/api/operations",
     requiredPermission: "operations:read",
-    status: "active"
+    status: "active",
+    icon: BarChart3
   },
   {
     key: "scheduling",
@@ -43,7 +48,8 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/agendamento",
     apiPrefix: "/api/scheduling",
     requiredPermission: "scheduling:read",
-    status: "active"
+    status: "active",
+    icon: CalendarClock
   },
   {
     key: "support",
@@ -52,7 +58,8 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/suporte",
     apiPrefix: "/api/support",
     requiredPermission: "support:read",
-    status: "active"
+    status: "active",
+    icon: Headphones
   },
   {
     key: "management",
@@ -61,7 +68,8 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/gestao",
     apiPrefix: "/api/management",
     requiredPermission: "management:read",
-    status: "active"
+    status: "active",
+    icon: BriefcaseBusiness
   },
   {
     key: "admin",
@@ -70,7 +78,8 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/admin",
     apiPrefix: "/api/admin",
     requiredPermission: "admin:users:read",
-    status: "active"
+    status: "active",
+    icon: ShieldCheck
   },
   {
     key: "intelligence",
@@ -79,7 +88,8 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/intelligence",
     apiPrefix: "/api/intelligence",
     requiredPermission: "intelligence:read",
-    status: "active"
+    status: "active",
+    icon: Radar
   }
 ];
 

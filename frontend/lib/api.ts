@@ -73,15 +73,25 @@ import type {
   SupportOpaAttendanceDetail,
   SupportOpaAttendanceFilters,
   SupportOpaAttendancePage,
+  SupportOpaAttendanceTimeline,
+  SupportOpaAttendantOverride,
+  SupportOpaAttendantOverrideCreate,
+  SupportOpaAttendantOverrideUpdate,
+  SupportOpaAttendantSummary,
   SupportOpaBreakdownDimension,
   SupportOpaBreakdowns,
   SupportOpaFilters,
+  SupportOpaSavedFilter,
+  SupportOpaSavedFilterScope,
+  SupportOpaTimeseries,
   SupportOpaMetrics,
   SupportOpaOverview,
   SupportOpaSyncSettings,
   SupportOpaSyncStatus,
   SlaPenaltyRule,
   UnmappedSubject,
+  WorkspaceModulePreferenceUpdate,
+  WorkspaceOverview,
   WorkspaceVisibleModule
 } from "@/lib/types";
 
@@ -91,7 +101,7 @@ const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
 function readStoredToken() {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(TOKEN_KEY);
+  return window.localStorage.getItem(TOKEN_KEY);
 }
 
 let authToken: string | null = readStoredToken();
@@ -100,9 +110,9 @@ export function setAuthToken(token: string | null) {
   authToken = token;
   if (typeof window === "undefined") return;
   if (token) {
-    window.sessionStorage.setItem(TOKEN_KEY, token);
+    window.localStorage.setItem(TOKEN_KEY, token);
   } else {
-    window.sessionStorage.removeItem(TOKEN_KEY);
+    window.localStorage.removeItem(TOKEN_KEY);
   }
 }
 
@@ -260,6 +270,12 @@ export const api = {
       method: "DELETE"
     }),
   workspaceModules: () => request<WorkspaceVisibleModule[]>("/workspace/modules"),
+  updateModulePreference: (moduleKey: string, payload: WorkspaceModulePreferenceUpdate) =>
+    request<WorkspaceVisibleModule>(`/workspace/modules/${moduleKey}/preference`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  workspaceOverview: () => request<WorkspaceOverview>("/workspace/overview"),
   adminModules: () => request<AdminWorkspaceModule[]>("/admin/modules"),
   updateAdminModuleVisibility: (moduleKey: string, payload: { profile_id: number; visible: boolean; reason?: string | null }) =>
     request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/visibility`, {
@@ -459,6 +475,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify(period)
     }),
+  supportOpaAttendantOverrides: () =>
+    request<SupportOpaAttendantOverride[]>("/support/opa/attendant-overrides"),
+  createSupportOpaAttendantOverride: (payload: SupportOpaAttendantOverrideCreate) =>
+    request<SupportOpaAttendantOverride>("/support/opa/attendant-overrides", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateSupportOpaAttendantOverride: (id: number, payload: SupportOpaAttendantOverrideUpdate) =>
+    request<SupportOpaAttendantOverride>(`/support/opa/attendant-overrides/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  deleteSupportOpaAttendantOverride: (id: number) =>
+    request<{ deleted: boolean }>(`/support/opa/attendant-overrides/${id}`, { method: "DELETE" }),
   supportOpaAttendances: (filters: SupportOpaAttendanceFilters) => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {
@@ -480,10 +510,45 @@ export const api = {
     return request<SupportOpaBreakdowns>(`/support/opa/breakdowns?${params.toString()}`);
   },
   supportOpaAttendanceDetail: (id: number) => request<SupportOpaAttendanceDetail>(`/support/opa/attendances/${id}`),
-  supportOpaFilters: (period?: { date_from?: string; date_to?: string }) => {
+  supportOpaAttendanceTimeline: (id: number, includeMessages = true) =>
+    request<SupportOpaAttendanceTimeline>(`/support/opa/attendances/${id}/timeline?include_messages=${includeMessages}`),
+  supportOpaTimeseries: (filters: SupportOpaAttendanceFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      // A série é sobre o período inteiro do recorte — paginação/ordenação da
+      // tabela não fazem parte dele e distorceriam a query se vazassem.
+      if (key === "page" || key === "page_size" || key === "sort_by" || key === "sort_dir") return;
+      params.set(key, String(value));
+    });
+    return request<SupportOpaTimeseries>(`/support/opa/timeseries?${params.toString()}`);
+  },
+  supportOpaSavedFilters: () => request<SupportOpaSavedFilter[]>("/support/opa/saved-filters"),
+  createSupportOpaSavedFilter: (payload: { name: string; scope: SupportOpaSavedFilterScope; filters: Record<string, string | number> }) =>
+    request<SupportOpaSavedFilter>("/support/opa/saved-filters", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  deleteSupportOpaSavedFilter: (id: number) =>
+    request<{ status: string }>(`/support/opa/saved-filters/${id}`, { method: "DELETE" }),
+  supportOpaAttendantSummary: (attendantId: string, filters: SupportOpaAttendanceFilters) => {
+    const params = new URLSearchParams();
+    ([
+      "date_from", "date_to", "date_basis", "status", "channel", "department_id", "reason_id", "customer", "search",
+      "tag_id", "customer_id", "rating_min", "rating_max", "bot_human",
+    ] as const).forEach((key) => {
+      const value = filters[key];
+      if (value === undefined || value === null || value === "") return;
+      params.set(key, String(value));
+    });
+    const query = params.toString();
+    return request<SupportOpaAttendantSummary>(`/support/opa/attendants/${encodeURIComponent(attendantId)}/summary${query ? `?${query}` : ""}`);
+  },
+  supportOpaFilters: (period?: { date_from?: string; date_to?: string; date_basis?: "opened_at" | "closed_at" }) => {
     const params = new URLSearchParams();
     if (period?.date_from) params.set("date_from", period.date_from);
     if (period?.date_to) params.set("date_to", period.date_to);
+    if (period?.date_basis) params.set("date_basis", period.date_basis);
     const query = params.toString();
     return request<SupportOpaFilters>(`/support/opa/filters${query ? `?${query}` : ""}`);
   },

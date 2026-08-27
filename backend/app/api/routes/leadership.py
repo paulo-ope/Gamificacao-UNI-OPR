@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.security import require_permission
+from app.core.security import is_admin_user, require_permission
 from app.db.session import get_db
 from app.models import (
     CalculationRun,
@@ -302,10 +302,27 @@ def calculate_leadership_bonus_results(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("calculation:run")),
 ):
+    # Este endpoint reescreve valores financeiros gravados (`leadership_bonus_results` e o
+    # `cost_by_regional` dentro de `result_summary`) - `calculation:run` sozinho nao basta, pelo
+    # mesmo critério de `ensure_status_change_permission` para aprovar/pagar.
+    if not is_admin_user(user):
+        raise HTTPException(status_code=403, detail="Somente administrador pode recalcular o bônus de liderança.")
     try:
         run = db.get(CalculationRun, calculation_run_id) if calculation_run_id else latest_run(db)
         if not run:
             raise HTTPException(status_code=404, detail="Cálculo de referência não encontrado.")
+        # Fechamento encerrado é o registro do que foi pago/cancelado - recalcular por cima dele
+        # alterava o detalhamento financeiro de um pagamento já feito (achado C2 da auditoria
+        # 2026-08-26: o #1601 acumulou o bônus três vezes em "Valor a ser pago por regional").
+        if run.status in {"paid", "cancelled"}:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"O fechamento #{run.id} está em '{run.status}' e não pode ter o bônus de liderança "
+                    "recalculado - ele é o registro do que foi pago. Crie uma revisão em rascunho se "
+                    "precisar reavaliar."
+                ),
+            )
         run = db.scalar(
             select(CalculationRun)
             .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))

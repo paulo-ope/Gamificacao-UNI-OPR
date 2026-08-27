@@ -12,9 +12,8 @@ from app.schemas import DashboardBootstrapOut, DashboardFilteredBreakdownOut, Da
 from app.services.calculation import (
     _apply_cpk_adjustment,
     _period_orders,
-    _run_extra_summaries,
     calculate_penalty_distribution,
-    cached_score_summaries,
+    collaborator_financial_context,
     get_point_value,
     latest_run,
     serialize_run,
@@ -92,24 +91,37 @@ def _result_summary_cache(run: CalculationRun | None) -> dict:
     return run.result_summary
 
 
+# Tolerancia de 1 centavo: a soma de N valores de 2 casas pode oscilar no ultimo centavo por
+# arredondamento, e isso nao e motivo pra descartar o cache inteiro.
+BREAKDOWN_CONSISTENCY_TOLERANCE = 0.01
+
+
+def _regional_breakdown_is_consistent(summary_cache: dict, cards: dict, leadership_bonus: dict) -> bool:
+    """A soma de "Valor a ser pago por regional" tem que ser o valor dos tecnicos mais o bonus de
+    lideranca. Quando nao e, o detalhamento gravado esta velho ou inflado e nao pode ser servido.
+
+    Existe por causa de dois achados reais da auditoria 2026-08-26: o detalhamento ficava
+    congelado com a previa do rascunho depois do pagamento (C1) e o bonus de lideranca era somado
+    de novo a cada recalculo (C2) - o fechamento pago #1601 tem R$ 38.264,02 nesta tabela contra
+    R$ 24.282,77 reais. Devolver `False` faz a rota recalcular na hora, curando a leitura sem
+    depender de reprocessar o fechamento (nao da pra recalcular um periodo ja pago).
+    """
+    cached = summary_cache.get("cost_by_regional") or []
+    if not cached:
+        return False
+    cached_total = round(sum(float(item.get("estimated_payment") or 0) for item in cached), 2)
+    expected = round(
+        float(cards.get("estimated_payment") or 0) + float(leadership_bonus.get("total_bonus_amount") or 0), 2
+    )
+    return abs(cached_total - expected) <= BREAKDOWN_CONSISTENCY_TOLERANCE
+
+
 def _collaborator_financial_context(db: Session, run: CalculationRun) -> dict[int, dict[str, float | int | str]]:
-    summaries = cached_score_summaries(run)
-    if not summaries:
-        summaries = _run_extra_summaries(db, run)
-    context: dict[int, dict[str, float | int | str]] = {}
-    for collaborator_id, summary in summaries.items():
-        if int(summary.get("total_service_orders", 0) or 0) <= 0:
-            continue
-        context[int(collaborator_id)] = {
-            "regional": summary.get("regional"),
-            "health_multiplier": summary.get("health_multiplier", 0),
-            # Usado por financial_breakdowns pra proporcionalizar o desconto de garantia (lancado
-            # uma vez no total do colaborador) em cada O.S dele - sem isso, "por regional/grupo"
-            # mostra o valor bruto, sem o desconto que "Total a pagar" ja aplica.
-            "gross_estimated_payment": summary.get("gross_estimated_payment", summary.get("estimated_payment", 0)),
-            "estimated_payment": summary.get("estimated_payment", 0),
-        }
-    return context
+    """Delega pra fonte unica em `services/calculation.py` - o valor a pagar de cada colaborador
+    vem da linha `collaborator_scores`, nunca do cache JSON (achado C1 da auditoria 2026-08-26).
+    Sem isso, "por regional/grupo" era proporcionalizado sobre um total diferente do que a pessoa
+    de fato recebe."""
+    return collaborator_financial_context(db, run)
 
 
 def _period_bounds(reference_month: int, reference_year: int) -> tuple[datetime, datetime]:
@@ -266,14 +278,22 @@ def dashboard_summary(
     point_value = float(run.point_value)
     serialized_run = serialize_run(run, db)
     summary_cache = _result_summary_cache(run)
+    # `cards` sai do resumo ja reconciliado com as linhas (serialize_run), nao do JSON cru - o
+    # card "Total a pagar" e a tabela de colaboradores da mesma tela precisam bater (achado C1).
+    reconciled_cards = (serialized_run or {}).get("result_summary", {}).get("cards", {}) or {}
+    leadership_bonus = _stored_leadership_bonus_summary(db, run)
 
     has_cached_breakdowns = bool(summary_cache.get("cost_by_regional"))
-    if summary_cache.get("dashboard_cache_version") == 3 and has_cached_breakdowns:
+    if (
+        summary_cache.get("dashboard_cache_version") == 3
+        and has_cached_breakdowns
+        and _regional_breakdown_is_consistent(summary_cache, reconciled_cards, leadership_bonus)
+    ):
         return {
             "run": serialized_run,
-            "cards": summary_cache.get("cards", {}),
+            "cards": reconciled_cards,
             "ranking": serialized_run["scores"] if serialized_run else [],
-            "leadership_bonus": _stored_leadership_bonus_summary(db, run),
+            "leadership_bonus": leadership_bonus,
             "penalty_distribution": summary_cache.get("penalty_distribution", []),
             "health_by_regional": summary_cache.get("health_by_regional", []),
             "point_value": point_value,
@@ -299,16 +319,15 @@ def dashboard_summary(
         health_by_regional=health_by_regional,
         collaborator_context=_collaborator_financial_context(db, run),
     )
-    leadership_bonus_summary = _stored_leadership_bonus_summary(db, run)
     breakdowns["cost_by_regional"] = apply_leadership_bonus_to_cost_by_regional(
-        breakdowns["cost_by_regional"], leadership_bonus_summary
+        breakdowns["cost_by_regional"], leadership_bonus
     )
 
     return {
         "run": serialized_run,
-        "cards": summary_cache.get("cards", {}),
+        "cards": reconciled_cards,
         "ranking": serialized_run["scores"] if serialized_run else [],
-        "leadership_bonus": leadership_bonus_summary,
+        "leadership_bonus": leadership_bonus,
         "penalty_distribution": calculate_penalty_distribution(db, orders, details=details),
         "health_by_regional": list(health_by_regional.values()),
         "point_value": point_value,

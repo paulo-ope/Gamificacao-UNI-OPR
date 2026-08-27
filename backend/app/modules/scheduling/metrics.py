@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import AppSetting
+from app.modules.management.models import ManagementOperationalMember
 from app.modules.scheduling.models import SchedulingEvent, SchedulingOperator, SchedulingOrder, SchedulingTechnician
 from app.services.calculation_closure import PORTO_VELHO_TZ, now_porto_velho
 from app.services.regional import REGIONAL_CODE_MAP
@@ -139,6 +140,7 @@ class SchedulingFilters:
     setor_ids: list[str] = field(default_factory=list)
     assunto_ids: list[str] = field(default_factory=list)
     operator_ids: list[int] = field(default_factory=list)
+    technician_ids: list[int] = field(default_factory=list)
 
 
 def _percentile(sorted_values: list[float], pct: float) -> float | None:
@@ -172,6 +174,8 @@ def _cohort_query(filters: SchedulingFilters):
         stmt = stmt.where(SchedulingOrder.assunto_id.in_(filters.assunto_ids))
     if filters.operator_ids:
         stmt = stmt.where(SchedulingOrder.first_operator_id.in_(filters.operator_ids))
+    if filters.technician_ids:
+        stmt = stmt.where(SchedulingOrder.first_technician_id.in_(filters.technician_ids))
     return stmt
 
 
@@ -187,6 +191,23 @@ def _resolve_technician_names(db: Session, technician_ids: set[int]) -> dict[int
         return {}
     rows = db.execute(select(SchedulingTechnician).where(SchedulingTechnician.ixc_funcionario_id.in_(technician_ids))).scalars()
     return {row.ixc_funcionario_id: row.name for row in rows}
+
+
+def _field_technician_ixc_ids(db: Session) -> set[int]:
+    """IDs de funcionário (mesmo espaço de `SchedulingEvent.technician_id`) dos colaboradores
+    cadastrados no módulo de Gestão com um modelo de equipe de campo (TECNICO 12/36H, FAZ TUDO
+    etc.) - achado real de 2026-08-25: `SchedulingEvent.technician_id` é o "técnico associado à
+    O.S." no IXC, e às vezes carrega o `id_tecnico` de gente do backoffice/agendamento (ex.:
+    Vandesson, que é operador de equipe e não técnico de campo) - sem esse filtro, o card
+    "Reagendamentos por técnico" listava operadores do backoffice como se fossem técnicos."""
+    rows = db.execute(
+        select(ManagementOperationalMember.ixc_employee_id).where(
+            ManagementOperationalMember.ixc_employee_id.is_not(None),
+            ManagementOperationalMember.team_model_id.is_not(None),
+            ManagementOperationalMember.is_active.is_(True),
+        ).distinct()
+    )
+    return {ixc_employee_id for (ixc_employee_id,) in rows}
 
 
 def _team_operator_ids(db: Session) -> set[int]:
@@ -216,6 +237,80 @@ def _reschedule_origins_by_order(db: Session, os_ids: set[int], team_ids: set[in
     for os_id, operator_id in rows:
         origins_by_order.setdefault(os_id, []).append(_classify_reschedule_origin(operator_id, team_ids))
     return origins_by_order
+
+
+def reschedules_by_technician(db: Session, filters: SchedulingFilters) -> dict:
+    """Reagendamentos POR EVENTO (tipo "10" = Reagendar) atribuído ao TÉCNICO DE CAMPO do próprio
+    evento - correção de 2026-08-25: a versão anterior agrupava pela O.S. inteira
+    (`order.first_technician_id`), então um técnico aparecia com reagendamento mesmo quando quem
+    de fato reagendou foi outra pessoa (operador/backoffice) numa O.S. que só por acaso era dele.
+    Agora só conta evento cujo `SchedulingEvent.technician_id` é o próprio técnico - mesmo padrão
+    de `reschedules_by_operator`, espelhando o campo trocado (technician_id em vez de operator_id).
+    Restrito a quem está cadastrado no módulo de Gestão com um modelo de equipe de campo (ver
+    `_field_technician_ixc_ids`) - sem isso, gente do backoffice/agendamento aparecia como técnico."""
+    os_ids = {row for (row,) in db.execute(_cohort_query(filters).with_only_columns(SchedulingOrder.ixc_os_id))}
+    field_technician_ids = _field_technician_ixc_ids(db)
+    if not os_ids or not field_technician_ids:
+        return {"date_from": filters.date_from, "date_to": filters.date_to, "items": []}
+
+    rows = db.execute(
+        select(SchedulingEvent.technician_id, func.count(SchedulingEvent.id))
+        .where(
+            SchedulingEvent.ixc_os_id.in_(os_ids),
+            SchedulingEvent.event_type == "10",
+            SchedulingEvent.technician_id.in_(field_technician_ids),
+        )
+        .group_by(SchedulingEvent.technician_id)
+    ).all()
+
+    technician_ids = {technician_id for technician_id, _ in rows if technician_id is not None}
+    technician_names = _resolve_technician_names(db, technician_ids)
+
+    items = [
+        {
+            "technician_id": technician_id,
+            "technician_name": technician_names.get(technician_id, f"Técnico #{technician_id}"),
+            "reschedule_events": count,
+        }
+        for technician_id, count in rows
+    ]
+    items.sort(key=lambda item: item["reschedule_events"], reverse=True)
+    return {"date_from": filters.date_from, "date_to": filters.date_to, "items": items}
+
+
+def reschedules_by_operator(db: Session, filters: SchedulingFilters) -> dict:
+    """Reagendamentos POR AÇÃO de cada operador (evento tipo "10" = Reagendar) - pedido do usuário
+    em 2026-08-24: "quantos agendamentos ele fez, sem ser o 1o agendamento" - conta só reagendamento
+    de verdade (tipo 10), nunca o 1o agendamento (tipo 5) nem qualquer outra ação (abertura,
+    fechamento etc.). Diferente de `reschedules_by_technician`: aqui o agrupamento é por quem
+    REGISTROU o evento (o operador), não pelo técnico responsável pela O.S."""
+    os_ids = {row for (row,) in db.execute(_cohort_query(filters).with_only_columns(SchedulingOrder.ixc_os_id))}
+    if not os_ids:
+        return {"date_from": filters.date_from, "date_to": filters.date_to, "items": []}
+
+    rows = db.execute(
+        select(SchedulingEvent.operator_id, func.count(SchedulingEvent.id))
+        .where(SchedulingEvent.ixc_os_id.in_(os_ids), SchedulingEvent.event_type == "10")
+        .group_by(SchedulingEvent.operator_id)
+    ).all()
+
+    operator_ids = {operator_id for operator_id, _ in rows if operator_id is not None}
+    operator_names = _resolve_operator_names(db, operator_ids)
+    team_ids = _team_operator_ids(db)
+
+    items = [
+        {
+            "operator_id": operator_id,
+            "operator_name": operator_names.get(operator_id, f"Operador IXC {operator_id}")
+            if operator_id is not None
+            else "Operador não identificado",
+            "is_team_member": (operator_id in team_ids) if operator_id is not None else None,
+            "reschedule_events": count,
+        }
+        for operator_id, count in rows
+    ]
+    items.sort(key=lambda item: item["reschedule_events"], reverse=True)
+    return {"date_from": filters.date_from, "date_to": filters.date_to, "items": items}
 
 
 def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str = "all_events") -> dict:
@@ -669,6 +764,62 @@ def operator_events(
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
+def technician_events(
+    db: Session,
+    filters: SchedulingFilters,
+    *,
+    technician_id: int,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    """Cada REAGENDAMENTO (evento tipo "10" apenas) atribuído a esse técnico de campo no período -
+    drill do card "Reagendamentos por técnico", corrigido em 2026-08-25 pra mostrar só as O.S. que
+    ele mesmo reagendou (`SchedulingEvent.technician_id`), não qualquer O.S. dele que foi
+    reagendada por outra pessoa. Espelha `operator_events`, mas filtrando por técnico em vez de
+    operador e só o tipo 10 (nunca o 1o agendamento), e mostra quem executou a ação
+    (`operator_name`) já que o técnico já é conhecido (é o filtro)."""
+    stmt = (
+        select(SchedulingEvent, SchedulingOrder)
+        .join(SchedulingOrder, SchedulingOrder.ixc_os_id == SchedulingEvent.ixc_os_id)
+        .where(
+            SchedulingEvent.event_type == "10",
+            SchedulingEvent.technician_id == technician_id,
+            SchedulingEvent.event_at >= datetime.combine(filters.date_from, dtime.min, tzinfo=PORTO_VELHO_TZ),
+            SchedulingEvent.event_at <= datetime.combine(filters.date_to, dtime.max, tzinfo=PORTO_VELHO_TZ),
+        )
+    )
+    if filters.filial_ids:
+        stmt = stmt.where(SchedulingOrder.filial_id.in_(filters.filial_ids))
+    if filters.setor_ids:
+        stmt = stmt.where(SchedulingOrder.setor_id.in_(filters.setor_ids))
+    if filters.assunto_ids:
+        stmt = stmt.where(SchedulingOrder.assunto_id.in_(filters.assunto_ids))
+
+    rows = list(db.execute(stmt))
+    rows.sort(key=lambda pair: pair[0].event_at, reverse=True)
+    total = len(rows)
+    page_rows = rows[(page - 1) * page_size: (page - 1) * page_size + page_size]
+
+    operator_ids = {event.operator_id for event, _ in page_rows if event.operator_id}
+    operator_names = _resolve_operator_names(db, operator_ids)
+
+    items = [
+        {
+            "ixc_os_id": order.ixc_os_id,
+            "event_type": event.event_type,
+            "event_label": EVENT_TYPE_LABELS.get(event.event_type, f"Evento {event.event_type}"),
+            "event_at": event.event_at,
+            "window_start": event.window_start,
+            "window_end": event.window_end,
+            "operator_name": operator_names.get(event.operator_id) if event.operator_id else None,
+            "filial": REGIONAL_CODE_MAP.get(order.filial_id, f"Filial {order.filial_id}"),
+            "assunto": order.assunto_name or "Não informado",
+        }
+        for event, order in page_rows
+    ]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
 def filter_options(db: Session) -> dict:
     filiais = [
         {"id": fid, "name": REGIONAL_CODE_MAP.get(fid, f"Filial {fid}")}
@@ -699,12 +850,26 @@ def filter_options(db: Session) -> dict:
         ),
         key=lambda item: item["name"],
     )
+    technician_ids = {
+        int(tid) for (tid,) in db.execute(
+            select(SchedulingOrder.first_technician_id).where(SchedulingOrder.first_technician_id.is_not(None)).distinct()
+        )
+    }
+    technician_names = _resolve_technician_names(db, technician_ids)
+    technicians = sorted(
+        (
+            {"id": tid, "name": technician_names.get(tid, f"Técnico IXC {tid}")}
+            for tid in technician_ids
+        ),
+        key=lambda item: item["name"],
+    )
     bounds = db.execute(select(func.min(SchedulingOrder.opened_at), func.max(SchedulingOrder.opened_at))).one()
     return {
         "filiais": filiais,
         "setores": setores,
         "assuntos": assuntos,
         "operators": operators,
+        "technicians": technicians,
         "data_available_from": bounds[0],
         "data_available_to": bounds[1],
     }

@@ -60,6 +60,10 @@ type CollaboratorOrdersSheetProps = {
   pointValue?: number | null;
   rulesVersionId?: number | null;
   runStatus?: string | null;
+  /** O extrato de pagamento é dado financeiro pessoal: o servidor só o emite para o
+   *  administrador ou para o próprio colaborador. Sem isso o botão aparecia para qualquer perfil
+   *  com `audit:read` (leitor/operador) e só falhava depois do clique. */
+  canEmitStatement?: boolean;
 };
 
 function formatPeriod(month: number | null | undefined, year: number | null | undefined) {
@@ -88,7 +92,8 @@ export function CollaboratorOrdersSheet({
   regionalHealth = null,
   pointValue = null,
   rulesVersionId = null,
-  runStatus = null
+  runStatus = null,
+  canEmitStatement = false
 }: CollaboratorOrdersSheetProps) {
   const [detail, setDetail] = useState<CollaboratorOrdersDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -400,33 +405,35 @@ export function CollaboratorOrdersSheet({
                       <div>Ranking: <span className="font-medium text-slate-950">{rankingPosition ? `${rankingPosition}º lugar` : "Não informado"}</span></div>
                     </div>
                   </div>
-                  <div className="flex flex-col items-start gap-1 xl:items-end">
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={!calculationRunId || previewingStatement || generatingStatement}
-                        onClick={() => void previewStatementPdf()}
-                        title={!calculationRunId ? "Selecione um fechamento para visualizar o extrato em PDF." : undefined}
-                      >
-                        <Eye className={`h-4 w-4 ${previewingStatement ? "animate-pulse" : ""}`} />
-                        {previewingStatement ? "Abrindo..." : "Visualizar extrato (PDF)"}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={!calculationRunId || generatingStatement || previewingStatement}
-                        onClick={() => void downloadStatementPdf()}
-                        title={!calculationRunId ? "Selecione um fechamento para gerar o extrato em PDF." : undefined}
-                      >
-                        <FileText className={`h-4 w-4 ${generatingStatement ? "animate-pulse" : ""}`} />
-                        {generatingStatement ? "Gerando extrato..." : "Baixar extrato para envio (PDF)"}
-                      </Button>
+                  {canEmitStatement ? (
+                    <div className="flex flex-col items-start gap-1 xl:items-end">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!calculationRunId || previewingStatement || generatingStatement}
+                          onClick={() => void previewStatementPdf()}
+                          title={!calculationRunId ? "Selecione um fechamento para visualizar o extrato em PDF." : undefined}
+                        >
+                          <Eye className={`h-4 w-4 ${previewingStatement ? "animate-pulse" : ""}`} />
+                          {previewingStatement ? "Abrindo..." : "Visualizar extrato (PDF)"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={!calculationRunId || generatingStatement || previewingStatement}
+                          onClick={() => void downloadStatementPdf()}
+                          title={!calculationRunId ? "Selecione um fechamento para gerar o extrato em PDF." : undefined}
+                        >
+                          <FileText className={`h-4 w-4 ${generatingStatement ? "animate-pulse" : ""}`} />
+                          {generatingStatement ? "Gerando extrato..." : "Baixar extrato para envio (PDF)"}
+                        </Button>
+                      </div>
+                      {statementError ? <span className="text-xs text-red-600">{statementError}</span> : null}
                     </div>
-                    {statementError ? <span className="text-xs text-red-600">{statementError}</span> : null}
-                  </div>
+                  ) : null}
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {tabs.map(([value, label]) => (

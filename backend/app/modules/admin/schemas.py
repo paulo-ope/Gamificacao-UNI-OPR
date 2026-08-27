@@ -203,3 +203,10 @@ class WorkspaceVisibleModuleOut(BaseModel):
     api_prefix: str
     required_permission: str
     status: str
+    pinned: bool = False
+    order_index: int | None = None
+
+
+class WorkspaceModulePreferenceUpdate(BaseModel):
+    pinned: bool | None = None
+    order_index: int | None = None

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import type { EChartsOption } from "echarts";
-import { MapPinned, Moon, Sun } from "lucide-react";
+import { Minus, MapPinned, Moon, Plus, Sun } from "lucide-react";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
@@ -359,6 +359,10 @@ function MiniChart({ title, option, className, order }: { title: string; option:
   );
 }
 
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 1.4;
+const ZOOM_STEP = 0.1;
+
 export default function CockpitPage() {
   const params = useParams<{ profileKey: string }>();
   const profileKey = params.profileKey;
@@ -368,6 +372,7 @@ export default function CockpitPage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [zoom, setZoom] = useState(1);
   const requestRef = useRef(0);
   const secondaryPanelRef = useRef<HTMLDivElement | null>(null);
 
@@ -418,6 +423,19 @@ export default function CockpitPage() {
   function setCockpitTheme(next: "light" | "dark") {
     setTheme(next);
     window.localStorage.setItem("uni-cockpit-theme-v2", next);
+  }
+
+  const zoomStorageKey = `uni-cockpit-zoom-${profileKey}`;
+
+  useEffect(() => {
+    const stored = Number(window.localStorage.getItem(zoomStorageKey));
+    setZoom(stored >= ZOOM_MIN && stored <= ZOOM_MAX ? stored : 1);
+  }, [zoomStorageKey]);
+
+  function setCockpitZoom(next: number) {
+    const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 100) / 100));
+    setZoom(clamped);
+    window.localStorage.setItem(zoomStorageKey, String(clamped));
   }
 
   useEffect(() => {
@@ -497,7 +515,10 @@ export default function CockpitPage() {
   const showRecommendations = displayConfig.show_recommendations !== false;
 
   return (
-    <main className={cn("flex h-screen w-screen flex-col overflow-hidden", displayConfig.density === "COMPACT" ? "p-3" : displayConfig.density === "TV" ? "p-6" : "p-5", theme === "dark" ? "cockpit-theme-dark bg-[#101216] text-slate-100" : "bg-slate-50 text-slate-900")}>
+    <main
+      style={{ zoom }}
+      className={cn("flex h-screen w-screen flex-col overflow-hidden", displayConfig.density === "COMPACT" ? "p-3" : displayConfig.density === "TV" ? "p-6" : "p-5", theme === "dark" ? "cockpit-theme-dark bg-[#101216] text-slate-100" : "bg-slate-50 text-slate-900")}
+    >
       {/* TOPO: profile, freshness, saúde dos monitores - sem badge de status geral (o estado já
           fica claro pela área de Problemas agora e pelos indicadores, ajuste visual pedido). */}
       <header className="relative flex flex-shrink-0 items-center justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white px-6 py-4 shadow-sm">
@@ -509,6 +530,35 @@ export default function CockpitPage() {
             {payload.profile.name} · atualizado às {formatClock(lastUpdatedAt?.toISOString() ?? payload.generated_at)} · monitores saudáveis {healthyCount}/
             {payload.monitor_health.length}
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+        <div className="inline-flex items-center rounded-lg border border-slate-200 p-1" aria-label="Zoom do cockpit">
+          <button
+            type="button"
+            onClick={() => setCockpitZoom(zoom - ZOOM_STEP)}
+            disabled={zoom <= ZOOM_MIN}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:text-slate-700 disabled:opacity-40"
+            aria-label="Diminuir zoom"
+          >
+            <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setCockpitZoom(1)}
+            className="inline-flex h-8 min-w-[3.25rem] items-center justify-center rounded-md px-1 text-xs font-medium text-slate-500 hover:text-slate-700"
+            aria-label="Redefinir zoom para 100%"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            onClick={() => setCockpitZoom(zoom + ZOOM_STEP)}
+            disabled={zoom >= ZOOM_MAX}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:text-slate-700 disabled:opacity-40"
+            aria-label="Aumentar zoom"
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </div>
         <div className="inline-flex rounded-lg border border-slate-200 p-1" aria-label="Tema do cockpit">
           <button
@@ -529,6 +579,7 @@ export default function CockpitPage() {
             <Moon className="h-3.5 w-3.5" aria-hidden="true" />
             Escuro
           </button>
+        </div>
         </div>
       </header>
 

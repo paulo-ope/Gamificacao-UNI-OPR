@@ -496,6 +496,19 @@ export default function GamificacaoPage() {
       .finally(() => setAuthChecked(true));
   }, []);
 
+  // Recalcular a bonificação é efeito colateral de salvar/remover uma liderança - o salvamento em
+  // si já aconteceu antes desta chamada. O backend recusa recalcular sobre um fechamento pago ou
+  // cancelado (ele é o registro do que foi pago) e exige administrador, então só chamamos quando
+  // faz sentido, em vez de deixar a tela quebrar com um erro em cima de uma operação bem-sucedida.
+  const refreshLeadershipBonusForCurrentRun = useCallback(async () => {
+    const runId = summary?.run?.id;
+    const runStatus = summary?.run?.status;
+    if (!runId || !can("calculation:run") || currentUser?.role !== "admin") return;
+    if (runStatus === "paid" || runStatus === "cancelled") return;
+    await api.calculateLeadershipBonus(runId);
+    await loadAll(analysisPeriod);
+  }, [analysisPeriod, can, currentUser?.role, loadAll, summary?.run?.id, summary?.run?.status]);
+
   useEffect(() => {
     if (!authChecked || !currentUser) {
       setLoading(false);
@@ -1721,10 +1734,7 @@ export default function GamificacaoPage() {
                             setLeadershipRoleProfiles((current) => replaceById(current, roleProfile.id, saved));
                             const leaders = await api.leadershipProfiles();
                             setLeadershipProfiles(leaders);
-                            if (summary?.run?.id && can("calculation:run")) {
-                              await api.calculateLeadershipBonus(summary.run.id);
-                              await loadAll(analysisPeriod);
-                            }
+                            await refreshLeadershipBonusForCurrentRun();
                           }, "Perfil de liderança salvo.")
                         }
                         onDeleteRoleProfile={(roleProfile) =>
@@ -1737,10 +1747,7 @@ export default function GamificacaoPage() {
                           withFeedback(async () => {
                             const created = await api.createLeadershipProfile(payload);
                             setLeadershipProfiles((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
-                            if (summary?.run?.id && can("calculation:run")) {
-                              await api.calculateLeadershipBonus(summary.run.id);
-                              await loadAll(analysisPeriod);
-                            }
+                            await refreshLeadershipBonusForCurrentRun();
                           }, "Liderança cadastrada e bonificação atualizada.")
                         }
                         onSave={(profile) =>
@@ -1758,20 +1765,14 @@ export default function GamificacaoPage() {
                               regional_names: profile.regional_names
                             });
                             setLeadershipProfiles((current) => replaceById(current, profile.id, saved));
-                            if (summary?.run?.id && can("calculation:run")) {
-                              await api.calculateLeadershipBonus(summary.run.id);
-                              await loadAll(analysisPeriod);
-                            }
+                            await refreshLeadershipBonusForCurrentRun();
                           }, "Liderança salva e bonificação atualizada.")
                         }
                         onDelete={(profile) =>
                           withFeedback(async () => {
                             await api.deleteLeadershipProfile(profile.id);
                             setLeadershipProfiles((current) => current.filter((item) => item.id !== profile.id));
-                            if (summary?.run?.id && can("calculation:run")) {
-                              await api.calculateLeadershipBonus(summary.run.id);
-                              await loadAll(analysisPeriod);
-                            }
+                            await refreshLeadershipBonusForCurrentRun();
                           }, "Liderança removida.")
                         }
                       />
@@ -1960,6 +1961,11 @@ export default function GamificacaoPage() {
         pointValue={summary?.run?.point_value ?? summary?.point_value ?? null}
         rulesVersionId={summary?.run?.rules_version_id ?? null}
         runStatus={summary?.run?.status ?? null}
+        canEmitStatement={
+          currentUser?.role === "admin" ||
+          can("admin:users:write") ||
+          (currentUser?.collaborator_id != null && currentUser.collaborator_id === selectedScore?.collaborator_id)
+        }
         rankingPosition={
           selectedScore
             ? filteredRanking.findIndex((score) => score.collaborator_id === selectedScore.collaborator_id) + 1 || null

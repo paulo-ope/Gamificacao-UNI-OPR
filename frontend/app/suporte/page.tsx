@@ -3,8 +3,6 @@
 import Link from "next/link";
 import {
   ArrowUpDown,
-  ArrowDownRight,
-  ArrowUpRight,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -12,7 +10,7 @@ import {
   Home,
   Loader2,
   LogOut,
-  Minus,
+  ShieldCheck,
   XCircle,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -31,8 +29,14 @@ import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
 import {
   ACTIVE_OPA_TABS,
+  BotHumanSummary,
+  ChannelSummary,
+  customerCodeLabel,
+  customerNameLabel,
   dateTimeLabel,
+  isTransientBusyMessage,
   number,
+  OpaAttendantOverridesPanel,
   OpaGlobalFilters,
   OpaAttendantsPanel,
   OPA_NAV_ITEMS,
@@ -40,21 +44,81 @@ import {
   OpaSyncPanel,
   opaStatusLabel,
   secondsLabel,
+  StatCell,
+  StatusSummary,
+  TimeMetricsStrip,
+  tmrCoverageNote,
+  TopReasonsSummary,
+  TrendValue,
   type OpaModuleTab,
 } from "@/app/suporte/_components/opa-module-components";
+import { BotHumanChart, RankingChart, TimeTrendChart, VolumeTrendChart } from "@/app/suporte/_components/opa-charts";
+import { OpaDrilldownSheet, type OpaDrilldown } from "@/app/suporte/_components/opa-drilldown";
+import { OpaSavedFiltersBar } from "@/app/suporte/_components/opa-saved-filters";
 import type {
   SupportOpaAttendanceDetail,
   SupportOpaAttendanceDetailData,
   SupportOpaAttendanceFilters,
   SupportOpaAttendanceListItem,
   SupportOpaAttendancePage,
+  SupportOpaAttendanceTimeline,
+  SupportOpaAttendantOverride,
+  SupportOpaAttendantOverrideCreate,
+  SupportOpaAttendantOverrideUpdate,
+  SupportOpaAttendantSummary,
   SupportOpaBreakdownItem,
   SupportOpaBreakdowns,
   SupportOpaFilters,
   SupportOpaOverview,
   SupportOpaSyncSettings,
   SupportOpaSyncStatus,
+  SupportOpaTimelineEvent,
+  SupportOpaTimeseriesPoint,
 } from "@/lib/types";
+
+function SyncStatusIndicator({ syncStatus, onOpenSync }: { syncStatus: SupportOpaSyncStatus | null; onOpenSync: () => void }) {
+  if (!syncStatus) return null;
+  const hasError = Boolean(syncStatus.last_error) && !isTransientBusyMessage(syncStatus.last_error ?? "");
+  const inProgress = syncStatus.sync_in_progress;
+  const label = hasError
+    ? "Sincronização com erro"
+    : inProgress
+      ? syncStatus.active_run_mode === "scheduled" ? "Sincronizando (automático)" : "Sincronizando"
+      : syncStatus.enabled
+        ? "Sincronização automática ativa"
+        : "Sincronização automática desligada";
+  const tone = hasError ? "border-red-200 bg-red-50 text-red-700" : inProgress ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-600";
+  return (
+    <button
+      type="button"
+      onClick={onOpenSync}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors hover:opacity-80 ${tone}`}
+      title="Abrir aba de sincronização"
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${hasError ? "bg-red-500" : inProgress ? "bg-blue-500" : syncStatus.enabled ? "bg-emerald-500" : "bg-slate-400"}`} aria-hidden="true" />
+      {inProgress ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+      {label}
+    </button>
+  );
+}
+
+// Versão compacta da janela de base importada (ver `ImportedDataWindowNote`
+// em opa-module-components.tsx) pro cabeçalho — mesma informação, formato
+// mínimo pra caber ao lado do status de sincronização sem competir com o
+// título da página.
+function ImportedBaseBadge({ window }: { window: SupportOpaOverview["imported_data_window"] | null | undefined }) {
+  if (!window || !window.max_opened_at) return null;
+  const maxLabel = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "America/Porto_Velho" }).format(new Date(window.max_opened_at));
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600"
+      title="Data mais recente com atendimento importado da base local"
+    >
+      <Database className="h-3 w-3 text-slate-400" />
+      Base até {maxLabel} · {number(window.total_attendances)}
+    </span>
+  );
+}
 
 function isoDate(value: Date) {
   return value.toISOString().slice(0, 10);
@@ -80,21 +144,11 @@ function protocolLabel(item: { protocol: string | null; source_id: string }) {
   return item.protocol?.trim() || `Código OPA ${item.source_id}`;
 }
 
-function customerNameLabel(customerName?: string | null, customerId?: string | null) {
-  const name = customerName?.trim();
-  if (name) return name;
-  return customerId?.trim() ? "Cliente sem nome cadastrado" : "Cliente não informado";
-}
-
-function customerCodeLabel(customerId?: string | null) {
-  const id = customerId?.trim();
-  return id ? `Código do cliente: ${id}` : "";
-}
-
 function overviewFilters(period: { date_from: string; date_to: string }, filters: SupportOpaAttendanceFilters): SupportOpaAttendanceFilters {
   return {
     date_from: period.date_from,
     date_to: period.date_to,
+    date_basis: filters.date_basis,
     status: filters.status,
     channel: filters.channel,
     attendant_id: filters.attendant_id,
@@ -110,19 +164,51 @@ function queryStringFor(tab: OpaModuleTab, period: { date_from: string; date_to:
   if (tab !== "overview") params.set("tab", tab);
   params.set("date_from", period.date_from);
   params.set("date_to", period.date_to);
-  (["status", "channel", "attendant_id", "department_id", "reason_id", "customer", "search"] as const).forEach((key) => {
+  URL_FILTER_KEYS.forEach((key) => {
     const value = filters[key];
     if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
   });
   return params.toString();
 }
 
+/** Chaves de filtro que trafegam na URL. Ida e volta usam a MESMA lista de
+ *  propósito: quando eram duas listas soltas, um filtro novo entrava só na
+ *  escrita ou só na leitura e o recorte não sobrevivia a um reload — foi
+ *  exatamente o que aconteceu com `tag_id` na primeira validação ao vivo. */
+const URL_FILTER_KEYS = [
+  "date_basis",
+  "status",
+  "channel",
+  "attendant_id",
+  "department_id",
+  "reason_id",
+  "customer",
+  "search",
+  "tag_id",
+  "customer_id",
+  "rating_min",
+  "rating_max",
+  "bot_human",
+] as const;
+
+const BOT_HUMAN_VALUES = ["with_bot", "without_bot", "reached_human", "bot_only", "handoff", "unclassified"] as const;
+
+function numberParam(params: URLSearchParams, key: string) {
+  const raw = params.get(key);
+  if (raw === null || raw.trim() === "") return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function filtersFromParams(params: URLSearchParams): SupportOpaAttendanceFilters {
+  const dateBasis = params.get("date_basis");
+  const botHuman = params.get("bot_human");
   return {
     page: 1,
     page_size: 25,
     sort_by: "opened_at",
     sort_dir: "desc",
+    date_basis: dateBasis === "closed_at" ? "closed_at" : undefined,
     status: params.get("status") || undefined,
     channel: params.get("channel") || undefined,
     attendant_id: params.get("attendant_id") || undefined,
@@ -130,6 +216,15 @@ function filtersFromParams(params: URLSearchParams): SupportOpaAttendanceFilters
     reason_id: params.get("reason_id") || undefined,
     customer: params.get("customer") || undefined,
     search: params.get("search") || undefined,
+    tag_id: params.get("tag_id") || undefined,
+    customer_id: params.get("customer_id") || undefined,
+    rating_min: numberParam(params, "rating_min"),
+    rating_max: numberParam(params, "rating_max"),
+    // Valor fora da lista é descartado em vez de repassado: o backend
+    // responderia 422 e a tela abriria quebrada por causa de um link torto.
+    bot_human: BOT_HUMAN_VALUES.includes(botHuman as never)
+      ? (botHuman as SupportOpaAttendanceFilters["bot_human"])
+      : undefined,
   };
 }
 
@@ -167,6 +262,11 @@ function SupportPageContent() {
   const [period, setPeriod] = useState(initialPeriod);
   const [appliedPeriod, setAppliedPeriod] = useState(initialPeriod);
   const [overview, setOverview] = useState<SupportOpaOverview | null>(null);
+  const [timeseries, setTimeseries] = useState<SupportOpaTimeseriesPoint[]>([]);
+  const [timeseriesLoading, setTimeseriesLoading] = useState(false);
+  const [overviewRanking, setOverviewRanking] = useState<SupportOpaBreakdownItem[]>([]);
+  const [overviewRankingLoading, setOverviewRankingLoading] = useState(false);
+  const [drilldown, setDrilldown] = useState<OpaDrilldown | null>(null);
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
   const [attendancePage, setAttendancePage] = useState<SupportOpaAttendancePage | null>(null);
   const [attendanceFilters, setAttendanceFilters] = useState<SupportOpaAttendanceFilters>(initialFilters);
@@ -178,14 +278,24 @@ function SupportPageContent() {
   const [attendantRecentPage, setAttendantRecentPage] = useState<SupportOpaAttendancePage | null>(null);
   const [attendantRecentLoading, setAttendantRecentLoading] = useState(false);
   const [attendantRecentError, setAttendantRecentError] = useState<string | null>(null);
+  const [attendantSummary, setAttendantSummary] = useState<SupportOpaAttendantSummary | null>(null);
+  const [attendantSummaryLoading, setAttendantSummaryLoading] = useState(false);
+  const [attendantSummaryError, setAttendantSummaryError] = useState<string | null>(null);
   const [filterOptions, setFilterOptions] = useState<SupportOpaFilters | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [selectedAttendanceId, setSelectedAttendanceId] = useState<number | null>(null);
   const [attendanceDetail, setAttendanceDetail] = useState<SupportOpaAttendanceDetail | null>(null);
   const [attendanceDetailLoading, setAttendanceDetailLoading] = useState(false);
   const [attendanceDetailError, setAttendanceDetailError] = useState<string | null>(null);
+  const [attendanceTimeline, setAttendanceTimeline] = useState<SupportOpaAttendanceTimeline | null>(null);
+  const [attendanceTimelineLoading, setAttendanceTimelineLoading] = useState(false);
+  const [attendanceTimelineError, setAttendanceTimelineError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SupportOpaSyncStatus | null>(null);
   const [settings, setSettings] = useState<SupportOpaSyncSettings | null>(null);
+  const [attendantOverrides, setAttendantOverrides] = useState<SupportOpaAttendantOverride[]>([]);
+  const [attendantOverridesLoading, setAttendantOverridesLoading] = useState(false);
+  const [attendantOverridesError, setAttendantOverridesError] = useState<string | null>(null);
+  const [savingAttendantOverride, setSavingAttendantOverride] = useState(false);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -212,7 +322,7 @@ function SupportPageContent() {
       if (syncUrl) updateUrl(tab, nextPeriod, nextFilters);
       const requests: Promise<unknown>[] = [
         api.supportOpaOverview(overviewFilters(nextPeriod, nextFilters)).then(setOverview),
-        api.supportOpaFilters(nextPeriod).then(setFilterOptions),
+        api.supportOpaFilters({ ...nextPeriod, date_basis: nextFilters.date_basis }).then(setFilterOptions),
       ];
       if (canSync) {
         requests.push(api.supportOpaSyncStatus().then(setSyncStatus));
@@ -221,6 +331,11 @@ function SupportPageContent() {
       await Promise.all(requests);
       setAppliedPeriod(nextPeriod);
       setAttendanceFilters((current) => ({ ...current, ...nextFilters, date_from: nextPeriod.date_from, date_to: nextPeriod.date_to, page: 1 }));
+      if (tab === "overview") {
+        // Gráficos são decomposições do MESMO recorte dos cards — carregam
+        // junto, com os mesmos filtros, e nunca por outro caminho de cálculo.
+        void loadOverviewCharts(nextPeriod, nextFilters);
+      }
       if (tab === "data") {
         await loadAttendances({ ...overviewFilters(nextPeriod, nextFilters), page: 1 });
       }
@@ -242,17 +357,75 @@ function SupportPageContent() {
 
   useEffect(() => {
     if (!user || !canRead || activeView !== "data") return;
-    void loadAttendances({ date_from: appliedPeriod.date_from, date_to: appliedPeriod.date_to, page: attendanceFilters.page ?? 1 });
-    if (!filterOptions) void api.supportOpaFilters(appliedPeriod).then(setFilterOptions).catch(() => undefined);
+    void loadAttendances({ date_from: appliedPeriod.date_from, date_to: appliedPeriod.date_to, date_basis: attendanceFilters.date_basis, page: attendanceFilters.page ?? 1 });
+    if (!filterOptions) void api.supportOpaFilters({ ...appliedPeriod, date_basis: attendanceFilters.date_basis }).then(setFilterOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView]);
 
   useEffect(() => {
     if (!user || !canRead || activeView !== "attendants") return;
     void loadAttendantBreakdown(appliedPeriod, attendanceFilters);
-    if (!filterOptions) void api.supportOpaFilters(appliedPeriod).then(setFilterOptions).catch(() => undefined);
+    if (!filterOptions) void api.supportOpaFilters({ ...appliedPeriod, date_basis: attendanceFilters.date_basis }).then(setFilterOptions).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView, attendantSortBy, attendantSortDir]);
+
+  useEffect(() => {
+    if (!user || !canSync || activeView !== "sync") return;
+    void loadAttendantOverrides();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView]);
+
+  async function loadAttendantOverrides() {
+    setAttendantOverridesLoading(true);
+    setAttendantOverridesError(null);
+    try {
+      const items = await api.supportOpaAttendantOverrides();
+      setAttendantOverrides(items);
+    } catch (reason) {
+      setAttendantOverridesError(reason instanceof Error ? reason.message : "Falha ao carregar o cadastro de atendentes virtuais.");
+    } finally {
+      setAttendantOverridesLoading(false);
+    }
+  }
+
+  async function createAttendantOverride(payload: SupportOpaAttendantOverrideCreate) {
+    setSavingAttendantOverride(true);
+    setAttendantOverridesError(null);
+    try {
+      await api.createSupportOpaAttendantOverride(payload);
+      await loadAttendantOverrides();
+    } catch (reason) {
+      setAttendantOverridesError(reason instanceof Error ? reason.message : "Falha ao cadastrar o atendente.");
+    } finally {
+      setSavingAttendantOverride(false);
+    }
+  }
+
+  async function updateAttendantOverride(id: number, payload: SupportOpaAttendantOverrideUpdate) {
+    setSavingAttendantOverride(true);
+    setAttendantOverridesError(null);
+    try {
+      await api.updateSupportOpaAttendantOverride(id, payload);
+      await loadAttendantOverrides();
+    } catch (reason) {
+      setAttendantOverridesError(reason instanceof Error ? reason.message : "Falha ao atualizar o cadastro.");
+    } finally {
+      setSavingAttendantOverride(false);
+    }
+  }
+
+  async function deleteAttendantOverride(id: number) {
+    setSavingAttendantOverride(true);
+    setAttendantOverridesError(null);
+    try {
+      await api.deleteSupportOpaAttendantOverride(id);
+      await loadAttendantOverrides();
+    } catch (reason) {
+      setAttendantOverridesError(reason instanceof Error ? reason.message : "Falha ao remover o cadastro.");
+    } finally {
+      setSavingAttendantOverride(false);
+    }
+  }
 
   function clearFilters() {
     const clearedPeriod = defaultPeriod();
@@ -288,6 +461,25 @@ function SupportPageContent() {
     }
   }
 
+  async function loadOverviewCharts(
+    nextPeriod = appliedPeriod,
+    nextFilters: SupportOpaAttendanceFilters = attendanceFilters,
+  ) {
+    const scoped = overviewFilters(nextPeriod, nextFilters);
+    setTimeseriesLoading(true);
+    setOverviewRankingLoading(true);
+    // Os dois gráficos são independentes: um falhar não pode apagar o outro,
+    // por isso `allSettled` em vez de `all`.
+    const [seriesResult, rankingResult] = await Promise.allSettled([
+      api.supportOpaTimeseries(scoped),
+      api.supportOpaBreakdowns("attendant", { ...scoped, sort_by: "total", sort_dir: "desc", limit: 8 }),
+    ]);
+    setTimeseries(seriesResult.status === "fulfilled" ? seriesResult.value.points : []);
+    setOverviewRanking(rankingResult.status === "fulfilled" ? rankingResult.value.items : []);
+    setTimeseriesLoading(false);
+    setOverviewRankingLoading(false);
+  }
+
   async function loadAttendantBreakdown(
     nextPeriod = appliedPeriod,
     nextFilters: SupportOpaAttendanceFilters = attendanceFilters,
@@ -321,7 +513,12 @@ function SupportPageContent() {
     setSelectedAttendant(attendant);
     setAttendantRecentPage(null);
     setAttendantRecentError(null);
-    if (attendant.id) void loadAttendantRecentAttendances(attendant.id);
+    setAttendantSummary(null);
+    setAttendantSummaryError(null);
+    if (attendant.id) {
+      void loadAttendantRecentAttendances(attendant.id);
+      void loadAttendantSummary(attendant.id);
+    }
   }
 
   async function loadAttendantRecentAttendances(attendantId: string) {
@@ -344,6 +541,19 @@ function SupportPageContent() {
     }
   }
 
+  async function loadAttendantSummary(attendantId: string) {
+    setAttendantSummaryLoading(true);
+    setAttendantSummaryError(null);
+    try {
+      const data = await api.supportOpaAttendantSummary(attendantId, overviewFilters(appliedPeriod, attendanceFilters));
+      setAttendantSummary(data);
+    } catch (reason) {
+      setAttendantSummaryError(reason instanceof Error ? reason.message : "Falha ao carregar o painel individual do atendente.");
+    } finally {
+      setAttendantSummaryLoading(false);
+    }
+  }
+
   function navigateToAttendantData(attendantId: string) {
     const nextFilters: SupportOpaAttendanceFilters = { ...attendanceFilters, attendant_id: attendantId, page: 1 };
     setAttendanceFilters(nextFilters);
@@ -353,11 +563,27 @@ function SupportPageContent() {
     void loadAttendances({ ...overviewFilters(appliedPeriod, nextFilters), page: 1 });
   }
 
+  async function loadAttendanceTimeline(id: number) {
+    setAttendanceTimelineLoading(true);
+    setAttendanceTimelineError(null);
+    try {
+      const timeline = await api.supportOpaAttendanceTimeline(id);
+      setAttendanceTimeline(timeline);
+    } catch (reason) {
+      setAttendanceTimelineError(reason instanceof Error ? reason.message : "Falha ao carregar a timeline do atendimento.");
+    } finally {
+      setAttendanceTimelineLoading(false);
+    }
+  }
+
   async function openAttendanceDetail(id: number) {
     setSelectedAttendanceId(id);
     setAttendanceDetail(null);
     setAttendanceDetailError(null);
     setAttendanceDetailLoading(true);
+    setAttendanceTimeline(null);
+    setAttendanceTimelineError(null);
+    void loadAttendanceTimeline(id);
     try {
       const detail = await api.supportOpaAttendanceDetail(id);
       setAttendanceDetail(detail);
@@ -434,7 +660,7 @@ function SupportPageContent() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-[0_1px_0_0_rgba(37,99,235,0.35)] backdrop-blur">
         <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
           <div className="flex items-center gap-3">
             <ModuleNavigationSidebar
@@ -464,20 +690,15 @@ function SupportPageContent() {
         </div>
       </header>
 
-      <section className="px-4 pt-5 lg:px-7">
-        <div className="flex flex-col justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:flex-row lg:items-center">
-          <div>
-            <div className="flex items-center gap-2 text-blue-700">
-              <Database className="h-5 w-5" />
-              <p className="text-[10px] font-bold uppercase tracking-[0.22em]">OPA Suite</p>
-            </div>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-950">Atendimentos do Suporte</h2>
-            <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              Acompanhe os atendimentos sincronizados do OPA Suite em uma única visão.
-            </p>
-          </div>
+      <section className="flex flex-wrap items-center justify-between gap-2 px-4 pb-1 pt-4 lg:px-7">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h2 className="text-lg font-semibold text-slate-950">Atendimentos do Suporte</h2>
+          <p className="truncate text-xs text-slate-500">Dados sincronizados do OPA Suite</p>
         </div>
-
+        <div className="flex flex-wrap items-center gap-2">
+          <ImportedBaseBadge window={overview?.imported_data_window} />
+          {canSync ? <SyncStatusIndicator syncStatus={syncStatus} onOpenSync={() => navigateToTab("sync")} /> : null}
+        </div>
       </section>
 
       <StatusToast error={error} message={message} onDismissError={() => setError(null)} onDismissMessage={() => setMessage(null)} />
@@ -490,6 +711,7 @@ function SupportPageContent() {
         canSync={canSync}
         syncing={syncing}
         canImport={Boolean(syncStatus?.configured)}
+        importedDataWindow={overview?.imported_data_window ?? null}
         onPeriodChange={setPeriod}
         onFilterChange={(patch) => setAttendanceFilters((current) => ({ ...current, ...patch }))}
         onApply={() => void load(period, { ...attendanceFilters, page: 1 }, activeView)}
@@ -497,9 +719,80 @@ function SupportPageContent() {
         onImport={() => void importPeriod()}
       />
 
+      <OpaSavedFiltersBar
+        period={period}
+        filters={attendanceFilters}
+        canPublishGlobal={canSync}
+        onApply={(saved) => {
+          // Um recorte salvo substitui o recorte inteiro — aplicar por cima do
+          // que já está na tela misturaria dois filtros e daria um terceiro
+          // resultado que o usuário nunca salvou.
+          const nextPeriod = {
+            date_from: String(saved.date_from ?? period.date_from),
+            date_to: String(saved.date_to ?? period.date_to),
+          };
+          const nextFilters: SupportOpaAttendanceFilters = {
+            page: 1,
+            page_size: attendanceFilters.page_size ?? 25,
+            sort_by: attendanceFilters.sort_by ?? "opened_at",
+            sort_dir: attendanceFilters.sort_dir ?? "desc",
+            date_basis: saved.date_basis === "closed_at" ? "closed_at" : undefined,
+            status: saved.status ? String(saved.status) : undefined,
+            channel: saved.channel ? String(saved.channel) : undefined,
+            attendant_id: saved.attendant_id ? String(saved.attendant_id) : undefined,
+            department_id: saved.department_id ? String(saved.department_id) : undefined,
+            reason_id: saved.reason_id ? String(saved.reason_id) : undefined,
+            customer: saved.customer ? String(saved.customer) : undefined,
+            search: saved.search ? String(saved.search) : undefined,
+            tag_id: saved.tag_id ? String(saved.tag_id) : undefined,
+            customer_id: saved.customer_id ? String(saved.customer_id) : undefined,
+            rating_min: saved.rating_min === undefined ? undefined : Number(saved.rating_min),
+            rating_max: saved.rating_max === undefined ? undefined : Number(saved.rating_max),
+            bot_human: saved.bot_human ? (String(saved.bot_human) as SupportOpaAttendanceFilters["bot_human"]) : undefined,
+          };
+          setPeriod(nextPeriod);
+          setAttendanceFilters(nextFilters);
+          void load(nextPeriod, nextFilters, activeView);
+        }}
+      />
+
       <section className="px-4 py-6 lg:px-7">
         <div className="grid gap-5">
-          {activeView === "overview" ? <OpaOverview overview={overview} /> : null}
+          {activeView === "overview" ? (
+            <div className="grid gap-5">
+              <div className="grid gap-3 xl:grid-cols-2">
+                <VolumeTrendChart
+                  points={timeseries}
+                  loading={timeseriesLoading}
+                  onSelectDay={(point) =>
+                    setDrilldown({
+                      title: `Atendimentos de ${dateLabel(point.day)}`,
+                      subtitle: `${number(point.total)} atendimento(s) · ${number(point.closed)} encerrados · mesmo recorte de filtros da tela`,
+                      filters: { date_from: point.day, date_to: point.day },
+                    })
+                  }
+                />
+                <TimeTrendChart points={timeseries} loading={timeseriesLoading} />
+              </div>
+              <div className="grid gap-3 xl:grid-cols-[1.4fr_1fr]">
+                <RankingChart
+                  title="Atendentes com mais volume"
+                  items={overviewRanking}
+                  loading={overviewRankingLoading}
+                  onSelect={(item) =>
+                    item.id &&
+                    setDrilldown({
+                      title: item.label,
+                      subtitle: `${number(item.total)} atendimento(s) · ${number(item.share_percentage, 1)}% do volume filtrado`,
+                      filters: { attendant_id: item.id },
+                    })
+                  }
+                />
+                <BotHumanChart metrics={overview?.bot_human ?? null} loading={loading} />
+              </div>
+              <OpaOverview overview={overview} />
+            </div>
+          ) : null}
           {activeView === "attendants" ? (
             <OpaAttendantsPanel
               breakdown={attendantBreakdown}
@@ -521,14 +814,26 @@ function SupportPageContent() {
             />
           ) : null}
           {activeView === "sync" ? (
-            <OpaSyncPanel
-              canSync={canSync}
-              syncStatus={syncStatus}
-              settings={settings}
-              savingSettings={savingSettings}
-              onDraftSettings={(next) => setSettings((current) => current ? { ...current, ...next } : current)}
-              onSaveSettings={(next) => void saveSettings(next)}
-            />
+            <div className="grid gap-5">
+              <OpaSyncPanel
+                canSync={canSync}
+                syncStatus={syncStatus}
+                settings={settings}
+                savingSettings={savingSettings}
+                onDraftSettings={(next) => setSettings((current) => current ? { ...current, ...next } : current)}
+                onSaveSettings={(next) => void saveSettings(next)}
+              />
+              <OpaAttendantOverridesPanel
+                canManage={canSync}
+                overrides={attendantOverrides}
+                loading={attendantOverridesLoading}
+                error={attendantOverridesError}
+                saving={savingAttendantOverride}
+                onCreate={(payload) => void createAttendantOverride(payload)}
+                onToggleActive={(id, active) => void updateAttendantOverride(id, { active })}
+                onDelete={(id) => void deleteAttendantOverride(id)}
+              />
+            </div>
           ) : null}
         </div>
       </section>
@@ -537,12 +842,28 @@ function SupportPageContent() {
         detail={attendanceDetail}
         loading={attendanceDetailLoading}
         error={attendanceDetailError}
+        timeline={attendanceTimeline}
+        timelineLoading={attendanceTimelineLoading}
+        timelineError={attendanceTimelineError}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedAttendanceId(null);
             setAttendanceDetail(null);
             setAttendanceDetailError(null);
+            setAttendanceTimeline(null);
+            setAttendanceTimelineError(null);
           }
+        }}
+      />
+      <OpaDrilldownSheet
+        drilldown={drilldown}
+        baseFilters={overviewFilters(appliedPeriod, attendanceFilters)}
+        onOpenChange={(open) => {
+          if (!open) setDrilldown(null);
+        }}
+        onOpenAttendance={(id) => {
+          setDrilldown(null);
+          void openAttendanceDetail(id);
         }}
       />
       <AttendantDetailSheet
@@ -552,6 +873,9 @@ function SupportPageContent() {
         recentPage={attendantRecentPage}
         loading={attendantRecentLoading}
         error={attendantRecentError}
+        summary={attendantSummary}
+        summaryLoading={attendantSummaryLoading}
+        summaryError={attendantSummaryError}
         onViewAll={(attendantId) => navigateToAttendantData(attendantId)}
         onOpenAttendanceDetail={(id) => void openAttendanceDetail(id)}
         onOpenChange={(open) => {
@@ -559,6 +883,8 @@ function SupportPageContent() {
             setSelectedAttendant(null);
             setAttendantRecentPage(null);
             setAttendantRecentError(null);
+            setAttendantSummary(null);
+            setAttendantSummaryError(null);
           }
         }}
       />
@@ -590,12 +916,12 @@ function AttendanceDataTable({
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-200 p-4">
+      <div className="border-b border-slate-200 bg-slate-50/60 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
             <Database className="h-4 w-4 text-blue-700" />
             <h3 className="text-base font-semibold text-slate-950">Dados</h3>
-            <Badge className="border-slate-200 bg-slate-50 text-slate-700">{number(page?.total ?? 0)} registros</Badge>
+            <Badge className="border-blue-100 bg-blue-50 text-blue-700">{number(page?.total ?? 0)} registros</Badge>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <select
@@ -629,7 +955,7 @@ function AttendanceDataTable({
             {loading ? (
               <TableRow><TableCell colSpan={11} className="py-10 text-center text-sm text-slate-500">Carregando atendimentos...</TableCell></TableRow>
             ) : null}
-            {!loading && items.map((item) => <AttendanceRow key={item.id} item={item} onOpenDetail={onOpenDetail} />)}
+            {!loading && items.map((item, index) => <AttendanceRow key={item.id} item={item} zebra={index % 2 === 1} onOpenDetail={onOpenDetail} />)}
             {!loading && !items.length ? (
               <TableRow><TableCell colSpan={11} className="py-10 text-center text-sm text-slate-500">Não há atendimentos para os filtros aplicados.</TableCell></TableRow>
             ) : null}
@@ -661,14 +987,23 @@ function SortableHead({ label, active, onClick }: { label: string; active: boole
   );
 }
 
-function AttendanceRow({ item, onOpenDetail }: { item: SupportOpaAttendanceListItem; onOpenDetail: (id: number) => void }) {
+function AttendanceStatusBadge({ status, closedAt }: { status: string | null; closedAt: string | null }) {
+  const closed = Boolean(closedAt);
+  return (
+    <Badge className={closed ? "border-slate-200 bg-slate-50 text-slate-700" : "border-blue-100 bg-blue-50 text-blue-700"}>
+      {opaStatusLabel(status)}
+    </Badge>
+  );
+}
+
+function AttendanceRow({ item, zebra, onOpenDetail }: { item: SupportOpaAttendanceListItem; zebra?: boolean; onOpenDetail: (id: number) => void }) {
   const customerName = item.customer_name?.trim();
   const customerId = item.customer_id?.trim();
   const customerCode = customerCodeLabel(customerId);
   return (
-    <TableRow className="cursor-pointer hover:bg-slate-50" onClick={() => onOpenDetail(item.id)}>
+    <TableRow className={`cursor-pointer hover:bg-blue-50/40 ${zebra ? "bg-slate-50/50" : ""}`} onClick={() => onOpenDetail(item.id)}>
       <TableCell className="whitespace-nowrap tabular-nums">{dateTimeShort(item.opened_at)}</TableCell>
-      <TableCell className="font-medium text-slate-900">{protocolLabel(item)}</TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-[11px] text-slate-500">{protocolLabel(item)}</TableCell>
       <TableCell className="max-w-56" title={[customerName, customerCode].filter(Boolean).join(" - ")}>
         <div className="min-w-0">
           <p className="truncate font-medium text-slate-800">{customerNameLabel(customerName, customerId)}</p>
@@ -679,24 +1014,33 @@ function AttendanceRow({ item, onOpenDetail }: { item: SupportOpaAttendanceListI
       <TableCell className="max-w-48 truncate" title={item.department_name ?? ""}>{item.department_name ?? "-"}</TableCell>
       <TableCell className="max-w-52 truncate" title={item.reason_name ?? ""}>{item.reason_name ?? "-"}</TableCell>
       <TableCell>{item.channel ?? "-"}</TableCell>
-      <TableCell>{opaStatusLabel(item.status)}</TableCell>
+      <TableCell><AttendanceStatusBadge status={item.status} closedAt={item.closed_at} /></TableCell>
       <TableCell className="text-right tabular-nums">{secondsLabel(item.tma_seconds)}</TableCell>
       <TableCell className="text-right tabular-nums">{number(item.rating, 2)}</TableCell>
       <TableCell className="text-right">
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           size="sm"
+          aria-label="Ver detalhes do atendimento"
+          className="text-slate-500 hover:text-blue-700"
           onClick={(event) => {
             event.stopPropagation();
             onOpenDetail(item.id);
           }}
         >
-          <Eye className="h-3.5 w-3.5" /> Ver detalhes
+          <Eye className="h-3.5 w-3.5" />
         </Button>
       </TableCell>
     </TableRow>
   );
+}
+
+function attendantInitials(label: string | null | undefined) {
+  const words = (label ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[words.length - 1][0]}`.toUpperCase();
 }
 
 function dateLabel(value: string) {
@@ -708,33 +1052,6 @@ function dateLabel(value: string) {
   }).format(new Date(`${value}T12:00:00Z`));
 }
 
-function AttendantMetric({ label, value, helper }: { label: string; value: string; helper?: string }) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-      <p className="text-[11px] font-medium text-slate-500">{label}</p>
-      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-950">{value}</p>
-      {helper ? <p className="mt-1 text-[11px] text-slate-500">{helper}</p> : null}
-    </div>
-  );
-}
-
-function AttendantTrend({ label, value, suffix = "" }: { label: string; value: number | null | undefined; suffix?: string }) {
-  const missing = value === null || value === undefined;
-  const positive = !missing && value > 0;
-  const negative = !missing && value < 0;
-  const Icon = missing ? Minus : positive ? ArrowUpRight : negative ? ArrowDownRight : Minus;
-  const labelValue = missing ? "-" : `${positive ? "+" : negative ? "-" : ""}${number(Math.abs(value), suffix ? 1 : 2)}${suffix}`;
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-      <span className="text-xs font-medium text-slate-500">{label}</span>
-      <span className={`inline-flex items-center gap-1 text-xs font-semibold tabular-nums ${positive ? "text-blue-700" : negative ? "text-slate-600" : "text-slate-400"}`}>
-        <Icon className="h-3.5 w-3.5" />
-        {labelValue}
-      </span>
-    </div>
-  );
-}
-
 function AttendantDetailSheet({
   open,
   attendant,
@@ -742,6 +1059,9 @@ function AttendantDetailSheet({
   recentPage,
   loading,
   error,
+  summary,
+  summaryLoading,
+  summaryError,
   onViewAll,
   onOpenAttendanceDetail,
   onOpenChange,
@@ -752,6 +1072,9 @@ function AttendantDetailSheet({
   recentPage: SupportOpaAttendancePage | null;
   loading: boolean;
   error: string | null;
+  summary: SupportOpaAttendantSummary | null;
+  summaryLoading: boolean;
+  summaryError: string | null;
   onViewAll: (attendantId: string) => void;
   onOpenAttendanceDetail: (id: number) => void;
   onOpenChange: (open: boolean) => void;
@@ -762,8 +1085,34 @@ function AttendantDetailSheet({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-4xl">
-        <SheetHeader>
-          <SheetTitle>{attendant?.label ?? "Atendente"}</SheetTitle>
+        <SheetHeader className="border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white">
+          <div className="flex items-center gap-3.5">
+            <span
+              className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-base font-bold shadow-sm ${
+                summary?.attendant_type === "bot"
+                  ? "bg-gradient-to-br from-blue-500 to-blue-700 text-white"
+                  : "bg-gradient-to-br from-slate-600 to-slate-800 text-white"
+              }`}
+              aria-hidden="true"
+            >
+              {attendantInitials(attendant?.label)}
+            </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <SheetTitle className="text-xl">{attendant?.label ?? "Atendente"}</SheetTitle>
+                {summary?.attendant_type ? (
+                  <Badge className={summary.attendant_type === "bot" ? "border-blue-100 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-700"}>
+                    {summary.attendant_type === "bot" ? "Agente virtual" : "Atendente humano"}
+                  </Badge>
+                ) : null}
+              </div>
+              {attendant ? (
+                <p className="text-sm text-slate-600">
+                  {number(attendant.total)} atendimento(s) · {number(attendant.closure_rate, 1)}% encerrados · avaliação média {number(attendant.avg_rating, 2)}
+                </p>
+              ) : null}
+            </div>
+          </div>
           <SheetDescription>
             Período: {dateLabel(period.date_from)} até {dateLabel(period.date_to)}
           </SheetDescription>
@@ -771,37 +1120,108 @@ function AttendantDetailSheet({
 
         {attendant ? (
           <div className="mt-5 grid gap-5">
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <div className="grid gap-0 lg:grid-cols-[1.2fr_2fr]">
-                <div className="border-b border-slate-200 bg-slate-50 p-4 lg:border-b-0 lg:border-r">
-                  <p className="text-xs font-medium text-slate-500">Atendimentos no período</p>
-                  <p className="mt-2 text-4xl font-semibold tabular-nums text-slate-950">{number(attendant.total)}</p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <Badge className="border-blue-100 bg-blue-50 text-blue-700">{number(attendant.share_percentage, 1)}% do volume</Badge>
-                    <Badge className="border-slate-200 bg-white text-slate-700">{number(attendant.closed)} encerrados</Badge>
-                    <Badge className="border-slate-200 bg-white text-slate-700">{number(attendant.open)} em aberto</Badge>
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="grid divide-y divide-slate-100 lg:grid-cols-[1fr_1.6fr] lg:items-stretch lg:divide-x lg:divide-y-0">
+                <div className="flex flex-col justify-center p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Volume no período</p>
+                  <div className="mt-2 flex items-baseline gap-3">
+                    <p className="text-4xl font-bold tabular-nums text-slate-950">{number(attendant.total)}</p>
+                    <TrendValue value={attendant.total_change_percentage} suffix="%" />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge className="border-slate-200 bg-slate-50 text-slate-700">{number(attendant.closed)} encerrados</Badge>
+                    <Badge className="border-slate-200 bg-slate-50 text-slate-700">{number(attendant.open)} em aberto</Badge>
                   </div>
                 </div>
-                <div className="grid gap-3 p-4 sm:grid-cols-2">
-                  <AttendantMetric label="Taxa de encerramento" value={`${number(attendant.closure_rate, 1)}%`} helper={`${number(attendant.closed)} de ${number(attendant.total)} atendimentos`} />
-                  <AttendantMetric label="Duração média" value={secondsLabel(attendant.avg_duration_seconds)} helper="somente atendimentos encerrados" />
-                  <AttendantMetric label="Avaliação média" value={number(attendant.avg_rating, 2)} helper={`${number(attendant.rating_count)} avaliação(ões)`} />
-                  <AttendantMetric label="Cobertura de avaliação" value={ratingCoverage === null ? "-" : `${number(ratingCoverage, 1)}%`} helper="avaliações sobre o volume" />
+                <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:divide-y-0 sm:grid-cols-4">
+                  <StatCell label="Taxa de encerramento" value={`${number(attendant.closure_rate, 1)}%`} trend={attendant.closure_rate_change_pp} trendSuffix=" p.p." />
+                  <StatCell label="Duração média" value={secondsLabel(attendant.avg_duration_seconds)} trend={attendant.avg_duration_change_percentage} />
+                  <StatCell label="Avaliação média" value={number(attendant.avg_rating, 2)} trend={attendant.avg_rating_change} trendSuffix="" />
+                  <StatCell label="Cobertura de avaliação" value={ratingCoverage === null ? "-" : `${number(ratingCoverage, 1)}%`} helper={`${number(attendant.rating_count)} avaliação(ões)`} />
                 </div>
               </div>
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold text-slate-950">Tendência vs período anterior</h3>
-                <span className="text-xs text-slate-500">sem julgamento automático</span>
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-4 py-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Painel individual</h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  TMR humano, TMR geral, 1ª resposta, clientes e classificação bot/humano no mesmo recorte de filtros aplicado na tela.
+                </p>
               </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <AttendantTrend label="Volume" value={attendant.total_change_percentage} suffix="%" />
-                <AttendantTrend label="Taxa de encerramento" value={attendant.closure_rate_change_pp} suffix=" p.p." />
-                <AttendantTrend label="Duração" value={attendant.avg_duration_change_percentage} suffix="%" />
-                <AttendantTrend label="Avaliação" value={attendant.avg_rating_change} />
-              </div>
+
+              {summaryLoading ? (
+                <div className="flex min-h-32 items-center justify-center gap-2 p-4 text-sm text-slate-500">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Carregando painel individual...
+                </div>
+              ) : null}
+
+              {!summaryLoading && summaryError ? (
+                <div className="m-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{summaryError}</div>
+              ) : null}
+
+              {!summaryLoading && !summaryError && summary ? (
+                <div className="grid gap-5 p-4">
+                  {summary.attendant_type === "bot" ? (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                      Agente virtual — TMR geral é a métrica de referência aqui; TMR humano não se aplica (não há atendente humano nesta conversa).
+                    </div>
+                  ) : null}
+                  <div>
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Tempos</p>
+                    <TimeMetricsStrip
+                      items={
+                        summary.attendant_type === "bot"
+                          ? [
+                              { label: "TMA médio", value: secondsLabel(summary.average_tma_seconds), helper: "atendimentos encerrados" },
+                              { label: "TMR geral", value: secondsLabel(summary.average_tmr_all_responses_seconds), helper: "métrica principal do agente virtual", emphasis: true },
+                              { label: "TMR humano", value: secondsLabel(summary.average_tmr_seconds), helper: "não aplicável a agente virtual", muted: true },
+                              { label: "1ª resposta humana", value: secondsLabel(summary.average_first_response_seconds) },
+                            ]
+                          : [
+                              { label: "TMA médio", value: secondsLabel(summary.average_tma_seconds), helper: "atendimentos encerrados" },
+                              { label: "TMR humano", value: secondsLabel(summary.average_tmr_seconds), helper: "exclui respostas automáticas", emphasis: true },
+                              { label: "TMR geral", value: secondsLabel(summary.average_tmr_all_responses_seconds), helper: "inclui respostas automáticas" },
+                              { label: "1ª resposta humana", value: secondsLabel(summary.average_first_response_seconds) },
+                            ]
+                      }
+                      note={tmrCoverageNote(summary.tmr_all_responses_coverage)}
+                    />
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Clientes e automação</p>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:divide-y-0">
+                          <StatCell label="Clientes únicos" value={number(summary.customers.unique_customers)} helper={`${number(summary.customers.average_attendances_per_customer, 1)} atend./cliente`} />
+                          <StatCell label="Reincidentes" value={number(summary.customers.recurring_customers)} helper={`${number(summary.customers.recurring_customers_percentage, 1)}% dos únicos`} />
+                          <StatCell label="Total no recorte" value={number(summary.total_attendances)} helper={`${number(summary.closed_attendances)} encerrados · ${number(summary.open_attendances)} em aberto`} />
+                          <StatCell label="Avaliação média" value={number(summary.average_rating, 2)} helper={`${number(summary.rating_count)} avaliação(ões)`} />
+                        </div>
+                      </div>
+                      <BotHumanSummary metrics={summary.bot_human} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Distribuição</p>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <ChannelSummary items={summary.by_channel} />
+                      <StatusSummary items={summary.by_status} />
+                    </div>
+                    <div className="mt-3">
+                      <TopReasonsSummary items={summary.by_reason} />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {!summaryLoading && !summaryError && !summary ? (
+                <div className="p-6 text-center text-sm text-slate-500">
+                  Sem dados suficientes para montar o painel individual neste recorte de filtros.
+                </div>
+              ) : null}
             </section>
 
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -901,9 +1321,86 @@ function listLabel(item: Record<string, unknown>) {
 
 function DetailBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
-      <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">{children}</div>
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">{title}</h3>
+      </div>
+      <div className="grid gap-3 p-4 sm:grid-cols-2">{children}</div>
+    </section>
+  );
+}
+
+// Resumo executivo do atendimento — protocolo/status/cliente/atendente/tempos
+// numa única área de destaque, em vez de repetir o mesmo em vários blocos tipo
+// formulário. Código do cliente/atendente/departamento vira metadado discreto
+// (monoespaçado, cinza) sob o nome — nunca compete com ele como texto principal.
+function AttendanceSummaryHeader({
+  protocol,
+  status,
+  customerName,
+  customerId,
+  attendantName,
+  attendantId,
+  departmentName,
+  openedAt,
+  closedAt,
+  duration,
+  tmrHuman,
+  tmrAll,
+  rating,
+}: {
+  protocol: unknown;
+  status: unknown;
+  customerName: unknown;
+  customerId: unknown;
+  attendantName: unknown;
+  attendantId: unknown;
+  departmentName: unknown;
+  openedAt: unknown;
+  closedAt: unknown;
+  duration: unknown;
+  tmrHuman: unknown;
+  tmrAll: unknown;
+  rating: unknown;
+}) {
+  const customerCode = typeof customerId === "string" ? customerCodeLabel(customerId) : "";
+  const attendantCode = typeof attendantId === "string" && attendantId.trim() ? `Código: ${attendantId}` : "";
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white px-4 py-3">
+        <div className="flex items-center gap-2">
+          {typeof status === "string" ? <AttendanceStatusBadge status={status} closedAt={typeof closedAt === "string" ? closedAt : null} /> : null}
+          <span className="font-mono text-[11px] text-slate-500">{detailLabel(protocol)}</span>
+        </div>
+        {typeof rating === "number" ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">
+            ★ {number(rating, 2)}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="grid gap-4 p-4 sm:grid-cols-2">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cliente</p>
+          <p className="mt-0.5 truncate text-base font-semibold text-slate-950">{detailLabel(customerName)}</p>
+          {customerCode ? <p className="mt-0.5 truncate text-[11px] text-slate-400">{customerCode}</p> : null}
+        </div>
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Atendente</p>
+          <p className="mt-0.5 truncate text-base font-semibold text-slate-950">{detailLabel(attendantName)}</p>
+          <p className="mt-0.5 truncate text-[11px] text-slate-400">
+            {typeof departmentName === "string" && departmentName ? departmentName : "Departamento não informado"}
+            {attendantCode ? ` · ${attendantCode}` : ""}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 border-t border-slate-100 sm:grid-cols-4 sm:divide-y-0">
+        <StatCell label="Duração" value={typeof duration === "number" ? secondsLabel(duration) : "-"} />
+        <StatCell label="TMR humano" value={typeof tmrHuman === "number" ? secondsLabel(tmrHuman) : "Não disponível"} />
+        <StatCell label="TMR geral" value={typeof tmrAll === "number" ? secondsLabel(tmrAll) : "Não disponível"} helper="inclui bot" />
+        <StatCell label="Abertura → Encerramento" value={typeof openedAt === "string" ? dateTimeShort(openedAt) : "-"} helper={typeof closedAt === "string" ? `até ${dateTimeShort(closedAt)}` : "em aberto"} />
+      </div>
     </section>
   );
 }
@@ -930,17 +1427,107 @@ function DetailText({ label, value }: { label: string; value: unknown; source?: 
   );
 }
 
+const TIMELINE_ACTOR_STYLE: Record<string, { dot: string; badge: string; actorLabel: string }> = {
+  client: { dot: "bg-blue-500", badge: "border-blue-100 bg-blue-50 text-blue-700", actorLabel: "Cliente" },
+  bot: { dot: "bg-violet-500", badge: "border-violet-100 bg-violet-50 text-violet-700", actorLabel: "IA / Bot" },
+  human: { dot: "bg-emerald-500", badge: "border-emerald-100 bg-emerald-50 text-emerald-700", actorLabel: "Atendente" },
+  system: { dot: "bg-slate-400", badge: "border-slate-200 bg-slate-50 text-slate-700", actorLabel: "Sistema" },
+  unknown: { dot: "bg-slate-300", badge: "border-slate-200 bg-slate-50 text-slate-500", actorLabel: "Não identificado" },
+};
+
+function TimelineEventRow({ event, isLast }: { event: SupportOpaTimelineEvent; isLast: boolean }) {
+  const style = TIMELINE_ACTOR_STYLE[event.actor_type] ?? TIMELINE_ACTOR_STYLE.unknown;
+  return (
+    <li className="relative flex gap-3 pb-3 last:pb-0">
+      {!isLast ? <span className="absolute left-[6px] top-4 bottom-[-12px] w-px bg-slate-200" aria-hidden="true" /> : null}
+      <span className={`relative z-10 mt-1.5 h-3 w-3 shrink-0 rounded-full ring-4 ring-white ${style.dot}`} aria-hidden="true" />
+      <div className="min-w-0 flex-1 rounded-lg border border-slate-100 bg-white p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium text-slate-900">{event.label}</p>
+            <Badge className={style.badge}>{style.actorLabel}</Badge>
+          </div>
+          <span className="shrink-0 whitespace-nowrap text-xs font-medium tabular-nums text-slate-600">{dateTimeLabel(event.occurred_at)}</span>
+        </div>
+        {event.description ? <p className="mt-1 text-xs text-slate-500">{event.description}</p> : null}
+      </div>
+    </li>
+  );
+}
+
+function AttendanceTimelineSection({
+  timeline,
+  loading,
+  error,
+}: {
+  timeline: SupportOpaAttendanceTimeline | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <h3 className="text-sm font-semibold text-slate-950">Timeline do atendimento</h3>
+      <div className="mt-1.5 flex items-start gap-1.5 text-xs text-slate-500">
+        <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+        <p>
+          Sequência de eventos em ordem cronológica. Por privacidade, mensagens mostram só quem enviou (cliente,
+          agente virtual ou atendente) e o horário — o conteúdo da conversa nunca é exibido aqui.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="mt-3 flex min-h-24 items-center justify-center gap-2 rounded-lg border border-slate-100 text-sm text-slate-500">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando timeline...
+        </div>
+      ) : null}
+
+      {!loading && error ? (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <XCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+        </div>
+      ) : null}
+
+      {!loading && !error && timeline ? (
+        <div className="mt-3">
+          {timeline.messages_source === "unavailable" && timeline.messages_error ? (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              {timeline.messages_error}
+            </div>
+          ) : null}
+          {timeline.events.length ? (
+            <ol>
+              {timeline.events.map((event, index) => (
+                <TimelineEventRow key={`${event.type}-${index}`} event={event} isLast={index === timeline.events.length - 1} />
+              ))}
+            </ol>
+          ) : (
+            <p className="rounded-lg border border-slate-100 bg-slate-50 p-4 text-center text-sm text-slate-500">
+              Nenhum evento disponível para este atendimento.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function AttendanceDetailSheet({
   open,
   detail,
   loading,
   error,
+  timeline,
+  timelineLoading,
+  timelineError,
   onOpenChange,
 }: {
   open: boolean;
   detail: SupportOpaAttendanceDetail | null;
   loading: boolean;
   error: string | null;
+  timeline: SupportOpaAttendanceTimeline | null;
+  timelineLoading: boolean;
+  timelineError: string | null;
   onOpenChange: (open: boolean) => void;
 }) {
   const protocol = detailValue(detail, "protocol");
@@ -957,6 +1544,8 @@ function AttendanceDetailSheet({
   const openedAt = detailValue(detail, "opened_at");
   const closedAt = detailValue(detail, "closed_at");
   const duration = detailValue(detail, "duration_seconds");
+  const tmrHuman = detailValue(detail, "tmr_seconds");
+  const tmrAll = detailValue(detail, "tmr_all_responses_seconds");
   const rating = detailValue(detail, "rating");
   const description = detailValue(detail, "description");
   const observations = detailValue(detail, "observations");
@@ -1003,48 +1592,41 @@ function AttendanceDetailSheet({
                 </div>
               ) : null}
 
-              <DetailBlock title="Atendimento">
-                <DetailField label="Protocolo" value={protocol.value} source={protocol.source} />
-                <DetailField label="Status" value={typeof status.value === "string" ? opaStatusLabel(status.value) : status.value} source={status.source} />
-              </DetailBlock>
+              <AttendanceSummaryHeader
+                protocol={protocol.value}
+                status={status.value}
+                customerName={customerDisplayName}
+                customerId={customerId.value}
+                attendantName={attendantName.value}
+                attendantId={attendantId.value}
+                departmentName={departmentName.value}
+                openedAt={openedAt.value}
+                closedAt={closedAt.value}
+                duration={duration.value}
+                tmrHuman={tmrHuman.value}
+                tmrAll={tmrAll.value}
+                rating={rating.value}
+              />
 
-              <DetailBlock title="Cliente">
-                <DetailField label="Cliente" value={customerDisplayName} source={customerName.source} />
-                <DetailField label="Código do cliente" value={customerId.value} source={customerId.source} />
-              </DetailBlock>
-
-              <DetailBlock title="Atendente">
-                <DetailField label="Atendente" value={attendantName.value} source={attendantName.source} />
-                <DetailField label="Código do atendente" value={attendantId.value} source={attendantId.source} />
-                <DetailField label="Departamento/setor" value={departmentName.value} source={departmentName.source} />
-                <DetailField label="Código do departamento" value={departmentId.value} source={departmentId.source} />
-              </DetailBlock>
-
-              <DetailBlock title="Canal">
+              <DetailBlock title="Canal e contexto">
                 <DetailField label="Canal" value={channel.value} source={channel.source} />
-                <DetailField label="Código do canal" value={channelId.value} source={channelId.source} />
                 <DetailField label="Canal do cliente" value={channelCustomer.value} source={channelCustomer.source} />
-              </DetailBlock>
-
-              <DetailBlock title="Motivos e tags">
                 <DetailField label="Motivos" value={reasons.length ? reasons.map(listLabel).join(", ") : null} source={listSource} />
                 <DetailField label="Tags" value={tags.length ? tags.map(listLabel).join(", ") : null} source={listSource} />
               </DetailBlock>
 
-              <DetailBlock title="Datas e duração">
-                <DetailField label="Abertura" value={typeof openedAt.value === "string" ? dateTimeLabel(openedAt.value) : openedAt.value} source={openedAt.source} />
-                <DetailField label="Encerramento" value={typeof closedAt.value === "string" ? dateTimeLabel(closedAt.value) : closedAt.value} source={closedAt.source} />
-                <DetailField label="Duração" value={typeof duration.value === "number" ? secondsLabel(duration.value) : duration.value} source={duration.source} />
-              </DetailBlock>
+              {(description.value || observations.value) ? (
+                <DetailBlock title="Descrição/observações">
+                  <DetailText label="Descrição" value={description.value} source={description.source} />
+                  <DetailText label="Observações" value={observations.value} source={observations.source} />
+                </DetailBlock>
+              ) : null}
 
-              <DetailBlock title="Avaliação">
-                <DetailField label="Nota" value={rating.value} source={rating.source} />
-              </DetailBlock>
+              <p className="px-1 text-[11px] text-slate-400">
+                Códigos internos: cliente {customerId.value ? String(customerId.value) : "-"} · atendente {attendantId.value ? String(attendantId.value) : "-"} · departamento {departmentId.value ? String(departmentId.value) : "-"} · canal {channelId.value ? String(channelId.value) : "-"}
+              </p>
 
-              <DetailBlock title="Descrição/observações">
-                <DetailText label="Descrição" value={description.value} source={description.source} />
-                <DetailText label="Observações" value={observations.value} source={observations.source} />
-              </DetailBlock>
+              <AttendanceTimelineSection timeline={timeline} loading={timelineLoading} error={timelineError} />
             </>
           ) : null}
         </div>

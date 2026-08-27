@@ -376,6 +376,9 @@ def _distribute_cents_exactly(total: float, count: int) -> list[float]:
     return [cents / 100 for cents in shares_cents]
 
 
+UNASSIGNED_LEADERSHIP_REGIONAL = "Liderança sem regional"
+
+
 def apply_leadership_bonus_to_cost_by_regional(
     cost_by_regional: list[dict[str, float | int | str]],
     leadership_summary: dict,
@@ -387,10 +390,32 @@ def apply_leadership_bonus_to_cost_by_regional(
     que houvesse lider multi-regional) - assim a soma de "por regional" sempre bate com o Total a
     pagar, sem excecao. Gerente de pasta cobre todas as regionais ao mesmo tempo por definicao
     (nao tem uma regional propria) - vira uma linha separada "Liderança sem regional" em vez de
-    silenciosamente sumir do total quando comparado com o card do topo."""
-    by_regional: dict[str, dict[str, float | int | str]] = {
-        str(item["regional"]): dict(item) for item in cost_by_regional
-    }
+    silenciosamente sumir do total quando comparado com o card do topo.
+
+    IDEMPOTENTE (achado C2 da auditoria 2026-08-26): esta funcao recebe a lista que ja esta
+    gravada em `result_summary` e o resultado dela e gravado de volta no mesmo lugar. Como o
+    bonus e recalculado varias vezes sobre o MESMO fechamento (no calculo, ao marcar como pago e
+    via `POST /leadership/bonus-results/calculate`), somar sobre o valor anterior inflava a
+    tabela a cada rodada - o fechamento pago #1601 chegou a R$ 38.264,02 contra R$ 24.282,77
+    reais, com DUAS linhas "Liderança sem regional". Por isso cada linha carrega
+    `leadership_amount`: quanto do `estimated_payment` dela veio de lideranca. Reaplicar remove
+    esse valor antes de somar o novo, entao o resultado depende so do `leadership_summary`
+    recebido, nunca de quantas vezes a funcao ja rodou.
+    """
+    by_regional: dict[str, dict[str, float | int | str]] = {}
+    for item in cost_by_regional:
+        regional_key = str(item["regional"])
+        # A linha agregada de lideranca e sempre reconstruida do zero abaixo - manter a anterior
+        # aqui era o que produzia linhas duplicadas a cada reaplicacao.
+        if regional_key == UNASSIGNED_LEADERSHIP_REGIONAL:
+            continue
+        entry = dict(item)
+        # Desfaz o bonus da rodada anterior, voltando ao valor so de tecnico.
+        previous_bonus = float(entry.pop("leadership_amount", 0.0) or 0.0)
+        entry["estimated_payment"] = round(float(entry.get("estimated_payment", 0.0)) - previous_bonus, 2)
+        by_regional[regional_key] = entry
+
+    bonus_by_regional: dict[str, float] = {}
     unassigned_total = 0.0
     for result in leadership_summary.get("results", []):
         bonus = float(result.get("bonus_amount") or 0)
@@ -406,14 +431,25 @@ def apply_leadership_bonus_to_cost_by_regional(
         shares = _distribute_cents_exactly(bonus, len(regionals))
         for regional, share in zip(regionals, shares):
             regional_key = str(regional)
-            item = by_regional.setdefault(
-                regional_key, {"regional": regional_key, "orders": 0, "estimated_payment": 0.0}
-            )
-            item["estimated_payment"] = round(float(item.get("estimated_payment", 0.0)) + share, 2)
+            bonus_by_regional[regional_key] = round(bonus_by_regional.get(regional_key, 0.0) + share, 2)
+
+    for regional_key, bonus in bonus_by_regional.items():
+        item = by_regional.setdefault(
+            regional_key, {"regional": regional_key, "orders": 0, "estimated_payment": 0.0}
+        )
+        item["leadership_amount"] = bonus
+        item["estimated_payment"] = round(float(item.get("estimated_payment", 0.0)) + bonus, 2)
 
     merged = list(by_regional.values())
     if unassigned_total:
-        merged.append({"regional": "Liderança sem regional", "orders": 0, "estimated_payment": round(unassigned_total, 2)})
+        merged.append(
+            {
+                "regional": UNASSIGNED_LEADERSHIP_REGIONAL,
+                "orders": 0,
+                "estimated_payment": round(unassigned_total, 2),
+                "leadership_amount": round(unassigned_total, 2),
+            }
+        )
     return sorted(merged, key=lambda item: float(item["estimated_payment"]), reverse=True)
 
 

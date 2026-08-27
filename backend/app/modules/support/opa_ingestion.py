@@ -7,11 +7,15 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import exists, or_, select, text, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.services.opa_client import OpaClient
 
+from . import opa_attendant_overrides
 from .models import SupportOpaAttendance, SupportOpaAttendanceRaw, SupportOpaDimension, SupportOpaImportRun
+from .opa_filters import TAG_SEPARATOR
 
 
 SUPPORT_OPA_IMPORT_LOCK_KEY = 913_275_003
@@ -42,6 +46,26 @@ def _first(record: dict[str, Any], *keys: str) -> str:
         if text:
             return text
     return ""
+
+
+def _tag_ids_text(record: dict[str, Any]) -> str:
+    """Projeta `tags[].id_tag` do payload bruto numa string delimitada pronta
+    pra filtro (ver `SupportOpaAttendance.tag_ids_text`). Sempre devolve pelo
+    menos o separador sozinho (",") — string vazia significaria "não sei", e
+    aqui a gente sabe: o atendimento simplesmente não tem etiqueta."""
+    tags = record.get("tags")
+    if not isinstance(tags, list):
+        return TAG_SEPARATOR
+    ids = []
+    for tag in tags:
+        if not isinstance(tag, dict):
+            continue
+        tag_id = tag.get("id_tag") or tag.get("_id") or tag.get("id")
+        if tag_id and str(tag_id) not in ids:
+            ids.append(str(tag_id))
+    if not ids:
+        return TAG_SEPARATOR
+    return f"{TAG_SEPARATOR}{TAG_SEPARATOR.join(ids)}{TAG_SEPARATOR}"
 
 
 def _first_list_dict(record: dict[str, Any], key: str) -> dict[str, Any] | None:
@@ -141,6 +165,245 @@ def _evaluation_rating(record: dict[str, Any]) -> float | None:
     return sum(ratings) / len(ratings)
 
 
+def _message_timestamp(message: dict[str, Any]) -> datetime | None:
+    return _parse_datetime(_first(message, "data", "createdAt"))
+
+
+def _message_is_from_client(message: dict[str, Any]) -> bool:
+    return bool(message.get("id_user")) and not message.get("id_atend")
+
+
+def _message_is_from_human_attendant(message: dict[str, Any], human_attendant_ids: set[str]) -> bool:
+    attendant_id = message.get("id_atend")
+    return bool(attendant_id) and attendant_id in human_attendant_ids
+
+
+def _load_attendant_types(db: Session) -> dict[str, str]:
+    """Mapa source_id -> `attendant_type` resolvido (ex.: "bot", "user"), já
+    aplicando o cadastro manual de agente virtual por cima da dimensão sincronizada
+    do OPA Suite (`/api/v1/usuario`) — ver `opa_attendant_overrides.resolve_attendant_type`
+    pra prioridade. Um atendente sem override e ausente da dimensão (nunca
+    sincronizado) simplesmente não aparece aqui — suas mensagens ficam como "tipo
+    desconhecido" em quem consome este mapa, nunca classificadas como bot nem como
+    humano. Zero chamada nova à API: overrides são uma tabela local."""
+    rows = db.execute(
+        select(SupportOpaDimension.source_id, SupportOpaDimension.payload_json).where(
+            SupportOpaDimension.dimension_type == "user",
+        )
+    ).all()
+    opa_types = {
+        source_id: payload.get("tipo")
+        for source_id, payload in rows
+        if isinstance(payload, dict) and payload.get("tipo")
+    }
+    overrides = opa_attendant_overrides.load_active_overrides(db)
+
+    resolved: dict[str, str] = {}
+    for attendant_id in set(opa_types) | set(overrides):
+        attendant_type = opa_attendant_overrides.resolve_attendant_type(
+            attendant_id, opa_types.get(attendant_id), overrides
+        )
+        if attendant_type:
+            resolved[attendant_id] = attendant_type
+    return resolved
+
+
+def _human_attendant_ids(attendant_types: dict[str, str]) -> set[str]:
+    return {source_id for source_id, tipo in attendant_types.items() if tipo != "bot"}
+
+
+def _classify_bot_human(
+    messages: list[dict[str, Any]], attendant_types: dict[str, str]
+) -> tuple[bool | None, bool | None, bool | None]:
+    """Classifica participação de bot/humano e handoff a partir das MESMAS
+    mensagens já buscadas para o TMR (`_human_response_metrics`) — sem nenhuma
+    chamada extra à API do OPA Suite. Retorna
+    (handled_by_bot, reached_human, bot_to_human_handoff).
+
+    Qualquer valor `None` significa dado insuficiente para classificar (sem
+    mensagens recuperáveis, ou nenhum atendente com `tipo` conhecido na
+    conversa) — NUNCA interpretar `None` como `False`. `bot_to_human_handoff`
+    só é `True` quando existe uma mensagem de bot com timestamp anterior à
+    primeira mensagem humana confirmada; caso contrário (bot sem humano, humano
+    sem bot, ou nenhum dos dois) é `False`, nunca inferido sem validar a ordem
+    real das mensagens.
+    """
+    classified: list[tuple[str, datetime]] = []
+    for message in messages:
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        attendant_id = message.get("id_atend")
+        if not attendant_id:
+            continue
+        attendant_type = attendant_types.get(attendant_id)
+        if attendant_type == "bot":
+            classified.append(("bot", timestamp))
+        elif attendant_type is not None:
+            classified.append(("human", timestamp))
+        # tipo desconhecido (atendente ainda não sincronizado): mensagem ignorada.
+
+    if not classified:
+        return None, None, None
+
+    handled_by_bot = any(role == "bot" for role, _ in classified)
+    reached_human = any(role == "human" for role, _ in classified)
+    if handled_by_bot and reached_human:
+        first_human_at = min(ts for role, ts in classified if role == "human")
+        first_bot_at = min(ts for role, ts in classified if role == "bot")
+        handoff = first_bot_at < first_human_at
+    else:
+        handoff = False
+    return handled_by_bot, reached_human, handoff
+
+
+def _message_attendant_summary(
+    messages: list[dict[str, Any]], attendant_types: dict[str, str]
+) -> dict[str, Any]:
+    """Resumo mínimo de quem respondeu (humano) a partir das MESMAS mensagens já
+    buscadas pro TMR/classificação bot-humano — zero chamada extra à API do OPA
+    Suite. Existe só pra preparar uma comparação futura sobre handoff/atendente
+    real (o total de atendimentos por atendente diverge do painel oficial do
+    OPA — ver docs/roteiro-comparacao-tmr-opa-suite.md, seção 10.3), NÃO altera
+    nenhum cálculo de TMA/TMR/bot-humano existente.
+
+    Mesmo critério de classificação de `_classify_bot_human`: tipo "bot" conta
+    como bot, tipo conhecido diferente de bot conta como humano, tipo
+    desconhecido (atendente não sincronizado) é ignorado — nunca tratado como
+    bot nem como humano. Mensagem de humano sem timestamp parseável entra na
+    contagem mas não participa da ordenação primeiro/último (mesmo critério de
+    `_classify_bot_human`, que também descarta timestamp ausente).
+
+    Lista de mensagens vazia -> tudo `None` (dado insuficiente, mesmo critério
+    de `_classify_bot_human` pra `classified` vazio) — não dá pra distinguir
+    "atendimento sem mensagem nenhuma" de "API não devolveu nada pra esse
+    atendimento", então nunca vira zero por padrão. Já com mensagens
+    presentes, `*_message_count` é uma contagem real (pode ser `0` de
+    verdade, ex.: atendimento só de bot tem `human_message_count == 0`)."""
+    if not messages:
+        return {
+            "distinct_human_attendant_ids": None,
+            "first_human_attendant_id": None,
+            "last_human_attendant_id": None,
+            "human_message_count": None,
+            "bot_message_count": None,
+            "client_message_count": None,
+        }
+
+    human_timestamped: list[tuple[str, datetime]] = []
+    human_count = 0
+    bot_count = 0
+    client_count = 0
+    for message in messages:
+        if _message_is_from_client(message):
+            client_count += 1
+            continue
+        attendant_id = message.get("id_atend")
+        if not attendant_id:
+            continue
+        attendant_type = attendant_types.get(attendant_id)
+        if attendant_type == "bot":
+            bot_count += 1
+        elif attendant_type is not None:
+            human_count += 1
+            timestamp = _message_timestamp(message)
+            if timestamp is not None:
+                human_timestamped.append((attendant_id, timestamp))
+        # tipo desconhecido: mensagem não contabilizada (mesmo critério de _classify_bot_human).
+
+    human_timestamped.sort(key=lambda item: item[1])
+    distinct_ids = sorted({attendant_id for attendant_id, _ in human_timestamped})
+
+    return {
+        "distinct_human_attendant_ids": distinct_ids or None,
+        "first_human_attendant_id": human_timestamped[0][0] if human_timestamped else None,
+        "last_human_attendant_id": human_timestamped[-1][0] if human_timestamped else None,
+        "human_message_count": human_count,
+        "bot_message_count": bot_count,
+        "client_message_count": client_count,
+    }
+
+
+def _human_response_metrics(
+    messages: list[dict[str, Any]], human_attendant_ids: set[str]
+) -> tuple[int | None, datetime | None]:
+    """TMR = média dos intervalos entre uma mensagem do cliente e a resposta do
+    nosso atendente HUMANO seguinte (id_rota == atendimento). Mensagens de bot são
+    ignoradas — não fecham o intervalo pendente nem contam como resposta, conforme
+    regra: 'não considerar mensagens automáticas como resposta humana'. Retorna
+    também o instante da primeira resposta humana da conversa inteira, separado da
+    média das respostas seguintes."""
+    timestamped: list[tuple[str, datetime]] = []
+    for message in messages:
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        if _message_is_from_client(message):
+            timestamped.append(("client", timestamp))
+        elif _message_is_from_human_attendant(message, human_attendant_ids):
+            timestamped.append(("human", timestamp))
+        # mensagens de bot (id_atend fora de human_attendant_ids) são descartadas.
+    timestamped.sort(key=lambda item: item[1])
+
+    gaps: list[float] = []
+    first_response_at: datetime | None = None
+    pending_client_at: datetime | None = None
+    for role, timestamp in timestamped:
+        if role == "client":
+            if pending_client_at is None:
+                pending_client_at = timestamp
+        else:
+            if pending_client_at is not None:
+                gap = (timestamp - pending_client_at).total_seconds()
+                if gap >= 0:
+                    gaps.append(gap)
+                    if first_response_at is None:
+                        first_response_at = timestamp
+                pending_client_at = None
+    if not gaps:
+        return None, None
+    return round(sum(gaps) / len(gaps)), first_response_at
+
+
+def _message_is_from_any_attendant(message: dict[str, Any]) -> bool:
+    return bool(message.get("id_atend"))
+
+
+def _all_response_metrics(messages: list[dict[str, Any]]) -> int | None:
+    """TMR geral = média dos intervalos entre uma mensagem do cliente e a
+    próxima mensagem de QUALQUER atendente (bot, humano, ou tipo
+    desconhecido) — permite comparação com painéis que não separam bot de
+    humano no TMR. Diferente de `_human_response_metrics`: aqui toda resposta
+    de atendente fecha o intervalo, mesmo vinda de bot. `tmr_seconds` (TMR
+    humano) não é afetado por esta função."""
+    timestamped: list[tuple[str, datetime]] = []
+    for message in messages:
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        if _message_is_from_client(message):
+            timestamped.append(("client", timestamp))
+        elif _message_is_from_any_attendant(message):
+            timestamped.append(("attendant", timestamp))
+    timestamped.sort(key=lambda item: item[1])
+
+    gaps: list[float] = []
+    pending_client_at: datetime | None = None
+    for role, timestamp in timestamped:
+        if role == "client":
+            if pending_client_at is None:
+                pending_client_at = timestamp
+        else:
+            if pending_client_at is not None:
+                gap = (timestamp - pending_client_at).total_seconds()
+                if gap >= 0:
+                    gaps.append(gap)
+                pending_client_at = None
+    if not gaps:
+        return None
+    return round(sum(gaps) / len(gaps))
+
+
 def _dimension_id(record: dict[str, Any]) -> str:
     return _first(record, "_id", "id", "codigo", "idMotivo", "value")
 
@@ -203,10 +466,12 @@ def _sync_opa_dimensions(db: Session, client: OpaClient, now: datetime) -> dict[
     }
     for dimension_type, collector in collectors.items():
         try:
+            records = collector()
+            logger.info("dimensao_opa_sincronizada type=%s total=%s", dimension_type, len(records))
             _sync_dimension_records(
                 db,
                 dimension_type=dimension_type,
-                records=collector(),
+                records=records,
                 now=now,
             )
         except Exception as exc:
@@ -326,8 +591,134 @@ def _normalize_attendance(record: dict[str, Any], dimensions: dict[str, dict[str
         "tma_seconds": tma_seconds if tma_seconds is not None else _computed_duration_seconds(opened_at, closed_at),
         "tmr_seconds": _duration_seconds(record, "tmr_seconds", "tmrSegundos", "tempo_medio_resposta_segundos", "tmr"),
         "source_updated_at": source_updated_at,
+        "tag_ids_text": _tag_ids_text(record),
         "raw_payload": record,
     }
+
+
+def active_opa_import_run(db: Session) -> SupportOpaImportRun | None:
+    """Última run marcada como `running` — leitura simples, não reflete por si só se o
+    lock do Postgres está ocupado (uma run pode ficar presa em `running` se o processo
+    morrer sem passar pelo `finally`)."""
+    return db.scalar(
+        select(SupportOpaImportRun)
+        .where(SupportOpaImportRun.status == "running")
+        .order_by(SupportOpaImportRun.started_at.desc())
+    )
+
+
+def opa_import_lock_busy(db: Session) -> bool | None:
+    """Verifica se o lock consultivo de importação está ocupado, sem tirá-lo de quem
+    já o segura: tenta adquirir e, se conseguir, libera imediatamente (lock só estava
+    livre). Retorna `None` fora do Postgres ou se a checagem falhar — não é um "não"."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+    try:
+        acquired = bool(
+            db.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": SUPPORT_OPA_IMPORT_LOCK_KEY}).scalar()
+        )
+        if acquired:
+            db.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": SUPPORT_OPA_IMPORT_LOCK_KEY})
+        return not acquired
+    except SQLAlchemyError:
+        return None
+
+
+def _opa_import_busy_message(db: Session) -> str:
+    active_run = active_opa_import_run(db)
+    if active_run is not None and active_run.mode == "scheduled":
+        return "A sincronização automática do OPA está em andamento. Aguarde a conclusão para iniciar uma importação manual."
+    if active_run is not None:
+        return "Já existe uma importação do OPA Suite em andamento. Aguarde a conclusão antes de tentar novamente."
+    return "Há uma importação do OPA Suite em andamento, mas a run ativa ainda não pôde ser identificada. Aguarde alguns instantes e tente novamente."
+
+
+def _create_running_import_run(
+    *, mode: str, date_from: date, date_to: date, imported_by: int | None
+) -> int:
+    """Cria a run já como `running` numa sessão própria, commitada na hora — chamada
+    só DEPOIS que o lock de importação já foi adquirido (nunca antes: evitaria linha
+    órfã em "running" se o lock estiver ocupado), e ANTES do processamento longo de
+    páginas. Assim outras conexões (ex.: o probe de `/opa-sync-status`) enxergam a run
+    ativa assim que a importação realmente começa, não só quando tudo termina e a
+    transação principal (que segura o lock) commita.
+
+    Usa uma sessão separada de propósito: a sessão principal do import mantém o lock
+    consultivo do Postgres atrelado à sua conexão pelo tempo todo; um `commit()` nela
+    no meio do processamento devolveria a conexão pro pool e poderia trocar de conexão
+    física na sequência, quebrando essa associação (o unlock no fim rodaria na conexão
+    errada). Uma sessão à parte nunca toca na conexão que segura o lock.
+    """
+    with SessionLocal() as run_db:
+        run = SupportOpaImportRun(
+            provider="opa",
+            entity="attendance",
+            mode=mode,
+            date_from=date_from,
+            date_to=date_to,
+            status="running",
+            page_limit=SUPPORT_OPA_PAGE_LIMIT,
+            next_skip=0,
+            checkpoint_json={"skip": 0, "page_limit": SUPPORT_OPA_PAGE_LIMIT},
+            imported_by=imported_by,
+        )
+        run_db.add(run)
+        run_db.commit()
+        return run.id
+
+
+def _mark_resumed_run_running(run_id: int, *, imported_by: int | None, checkpoint: dict) -> None:
+    """Mesma lógica de `_create_running_import_run`, mas pra retomada de uma run
+    existente: grava `status="running"` numa sessão própria e já commitada, sem tocar
+    na sessão que segura o lock."""
+    with SessionLocal() as run_db:
+        run_db.execute(
+            update(SupportOpaImportRun)
+            .where(SupportOpaImportRun.id == run_id)
+            .values(
+                status="running",
+                mode="resume",
+                imported_by=imported_by,
+                finished_at=None,
+                last_error=None,
+                checkpoint_json=checkpoint,
+            )
+        )
+        run_db.commit()
+
+
+def _persist_run_terminal_status(run: SupportOpaImportRun) -> None:
+    """Grava o status final da run (completed/completed_with_warnings/interrupted/
+    failed) numa transação própria e já commitada, independente do que o chamador
+    (rota ou scheduler) fizer depois com a sessão principal.
+
+    Sem isso, uma falha cujo tipo não é `OpaImportInterrupted` faz o chamador reverter
+    (`db.rollback()`) a sessão inteira — incluindo o `run.status = "failed"` que
+    `_process_attendance_pages` acabou de gravar — e a run fica presa em "running"
+    pra sempre (o problema de visibilidade original, só que permanente).
+    """
+    with SessionLocal() as status_db:
+        status_db.execute(
+            update(SupportOpaImportRun)
+            .where(SupportOpaImportRun.id == run.id)
+            .values(
+                status=run.status,
+                last_error=run.last_error,
+                errors=run.errors,
+                pages_processed=run.pages_processed,
+                fetched_count=run.fetched_count,
+                created_count=run.created_count,
+                updated_count=run.updated_count,
+                unchanged_count=run.unchanged_count,
+                rejected_count=run.rejected_count,
+                next_skip=run.next_skip,
+                checkpoint_json=run.checkpoint_json,
+                finished_at=run.finished_at,
+                duration_ms=run.duration_ms,
+            )
+        )
+        status_db.commit()
 
 
 @contextlib.contextmanager
@@ -346,7 +737,7 @@ def _support_opa_import_lock(db: Session):
         time.sleep(1)
         waited += 1
     if not acquired:
-        raise RuntimeError("Outra importação do OPA Suite já está em andamento.")
+        raise RuntimeError(_opa_import_busy_message(db))
     try:
         yield
     finally:
@@ -405,6 +796,8 @@ def _process_attendance_pages(
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     dimensions = _sync_opa_dimensions(db, client, now)
+    attendant_types = _load_attendant_types(db)
+    human_attendant_ids = _human_attendant_ids(attendant_types)
     errors: list[dict[str, Any]] = list(run.errors or [])
     comparable_fields = set(SupportOpaAttendance.__table__.columns.keys()) - {
         "id",
@@ -440,6 +833,29 @@ def _process_attendance_pages(
                     payload = _normalize_attendance(record, dimensions)
                     if payload["opened_at"].date() < run.date_from or payload["opened_at"].date() > run.date_to:
                         raise ValueError("Atendimento fora do período solicitado; a API OPA pode ter ignorado o filtro de data.")
+
+                    try:
+                        messages = client.list_messages(payload["source_id"])
+                        avg_human_seconds, first_human_response_at = _human_response_metrics(
+                            messages, human_attendant_ids
+                        )
+                        if avg_human_seconds is not None:
+                            payload["tmr_seconds"] = avg_human_seconds
+                        if first_human_response_at is not None:
+                            payload["first_response_at"] = first_human_response_at
+
+                        avg_all_seconds = _all_response_metrics(messages)
+                        if avg_all_seconds is not None:
+                            payload["tmr_all_responses_seconds"] = avg_all_seconds
+
+                        handled_by_bot, reached_human, handoff = _classify_bot_human(messages, attendant_types)
+                        payload["handled_by_bot"] = handled_by_bot
+                        payload["reached_human"] = reached_human
+                        payload["bot_to_human_handoff"] = handoff
+
+                        payload.update(_message_attendant_summary(messages, attendant_types))
+                    except Exception as exc:
+                        logger.warning("falha_calcular_tmr source_id=%s erro=%s", payload["source_id"], exc)
 
                     raw = db.scalar(
                         select(SupportOpaAttendanceRaw).where(
@@ -521,6 +937,7 @@ def _process_attendance_pages(
         run.finished_at = datetime.now(timezone.utc)
         run.duration_ms = round((time.monotonic() - started_mono) * 1000)
         db.flush()
+        _persist_run_terminal_status(run)
         if run.status == "interrupted":
             raise OpaImportInterrupted(str(exc), run_id=run.id) from exc
         raise
@@ -547,20 +964,13 @@ def import_opa_attendances(
 
     with _support_opa_import_lock(db):
         started_mono = time.monotonic()
-        run = SupportOpaImportRun(
-            provider="opa",
-            entity="attendance",
+        run_id = _create_running_import_run(
             mode="manual" if imported_by is not None else "scheduled",
             date_from=date_from,
             date_to=date_to,
-            status="running",
-            page_limit=SUPPORT_OPA_PAGE_LIMIT,
-            next_skip=0,
-            checkpoint_json={"skip": 0, "page_limit": SUPPORT_OPA_PAGE_LIMIT},
             imported_by=imported_by,
         )
-        db.add(run)
-        db.flush()
+        run = db.get(SupportOpaImportRun, run_id)
         return _process_attendance_pages(
             db,
             client,
@@ -589,21 +999,18 @@ def resume_opa_import_run(
             raise ValueError("Run não possui checkpoint válido para retomada.")
 
         started_mono = time.monotonic()
-        run.status = "running"
-        run.mode = "resume"
-        run.imported_by = imported_by
-        run.finished_at = None
-        run.last_error = None
-        run.checkpoint_json = {
+        resume_from_skip = run.next_skip
+        resume_checkpoint = {
             **(run.checkpoint_json or {}),
             "resume_started_at": datetime.now(timezone.utc).isoformat(),
-            "resume_from_skip": run.next_skip,
+            "resume_from_skip": resume_from_skip,
         }
-        db.flush()
+        _mark_resumed_run_running(run_id, imported_by=imported_by, checkpoint=resume_checkpoint)
+        db.refresh(run)
         return _process_attendance_pages(
             db,
             client,
             run=run,
-            start_skip=run.next_skip,
+            start_skip=resume_from_skip,
             started_mono=started_mono,
         )

@@ -2,6 +2,7 @@
 
 import * as Popover from "@radix-ui/react-popover";
 import { Check, ChevronDown } from "lucide-react";
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -13,25 +14,47 @@ import {
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 
-export function MultiSelect({
+// Genérico em `T` (default `string`) - achado real de 2026-08-24: a tela de Agendamento
+// reimplementava este componente do zero só porque precisava de opções como objeto
+// ({id, name, is_team_member}), não string solta. `getValue` extrai a chave (string) usada pra
+// seleção/comparação, `formatOption` extrai o texto exibido - quem só usa string[] (todo o resto
+// do sistema) não precisa passar nenhum dos dois, o default é a própria string.
+export function MultiSelect<T = string>({
   values,
   options,
   placeholder = "Todos",
   ariaLabel,
-  formatOption = (value) => value,
+  formatOption = (option: T) => String(option),
+  getValue = (option: T) => String(option),
+  renderMeta,
   onChange,
   className,
 }: {
   values: string[];
-  options: string[];
+  options: T[];
   placeholder?: string;
   ariaLabel: string;
-  formatOption?: (value: string) => string;
+  formatOption?: (option: T) => string;
+  getValue?: (option: T) => string;
+  // Conteúdo extra por linha (ex.: badge "Equipe") - renderizado depois do texto, antes do check.
+  renderMeta?: (option: T) => ReactNode;
   onChange: (values: string[]) => void;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+
+  const optionsByValue = useMemo(() => {
+    const map = new Map<string, T>();
+    options.forEach((option) => map.set(getValue(option), option));
+    return map;
+  }, [options, getValue]);
+
+  const labelForValue = (value: string) => {
+    const option = optionsByValue.get(value);
+    return option !== undefined ? formatOption(option) : value;
+  };
+
   const filteredOptions = useMemo(() => {
     const normalized = search.trim().toLocaleLowerCase("pt-BR");
     return normalized
@@ -41,7 +64,7 @@ export function MultiSelect({
       : options;
   }, [formatOption, options, search]);
   const selectedFilteredCount = filteredOptions.filter((option) =>
-    values.includes(option),
+    values.includes(getValue(option)),
   ).length;
   const allFilteredSelected =
     filteredOptions.length > 0 &&
@@ -55,12 +78,13 @@ export function MultiSelect({
       : allOptionsSelected
         ? `Todos (${options.length})`
         : values.length === 1
-        ? formatOption(values[0])
+        ? labelForValue(values[0])
         : values.length === 2
-          ? values.map(formatOption).join(", ")
-          : `${formatOption(values[0])}, ${formatOption(values[1])} +${values.length - 2}`;
+          ? values.map(labelForValue).join(", ")
+          : `${labelForValue(values[0])}, ${labelForValue(values[1])} +${values.length - 2}`;
 
-  function toggle(value: string) {
+  function toggle(option: T) {
+    const value = getValue(option);
     onChange(
       values.includes(value)
         ? values.filter((item) => item !== value)
@@ -70,13 +94,13 @@ export function MultiSelect({
 
   function selectFiltered() {
     const next = new Set(values);
-    filteredOptions.forEach((option) => next.add(option));
+    filteredOptions.forEach((option) => next.add(getValue(option)));
     onChange(Array.from(next));
   }
 
   function clearFiltered() {
-    const filtered = new Set(filteredOptions);
-    onChange(values.filter((value) => !filtered.has(value)));
+    const filteredValues = new Set(filteredOptions.map(getValue));
+    onChange(values.filter((value) => !filteredValues.has(value)));
   }
 
   return (
@@ -136,18 +160,20 @@ export function MultiSelect({
             ) : null}
             <CommandList className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">
               {filteredOptions.map((option) => {
-                const selected = values.includes(option);
+                const value = getValue(option);
+                const selected = values.includes(value);
                 return (
                   <CommandItem
-                    key={option}
+                    key={value}
                     role="option"
                     aria-selected={selected}
                     onClick={() => toggle(option)}
                     title={formatOption(option)}
                     className="flex items-start justify-between gap-3 rounded-lg px-2.5 py-2 hover:bg-slate-50"
                   >
-                    <span className="min-w-0 whitespace-normal break-words leading-snug">
+                    <span className="min-w-0 flex-1 whitespace-normal break-words leading-snug">
                       {formatOption(option)}
+                      {renderMeta ? <span className="ml-1.5 inline-flex align-middle">{renderMeta(option)}</span> : null}
                     </span>
                     <span
                       className={cn(

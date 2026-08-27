@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -527,14 +527,33 @@ def apply_pending_entries_for_paid_run(
     if not pending:
         return {"applied_points": 0.0, "balance_after": round(float(available_points), 2), "entry_ids": []}
 
+    # Consumo CONDICIONAL (achado C5): o UPDATE so vence se o lancamento ainda estiver
+    # `pending`. Sem a condicao, dois pagamentos concorrentes marcavam o mesmo lancamento como
+    # aplicado duas vezes e cada um o descontava do seu proprio fechamento - o colaborador era
+    # cobrado duas vezes pela mesma garantia. `rowcount == 0` significa que outra transacao
+    # consumiu antes: o lancamento simplesmente nao entra neste pagamento.
+    consumed: list[PointBalanceEntry] = []
+    for entry in pending:
+        result = db.execute(
+            update(PointBalanceEntry)
+            .where(PointBalanceEntry.id == entry.id, PointBalanceEntry.status == "pending")
+            .values(
+                status="applied",
+                applied_calculation_run_id=calculation_run.id,
+                applied_reference_month=reference_month,
+                applied_reference_year=reference_year,
+            )
+            .execution_options(synchronize_session="fetch")
+        )
+        if result.rowcount:
+            consumed.append(entry)
+
+    if not consumed:
+        return {"applied_points": 0.0, "balance_after": round(float(available_points), 2), "entry_ids": []}
+
+    pending = consumed
     total_debit = round(sum(float(entry.points) for entry in pending), 2)
     new_total = round(float(available_points) + total_debit, 2)
-
-    for entry in pending:
-        entry.status = "applied"
-        entry.applied_calculation_run_id = calculation_run.id
-        entry.applied_reference_month = reference_month
-        entry.applied_reference_year = reference_year
 
     balance_row = db.scalar(
         select(CollaboratorPointBalance).where(CollaboratorPointBalance.collaborator_id == collaborator.id)

@@ -74,6 +74,40 @@ def _p(value: Any, style: ParagraphStyle) -> Paragraph:
     return Paragraph(escape(text), style)
 
 
+def distribute_amount_by_weight(total: float, weights: list[float]) -> list[float]:
+    """Reparte `total` (em reais) entre as O.S. proporcionalmente a `weights`, garantindo que a
+    soma das fatias seja EXATAMENTE `round(total, 2)`.
+
+    Existe por causa do achado A8 da auditoria 2026-08-26: a coluna "Valor" de cada O.S. era
+    `net_points * point_value`, ignorando o multiplicador de saúde da regional. Para um
+    colaborador com multiplicador 0,30 a coluna somava ~3,3x o "Valor a pagar" impresso no
+    resumo do MESMO documento - num papel chamado "Extrato de Pagamento - Conferência
+    Individual". O pagamento nunca esteve errado; o documento que o explica é que não fechava.
+
+    Reparte pelo método do maior resto (mesma ideia de `_distribute_cents_exactly` no bônus de
+    liderança), em vez de arredondar cada linha isoladamente - N linhas arredondadas
+    individualmente não somam o total arredondado uma vez só.
+    """
+    count = len(weights)
+    if count == 0:
+        return []
+    total_cents = round(float(total) * 100)
+    weight_sum = sum(weights)
+    if weight_sum <= 0:
+        # Sem peso (nenhuma O.S. pontuou): não há como distribuir proporcionalmente.
+        return [0.0] * count
+
+    exact = [total_cents * (weight / weight_sum) for weight in weights]
+    floors = [int(value // 1) for value in exact]
+    remainder = total_cents - sum(floors)
+    # Os centavos restantes vão para as linhas de maior resto fracionário, maior peso como
+    # desempate - determinístico, para o mesmo extrato sair igual toda vez que for gerado.
+    order = sorted(range(count), key=lambda index: (-(exact[index] - floors[index]), -weights[index], index))
+    for position in range(remainder):
+        floors[order[position % count]] += 1
+    return [cents / 100 for cents in floors]
+
+
 def _entry_trace(entry: PointBalanceEntry) -> str:
     if entry.entry_type != "post_payment_warranty_debit" or not entry.original_os_code:
         return entry.reason or "-"
@@ -140,6 +174,7 @@ def build_collaborator_statement_pdf(
     cell_style = ParagraphStyle("StatementCell", parent=styles["Normal"], fontSize=7.5, leading=9.5)
     cell_style_bold = ParagraphStyle("StatementCellBold", parent=cell_style, fontName="Helvetica-Bold")
     cell_style_right = ParagraphStyle("StatementCellRight", parent=cell_style, alignment=TA_RIGHT)
+    cell_style_right_bold = ParagraphStyle("StatementCellRightBold", parent=cell_style_right, fontName="Helvetica-Bold")
     cell_style_right_red = ParagraphStyle("StatementCellRightRed", parent=cell_style_right, textColor=colors.HexColor("#dc2626"))
 
     period_label = f"{MONTH_NAMES[run.reference_month]}/{run.reference_year}"
@@ -247,7 +282,16 @@ def build_collaborator_statement_pdf(
     orders_rows = [
         [Paragraph(label, header_style) for label in ["O.S", "Data", "Cliente", "Assunto", "SLA", "Pontos", "Valor", "Status"]]
     ]
-    for order in orders:
+    # Cada O.S. recebe a fatia do valor a pagar proporcional ao que ela representa dos pontos
+    # líquidos do colaborador, e as fatias somam exatamente o "Valor a pagar" do resumo acima
+    # (ver `distribute_amount_by_weight`). O peso usa o valor do ponto de cada O.S., porque
+    # assunto e grupo podem ter valor de ponto próprio (`effective_rule_point_value`).
+    order_weights = [
+        float(order["net_points"]) * float(order.get("point_value") or point_value) for order in orders
+    ]
+    order_amounts = distribute_amount_by_weight(float(score.estimated_payment), order_weights)
+
+    for order, amount in zip(orders, order_amounts):
         net_points = order["net_points"]
         closed_at = order.get("closed_at") or order.get("opened_at")
         date_html = f"{closed_at.strftime('%d/%m/%Y')}<br/>{closed_at.strftime('%H:%M')}" if closed_at else "-"
@@ -259,10 +303,26 @@ def build_collaborator_statement_pdf(
                 _p(order["os_subject"], cell_style),
                 _p(order["sla_status_normalized"], cell_style),
                 Paragraph(_format_points(net_points), cell_style_right),
-                Paragraph(_format_money(net_points * point_value), cell_style_right),
+                Paragraph(_format_money(amount), cell_style_right),
                 _p(order["scoring_status"], cell_style),
             ]
         )
+
+    # Linha de total: é o que permite conferir o documento sem somar 128 linhas na mão. Fecha
+    # exatamente com "Valor a pagar" do resumo, por construção.
+    orders_rows.append(
+        [
+            Paragraph("Total", cell_style_bold),
+            Paragraph("", cell_style),
+            Paragraph("", cell_style),
+            Paragraph("", cell_style),
+            Paragraph("", cell_style),
+            Paragraph(_format_points(sum(float(order["net_points"]) for order in orders)), cell_style_right_bold),
+            Paragraph(_format_money(sum(order_amounts)), cell_style_right_bold),
+            Paragraph("", cell_style),
+        ]
+    )
+
     orders_table = Table(
         orders_rows,
         colWidths=[18 * mm, 20 * mm, 32 * mm, 34 * mm, 24 * mm, 18 * mm, 20 * mm, 22 * mm],
@@ -278,7 +338,10 @@ def build_collaborator_statement_pdf(
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
                 ("LEFTPADDING", (0, 0), (-1, -1), 3),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8fafc")]),
+                # Linha de total destacada e separada por um traço mais forte.
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#e2e8f0")),
+                ("LINEABOVE", (0, -1), (-1, -1), 0.8, colors.HexColor("#0f172a")),
             ]
         )
     )
