@@ -1,18 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, RefreshCw, Search, ShieldAlert } from "lucide-react";
+import { ArrowLeft, BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, LogOut, RefreshCw, Search, ShieldAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { ManagementCaseDiagnosticsPanel, ManagementCasesPanel } from "@/components/management/management-cases-panel";
 import { ManagementModuleSidebar, type ManagementTab } from "@/components/management/management-module-sidebar";
 import { ManagementReasonsPanel } from "@/components/management/management-reasons-panel";
-import { useWorkspaceShell } from "@/components/workspace/workspace-shell-context";
+import { NotificationBell } from "@/components/workspace/notification-bell";
+import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
 import type { ManagementDashboard, ManagementOperationalMember, ManagementOptions, ManagementShiftPatternSuggestion } from "@/lib/types";
 
@@ -125,7 +127,7 @@ function metricCards(data: ManagementDashboard | null) {
 }
 
 export default function ManagementPage() {
-  const { user } = useWorkspaceShell();
+  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
   const [data, setData] = useState<ManagementDashboard | null>(null);
   const [options, setOptions] = useState<ManagementOptions>({ supervisors: [], team_models: [] });
   const [loading, setLoading] = useState(false);
@@ -292,6 +294,11 @@ export default function ManagementPage() {
     }
   }
 
+  if (checking && !user) {
+    return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando Gestão...</main>;
+  }
+  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
+
   if (!canRead) {
     return (
       <main className="min-h-screen bg-slate-50 p-6">
@@ -307,14 +314,26 @@ export default function ManagementPage() {
   return (
     <main className="min-h-screen bg-slate-50">
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center gap-3 px-5 py-4">
-          <ManagementModuleSidebar
-            activeTab={tab}
-            canAdminReasons={canAdminReasons}
-            openCasesCount={data?.summary.open_cases ?? 0}
-            onChange={setTab}
-          />
-          <h1 className="text-base font-semibold text-slate-950">Gestão Integrada</h1>
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <ManagementModuleSidebar
+              activeTab={tab}
+              canAdminReasons={canAdminReasons}
+              openCasesCount={data?.summary.open_cases ?? 0}
+              onChange={setTab}
+            />
+            <Link href="/" className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50">
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-blue-600">UNI Workspace</p>
+              <h1 className="text-base font-semibold text-slate-950">Gestão Integrada</h1>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <NotificationBell />
+            <Button type="button" variant="ghost" onClick={logout}><LogOut className="h-4 w-4" /> Sair</Button>
+          </div>
         </div>
       </header>
 
