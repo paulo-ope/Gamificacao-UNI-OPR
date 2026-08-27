@@ -82,8 +82,30 @@ def imported_data_window(db: Session) -> dict[str, Any]:
 def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, Any]:
     """Métricas base do período (comportamento idêntico ao `_overview_metrics`
     anterior em `router.py`), acrescido de `average_tmr_seconds` — único campo
-    novo aqui, os demais preservam nome e cálculo originais."""
+    novo aqui, os demais preservam nome e cálculo originais.
+
+    Achado da auditoria de performance 2026-08-27 (`EXPLAIN ANALYZE` real):
+    `COUNT(DISTINCT attendant_id)` e `COUNT(DISTINCT department_id)` juntos no
+    MESMO `SELECT` forçam o Postgres a fazer `Sort Method: external merge,
+    Disk` (~155ms de ~176ms da consulta inteira, medido ao vivo) - dois
+    `COUNT(DISTINCT)` de colunas diferentes não cabem no mesmo `HashAggregate`.
+    Reescrito como duas subconsultas escalares (`SELECT DISTINCT col ...`),
+    que o planejador resolve com `HashAggregate` em memória em vez de ordenar
+    em disco - mesmo resultado, ~110ms medido (ver auditoria de performance).
+    """
     closed_case = case((SupportOpaAttendance.closed_at.isnot(None), 1), else_=0)
+    distinct_attendants_subquery = apply_opa_attendance_filters(
+        select(SupportOpaAttendance.attendant_id)
+        .where(SupportOpaAttendance.attendant_id.isnot(None))
+        .distinct(),
+        filters,
+    ).subquery()
+    distinct_departments_subquery = apply_opa_attendance_filters(
+        select(SupportOpaAttendance.department_id)
+        .where(SupportOpaAttendance.department_id.isnot(None))
+        .distinct(),
+        filters,
+    ).subquery()
     statement = apply_opa_attendance_filters(
         select(
             func.count(SupportOpaAttendance.id).label("total"),
@@ -95,8 +117,8 @@ def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, An
             # COUNT ignora NULL igual AVG — dá o denominador real da média de
             # TMR geral sem precisar de uma segunda consulta. Ver `coverage()`.
             func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
-            func.count(func.distinct(SupportOpaAttendance.attendant_id)).label("distinct_attendants"),
-            func.count(func.distinct(SupportOpaAttendance.department_id)).label("distinct_departments"),
+            select(func.count()).select_from(distinct_attendants_subquery).scalar_subquery().label("distinct_attendants"),
+            select(func.count()).select_from(distinct_departments_subquery).scalar_subquery().label("distinct_departments"),
         ),
         filters,
     )
@@ -152,35 +174,56 @@ def status_breakdown(db: Session, filters: OpaAttendanceFilters) -> list[dict[st
 def customer_metrics(db: Session, filters: OpaAttendanceFilters, *, top_limit: int = 10) -> dict[str, Any]:
     """Clientes únicos e reincidência DENTRO DO PERÍODO consultado (não é a
     janela de reincidência configurável da Gamificação — aqui é só "mais de um
-    atendimento no mesmo período filtrado", conforme escopo aprovado da Fase 2)."""
-    base = (
+    atendimento no mesmo período filtrado", conforme escopo aprovado da Fase 2).
+
+    Achado da auditoria de performance 2026-08-27: a versão anterior trazia
+    TODAS as linhas agrupadas por cliente pra Python (25.492 linhas medidas ao
+    vivo num recorte de 31 dias) só pra contar/somar/ordenar - exatamente o
+    que `COUNT`/`SUM`/`ORDER BY ... LIMIT` já fazem em SQL. Agora só os
+    `top_limit` primeiros cruzam a fronteira banco↔aplicação; o resto vira 2
+    agregados escalares sobre a mesma subconsulta agrupada."""
+    per_customer = apply_opa_attendance_filters(
         select(
             SupportOpaAttendance.customer_id.label("customer_id"),
             func.max(SupportOpaAttendance.customer_name).label("customer_name"),
             func.count(SupportOpaAttendance.id).label("total"),
         )
         .where(SupportOpaAttendance.customer_id.isnot(None), SupportOpaAttendance.customer_id != "")
-        .group_by(SupportOpaAttendance.customer_id)
-    )
-    rows = db.execute(apply_opa_attendance_filters(base, filters)).all()
+        .group_by(SupportOpaAttendance.customer_id),
+        filters,
+    ).subquery()
+    recurring_case = case((per_customer.c.total > 1, 1), else_=0)
 
-    unique_customers = len(rows)
-    recurring_rows = [row for row in rows if (row.total or 0) > 1]
-    recurring_customers = len(recurring_rows)
-    top_recurring = sorted(recurring_rows, key=lambda row: row.total or 0, reverse=True)[:top_limit]
+    summary = db.execute(
+        select(
+            func.count().label("unique_customers"),
+            func.sum(recurring_case).label("recurring_customers"),
+            func.coalesce(func.sum(per_customer.c.total), 0).label("total_attendances"),
+        ).select_from(per_customer)
+    ).one()
+    unique_customers = int(summary.unique_customers or 0)
+    recurring_customers = int(summary.recurring_customers or 0)
+    total_attendances = int(summary.total_attendances or 0)
+
+    top_rows = db.execute(
+        select(per_customer.c.customer_id, per_customer.c.customer_name, per_customer.c.total)
+        .where(per_customer.c.total > 1)
+        .order_by(per_customer.c.total.desc())
+        .limit(top_limit)
+    ).all()
 
     return {
         "unique_customers": unique_customers,
         "recurring_customers": recurring_customers,
         "recurring_customers_percentage": (recurring_customers / unique_customers * 100) if unique_customers else 0.0,
-        "average_attendances_per_customer": (sum(row.total or 0 for row in rows) / unique_customers) if unique_customers else 0.0,
+        "average_attendances_per_customer": (total_attendances / unique_customers) if unique_customers else 0.0,
         "top_recurring_customers": [
             {
                 "customer_id": row.customer_id,
                 "customer_name": row.customer_name,
                 "total": int(row.total or 0),
             }
-            for row in top_recurring
+            for row in top_rows
         ],
     }
 
@@ -222,27 +265,41 @@ def top_reasons(db: Session, filters: OpaAttendanceFilters, *, limit: int = 5) -
     ]
 
 
+def _seconds_diff_expression(db: Session, end_column, start_column):
+    """`end_column - start_column` em segundos, nos dois dialetos - mesmo padrão
+    de dialeto explícito já usado em `_local_day_expression` (Postgres em
+    produção, SQLite na suíte de testes).
+
+    SQLite: `strftime('%s', ...)` (segundos inteiros desde a época, texto) em
+    vez de `julianday()` (dias fracionários em ponto flutuante) - achado real
+    ao rodar a suíte de testes: `julianday()` introduzia ruído de
+    ponto-flutuante (~0,00002%, ex. 599.9999843... em vez de 600.0) porque a
+    parte inteira enorme (dias desde 4714 a.C.) dilui a precisão do `double`
+    disponível pra hora do dia. `strftime('%s', ...)` é inteiro exato."""
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        return sa.extract("epoch", end_column - start_column)
+    return sa.cast(func.strftime("%s", end_column), sa.Integer) - sa.cast(func.strftime("%s", start_column), sa.Integer)
+
+
 def average_first_response_seconds(db: Session, filters: OpaAttendanceFilters) -> float | None:
-    """Calculado em Python (não em SQL) de propósito: `first_response_at -
-    opened_at` é aritmética de data que o SQLite (usado nos testes) não resolve
-    da mesma forma que o Postgres — subtrair em Python evita depender de função
-    específica de dialeto."""
+    """Achado da auditoria de performance 2026-08-27: a versão anterior trazia
+    TODO par (opened_at, first_response_at) pra Python (23.819 linhas medidas
+    ao vivo num recorte de 31 dias) só pra subtrair e tirar a média - de
+    propósito, porque a aritmética de data no SQLite dos testes não bate 1:1
+    com o Postgres de produção. Resolvido com `_seconds_diff_expression`
+    (mesmo padrão de branch-por-dialeto já usado em `_local_day_expression`
+    logo abaixo) em vez de deixar de usar SQL - agora só o escalar final
+    cruza a fronteira banco↔aplicação."""
+    diff_seconds = _seconds_diff_expression(db, SupportOpaAttendance.first_response_at, SupportOpaAttendance.opened_at)
     statement = apply_opa_attendance_filters(
-        select(SupportOpaAttendance.opened_at, SupportOpaAttendance.first_response_at).where(
-            SupportOpaAttendance.first_response_at.isnot(None)
+        select(func.avg(diff_seconds)).where(
+            SupportOpaAttendance.first_response_at.isnot(None),
+            diff_seconds >= 0,
         ),
         filters,
     )
-    rows = db.execute(statement).all()
-    deltas = [
-        (first_response_at - opened_at).total_seconds()
-        for opened_at, first_response_at in rows
-        if opened_at and first_response_at
-    ]
-    deltas = [delta for delta in deltas if delta >= 0]
-    if not deltas:
-        return None
-    return sum(deltas) / len(deltas)
+    result = db.execute(statement).scalar()
+    return float(result) if result is not None else None
 
 
 def bot_human_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, Any]:
