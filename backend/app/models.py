@@ -199,11 +199,6 @@ class WorkspaceModuleVisibility(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Preferência pessoal de atalho na sidebar - só a linha de USUÁRIO usa esses dois campos
-    # (a de perfil só existe pra hide/show em massa); auto-servido via PUT
-    # /workspace/modules/{key}/preference, sem exigir permissão de admin.
-    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    order_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)

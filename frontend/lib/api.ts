@@ -90,8 +90,6 @@ import type {
   SupportOpaSyncStatus,
   SlaPenaltyRule,
   UnmappedSubject,
-  WorkspaceModulePreferenceUpdate,
-  WorkspaceOverview,
   WorkspaceVisibleModule
 } from "@/lib/types";
 
@@ -270,12 +268,6 @@ export const api = {
       method: "DELETE"
     }),
   workspaceModules: () => request<WorkspaceVisibleModule[]>("/workspace/modules"),
-  updateModulePreference: (moduleKey: string, payload: WorkspaceModulePreferenceUpdate) =>
-    request<WorkspaceVisibleModule>(`/workspace/modules/${moduleKey}/preference`, {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    }),
-  workspaceOverview: () => request<WorkspaceOverview>("/workspace/overview"),
   adminModules: () => request<AdminWorkspaceModule[]>("/admin/modules"),
   updateAdminModuleVisibility: (moduleKey: string, payload: { profile_id: number; visible: boolean; reason?: string | null }) =>
     request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/visibility`, {

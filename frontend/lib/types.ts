@@ -158,33 +158,13 @@ export type ManagementShiftPatternSuggestion = {
 };
 
 export type WorkspaceVisibleModule = {
-  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin" | "intelligence";
+  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin";
   name: string;
   description: string;
   web_path: string;
   api_prefix: string;
   required_permission: Permission;
   status: "active" | "planned" | "disabled" | string;
-  pinned: boolean;
-  order_index: number | null;
-};
-
-export type WorkspaceModulePreferenceUpdate = {
-  pinned?: boolean;
-  order_index?: number;
-};
-
-export type WorkspaceOverviewCard = {
-  module_key: string;
-  title: string;
-  metric_label: string;
-  metric_value: string;
-  subtitle: string | null;
-  link: string;
-};
-
-export type WorkspaceOverview = {
-  cards: WorkspaceOverviewCard[];
 };
 
 export type SupportOpaSyncSettings = {
