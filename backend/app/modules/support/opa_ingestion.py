@@ -1,20 +1,27 @@
 from __future__ import annotations
 
+import calendar
 import contextlib
 import logging
 import time
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import exists, or_, select, text, update
+from sqlalchemy import exists, func, or_, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.services.opa_client import OpaClient
+from app.services.opa_client import OpaClient, get_opa_client
 
 from . import opa_attendant_overrides
-from .models import SupportOpaAttendance, SupportOpaAttendanceRaw, SupportOpaDimension, SupportOpaImportRun
+from .models import (
+    SupportOpaAttendance,
+    SupportOpaAttendanceRaw,
+    SupportOpaDimension,
+    SupportOpaImportMonth,
+    SupportOpaImportRun,
+)
 from .opa_filters import TAG_SEPARATOR
 
 
@@ -1014,3 +1021,156 @@ def resume_opa_import_run(
             start_skip=resume_from_skip,
             started_mono=started_mono,
         )
+
+
+def _create_pending_import_run(*, mode: str, date_from: date, date_to: date, imported_by: int | None) -> int:
+    """Mesma ideia de `_create_running_import_run`, mas pra importação em BACKGROUND
+    (ver `run_opa_import_background_job`): cria a run como "pending" (não "running")
+    porque o lock consultivo ainda não foi adquirido - só a `BackgroundTasks` que vai
+    tentar, depois que a requisição HTTP já respondeu com o `run_id`. Uma run "pending"
+    órfã (processo derrubado antes de tentar o lock) é inofensiva pro resto do sistema,
+    diferente de uma "running" órfã - por isso o status separado."""
+    with SessionLocal() as run_db:
+        run = SupportOpaImportRun(
+            provider="opa",
+            entity="attendance",
+            mode=mode,
+            date_from=date_from,
+            date_to=date_to,
+            status="pending",
+            page_limit=SUPPORT_OPA_PAGE_LIMIT,
+            next_skip=0,
+            checkpoint_json={"skip": 0, "page_limit": SUPPORT_OPA_PAGE_LIMIT},
+            imported_by=imported_by,
+        )
+        run_db.add(run)
+        run_db.commit()
+        return run.id
+
+
+def _month_bounds(year: int, month: int) -> tuple[date, date]:
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, 1), date(year, month, last_day)
+
+
+def _maybe_mark_month_complete(db: Session, *, run_id: int, date_from: date, date_to: date, status: str) -> None:
+    """Marca `SupportOpaImportMonth` como "complete" quando uma run termina cobrindo um
+    mês calendário INTEIRO (date_from/date_to batendo exatamente com o 1º e o último dia
+    do mês) sem falhar - definição operacional de "completo", já que o OPA Suite não
+    expõe um total esperado por mês pra validar contra. Uma run parcial (ex.: um recorte
+    de 10 dias) nunca marca nada, mesmo que tenha sucesso - só runs de mês inteiro."""
+    if status not in ("completed", "completed_with_warnings"):
+        return
+    first_day, last_day = _month_bounds(date_from.year, date_from.month)
+    if date_from != first_day or date_to != last_day:
+        return
+    year_month = date_from.strftime("%Y-%m")
+    range_start = datetime(first_day.year, first_day.month, first_day.day, tzinfo=timezone.utc)
+    if first_day.month == 12:
+        range_end = datetime(first_day.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        range_end = datetime(first_day.year, first_day.month + 1, 1, tzinfo=timezone.utc)
+    count = db.scalar(
+        select(func.count(SupportOpaAttendance.id)).where(
+            SupportOpaAttendance.opened_at >= range_start,
+            SupportOpaAttendance.opened_at < range_end,
+        )
+    ) or 0
+    now = datetime.now(timezone.utc)
+    existing = db.scalar(select(SupportOpaImportMonth).where(SupportOpaImportMonth.year_month == year_month))
+    if existing is None:
+        db.add(
+            SupportOpaImportMonth(
+                year_month=year_month,
+                status="complete",
+                attendance_count=count,
+                last_run_id=run_id,
+                last_verified_at=now,
+            )
+        )
+    else:
+        existing.status = "complete"
+        existing.attendance_count = count
+        existing.last_run_id = run_id
+        existing.last_verified_at = now
+    db.commit()
+
+
+def run_opa_import_background_job(run_id: int) -> None:
+    """Processa em background uma run já criada como "pending" (ver
+    `_create_pending_import_run`) - o endpoint `POST /opa-imports` devolve o `run_id`
+    na hora, sem bloquear a requisição HTTP com um import de mês inteiro (que pode
+    levar minutos por causa da busca de mensagens por atendimento pra TMR), e o
+    frontend acompanha o progresso via `GET /opa/sync-runs/{run_id}`.
+
+    Mesma semântica de commit/rollback de `import_opa_period` (router.py), só que sem
+    resposta HTTP: `OpaImportInterrupted` faz commit (o que já foi processado fica
+    salvo, o status "interrupted" já foi persistido à parte por `_process_attendance_pages`);
+    qualquer outra exceção faz rollback (nada persistido além do status "failed", que
+    também já foi gravado à parte quando veio de dentro do processamento de páginas)."""
+    with SessionLocal() as db:
+        run = db.get(SupportOpaImportRun, run_id)
+        if run is None or run.status != "pending":
+            return
+        client = get_opa_client()
+        started_mono = time.monotonic()
+        try:
+            with _support_opa_import_lock(db):
+                run.status = "running"
+                db.flush()
+                _process_attendance_pages(db, client, run=run, start_skip=0, started_mono=started_mono)
+            db.commit()
+        except OpaImportInterrupted:
+            db.commit()
+            return
+        except RuntimeError as exc:
+            # Lock ocupado além do tempo de espera - a run nunca chegou a rodar
+            # (status ainda "pending"), diferente de uma falha durante o processamento
+            # (que já teria marcado "failed" sozinha via _persist_run_terminal_status).
+            db.rollback()
+            with SessionLocal() as err_db:
+                err_db.execute(
+                    update(SupportOpaImportRun)
+                    .where(SupportOpaImportRun.id == run_id)
+                    .values(status="failed", last_error=str(exc)[:500], finished_at=datetime.now(timezone.utc))
+                )
+                err_db.commit()
+            return
+        except Exception:
+            db.rollback()
+            logger.exception("Falha inesperada na importação OPA em background run_id=%s", run_id)
+            return
+
+    with SessionLocal() as status_db:
+        finished_run = status_db.get(SupportOpaImportRun, run_id)
+        if finished_run is not None:
+            _maybe_mark_month_complete(
+                status_db,
+                run_id=finished_run.id,
+                date_from=finished_run.date_from,
+                date_to=finished_run.date_to,
+                status=finished_run.status,
+            )
+
+
+def import_months_status(db: Session, year_months: list[str]) -> dict[str, dict[str, Any]]:
+    """Status de cada mês pedido (formato "AAAA-MM") - "missing" pra quem não tem
+    nenhuma linha em `SupportOpaImportMonth` ainda (nunca uma run de mês inteiro
+    terminou com sucesso pra ele)."""
+    rows = {
+        row.year_month: row
+        for row in db.scalars(select(SupportOpaImportMonth).where(SupportOpaImportMonth.year_month.in_(year_months)))
+    }
+    result: dict[str, dict[str, Any]] = {}
+    for year_month in year_months:
+        row = rows.get(year_month)
+        if row is None:
+            result[year_month] = {"year_month": year_month, "status": "missing", "attendance_count": 0, "last_verified_at": None}
+        else:
+            result[year_month] = {
+                "year_month": year_month,
+                "status": row.status,
+                "attendance_count": row.attendance_count,
+                "last_verified_at": row.last_verified_at,
+            }
+    return result

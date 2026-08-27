@@ -15,12 +15,27 @@ class SupportOpaSyncSettings(BaseModel):
     enabled: bool = False
     interval_minutes: int = Field(default=20, ge=5, le=1440)
     lookback_days: int = Field(default=1, ge=1, le=30)
+    # Backfill automático de meses completos (roda de madrugada) - ver
+    # app/services/opa_scheduler.py::run_opa_backfill_once.
+    backfill_enabled: bool = True
+    backfill_run_hour: int = Field(default=3, ge=0, le=23)
+    backfill_lookback_months: int = Field(default=3, ge=1, le=24)
 
 
 class SupportOpaSyncSettingsUpdate(BaseModel):
     enabled: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=5, le=1440)
     lookback_days: int | None = Field(default=None, ge=1, le=30)
+    backfill_enabled: bool | None = None
+    backfill_run_hour: int | None = Field(default=None, ge=0, le=23)
+    backfill_lookback_months: int | None = Field(default=None, ge=1, le=24)
+
+
+class SupportOpaImportMonthOut(BaseModel):
+    year_month: str
+    status: str
+    attendance_count: int = 0
+    last_verified_at: datetime | None = None
 
 
 class SupportOpaSyncStatus(BaseModel):
@@ -28,6 +43,9 @@ class SupportOpaSyncStatus(BaseModel):
     enabled: bool
     interval_minutes: int
     lookback_days: int
+    backfill_enabled: bool = True
+    backfill_run_hour: int = 3
+    backfill_lookback_months: int = 3
     last_success_at: datetime | None = None
     last_attempt_at: datetime | None = None
     next_allowed_at: datetime | None = None

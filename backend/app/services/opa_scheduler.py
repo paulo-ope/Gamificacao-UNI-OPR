@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.modules.support.opa_filters import SUPPORT_TIMEZONE
-from app.modules.support.opa_ingestion import OpaImportInterrupted, import_opa_attendances
+from app.modules.support.opa_ingestion import (
+    OpaImportInterrupted,
+    _maybe_mark_month_complete,
+    _month_bounds,
+    import_months_status,
+    import_opa_attendances,
+)
 from app.services.calculation import get_setting, upsert_setting
 from app.services.opa_client import get_opa_client
 
@@ -32,6 +38,11 @@ SUPPORT_OPA_SYNC_NEXT_ALLOWED_AT_KEY = "support_opa_sync_next_allowed_at"
 SUPPORT_OPA_SYNC_LAST_ERROR_KEY = "support_opa_sync_last_error"
 SUPPORT_OPA_SYNC_LAST_ERROR_AT_KEY = "support_opa_sync_last_error_at"
 SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY = "support_opa_sync_consecutive_failures"
+
+SUPPORT_OPA_BACKFILL_ENABLED_KEY = "support_opa_backfill_enabled"
+SUPPORT_OPA_BACKFILL_RUN_HOUR_KEY = "support_opa_backfill_run_hour"
+SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY = "support_opa_backfill_lookback_months"
+SUPPORT_OPA_BACKFILL_LAST_RUN_DATE_KEY = "support_opa_backfill_last_run_date"
 
 
 def _parse_sync_timestamp(value: str | None) -> datetime | None:
@@ -185,9 +196,134 @@ def run_opa_sync_once(interval_minutes: int | None = None) -> dict | None:
             return None
 
 
+def _current_backfill_enabled(default: bool) -> bool:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, SUPPORT_OPA_BACKFILL_ENABLED_KEY, "")
+    except SQLAlchemyError:
+        return default
+    if not raw:
+        return default
+    return raw.strip().lower() in {"true", "1", "sim", "yes"}
+
+
+def _current_backfill_run_hour(default: int) -> int:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, SUPPORT_OPA_BACKFILL_RUN_HOUR_KEY, "")
+    except SQLAlchemyError:
+        return default
+    try:
+        hour = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(hour, 0), 23)
+
+
+def _current_backfill_lookback_months(default: int) -> int:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY, "")
+    except SQLAlchemyError:
+        return default
+    try:
+        months = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(months, 1), 24)
+
+
+def _target_backfill_months(today, lookback_months: int) -> list[tuple[int, int]]:
+    months: list[tuple[int, int]] = []
+    year, month = today.year, today.month
+    for _ in range(lookback_months):
+        months.append((year, month))
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    months.reverse()
+    return months
+
+
+def run_opa_backfill_once(lookback_months: int | None = None) -> dict | None:
+    """Backfill diário de meses calendário completos - roda 1x por dia, a partir da
+    hora configurada (`SUPPORT_OPA_BACKFILL_RUN_HOUR_KEY`), e importa (mês inteiro,
+    `date_from`/`date_to` no 1º e último dia) qualquer um dos últimos N meses que
+    ainda não está marcado "complete" em `SupportOpaImportMonth`. Auto-gated por
+    data (mesmo padrão de `management/scheduler.py`): se já rodou hoje, não roda de
+    novo, mesmo chamado várias vezes no mesmo dia."""
+    settings = get_settings()
+    if not settings.opa_api_base_url or not settings.opa_api_token:
+        return None
+
+    months = lookback_months or _current_backfill_lookback_months(3)
+    today = datetime.now(SUPPORT_TIMEZONE).date()
+    target_months = _target_backfill_months(today, months)
+    year_months = [f"{year:04d}-{month:02d}" for year, month in target_months]
+
+    with SessionLocal() as db:
+        status_by_month = import_months_status(db, year_months)
+    pending_months = [
+        (year, month) for (year, month), year_month in zip(target_months, year_months)
+        if status_by_month[year_month]["status"] != "complete"
+    ]
+    if not pending_months:
+        with SessionLocal() as db:
+            upsert_setting(db, SUPPORT_OPA_BACKFILL_LAST_RUN_DATE_KEY, today.isoformat())
+            db.commit()
+        return {"imported_months": []}
+
+    client = get_opa_client()
+    imported: list[dict] = []
+    for year, month in pending_months:
+        date_from, date_to = _month_bounds(year, month)
+        with SessionLocal() as db:
+            try:
+                result = import_opa_attendances(db, client, date_from=date_from, date_to=date_to, imported_by=None)
+                db.commit()
+                _maybe_mark_month_complete(
+                    db, run_id=result["run_id"], date_from=date_from, date_to=date_to, status=result["status"]
+                )
+                imported.append({"year_month": f"{year:04d}-{month:02d}", **result})
+                logger.info("Backfill OPA: mês %04d-%02d -> %s", year, month, result["status"])
+            except OpaImportInterrupted as exc:
+                db.commit()
+                logger.exception("Backfill OPA interrompido no mês %04d-%02d (run #%s)", year, month, exc.run_id)
+            except Exception:
+                db.rollback()
+                logger.exception("Falha no backfill OPA do mês %04d-%02d", year, month)
+
+    with SessionLocal() as db:
+        upsert_setting(db, SUPPORT_OPA_BACKFILL_LAST_RUN_DATE_KEY, today.isoformat())
+        db.commit()
+    return {"imported_months": imported}
+
+
+def _backfill_due(default_enabled: bool, default_run_hour: int) -> bool:
+    if not _current_backfill_enabled(default=default_enabled):
+        return False
+    now_local = datetime.now(SUPPORT_TIMEZONE)
+    run_hour = _current_backfill_run_hour(default=default_run_hour)
+    if now_local.hour < run_hour:
+        return False
+    try:
+        with SessionLocal() as db:
+            last_run_raw = get_setting(db, SUPPORT_OPA_BACKFILL_LAST_RUN_DATE_KEY, "")
+    except SQLAlchemyError:
+        return False
+    return last_run_raw != now_local.date().isoformat()
+
+
 async def run_opa_sync_loop(interval_minutes: int, initial_enabled: bool = True) -> None:
     poll_seconds = 15.0
     while True:
+        if _backfill_due(default_enabled=True, default_run_hour=3):
+            try:
+                await asyncio.to_thread(run_opa_backfill_once)
+            except Exception:
+                logger.exception("Falha ao rodar o backfill automático de meses do OPA Suite")
+
         if not _current_sync_enabled(default=initial_enabled):
             await asyncio.sleep(poll_seconds)
             continue

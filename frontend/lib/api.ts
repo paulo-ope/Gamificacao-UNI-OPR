@@ -81,6 +81,7 @@ import type {
   SupportOpaBreakdownDimension,
   SupportOpaBreakdowns,
   SupportOpaFilters,
+  SupportOpaImportMonth,
   SupportOpaSavedFilter,
   SupportOpaSavedFilterScope,
   SupportOpaTimeseries,
@@ -467,6 +468,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(period)
     }),
+  supportOpaSyncRun: (runId: number) => request<SupportImportResult>(`/support/opa/sync-runs/${runId}`),
+  supportOpaImportMonths: (months = 6) =>
+    request<SupportOpaImportMonth[]>(`/support/opa/import-months?months=${months}`),
   supportOpaAttendantOverrides: () =>
     request<SupportOpaAttendantOverride[]>("/support/opa/attendant-overrides"),
   createSupportOpaAttendantOverride: (payload: SupportOpaAttendantOverrideCreate) =>

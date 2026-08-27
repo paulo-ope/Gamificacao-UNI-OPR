@@ -171,6 +171,16 @@ export type SupportOpaSyncSettings = {
   enabled: boolean;
   interval_minutes: number;
   lookback_days: number;
+  backfill_enabled: boolean;
+  backfill_run_hour: number;
+  backfill_lookback_months: number;
+};
+
+export type SupportOpaImportMonth = {
+  year_month: string;
+  status: string;
+  attendance_count: number;
+  last_verified_at: string | null;
 };
 
 export type SupportOpaSyncStatus = SupportOpaSyncSettings & {

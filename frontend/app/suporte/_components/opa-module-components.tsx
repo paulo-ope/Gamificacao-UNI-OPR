@@ -31,10 +31,11 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { InfoHint } from "@/components/gamification/info-hint";
 import { DateRangePicker, type DateRangePreset } from "@/components/ui/date-range-picker";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -50,6 +51,7 @@ import type {
   SupportOpaBotHumanFilter,
   SupportOpaFilters,
   SupportOpaImportedDataWindow,
+  SupportOpaImportMonth,
   SupportOpaMetricComparison,
   SupportOpaMetricCoverage,
   SupportOpaOverview,
@@ -1155,21 +1157,53 @@ export function BotHumanSummary({ metrics }: { metrics: SupportOpaBotHumanMetric
   );
 }
 
+// Rascunho de texto livre pra um campo numérico de configuração - achado real de
+// 2026-08-27: `value={settings?.x ?? default}` direto num <input type="number">
+// com `onChange={(e) => onDraftSettings({ x: Number(e.target.value) })}` fazia o
+// campo virar "0" ao apagar (Number("") === 0, não NaN, e 0 não é "nullish" então
+// o `?? default` nunca entrava). Mantendo o texto digitado à parte (permite ficar
+// vazio) e só convertendo/gravando no blur resolve isso pros 4 campos numéricos
+// desta tela (intervalo, dias de histórico, hora do backfill, meses do backfill).
+function useNumberDraft(committed: number | undefined, fallback: number) {
+  const [draft, setDraft] = useState(String(committed ?? fallback));
+  useEffect(() => {
+    setDraft(String(committed ?? fallback));
+  }, [committed, fallback]);
+  return [draft, setDraft] as const;
+}
+
 export function OpaSyncPanel({
   canSync,
   syncStatus,
   settings,
   savingSettings,
+  months,
+  monthsLoading,
   onDraftSettings,
   onSaveSettings,
+  onReimportMonth,
 }: {
   canSync: boolean;
   syncStatus: SupportOpaSyncStatus | null;
   settings: SupportOpaSyncSettings | null;
   savingSettings: boolean;
+  months: SupportOpaImportMonth[];
+  monthsLoading: boolean;
   onDraftSettings: (next: Partial<SupportOpaSyncSettings>) => void;
   onSaveSettings: (next: Partial<SupportOpaSyncSettings>) => void;
+  onReimportMonth: (yearMonth: string) => void;
 }) {
+  const [intervalDraft, setIntervalDraft] = useNumberDraft(settings?.interval_minutes, 20);
+  const [lookbackDraft, setLookbackDraft] = useNumberDraft(settings?.lookback_days, 1);
+  const [runHourDraft, setRunHourDraft] = useNumberDraft(settings?.backfill_run_hour, 3);
+  const [backfillMonthsDraft, setBackfillMonthsDraft] = useNumberDraft(settings?.backfill_lookback_months, 3);
+
+  function commit(draft: string, min: number, max: number, fallback: number, apply: (value: number) => void) {
+    const parsed = Number(draft);
+    const value = draft.trim() === "" || Number.isNaN(parsed) ? fallback : Math.min(Math.max(Math.round(parsed), min), max);
+    apply(value);
+  }
+
   if (!canSync) {
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
@@ -1255,10 +1289,10 @@ export function OpaSyncPanel({
             type="number"
             min={5}
             max={1440}
-            value={settings?.interval_minutes ?? 20}
+            value={intervalDraft}
             disabled={savingSettings || !settings}
-            onChange={(event) => onDraftSettings({ interval_minutes: Number(event.target.value) })}
-            onBlur={(event) => onSaveSettings({ interval_minutes: Number(event.target.value) })}
+            onChange={(event) => setIntervalDraft(event.target.value)}
+            onBlur={() => commit(intervalDraft, 5, 1440, 20, (value) => onSaveSettings({ interval_minutes: value }))}
           />
         </label>
         <label className="block">
@@ -1267,13 +1301,124 @@ export function OpaSyncPanel({
             type="number"
             min={1}
             max={30}
-            value={settings?.lookback_days ?? 1}
+            value={lookbackDraft}
             disabled={savingSettings || !settings}
-            onChange={(event) => onDraftSettings({ lookback_days: Number(event.target.value) })}
-            onBlur={(event) => onSaveSettings({ lookback_days: Number(event.target.value) })}
+            onChange={(event) => setLookbackDraft(event.target.value)}
+            onBlur={() => commit(lookbackDraft, 1, 30, 1, (value) => onSaveSettings({ lookback_days: value }))}
           />
         </label>
       </div>
+      <div className="mt-4 flex items-center gap-2 text-slate-800">
+        <Clock3 className="h-4 w-4" />
+        <h4 className="text-sm font-semibold">Backfill automático de meses (madrugada)</h4>
+        <InfoHint
+          ariaLabel="Ajuda sobre o backfill automático"
+          side="bottom"
+          title="Meses completos, sem esperar clique manual"
+          description="Todo dia, no horário configurado, o sistema verifica os últimos N meses e importa (mês inteiro) qualquer um que ainda não esteja completo - sem travar a tela, roda em background."
+        />
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-3">
+        <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm">
+          <span className="font-medium text-slate-700">Ligado</span>
+          <input
+            type="checkbox"
+            checked={Boolean(settings?.backfill_enabled ?? true)}
+            disabled={savingSettings || !settings}
+            onChange={(event) => onSaveSettings({ backfill_enabled: event.target.checked })}
+            className="h-4 w-4 rounded border-slate-300"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Hora do dia (0-23)</span>
+          <Input
+            type="number"
+            min={0}
+            max={23}
+            value={runHourDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setRunHourDraft(event.target.value)}
+            onBlur={() => commit(runHourDraft, 0, 23, 3, (value) => onSaveSettings({ backfill_run_hour: value }))}
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Meses verificados</span>
+          <Input
+            type="number"
+            min={1}
+            max={24}
+            value={backfillMonthsDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setBackfillMonthsDraft(event.target.value)}
+            onBlur={() => commit(backfillMonthsDraft, 1, 24, 3, (value) => onSaveSettings({ backfill_lookback_months: value }))}
+          />
+        </label>
+      </div>
+      <OpaImportMonthsPanel months={months} loading={monthsLoading} onReimport={onReimportMonth} />
+    </div>
+  );
+}
+
+const MONTH_STATUS_LABEL: Record<string, string> = {
+  complete: "Completo",
+  partial: "Parcial",
+  missing: "Faltando",
+};
+
+const MONTH_STATUS_BADGE: Record<string, string> = {
+  complete: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  partial: "border-amber-200 bg-amber-50 text-amber-700",
+  missing: "border-slate-200 bg-slate-100 text-slate-600",
+};
+
+function monthLabel(yearMonth: string): string {
+  const [year, month] = yearMonth.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, 1));
+  return date.toLocaleDateString("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+function OpaImportMonthsPanel({
+  months,
+  loading,
+  onReimport,
+}: {
+  months: SupportOpaImportMonth[];
+  loading: boolean;
+  onReimport: (yearMonth: string) => void;
+}) {
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2 text-slate-800">
+        <Database className="h-4 w-4" />
+        <h4 className="text-sm font-semibold">Meses importados</h4>
+      </div>
+      <p className="mt-1 text-xs text-slate-500">
+        "Completo" = já existiu uma importação de mês inteiro concluída com sucesso. Clique em "Reimportar" pra forçar de novo.
+      </p>
+      {loading ? (
+        <div className="mt-2 h-16 animate-pulse rounded-xl bg-slate-100" />
+      ) : (
+        <ul className="mt-2 flex flex-wrap gap-2">
+          {months.map((month) => (
+            <li
+              key={month.year_month}
+              className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs"
+            >
+              <span className="font-medium capitalize text-slate-700">{monthLabel(month.year_month)}</span>
+              <Badge className={MONTH_STATUS_BADGE[month.status] ?? MONTH_STATUS_BADGE.missing}>
+                {MONTH_STATUS_LABEL[month.status] ?? month.status}
+              </Badge>
+              <button
+                type="button"
+                onClick={() => onReimport(month.year_month)}
+                className="font-medium text-blue-700 hover:underline"
+              >
+                Reimportar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

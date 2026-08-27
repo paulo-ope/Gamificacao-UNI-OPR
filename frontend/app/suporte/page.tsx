@@ -69,6 +69,7 @@ import type {
   SupportOpaBreakdownItem,
   SupportOpaBreakdowns,
   SupportOpaFilters,
+  SupportOpaImportMonth,
   SupportOpaOverview,
   SupportOpaSyncSettings,
   SupportOpaSyncStatus,
@@ -292,6 +293,8 @@ function SupportPageContent() {
   const [attendanceTimelineError, setAttendanceTimelineError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SupportOpaSyncStatus | null>(null);
   const [settings, setSettings] = useState<SupportOpaSyncSettings | null>(null);
+  const [importMonths, setImportMonths] = useState<SupportOpaImportMonth[]>([]);
+  const [importMonthsLoading, setImportMonthsLoading] = useState(false);
   const [attendantOverrides, setAttendantOverrides] = useState<SupportOpaAttendantOverride[]>([]);
   const [attendantOverridesLoading, setAttendantOverridesLoading] = useState(false);
   const [attendantOverridesError, setAttendantOverridesError] = useState<string | null>(null);
@@ -327,6 +330,7 @@ function SupportPageContent() {
       if (canSync) {
         requests.push(api.supportOpaSyncStatus().then(setSyncStatus));
         requests.push(api.supportOpaSyncSettings().then(setSettings));
+        requests.push(loadImportMonths());
       }
       await Promise.all(requests);
       setAppliedPeriod(nextPeriod);
@@ -606,23 +610,59 @@ function SupportPageContent() {
     }
   }
 
-  async function importPeriod() {
+  async function loadImportMonths() {
+    setImportMonthsLoading(true);
+    try {
+      setImportMonths(await api.supportOpaImportMonths());
+    } catch {
+      // Painel é auxiliar - uma falha aqui não deve derrubar o resto da tela.
+    } finally {
+      setImportMonthsLoading(false);
+    }
+  }
+
+  // Achado real de 2026-08-27: import de mês inteiro busca mensagem por mensagem
+  // pra calcular TMR e podia levar minutos rodando dentro da requisição HTTP
+  // (risco de timeout). Agora o backend devolve o run_id na hora e processa em
+  // background - aqui só ficamos perguntando o status a cada 2s até terminar,
+  // mesmo padrão já usado pelo sync do IXC na tela de Agendamento.
+  async function runImportJob(dateFrom: string, dateTo: string) {
     setSyncing(true);
     setError(null);
     setMessage(null);
     try {
-      const result = await api.importSupportOpaPeriod(period);
+      let result = await api.importSupportOpaPeriod({ date_from: dateFrom, date_to: dateTo });
+      while (result.status === "pending" || result.status === "running") {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        result = await api.supportOpaSyncRun(result.run_id);
+      }
+      if (result.status === "failed") {
+        throw new Error("Falha ao importar o período selecionado do OPA Suite.");
+      }
       setMessage(
         `Run #${result.run_id}: ${result.fetched_count} recebido(s) em ${result.pages_processed} página(s), ${result.created_count} criado(s), ` +
         `${result.updated_count} atualizado(s), ${result.unchanged_count} sem alteração, ${result.rejected_count} rejeitado(s).`,
       );
       window.dispatchEvent(new Event("notifications:refresh"));
       await load(period);
+      await loadImportMonths();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Falha ao importar dados do OPA Suite.");
     } finally {
       setSyncing(false);
     }
+  }
+
+  async function importPeriod() {
+    await runImportJob(period.date_from, period.date_to);
+  }
+
+  async function reimportMonth(yearMonth: string) {
+    const [year, month] = yearMonth.split("-").map(Number);
+    const dateFrom = `${yearMonth}-01`;
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const dateTo = `${yearMonth}-${String(lastDay).padStart(2, "0")}`;
+    await runImportJob(dateFrom, dateTo);
   }
 
   async function saveSettings(next: Partial<SupportOpaSyncSettings>) {
@@ -820,8 +860,11 @@ function SupportPageContent() {
                 syncStatus={syncStatus}
                 settings={settings}
                 savingSettings={savingSettings}
+                months={importMonths}
+                monthsLoading={importMonthsLoading}
                 onDraftSettings={(next) => setSettings((current) => current ? { ...current, ...next } : current)}
                 onSaveSettings={(next) => void saveSettings(next)}
+                onReimportMonth={(yearMonth) => void reimportMonth(yearMonth)}
               />
               <OpaAttendantOverridesPanel
                 canManage={canSync}
