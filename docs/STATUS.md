@@ -13,10 +13,52 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-08-27** — branch `claude/auditoria-performance-p1` (P0 e P1 em PR separada,
-`claude/auditoria-performance-p0`; ver PRs abertas abaixo)
+**2026-08-27** — branch `claude/suporte-sync-backfill-madrugada` (auditoria de
+performance do módulo OPA Suite; ver PRs abertas abaixo pras outras frentes)
 
 ## O que foi feito recentemente
+
+- **Auditoria de performance do módulo SGP Suporte/OPA Suite — maior gargalo do
+  backend inteiro encontrado e corrigido (branch
+  `claude/suporte-sync-backfill-madrugada`, aguardando merge)**: pedido do
+  usuário "preciso validar o backend do módulo opa suite... ser o mais rápido
+  possível sem perder a confiabilidade de dados", em cima da auditoria geral já
+  feita. **Achado real, medido ao vivo direto na API do OPA Suite (não
+  simulado)**: `_sync_opa_dimensions` buscava o cadastro de USUÁRIOS/MOTIVOS/
+  DEPARTAMENTOS/ETIQUETAS/CLIENTES do OPA Suite em TODA sincronização — a
+  periódica (a cada ~20 min), todo import manual, todo backfill de mês, todo
+  resume. Só o cadastro de clientes (177.870 registros na base real) media
+  **mais de 100 segundos por ciclo**, e depois disso `_sync_dimension_records`
+  fazia **um SELECT por registro** pra decidir criar vs. atualizar — mais de
+  100 mil consultas individuais na MESMA sincronização. Isso sozinho era maior
+  que qualquer lentidão já medida nas telas de leitura do módulo.
+  Corrigido em 3 frentes, validadas ao vivo (100s+ → **2,73s**, ~35-40x):
+  (1) throttle configurável (padrão 24h, exposto na tela de sincronização como
+  "Atualizar cadastros") — entre uma janela e outra usa só o cache já no
+  banco, zero chamada à API; nomes de cliente/usuário/motivo mudam raramente
+  comparado à frequência de sync de atendimentos, uma defasagem de até 24h no
+  NOME exibido não afeta nenhum número financeiro/operacional; (2) upsert em
+  lote em `_sync_dimension_records` (carrega os existentes de uma vez, em
+  lotes de 2000, em vez de um SELECT por registro); (3) `_load_dimension_map`
+  selecionava a entidade ORM inteira (hidratando `payload_json`, que ninguém
+  usa ali) só pra ler 2 colunas — sozinho foi de 5,6s pra 0,9s, medido ao vivo,
+  e essa função roda toda vez mesmo quando o throttle pula a busca na API.
+  Testes: 6 novos (`test_opa_dimensions_throttle.py`) + 741 passed na suíte
+  completa (as 13 falhas restantes são pré-existentes e alheias, módulo
+  `test_ai_*`).
+  **Achados adicionais, ainda NÃO implementados** (relatório completo de um
+  agente investigador, com evidência de `EXPLAIN ANALYZE` real): `GET
+  /support/opa/overview` mede 540-930ms — não é falta de índice (confirmado
+  via `EXPLAIN ANALYZE`, os índices existem e funcionam), é **8-9 consultas
+  separadas escaneando o mesmo recorte de ~57 mil linhas** em vez de uma só;
+  `customer_metrics` e `average_first_response_seconds` puxam dezenas de
+  milhares de linhas pra Python quando o cálculo cabia inteiro em SQL (`AVG`,
+  `COUNT DISTINCT`); `COUNT(DISTINCT attendant_id)`/`COUNT(DISTINCT
+  department_id)` força um `Sort Method: external merge, Disk` de ~155ms,
+  rodando 2x por chamada (período atual + anterior); `GET /support/opa-metrics`
+  parece duplicar o núcleo do que `/opa/overview` já calcula. Nenhuma dessas
+  mexe em índice nem em dado - são só menos idas ao banco pro mesmo resultado.
+  Decisão de quando implementar essa parte ainda pendente do usuário.
 
 - **Auditoria de performance do backend — P0 e P1 corrigidos, P2 avaliado e adiado**:
   pedido do usuário "preciso de uma auditoria na velocidade do backend, como deixar
@@ -1193,16 +1235,26 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Frentes em andamento / conhecidas
 
-- **3 PRs abertas aguardando merge** (nenhuma na VM ainda):
+- **4 PRs abertas aguardando merge** (nenhuma na VM ainda):
   `claude/suporte-sync-backfill-madrugada` (import em background + backfill de
-  meses + fix de campo numérico), `claude/auditoria-performance-p0` (fix do
-  cache do dashboard + ANALYZE + poda de rascunhos) e
-  `claude/auditoria-performance-p1` (IXC backfill em background + N+1 + query
-  duplicada + pool de conexão). **Depois do merge/deploy da P0, faltam 2
-  comandos manuais na VM** (ação em banco, não fazem parte do `docker compose up`):
+  meses + fix de campo numérico + throttle de sincronização de dimensões do
+  OPA Suite), `claude/auditoria-performance-p0` (fix do cache do dashboard +
+  ANALYZE + poda de rascunhos) e `claude/auditoria-performance-p1` (IXC
+  backfill em background + N+1 + query duplicada + pool de conexão) — mais
+  esta própria PR de docs (`claude/status-md-2026-08-27`). **Depois do
+  merge/deploy da P0, faltam 2 comandos manuais na VM** (ação em banco, não
+  fazem parte do `docker compose up`):
   `ANALYZE service_orders, collaborator_scores, operations_orders,
   scheduling_orders, scheduling_events, management_cases;` e
   `docker exec opr-gamification-backend python -m scripts.enable_draft_retention`.
+- **Otimização da tela de leitura do SGP Suporte/OPA Suite — achados
+  mapeados, ainda não implementados**: `GET /support/opa/overview` mede
+  540-930ms por causa de 8-9 consultas separadas escaneando o mesmo recorte de
+  dados (não falta de índice - confirmado via `EXPLAIN ANALYZE`), com
+  `customer_metrics`/`average_first_response_seconds` puxando dezenas de
+  milhares de linhas pra Python quando cabia em SQL. Decisão de quando
+  implementar pendente do usuário (ver entrada acima em "O que foi feito
+  recentemente").
 - **Menu lateral único — código pronto no histórico, fora de produção por
   decisão do usuário**: revertido antes do deploy (ver acima). Reativar quando
   o usuário pedir: reverter o commit de revert numa branch nova.
@@ -1238,9 +1290,14 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Próximos passos sugeridos
 
-- Mergear as 3 PRs abertas (ver "Frentes em andamento") e rodar os 2 comandos
+- Mergear as 4 PRs abertas (ver "Frentes em andamento") e rodar os 2 comandos
   manuais na VM depois do deploy da P0.
-- P2 da auditoria de performance, ainda não desenhada: cache de curto prazo em
+- Decidir com o usuário se/quando implementar os achados de leitura da
+  auditoria de performance do SGP Suporte/OPA Suite (combinar as 8-9 consultas
+  de `/opa/overview` num recorte só, mover `customer_metrics`/
+  `average_first_response_seconds` pra SQL, ver se `/opa-metrics` duplica
+  `/opa/overview`) — mapeado, não implementado (ver "Frentes em andamento").
+- P2 da auditoria de performance geral, ainda não desenhada: cache de curto prazo em
   `GET /operations/overview` e `GET /support/opa/overview` — precisa incluir o
   escopo por usuário (gestor regional) na chave do cache, não só os filtros da
   URL, senão risco de vazar dado de uma regional pra gestor de outra. Também
