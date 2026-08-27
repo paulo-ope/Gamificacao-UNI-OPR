@@ -517,6 +517,121 @@ def test_import_leaves_bot_human_classification_null_without_message_data(db_ses
     assert attendance.reached_human is None
     assert attendance.bot_to_human_handoff is None
     assert attendance.tmr_all_responses_seconds is None
+    # Bloco de resumo por mensagem (preparação B3, seção 10.3 do roteiro) segue
+    # o mesmo critério: sem mensagem, tudo fica None, nunca vira zero.
+    assert attendance.distinct_human_attendant_ids is None
+    assert attendance.first_human_attendant_id is None
+    assert attendance.last_human_attendant_id is None
+    assert attendance.human_message_count is None
+    assert attendance.bot_message_count is None
+    assert attendance.client_message_count is None
+
+
+def test_message_attendant_summary_is_null_without_messages(db_session):
+    """Atendimento sem mensagens: `list_messages` devolve `[]` explicitamente
+    (não ausente) — mesmo assim o resumo fica todo `None`, não zero."""
+    client = FakeOpaClient([_record(id="OPA-VAZIO")], messages={"OPA-VAZIO": []})
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-VAZIO"))
+    assert attendance.distinct_human_attendant_ids is None
+    assert attendance.first_human_attendant_id is None
+    assert attendance.last_human_attendant_id is None
+    assert attendance.human_message_count is None
+    assert attendance.bot_message_count is None
+    assert attendance.client_message_count is None
+
+
+def test_message_attendant_summary_bot_only_has_zero_human_messages(db_session):
+    """Mensagens só de bot: contagem humana é um zero de verdade (dado real,
+    não "insuficiente") — diferente do caso sem mensagem nenhuma."""
+    record = _record(id="OPA-SO-BOT", data_abertura="2026-08-20T10:00:00+00:00", data_encerramento=None, tmr_seconds=None)
+    messages = [
+        {"id_user": "U-1", "data": "2026-08-20T10:00:00+00:00"},
+        {"id_atend": "BOT-1", "data": "2026-08-20T10:00:02+00:00"},
+        {"id_atend": "BOT-1", "data": "2026-08-20T10:00:05+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[{"_id": "BOT-1", "nome": "Bot", "tipo": "bot"}],
+        messages={"OPA-SO-BOT": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 20), date_to=date(2026, 8, 20), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-SO-BOT"))
+    assert attendance.distinct_human_attendant_ids is None
+    assert attendance.first_human_attendant_id is None
+    assert attendance.last_human_attendant_id is None
+    assert attendance.human_message_count == 0
+    assert attendance.bot_message_count == 2
+    assert attendance.client_message_count == 1
+
+
+def test_message_attendant_summary_single_human_attendant(db_session):
+    record = _record(id="OPA-1-HUMANO", atendente={"id": "A-1", "nome": "Atendente Um"})
+    messages = [
+        {"id_user": "U-1", "data": "2026-08-20T10:00:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:05:00+00:00"},
+        {"id_user": "U-1", "data": "2026-08-20T10:10:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:12:00+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[{"_id": "A-1", "nome": "Atendente Um", "tipo": "user"}],
+        messages={"OPA-1-HUMANO": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-1-HUMANO"))
+    assert attendance.distinct_human_attendant_ids == ["A-1"]
+    assert attendance.first_human_attendant_id == "A-1"
+    assert attendance.last_human_attendant_id == "A-1"
+    assert attendance.human_message_count == 2
+    assert attendance.bot_message_count == 0
+    assert attendance.client_message_count == 2
+
+
+def test_message_attendant_summary_multiple_human_attendants_orders_by_timestamp(db_session):
+    """Atendimento com handoff entre dois atendentes humanos: primeiro/último
+    precisam respeitar a ordem cronológica das mensagens, não a ordem em que
+    elas chegam na lista (a lista abaixo já está fora de ordem de propósito)."""
+    record = _record(id="OPA-HANDOFF-HUMANO", atendente={"id": "A-2", "nome": "Atendente Dois"})
+    messages = [
+        {"id_atend": "A-2", "data": "2026-08-20T12:00:00+00:00"},  # ultimo cronologicamente, primeiro na lista
+        {"id_user": "U-1", "data": "2026-08-20T10:00:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-08-20T10:05:00+00:00"},  # primeiro cronologicamente
+        {"id_user": "U-1", "data": "2026-08-20T11:00:00+00:00"},
+        {"id_atend": "A-2", "data": "2026-08-20T11:30:00+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[
+            {"_id": "A-1", "nome": "Atendente Um", "tipo": "user"},
+            {"_id": "A-2", "nome": "Atendente Dois", "tipo": "user"},
+        ],
+        messages={"OPA-HANDOFF-HUMANO": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 15), date_to=date(2026, 8, 15), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-HANDOFF-HUMANO"))
+    assert attendance.distinct_human_attendant_ids == ["A-1", "A-2"]
+    assert attendance.first_human_attendant_id == "A-1"
+    assert attendance.last_human_attendant_id == "A-2"
+    assert attendance.human_message_count == 3
+    assert attendance.bot_message_count == 0
+    assert attendance.client_message_count == 2
 
 
 def test_opa_metrics_summarizes_imported_attendances(db_session, admin_user):

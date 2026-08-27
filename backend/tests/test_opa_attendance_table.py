@@ -10,12 +10,14 @@ from app.modules.support.models import SupportOpaAttendance, SupportOpaDimension
 from app.modules.support import opa_timeline_service
 from app.modules.support import router as support_router
 from app.modules.support.router import (
+    OpaExtraFilters,
     opa_attendance_detail,
     opa_attendance_timeline,
     opa_attendances,
     opa_attendant_summary,
     opa_breakdowns,
     opa_overview,
+    opa_timeseries,
 )
 
 
@@ -62,6 +64,9 @@ def _list(db_session, admin_user, **kwargs):
         "sort_dir": "desc",
         "db": db_session,
         "user": admin_user,
+        # As rotas recebem os filtros adicionais por `Depends(OpaExtraFilters)`;
+        # chamadas direto (sem FastAPI) precisam montar o objeto na mão.
+        "extra": OpaExtraFilters(),
     }
     params.update(kwargs)
     return opa_attendances(**params)
@@ -79,6 +84,9 @@ def _overview(db_session, admin_user, **kwargs):
         "search": None,
         "db": db_session,
         "user": admin_user,
+        # As rotas recebem os filtros adicionais por `Depends(OpaExtraFilters)`;
+        # chamadas direto (sem FastAPI) precisam montar o objeto na mão.
+        "extra": OpaExtraFilters(),
     }
     params.update(kwargs)
     return opa_overview(**params)
@@ -96,6 +104,9 @@ def _attendant_summary(db_session, admin_user, attendant_id, **kwargs):
         "search": None,
         "db": db_session,
         "user": admin_user,
+        # As rotas recebem os filtros adicionais por `Depends(OpaExtraFilters)`;
+        # chamadas direto (sem FastAPI) precisam montar o objeto na mão.
+        "extra": OpaExtraFilters(),
     }
     params.update(kwargs)
     return opa_attendant_summary(attendant_id, **params)
@@ -122,6 +133,9 @@ def _breakdowns(db_session, admin_user, **kwargs):
         "customer": None,
         "db": db_session,
         "user": admin_user,
+        # As rotas recebem os filtros adicionais por `Depends(OpaExtraFilters)`;
+        # chamadas direto (sem FastAPI) precisam montar o objeto na mão.
+        "extra": OpaExtraFilters(),
     }
     params.update(kwargs)
     return opa_breakdowns(**params)
@@ -594,6 +608,126 @@ def test_opa_attendant_summary_and_top_reasons_expose_tmr_all_responses_seconds(
     assert top_reason["label"] == "Sem conexão"
     assert top_reason["average_tmr_seconds"] == 300.0
     assert top_reason["average_tmr_all_responses_seconds"] == 40.0
+
+
+def test_tmr_all_responses_coverage_reports_partial_history(db_session, admin_user):
+    """Caso real da auditoria: parte do histórico ainda não tem TMR geral
+    calculado (campo entrou em produção depois). A média (40.0) precisa
+    continuar exatamente igual a antes - só o denominador é novo."""
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=50),
+            _attendance(2, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=30),
+            # Histórico sem TMR geral (anterior à ativação do cálculo) - NULL,
+            # nunca 0. Não pode entrar na média nem no numerador da cobertura.
+            _attendance(3, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=None),
+            _attendance(4, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=None),
+        ]
+    )
+    db_session.flush()
+
+    overview = _overview(db_session, admin_user)
+    assert overview["average_tmr_all_responses_seconds"]["current"] == 40.0
+    assert overview["tmr_all_responses_coverage"] == {"count": 2, "total": 4, "percentage": 50.0}
+
+    summary = _attendant_summary(db_session, admin_user, "A-1")
+    assert summary["average_tmr_all_responses_seconds"] == 40.0
+    assert summary["tmr_all_responses_coverage"] == {"count": 2, "total": 4, "percentage": 50.0}
+
+    top_reason = overview["top_reasons"][0]
+    assert top_reason["tmr_all_responses_coverage"]["count"] <= top_reason["tmr_all_responses_coverage"]["total"]
+
+
+def test_tmr_all_responses_coverage_is_zero_when_nothing_calculated(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=None),
+            _attendance(2, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=None),
+        ]
+    )
+    db_session.flush()
+
+    overview = _overview(db_session, admin_user)
+    assert overview["average_tmr_all_responses_seconds"]["current"] is None
+    assert overview["tmr_all_responses_coverage"] == {"count": 0, "total": 2, "percentage": 0.0}
+
+
+def test_tmr_all_responses_coverage_is_full_when_everything_calculated(db_session, admin_user):
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=20),
+            _attendance(2, attendant_id="A-1", opened_at=opened, tmr_all_responses_seconds=40),
+        ]
+    )
+    db_session.flush()
+
+    overview = _overview(db_session, admin_user)
+    assert overview["average_tmr_all_responses_seconds"]["current"] == 30.0
+    assert overview["tmr_all_responses_coverage"] == {"count": 2, "total": 2, "percentage": 100.0}
+
+
+def test_tmr_all_responses_coverage_percentage_is_none_for_empty_universe(db_session, admin_user):
+    overview = _overview(db_session, admin_user, date_from=date(2099, 1, 1), date_to=date(2099, 1, 1))
+    assert overview["tmr_all_responses_coverage"] == {"count": 0, "total": 0, "percentage": None}
+
+
+def test_tmr_humano_stays_independent_of_tmr_geral_coverage(db_session, admin_user):
+    """TMR humano (tmr_seconds) não pode ser afetado pela cobertura parcial de
+    TMR geral - são campos e denominadores independentes."""
+    opened = datetime(2026, 8, 1, 8, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            _attendance(1, attendant_id="A-1", opened_at=opened, tmr_seconds=100, tmr_all_responses_seconds=None),
+            _attendance(2, attendant_id="A-1", opened_at=opened, tmr_seconds=300, tmr_all_responses_seconds=None),
+        ]
+    )
+    db_session.flush()
+
+    overview = _overview(db_session, admin_user)
+    assert overview["average_tmr_seconds"]["current"] == 200.0
+    assert overview["average_tmr_all_responses_seconds"]["current"] is None
+    assert overview["tmr_all_responses_coverage"] == {"count": 0, "total": 2, "percentage": 0.0}
+
+
+def test_imported_data_window_reports_min_max_over_whole_base_ignoring_filters(db_session, admin_user):
+    """`imported_data_window` é sobre a BASE INTEIRA, nunca sobre o recorte de
+    filtros escolhido - por isso o teste passa um período (10/08) que não cobre
+    o menor/maior opened_at real dos dados semeados (01/08 e 20/08) e ainda
+    assim espera ver a janela completa."""
+    db_session.add_all(
+        [
+            _attendance(1, opened_at=datetime(2026, 8, 1, 9, tzinfo=timezone.utc), closed_at=datetime(2026, 8, 1, 10, tzinfo=timezone.utc)),
+            _attendance(2, opened_at=datetime(2026, 8, 10, 9, tzinfo=timezone.utc), closed_at=datetime(2026, 8, 10, 10, tzinfo=timezone.utc)),
+            _attendance(3, opened_at=datetime(2026, 8, 20, 9, tzinfo=timezone.utc), closed_at=datetime(2026, 8, 20, 10, tzinfo=timezone.utc)),
+        ]
+    )
+    db_session.flush()
+
+    overview = _overview(db_session, admin_user, date_from=date(2026, 8, 10), date_to=date(2026, 8, 10))
+    window = overview["imported_data_window"]
+    assert window["total_attendances"] == 3
+    assert window["min_opened_at"].date() == date(2026, 8, 1)
+    assert window["max_opened_at"].date() == date(2026, 8, 20)
+    assert window["min_closed_at"].date() == date(2026, 8, 1)
+    assert window["max_closed_at"].date() == date(2026, 8, 20)
+    # o recorte filtrado (10/08) só bate 1 atendimento - prova que a janela
+    # acima não veio da mesma consulta filtrada.
+    assert overview["total_attendances"]["current"] == 1
+
+
+def test_imported_data_window_is_all_none_when_base_is_empty(db_session, admin_user):
+    overview = _overview(db_session, admin_user)
+    window = overview["imported_data_window"]
+    assert window == {
+        "min_opened_at": None,
+        "max_opened_at": None,
+        "min_closed_at": None,
+        "max_closed_at": None,
+        "total_attendances": 0,
+    }
 
 
 def test_opa_overview_and_table_filters_use_same_universe(db_session, admin_user):
@@ -1268,3 +1402,179 @@ def test_opa_attendance_timeline_external_failure_keeps_structural_events(db_ses
     assert body["messages_source"] == "unavailable"
     assert body["messages_error"] is not None
     assert any(event["type"] == "opened" for event in body["events"])
+
+
+# --- Filtros novos (etiqueta, avaliação, bot/humano) e série diária -----------
+
+
+def _timeseries(db_session, admin_user, **kwargs):
+    params = {
+        "date_from": date(2026, 8, 1),
+        "date_to": date(2026, 8, 1),
+        "status": None,
+        "channel": None,
+        "attendant_id": None,
+        "department_id": None,
+        "reason_id": None,
+        "customer": None,
+        "search": None,
+        "db": db_session,
+        "user": admin_user,
+        "extra": OpaExtraFilters(),
+    }
+    params.update(kwargs)
+    return opa_timeseries(**params)
+
+
+def test_tag_filter_matches_only_attendances_carrying_the_tag(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, tag_ids_text=",tag-a,tag-b,"),
+            _attendance(2, tag_ids_text=",tag-b,"),
+            _attendance(3, tag_ids_text=","),
+            _attendance(4, tag_ids_text=None),
+        ]
+    )
+    db_session.flush()
+
+    only_a = _list(db_session, admin_user, extra=OpaExtraFilters(tag_id="tag-a"))
+    assert {item["protocol"] for item in only_a["items"]} == {"UNI20260001"}
+
+    # Multivalorado é OU: "tem pelo menos uma das selecionadas".
+    a_or_b = _list(db_session, admin_user, extra=OpaExtraFilters(tag_id="tag-a,tag-b"))
+    assert {item["protocol"] for item in a_or_b["items"]} == {"UNI20260001", "UNI20260002"}
+
+
+def test_tag_filter_does_not_match_id_that_merely_contains_another(db_session, admin_user):
+    """O separador nas duas pontas existe justamente pra isso: sem ele,
+    LIKE '%tag%' casaria com 'tag-a' e o filtro devolveria a mais."""
+    db_session.add_all(
+        [
+            _attendance(1, tag_ids_text=",tag,"),
+            _attendance(2, tag_ids_text=",tag-a,"),
+        ]
+    )
+    db_session.flush()
+
+    result = _list(db_session, admin_user, extra=OpaExtraFilters(tag_id="tag"))
+    assert {item["protocol"] for item in result["items"]} == {"UNI20260001"}
+
+
+def test_rating_range_filter_excludes_unrated_attendances(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, rating=5.0),
+            _attendance(2, rating=3.0),
+            _attendance(3, rating=None),
+        ]
+    )
+    db_session.flush()
+
+    result = _list(db_session, admin_user, extra=OpaExtraFilters(rating_min=4))
+    protocols = {item["protocol"] for item in result["items"]}
+    assert protocols == {"UNI20260001"}
+    # Atendimento sem avaliação nunca entra num recorte por nota — `NULL >= 4`
+    # não é verdadeiro, e tratá-lo como 0 inventaria uma nota que não existe.
+    assert "UNI20260003" not in protocols
+
+    faixa = _list(db_session, admin_user, extra=OpaExtraFilters(rating_min=3, rating_max=4))
+    assert {item["protocol"] for item in faixa["items"]} == {"UNI20260002"}
+
+
+def test_bot_human_filter_never_treats_unclassified_as_false(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, handled_by_bot=True, reached_human=True, bot_to_human_handoff=True),
+            _attendance(2, handled_by_bot=False, reached_human=True, bot_to_human_handoff=False),
+            _attendance(3, handled_by_bot=None, reached_human=None, bot_to_human_handoff=None),
+        ]
+    )
+    db_session.flush()
+
+    com_bot = _list(db_session, admin_user, extra=OpaExtraFilters(bot_human="with_bot"))
+    assert {item["protocol"] for item in com_bot["items"]} == {"UNI20260001"}
+
+    sem_bot = _list(db_session, admin_user, extra=OpaExtraFilters(bot_human="without_bot"))
+    # O não classificado (NULL) NÃO aparece aqui: "não sei" nunca vira "sem bot".
+    assert {item["protocol"] for item in sem_bot["items"]} == {"UNI20260002"}
+
+    handoff = _list(db_session, admin_user, extra=OpaExtraFilters(bot_human="handoff"))
+    assert {item["protocol"] for item in handoff["items"]} == {"UNI20260001"}
+
+    nao_classificado = _list(db_session, admin_user, extra=OpaExtraFilters(bot_human="unclassified"))
+    assert {item["protocol"] for item in nao_classificado["items"]} == {"UNI20260003"}
+
+
+def test_new_filters_apply_to_overview_and_previous_period_alike(db_session, admin_user):
+    """`previous_period()` passou a usar `dataclasses.replace`; este teste trava
+    a regressão que a versão antiga (cópia campo a campo) permitiria — um filtro
+    novo valendo só no período atual faria o comparativo medir outro universo."""
+    db_session.add_all(
+        [
+            _attendance(1, opened_at=datetime(2026, 8, 2, 10, tzinfo=timezone.utc), handled_by_bot=True),
+            _attendance(2, opened_at=datetime(2026, 8, 2, 11, tzinfo=timezone.utc), handled_by_bot=False),
+            _attendance(3, opened_at=datetime(2026, 8, 1, 10, tzinfo=timezone.utc), handled_by_bot=True),
+            _attendance(4, opened_at=datetime(2026, 8, 1, 11, tzinfo=timezone.utc), handled_by_bot=False),
+        ]
+    )
+    db_session.flush()
+
+    overview = _overview(
+        db_session,
+        admin_user,
+        date_from=date(2026, 8, 2),
+        date_to=date(2026, 8, 2),
+        extra=OpaExtraFilters(bot_human="with_bot"),
+    )
+    assert overview["total_attendances"]["current"] == 1
+    # Se o filtro vazasse do período anterior, `previous` viria 2 em vez de 1.
+    assert overview["total_attendances"]["previous"] == 1
+
+
+def test_daily_timeseries_fills_days_without_attendances_with_zero(db_session, admin_user):
+    db_session.add_all(
+        [
+            _attendance(1, opened_at=datetime(2026, 8, 1, 12, tzinfo=timezone.utc)),
+            _attendance(2, opened_at=datetime(2026, 8, 3, 12, tzinfo=timezone.utc)),
+        ]
+    )
+    db_session.flush()
+
+    body = _timeseries(db_session, admin_user, date_from=date(2026, 8, 1), date_to=date(2026, 8, 3))
+    points = body["points"]
+
+    assert [point["day"] for point in points] == [date(2026, 8, 1), date(2026, 8, 2), date(2026, 8, 3)]
+    assert [point["total"] for point in points] == [1, 0, 1]
+    # Dia vazio não pode inventar tempo: some da média, não vira zero.
+    assert points[1]["average_duration_seconds"] is None
+    assert points[1]["tmr_all_responses_coverage"] == {"count": 0, "total": 0, "percentage": None}
+
+
+def test_daily_timeseries_totals_match_the_overview_of_the_same_period(db_session, admin_user):
+    """O gráfico é decomposição dos cards — se as duas somas divergirem, a tela
+    está mostrando dois universos diferentes lado a lado."""
+    _seed(db_session, total=18)
+
+    overview = _overview(db_session, admin_user, date_from=date(2026, 8, 1), date_to=date(2026, 8, 2))
+    body = _timeseries(db_session, admin_user, date_from=date(2026, 8, 1), date_to=date(2026, 8, 2))
+
+    assert sum(point["total"] for point in body["points"]) == overview["total_attendances"]["current"]
+    assert sum(point["closed"] for point in body["points"]) == overview["closed_attendances"]["current"]
+
+
+def test_daily_timeseries_buckets_by_local_day_not_utc(db_session, admin_user):
+    """02:00 UTC do dia 2 é ainda 22:00 do dia 1 em America/Porto_Velho (UTC-4).
+    Agrupar em UTC jogaria esse atendimento no dia errado do gráfico."""
+    db_session.add_all(
+        [
+            _attendance(1, opened_at=datetime(2026, 8, 2, 2, 0, tzinfo=timezone.utc)),
+            _attendance(2, opened_at=datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)),
+        ]
+    )
+    db_session.flush()
+
+    body = _timeseries(db_session, admin_user, date_from=date(2026, 8, 1), date_to=date(2026, 8, 2))
+    by_day = {point["day"]: point["total"] for point in body["points"]}
+
+    assert by_day[date(2026, 8, 1)] == 1
+    assert by_day[date(2026, 8, 2)] == 1

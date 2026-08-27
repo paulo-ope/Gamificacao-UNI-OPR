@@ -49,6 +49,10 @@ rota nem na tela — ver [AGENTS.md](../AGENTS.md).
 - Regras obrigatórias de código, segurança e arquitetura: [AGENTS.md](../AGENTS.md).
   Leia antes de qualquer alteração — inclui a exigência de apresentar diagnóstico e
   plano antes de escrever código em tarefa nova.
+- Contrato operacional obrigatório de engenharia: [manual_desenvolvimento_senior.md](manual_desenvolvimento_senior.md).
+  Leia antes de desenvolver ou modernizar funcionalidades. Ele usa linguagem
+  normativa e define critérios verificáveis para layout moderno, backend estável e
+  rápido, código organizado, segurança, banco, testes e produção.
 - **Norma permanente de métricas, filtros, importações e dashboards:
   [normas-qualidade-dados-metricas.md](normas-qualidade-dados-metricas.md).**
   Obrigatória em qualquer tarefa que crie ou altere KPI, filtro de período,
@@ -72,6 +76,9 @@ arquivos antes de continuar o trabalho.
 
 ## Índice comentado dos demais documentos (`docs/`)
 
+- `manual_desenvolvimento_senior.md` — padrão oficial e contrato operacional de
+  engenharia: reúne regras verificáveis de layout moderno, backend estável e rápido,
+  código limpo, arquitetura, banco, segurança, testes, observabilidade e deploy.
 - `normas-qualidade-dados-metricas.md` — **norma permanente** de qualidade de dados e
   métricas: fonte única de regra (KPI vive no service, frontend só formata), contrato
   de filtros (fuso `America/Porto_Velho`, datas inclusivas, `opened_at` vs
@@ -87,6 +94,9 @@ arquivos antes de continuar o trabalho.
 - `plano-integracao-ixc.md` / `plano-integracao-opa-suite.md` — planos de integração externa.
 - `plano-analise-opa-suite-atendimentos.md` — plano de evolução do módulo SGP em análise completa de atendimentos (visão geral, individual, histórico/timeline, metas, IA).
 - `plano-ux-visual-sgp-suporte-fase-4a.md` — planejamento da fase visual/UX do SGP Suporte após as fases estruturais da OPA Suite.
+- `roteiro-comparacao-tmr-opa-suite.md` — roteiro pra comparar TMR do sistema local
+  contra o painel oficial do OPA Suite (qual métrica local corresponde ao TMR deles),
+  com tabela-modelo e critérios de classificação de divergência.
 - `proposta-filter-contract-v1.md` — contrato de filtros compartilhado entre telas.
 - `plano-plataforma-inteligencia-operacional.md` — plano do UNI Intelligence.
 - `estudo-kpis-agendamento.md` — KPIs do módulo de Agendamento.

@@ -91,6 +91,7 @@ def attendant_summary(db: Session, attendant_id: str, filters: OpaAttendanceFilt
         "average_tma_seconds": metrics["average_duration_seconds"],
         "average_tmr_seconds": metrics["average_tmr_seconds"],
         "average_tmr_all_responses_seconds": metrics["average_tmr_all_responses_seconds"],
+        "tmr_all_responses_coverage": metrics["tmr_all_responses_coverage"],
         "average_first_response_seconds": opa_overview_service.average_first_response_seconds(db, scoped_filters),
         "average_rating": metrics["average_rating"],
         "rating_count": int(rating_count),

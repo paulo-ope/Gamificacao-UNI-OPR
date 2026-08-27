@@ -47,10 +47,14 @@ import {
   StatCell,
   StatusSummary,
   TimeMetricsStrip,
+  tmrCoverageNote,
   TopReasonsSummary,
   TrendValue,
   type OpaModuleTab,
 } from "@/app/suporte/_components/opa-module-components";
+import { BotHumanChart, RankingChart, TimeTrendChart, VolumeTrendChart } from "@/app/suporte/_components/opa-charts";
+import { OpaDrilldownSheet, type OpaDrilldown } from "@/app/suporte/_components/opa-drilldown";
+import { OpaSavedFiltersBar } from "@/app/suporte/_components/opa-saved-filters";
 import type {
   SupportOpaAttendanceDetail,
   SupportOpaAttendanceDetailData,
@@ -69,6 +73,7 @@ import type {
   SupportOpaSyncSettings,
   SupportOpaSyncStatus,
   SupportOpaTimelineEvent,
+  SupportOpaTimeseriesPoint,
 } from "@/lib/types";
 
 function SyncStatusIndicator({ syncStatus, onOpenSync }: { syncStatus: SupportOpaSyncStatus | null; onOpenSync: () => void }) {
@@ -90,9 +95,28 @@ function SyncStatusIndicator({ syncStatus, onOpenSync }: { syncStatus: SupportOp
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors hover:opacity-80 ${tone}`}
       title="Abrir aba de sincronização"
     >
+      <span className={`h-1.5 w-1.5 rounded-full ${hasError ? "bg-red-500" : inProgress ? "bg-blue-500" : syncStatus.enabled ? "bg-emerald-500" : "bg-slate-400"}`} aria-hidden="true" />
       {inProgress ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
       {label}
     </button>
+  );
+}
+
+// Versão compacta da janela de base importada (ver `ImportedDataWindowNote`
+// em opa-module-components.tsx) pro cabeçalho — mesma informação, formato
+// mínimo pra caber ao lado do status de sincronização sem competir com o
+// título da página.
+function ImportedBaseBadge({ window }: { window: SupportOpaOverview["imported_data_window"] | null | undefined }) {
+  if (!window || !window.max_opened_at) return null;
+  const maxLabel = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "America/Porto_Velho" }).format(new Date(window.max_opened_at));
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600"
+      title="Data mais recente com atendimento importado da base local"
+    >
+      <Database className="h-3 w-3 text-slate-400" />
+      Base até {maxLabel} · {number(window.total_attendances)}
+    </span>
   );
 }
 
@@ -140,15 +164,45 @@ function queryStringFor(tab: OpaModuleTab, period: { date_from: string; date_to:
   if (tab !== "overview") params.set("tab", tab);
   params.set("date_from", period.date_from);
   params.set("date_to", period.date_to);
-  (["date_basis", "status", "channel", "attendant_id", "department_id", "reason_id", "customer", "search"] as const).forEach((key) => {
+  URL_FILTER_KEYS.forEach((key) => {
     const value = filters[key];
     if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
   });
   return params.toString();
 }
 
+/** Chaves de filtro que trafegam na URL. Ida e volta usam a MESMA lista de
+ *  propósito: quando eram duas listas soltas, um filtro novo entrava só na
+ *  escrita ou só na leitura e o recorte não sobrevivia a um reload — foi
+ *  exatamente o que aconteceu com `tag_id` na primeira validação ao vivo. */
+const URL_FILTER_KEYS = [
+  "date_basis",
+  "status",
+  "channel",
+  "attendant_id",
+  "department_id",
+  "reason_id",
+  "customer",
+  "search",
+  "tag_id",
+  "customer_id",
+  "rating_min",
+  "rating_max",
+  "bot_human",
+] as const;
+
+const BOT_HUMAN_VALUES = ["with_bot", "without_bot", "reached_human", "bot_only", "handoff", "unclassified"] as const;
+
+function numberParam(params: URLSearchParams, key: string) {
+  const raw = params.get(key);
+  if (raw === null || raw.trim() === "") return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function filtersFromParams(params: URLSearchParams): SupportOpaAttendanceFilters {
   const dateBasis = params.get("date_basis");
+  const botHuman = params.get("bot_human");
   return {
     page: 1,
     page_size: 25,
@@ -162,6 +216,15 @@ function filtersFromParams(params: URLSearchParams): SupportOpaAttendanceFilters
     reason_id: params.get("reason_id") || undefined,
     customer: params.get("customer") || undefined,
     search: params.get("search") || undefined,
+    tag_id: params.get("tag_id") || undefined,
+    customer_id: params.get("customer_id") || undefined,
+    rating_min: numberParam(params, "rating_min"),
+    rating_max: numberParam(params, "rating_max"),
+    // Valor fora da lista é descartado em vez de repassado: o backend
+    // responderia 422 e a tela abriria quebrada por causa de um link torto.
+    bot_human: BOT_HUMAN_VALUES.includes(botHuman as never)
+      ? (botHuman as SupportOpaAttendanceFilters["bot_human"])
+      : undefined,
   };
 }
 
@@ -199,6 +262,11 @@ function SupportPageContent() {
   const [period, setPeriod] = useState(initialPeriod);
   const [appliedPeriod, setAppliedPeriod] = useState(initialPeriod);
   const [overview, setOverview] = useState<SupportOpaOverview | null>(null);
+  const [timeseries, setTimeseries] = useState<SupportOpaTimeseriesPoint[]>([]);
+  const [timeseriesLoading, setTimeseriesLoading] = useState(false);
+  const [overviewRanking, setOverviewRanking] = useState<SupportOpaBreakdownItem[]>([]);
+  const [overviewRankingLoading, setOverviewRankingLoading] = useState(false);
+  const [drilldown, setDrilldown] = useState<OpaDrilldown | null>(null);
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
   const [attendancePage, setAttendancePage] = useState<SupportOpaAttendancePage | null>(null);
   const [attendanceFilters, setAttendanceFilters] = useState<SupportOpaAttendanceFilters>(initialFilters);
@@ -263,6 +331,11 @@ function SupportPageContent() {
       await Promise.all(requests);
       setAppliedPeriod(nextPeriod);
       setAttendanceFilters((current) => ({ ...current, ...nextFilters, date_from: nextPeriod.date_from, date_to: nextPeriod.date_to, page: 1 }));
+      if (tab === "overview") {
+        // Gráficos são decomposições do MESMO recorte dos cards — carregam
+        // junto, com os mesmos filtros, e nunca por outro caminho de cálculo.
+        void loadOverviewCharts(nextPeriod, nextFilters);
+      }
       if (tab === "data") {
         await loadAttendances({ ...overviewFilters(nextPeriod, nextFilters), page: 1 });
       }
@@ -386,6 +459,25 @@ function SupportPageContent() {
     } finally {
       setAttendanceLoading(false);
     }
+  }
+
+  async function loadOverviewCharts(
+    nextPeriod = appliedPeriod,
+    nextFilters: SupportOpaAttendanceFilters = attendanceFilters,
+  ) {
+    const scoped = overviewFilters(nextPeriod, nextFilters);
+    setTimeseriesLoading(true);
+    setOverviewRankingLoading(true);
+    // Os dois gráficos são independentes: um falhar não pode apagar o outro,
+    // por isso `allSettled` em vez de `all`.
+    const [seriesResult, rankingResult] = await Promise.allSettled([
+      api.supportOpaTimeseries(scoped),
+      api.supportOpaBreakdowns("attendant", { ...scoped, sort_by: "total", sort_dir: "desc", limit: 8 }),
+    ]);
+    setTimeseries(seriesResult.status === "fulfilled" ? seriesResult.value.points : []);
+    setOverviewRanking(rankingResult.status === "fulfilled" ? rankingResult.value.items : []);
+    setTimeseriesLoading(false);
+    setOverviewRankingLoading(false);
   }
 
   async function loadAttendantBreakdown(
@@ -568,7 +660,7 @@ function SupportPageContent() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-[0_1px_0_0_rgba(37,99,235,0.35)] backdrop-blur">
         <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
           <div className="flex items-center gap-3">
             <ModuleNavigationSidebar
@@ -603,7 +695,10 @@ function SupportPageContent() {
           <h2 className="text-lg font-semibold text-slate-950">Atendimentos do Suporte</h2>
           <p className="truncate text-xs text-slate-500">Dados sincronizados do OPA Suite</p>
         </div>
-        {canSync ? <SyncStatusIndicator syncStatus={syncStatus} onOpenSync={() => navigateToTab("sync")} /> : null}
+        <div className="flex flex-wrap items-center gap-2">
+          <ImportedBaseBadge window={overview?.imported_data_window} />
+          {canSync ? <SyncStatusIndicator syncStatus={syncStatus} onOpenSync={() => navigateToTab("sync")} /> : null}
+        </div>
       </section>
 
       <StatusToast error={error} message={message} onDismissError={() => setError(null)} onDismissMessage={() => setMessage(null)} />
@@ -616,6 +711,7 @@ function SupportPageContent() {
         canSync={canSync}
         syncing={syncing}
         canImport={Boolean(syncStatus?.configured)}
+        importedDataWindow={overview?.imported_data_window ?? null}
         onPeriodChange={setPeriod}
         onFilterChange={(patch) => setAttendanceFilters((current) => ({ ...current, ...patch }))}
         onApply={() => void load(period, { ...attendanceFilters, page: 1 }, activeView)}
@@ -623,9 +719,80 @@ function SupportPageContent() {
         onImport={() => void importPeriod()}
       />
 
+      <OpaSavedFiltersBar
+        period={period}
+        filters={attendanceFilters}
+        canPublishGlobal={canSync}
+        onApply={(saved) => {
+          // Um recorte salvo substitui o recorte inteiro — aplicar por cima do
+          // que já está na tela misturaria dois filtros e daria um terceiro
+          // resultado que o usuário nunca salvou.
+          const nextPeriod = {
+            date_from: String(saved.date_from ?? period.date_from),
+            date_to: String(saved.date_to ?? period.date_to),
+          };
+          const nextFilters: SupportOpaAttendanceFilters = {
+            page: 1,
+            page_size: attendanceFilters.page_size ?? 25,
+            sort_by: attendanceFilters.sort_by ?? "opened_at",
+            sort_dir: attendanceFilters.sort_dir ?? "desc",
+            date_basis: saved.date_basis === "closed_at" ? "closed_at" : undefined,
+            status: saved.status ? String(saved.status) : undefined,
+            channel: saved.channel ? String(saved.channel) : undefined,
+            attendant_id: saved.attendant_id ? String(saved.attendant_id) : undefined,
+            department_id: saved.department_id ? String(saved.department_id) : undefined,
+            reason_id: saved.reason_id ? String(saved.reason_id) : undefined,
+            customer: saved.customer ? String(saved.customer) : undefined,
+            search: saved.search ? String(saved.search) : undefined,
+            tag_id: saved.tag_id ? String(saved.tag_id) : undefined,
+            customer_id: saved.customer_id ? String(saved.customer_id) : undefined,
+            rating_min: saved.rating_min === undefined ? undefined : Number(saved.rating_min),
+            rating_max: saved.rating_max === undefined ? undefined : Number(saved.rating_max),
+            bot_human: saved.bot_human ? (String(saved.bot_human) as SupportOpaAttendanceFilters["bot_human"]) : undefined,
+          };
+          setPeriod(nextPeriod);
+          setAttendanceFilters(nextFilters);
+          void load(nextPeriod, nextFilters, activeView);
+        }}
+      />
+
       <section className="px-4 py-6 lg:px-7">
         <div className="grid gap-5">
-          {activeView === "overview" ? <OpaOverview overview={overview} /> : null}
+          {activeView === "overview" ? (
+            <div className="grid gap-5">
+              <div className="grid gap-3 xl:grid-cols-2">
+                <VolumeTrendChart
+                  points={timeseries}
+                  loading={timeseriesLoading}
+                  onSelectDay={(point) =>
+                    setDrilldown({
+                      title: `Atendimentos de ${dateLabel(point.day)}`,
+                      subtitle: `${number(point.total)} atendimento(s) · ${number(point.closed)} encerrados · mesmo recorte de filtros da tela`,
+                      filters: { date_from: point.day, date_to: point.day },
+                    })
+                  }
+                />
+                <TimeTrendChart points={timeseries} loading={timeseriesLoading} />
+              </div>
+              <div className="grid gap-3 xl:grid-cols-[1.4fr_1fr]">
+                <RankingChart
+                  title="Atendentes com mais volume"
+                  items={overviewRanking}
+                  loading={overviewRankingLoading}
+                  onSelect={(item) =>
+                    item.id &&
+                    setDrilldown({
+                      title: item.label,
+                      subtitle: `${number(item.total)} atendimento(s) · ${number(item.share_percentage, 1)}% do volume filtrado`,
+                      filters: { attendant_id: item.id },
+                    })
+                  }
+                />
+                <BotHumanChart metrics={overview?.bot_human ?? null} loading={loading} />
+              </div>
+              <OpaOverview overview={overview} />
+            </div>
+          ) : null}
           {activeView === "attendants" ? (
             <OpaAttendantsPanel
               breakdown={attendantBreakdown}
@@ -688,6 +855,17 @@ function SupportPageContent() {
           }
         }}
       />
+      <OpaDrilldownSheet
+        drilldown={drilldown}
+        baseFilters={overviewFilters(appliedPeriod, attendanceFilters)}
+        onOpenChange={(open) => {
+          if (!open) setDrilldown(null);
+        }}
+        onOpenAttendance={(id) => {
+          setDrilldown(null);
+          void openAttendanceDetail(id);
+        }}
+      />
       <AttendantDetailSheet
         open={selectedAttendant !== null}
         attendant={selectedAttendant}
@@ -738,12 +916,12 @@ function AttendanceDataTable({
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-200 p-4">
+      <div className="border-b border-slate-200 bg-slate-50/60 p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
             <Database className="h-4 w-4 text-blue-700" />
             <h3 className="text-base font-semibold text-slate-950">Dados</h3>
-            <Badge className="border-slate-200 bg-slate-50 text-slate-700">{number(page?.total ?? 0)} registros</Badge>
+            <Badge className="border-blue-100 bg-blue-50 text-blue-700">{number(page?.total ?? 0)} registros</Badge>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <select
@@ -777,7 +955,7 @@ function AttendanceDataTable({
             {loading ? (
               <TableRow><TableCell colSpan={11} className="py-10 text-center text-sm text-slate-500">Carregando atendimentos...</TableCell></TableRow>
             ) : null}
-            {!loading && items.map((item) => <AttendanceRow key={item.id} item={item} onOpenDetail={onOpenDetail} />)}
+            {!loading && items.map((item, index) => <AttendanceRow key={item.id} item={item} zebra={index % 2 === 1} onOpenDetail={onOpenDetail} />)}
             {!loading && !items.length ? (
               <TableRow><TableCell colSpan={11} className="py-10 text-center text-sm text-slate-500">Não há atendimentos para os filtros aplicados.</TableCell></TableRow>
             ) : null}
@@ -818,14 +996,14 @@ function AttendanceStatusBadge({ status, closedAt }: { status: string | null; cl
   );
 }
 
-function AttendanceRow({ item, onOpenDetail }: { item: SupportOpaAttendanceListItem; onOpenDetail: (id: number) => void }) {
+function AttendanceRow({ item, zebra, onOpenDetail }: { item: SupportOpaAttendanceListItem; zebra?: boolean; onOpenDetail: (id: number) => void }) {
   const customerName = item.customer_name?.trim();
   const customerId = item.customer_id?.trim();
   const customerCode = customerCodeLabel(customerId);
   return (
-    <TableRow className="cursor-pointer hover:bg-slate-50" onClick={() => onOpenDetail(item.id)}>
+    <TableRow className={`cursor-pointer hover:bg-blue-50/40 ${zebra ? "bg-slate-50/50" : ""}`} onClick={() => onOpenDetail(item.id)}>
       <TableCell className="whitespace-nowrap tabular-nums">{dateTimeShort(item.opened_at)}</TableCell>
-      <TableCell className="font-medium text-slate-900">{protocolLabel(item)}</TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-[11px] text-slate-500">{protocolLabel(item)}</TableCell>
       <TableCell className="max-w-56" title={[customerName, customerCode].filter(Boolean).join(" - ")}>
         <div className="min-w-0">
           <p className="truncate font-medium text-slate-800">{customerNameLabel(customerName, customerId)}</p>
@@ -907,11 +1085,13 @@ function AttendantDetailSheet({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-4xl">
-        <SheetHeader>
-          <div className="flex items-center gap-3">
+        <SheetHeader className="border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white">
+          <div className="flex items-center gap-3.5">
             <span
-              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
-                summary?.attendant_type === "bot" ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600"
+              className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-base font-bold shadow-sm ${
+                summary?.attendant_type === "bot"
+                  ? "bg-gradient-to-br from-blue-500 to-blue-700 text-white"
+                  : "bg-gradient-to-br from-slate-600 to-slate-800 text-white"
               }`}
               aria-hidden="true"
             >
@@ -1005,6 +1185,7 @@ function AttendantDetailSheet({
                               { label: "1ª resposta humana", value: secondsLabel(summary.average_first_response_seconds) },
                             ]
                       }
+                      note={tmrCoverageNote(summary.tmr_all_responses_coverage)}
                     />
                   </div>
 
@@ -1140,9 +1321,86 @@ function listLabel(item: Record<string, unknown>) {
 
 function DetailBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-4">
-      <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">{children}</div>
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">{title}</h3>
+      </div>
+      <div className="grid gap-3 p-4 sm:grid-cols-2">{children}</div>
+    </section>
+  );
+}
+
+// Resumo executivo do atendimento — protocolo/status/cliente/atendente/tempos
+// numa única área de destaque, em vez de repetir o mesmo em vários blocos tipo
+// formulário. Código do cliente/atendente/departamento vira metadado discreto
+// (monoespaçado, cinza) sob o nome — nunca compete com ele como texto principal.
+function AttendanceSummaryHeader({
+  protocol,
+  status,
+  customerName,
+  customerId,
+  attendantName,
+  attendantId,
+  departmentName,
+  openedAt,
+  closedAt,
+  duration,
+  tmrHuman,
+  tmrAll,
+  rating,
+}: {
+  protocol: unknown;
+  status: unknown;
+  customerName: unknown;
+  customerId: unknown;
+  attendantName: unknown;
+  attendantId: unknown;
+  departmentName: unknown;
+  openedAt: unknown;
+  closedAt: unknown;
+  duration: unknown;
+  tmrHuman: unknown;
+  tmrAll: unknown;
+  rating: unknown;
+}) {
+  const customerCode = typeof customerId === "string" ? customerCodeLabel(customerId) : "";
+  const attendantCode = typeof attendantId === "string" && attendantId.trim() ? `Código: ${attendantId}` : "";
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white px-4 py-3">
+        <div className="flex items-center gap-2">
+          {typeof status === "string" ? <AttendanceStatusBadge status={status} closedAt={typeof closedAt === "string" ? closedAt : null} /> : null}
+          <span className="font-mono text-[11px] text-slate-500">{detailLabel(protocol)}</span>
+        </div>
+        {typeof rating === "number" ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">
+            ★ {number(rating, 2)}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="grid gap-4 p-4 sm:grid-cols-2">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cliente</p>
+          <p className="mt-0.5 truncate text-base font-semibold text-slate-950">{detailLabel(customerName)}</p>
+          {customerCode ? <p className="mt-0.5 truncate text-[11px] text-slate-400">{customerCode}</p> : null}
+        </div>
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Atendente</p>
+          <p className="mt-0.5 truncate text-base font-semibold text-slate-950">{detailLabel(attendantName)}</p>
+          <p className="mt-0.5 truncate text-[11px] text-slate-400">
+            {typeof departmentName === "string" && departmentName ? departmentName : "Departamento não informado"}
+            {attendantCode ? ` · ${attendantCode}` : ""}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 border-t border-slate-100 sm:grid-cols-4 sm:divide-y-0">
+        <StatCell label="Duração" value={typeof duration === "number" ? secondsLabel(duration) : "-"} />
+        <StatCell label="TMR humano" value={typeof tmrHuman === "number" ? secondsLabel(tmrHuman) : "Não disponível"} />
+        <StatCell label="TMR geral" value={typeof tmrAll === "number" ? secondsLabel(tmrAll) : "Não disponível"} helper="inclui bot" />
+        <StatCell label="Abertura → Encerramento" value={typeof openedAt === "string" ? dateTimeShort(openedAt) : "-"} helper={typeof closedAt === "string" ? `até ${dateTimeShort(closedAt)}` : "em aberto"} />
+      </div>
     </section>
   );
 }
@@ -1334,50 +1592,39 @@ function AttendanceDetailSheet({
                 </div>
               ) : null}
 
-              <DetailBlock title="Atendimento">
-                <DetailField label="Protocolo" value={protocol.value} source={protocol.source} />
-                <DetailField label="Status" value={typeof status.value === "string" ? opaStatusLabel(status.value) : status.value} source={status.source} />
-              </DetailBlock>
+              <AttendanceSummaryHeader
+                protocol={protocol.value}
+                status={status.value}
+                customerName={customerDisplayName}
+                customerId={customerId.value}
+                attendantName={attendantName.value}
+                attendantId={attendantId.value}
+                departmentName={departmentName.value}
+                openedAt={openedAt.value}
+                closedAt={closedAt.value}
+                duration={duration.value}
+                tmrHuman={tmrHuman.value}
+                tmrAll={tmrAll.value}
+                rating={rating.value}
+              />
 
-              <DetailBlock title="Cliente">
-                <DetailField label="Cliente" value={customerDisplayName} source={customerName.source} />
-                <DetailField label="Código do cliente" value={customerId.value} source={customerId.source} />
-              </DetailBlock>
-
-              <DetailBlock title="Atendente">
-                <DetailField label="Atendente" value={attendantName.value} source={attendantName.source} />
-                <DetailField label="Código do atendente" value={attendantId.value} source={attendantId.source} />
-                <DetailField label="Departamento/setor" value={departmentName.value} source={departmentName.source} />
-                <DetailField label="Código do departamento" value={departmentId.value} source={departmentId.source} />
-              </DetailBlock>
-
-              <DetailBlock title="Canal">
+              <DetailBlock title="Canal e contexto">
                 <DetailField label="Canal" value={channel.value} source={channel.source} />
-                <DetailField label="Código do canal" value={channelId.value} source={channelId.source} />
                 <DetailField label="Canal do cliente" value={channelCustomer.value} source={channelCustomer.source} />
-              </DetailBlock>
-
-              <DetailBlock title="Motivos e tags">
                 <DetailField label="Motivos" value={reasons.length ? reasons.map(listLabel).join(", ") : null} source={listSource} />
                 <DetailField label="Tags" value={tags.length ? tags.map(listLabel).join(", ") : null} source={listSource} />
               </DetailBlock>
 
-              <DetailBlock title="Datas e duração">
-                <DetailField label="Abertura" value={typeof openedAt.value === "string" ? dateTimeLabel(openedAt.value) : openedAt.value} source={openedAt.source} />
-                <DetailField label="Encerramento" value={typeof closedAt.value === "string" ? dateTimeLabel(closedAt.value) : closedAt.value} source={closedAt.source} />
-                <DetailField label="Duração" value={typeof duration.value === "number" ? secondsLabel(duration.value) : duration.value} source={duration.source} />
-                <DetailField label="TMR humano" value={typeof tmrHuman.value === "number" ? secondsLabel(tmrHuman.value) : "Não disponível"} source={tmrHuman.source} />
-                <DetailField label="TMR geral (inclui bot)" value={typeof tmrAll.value === "number" ? secondsLabel(tmrAll.value) : "Não disponível"} source={tmrAll.source} />
-              </DetailBlock>
+              {(description.value || observations.value) ? (
+                <DetailBlock title="Descrição/observações">
+                  <DetailText label="Descrição" value={description.value} source={description.source} />
+                  <DetailText label="Observações" value={observations.value} source={observations.source} />
+                </DetailBlock>
+              ) : null}
 
-              <DetailBlock title="Avaliação">
-                <DetailField label="Nota" value={rating.value} source={rating.source} />
-              </DetailBlock>
-
-              <DetailBlock title="Descrição/observações">
-                <DetailText label="Descrição" value={description.value} source={description.source} />
-                <DetailText label="Observações" value={observations.value} source={observations.source} />
-              </DetailBlock>
+              <p className="px-1 text-[11px] text-slate-400">
+                Códigos internos: cliente {customerId.value ? String(customerId.value) : "-"} · atendente {attendantId.value ? String(attendantId.value) : "-"} · departamento {departmentId.value ? String(departmentId.value) : "-"} · canal {channelId.value ? String(channelId.value) : "-"}
+              </p>
 
               <AttendanceTimelineSection timeline={timeline} loading={timelineLoading} error={timelineError} />
             </>

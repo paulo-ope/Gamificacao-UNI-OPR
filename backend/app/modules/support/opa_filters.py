@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -46,6 +46,25 @@ DATE_BASIS_COLUMNS = {
 }
 DEFAULT_DATE_BASIS = "opened_at"
 
+# Separador usado em `SupportOpaAttendance.tag_ids_text` — o valor é sempre
+# gravado cercado por vírgulas (ex.: ",a,b,"), pra que um LIKE "%,a,%" nunca
+# case com um id que só CONTENHA outro como prefixo/sufixo.
+TAG_SEPARATOR = ","
+
+# Recortes de participação bot/humano. As colunas por trás são nullable e
+# `NULL` significa "não classificado" (histórico anterior à Fase 2, ou mensagens
+# indisponíveis) — por isso todo filtro aqui usa `IS TRUE`/`IS FALSE`, que
+# EXCLUI os não classificados dos dois lados, em vez de tratar NULL como False.
+# Ver `opa_ingestion._classify_bot_human`.
+BOT_HUMAN_FILTERS = {
+    "with_bot": lambda: SupportOpaAttendance.handled_by_bot.is_(True),
+    "without_bot": lambda: SupportOpaAttendance.handled_by_bot.is_(False),
+    "reached_human": lambda: SupportOpaAttendance.reached_human.is_(True),
+    "bot_only": lambda: SupportOpaAttendance.reached_human.is_(False),
+    "handoff": lambda: SupportOpaAttendance.bot_to_human_handoff.is_(True),
+    "unclassified": lambda: SupportOpaAttendance.handled_by_bot.is_(None),
+}
+
 
 @dataclass(frozen=True)
 class OpaAttendanceFilters:
@@ -63,30 +82,26 @@ class OpaAttendanceFilters:
     reason: str | None = None
     protocol: str | None = None
     customer: str | None = None
+    tag_id: str | None = None
+    customer_id: str | None = None
+    rating_min: float | None = None
+    rating_max: float | None = None
+    bot_human: str | None = None
 
     def previous_period(self) -> "OpaAttendanceFilters":
+        """Mesmo recorte de filtros, deslocado pro período imediatamente
+        anterior de mesma duração. Usa `dataclasses.replace` de propósito: a
+        versão antiga copiava campo a campo, e todo filtro novo que alguém
+        esquecesse de adicionar aqui vazaria silenciosamente do comparativo
+        (o "período anterior" ficaria calculado sobre um universo diferente do
+        atual, sem erro nenhum aparecendo)."""
         if not self.date_from or not self.date_to:
             return self
         validate_opa_period(self.date_from, self.date_to)
         days = (self.date_to - self.date_from).days + 1
         previous_to = self.date_from - timedelta(days=1)
         previous_from = previous_to - timedelta(days=days - 1)
-        return OpaAttendanceFilters(
-            date_from=previous_from,
-            date_to=previous_to,
-            date_basis=self.date_basis,
-            status=self.status,
-            channel=self.channel,
-            attendant_id=self.attendant_id,
-            department_id=self.department_id,
-            reason_id=self.reason_id,
-            search=self.search,
-            attendant=self.attendant,
-            department=self.department,
-            reason=self.reason,
-            protocol=self.protocol,
-            customer=self.customer,
-        )
+        return replace(self, date_from=previous_from, date_to=previous_to)
 
 
 def apply_opa_attendance_filters(statement, filters: OpaAttendanceFilters):
@@ -121,6 +136,29 @@ def apply_opa_attendance_filters(statement, filters: OpaAttendanceFilters):
         clauses.append(SupportOpaAttendance.reason_id.in_(values))
     if filters.reason:
         clauses.append(SupportOpaAttendance.reason_name == filters.reason)
+    if values := _selected_values(filters.customer_id):
+        clauses.append(SupportOpaAttendance.customer_id.in_(values))
+    if values := _selected_values(filters.tag_id):
+        # Etiqueta é multivalorada por atendimento (um atendimento pode ter N
+        # etiquetas), então a semântica é OU: "tem pelo menos uma das
+        # selecionadas" — igual ao que o painel do OPA faz.
+        clauses.append(
+            or_(
+                *[
+                    SupportOpaAttendance.tag_ids_text.like(f"%{TAG_SEPARATOR}{value}{TAG_SEPARATOR}%")
+                    for value in values
+                ]
+            )
+        )
+    if filters.rating_min is not None:
+        clauses.append(SupportOpaAttendance.rating >= filters.rating_min)
+    if filters.rating_max is not None:
+        clauses.append(SupportOpaAttendance.rating <= filters.rating_max)
+    if filters.bot_human:
+        build_clause = BOT_HUMAN_FILTERS.get(filters.bot_human)
+        if build_clause is None:
+            raise HTTPException(status_code=422, detail="Filtro de participação bot/humano inválido.")
+        clauses.append(build_clause())
     if filters.protocol:
         clauses.append(SupportOpaAttendance.protocol.ilike(f"%{filters.protocol.strip()}%"))
     if filters.customer:

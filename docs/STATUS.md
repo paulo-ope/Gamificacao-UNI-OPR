@@ -17,6 +17,545 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **Gráficos, drill-down e filtros novos na `/suporte` (ainda sem commit)**:
+  rodada pedida como "preciso ter gráficos, drill-down, melhorar os filtros".
+  **Filtros novos** (aditivos, em `opa_filters.py`): `tag_id` (etiqueta,
+  multivalorada com semântica OU), `rating_min`/`rating_max` (faixa de nota),
+  `bot_human` (6 recortes) e `customer_id`. Todos passam por um
+  `Depends(OpaExtraFilters)` único em vez de repetidos em cada rota — são 5
+  endpoints lendo o mesmo recorte, e um parâmetro esquecido em um deles
+  produziria a tela mostrando números de universos diferentes lado a lado sem
+  erro nenhum. `previous_period()` passou a usar `dataclasses.replace` pelo
+  mesmo motivo (a cópia campo a campo deixava filtro novo vazar do
+  comparativo).
+  **Etiqueta exigiu projeção**: era a única dimensão que o OPA só entrega
+  dentro do JSON (`raw_payload.tags[].id_tag`). Filtrar direto no JSON foi
+  medido em **411 ms por consulta** — inviável numa tela que dispara ~8
+  agregações por carga. Migration `0078` cria `tag_ids_text` (string
+  delimitada, separador nas duas pontas pra `LIKE` não casar id que contém
+  outro) e **faz backfill local** a partir do próprio `raw_payload` da mesma
+  linha — sem chamar a API do OPA, sem alterar métrica nenhuma. Resultado:
+  mesma contagem (1.698) em **98 ms**, 4,2x mais rápido; 0 nulos, 31.195 com
+  etiqueta.
+  **Gráficos** (ECharts, já era dependência do projeto — zero lib nova):
+  volume por dia (barras empilhadas encerrado/aberto), tempos por dia (TMA,
+  TMR humano e TMR geral — os três sempre juntos, dia sem cálculo vira buraco
+  na linha e nunca zero), ranking horizontal de atendentes e rosca bot vs.
+  humano com o denominador no centro. Endpoint novo `/opa/timeseries` usa os
+  MESMOS filtros dos cards — o gráfico é decomposição, não cálculo paralelo
+  (há teste travando que a soma da série bate com o total da Visão Geral).
+  Agrupa por dia LOCAL (UTC-4 fixo), com teste provando que 02:00 UTC do dia 2
+  cai no dia 1.
+  **Drill-down**: clicar num dia ou num atendente abre um drawer com o recorte
+  daquele clique aplicado POR CIMA dos filtros globais, nunca no lugar deles.
+  Validado ao vivo: drill-down do dia 25/08 devolveu 3.027, exatamente o valor
+  daquele dia no gráfico, preservando o `bot_human=with_bot` da tela.
+  **Filtros salvos** (migration `0079`, tabela nova): três escopos — local
+  (localStorage, rascunho do navegador), pessoal (backend, sincroniza entre
+  dispositivos) e global (backend, visível pra toda a operação). Publicar ou
+  remover global exige `support:sync_opa`; filtro global fica com
+  `owner_id=NULL` pra não sumir junto com o autor (a FK é CASCADE). 6 testes
+  cobrindo as duas barreiras de permissão e o não-vazamento entre usuários.
+  **Bug encontrado na validação ao vivo e corrigido**: as funções de
+  ida e volta da URL tinham listas de chaves separadas, então `tag_id` era
+  escrito mas não lido — o recorte não sobrevivia a reload nem a link
+  compartilhado. Unificado numa lista só (`URL_FILTER_KEYS`), com validação do
+  valor de `bot_human` pra link torto não virar 422.
+  **Validado ao vivo**: 11.662 (com bot) + 2.001 (sem bot) + 101 (não
+  classificado) = 13.764 = total sem filtro — prova que os recortes são
+  exclusivos e que "não classificado" não vira "sem bot". Filtro de etiqueta
+  pela URL devolveu 442 com badge "Etiqueta: Atendimento Suporte" (rótulo
+  resolvido da dimensão, não o hash). Console sem erro novo, mobile 375px sem
+  overflow.
+  **Limitação da validação**: não foi possível confirmar visualmente que os
+  gráficos PINTAM — o navegador headless desta sessão não compõe frames de
+  canvas. As instâncias ECharts montam com dimensão correta (589x240), e a
+  página `/operacao` (gráficos pré-existentes, em produção) apresenta
+  exatamente o mesmo comportamento no mesmo painel, o que indica limitação do
+  ambiente e não do código. **Vale uma olhada num navegador real.**
+  Backend **720 passed / 13 failed** (as mesmas 13 falhas pré-existentes do
+  módulo AI). Frontend: typecheck, 35 testes e build limpos.
+  Arquivos: `opa_filters.py`, `models.py`, `opa_ingestion.py`,
+  `opa_overview_service.py`, `router.py`, `schemas.py`, migrations `0078`/`0079`,
+  `test_opa_attendance_table.py`, `test_opa_saved_filters.py` (novo),
+  `types.ts`, `api.ts`, `support-chart-options.ts` (novo), `opa-charts.tsx`
+  (novo), `opa-drilldown.tsx` (novo), `opa-saved-filters.tsx` (novo),
+  `opa-module-components.tsx`, `page.tsx`.
+  **Ainda sem commit.**
+
+- **D1 corrigido (portal) + investigação do C3 + decisão dos créditos registrada**:
+  seção 10.3 de
+  [auditoria-gamificacao-financeira-2026-08-26.md](auditoria-gamificacao-financeira-2026-08-26.md).
+  **Portal**: `_portal_run` passa a usar `pick_run_by_status_priority`, com trava
+  extra — sem mês/ano, o **período** é resolvido antes do status (período mais recente
+  com apuração não cancelada), senão a prioridade global por `paid` trocaria o padrão
+  do portal de 08/2026 (mês corrente) para 07/2026 (pago) e esconderia o mês em
+  andamento; seria mudança de comportamento não pedida. **O defeito era pior do que a
+  auditoria registrou**: em 07/2026 o portal mostrava o run **#1646, CANCELADO**
+  (R$ 18.453,47), não um rascunho — agora mostra o #1601 pago (R$ 18.271,68); 08/2026
+  e o padrão do portal ficaram inalterados. 8 testes em
+  `test_portal_run_selection.py` (3 falhavam antes).
+  **C3 investigado**: o identificador de ponto de serviço **existe e o importador já o
+  lê** — `customer_login` vem de `radusuarios.login` via `id_login`, e `contract_id`
+  vem de `login.id_contrato`, ou seja o próprio IXC modela login como ponto de serviço
+  dentro do contrato. `fetch_logins_by_ids` traz o registro completo de `radusuarios`
+  mas o importador descarta `id_login`, `ativo`, endereço e coordenadas. Logo "opção
+  B (login)" e "opção D (id de instalação)" são a mesma coisa hoje. **A pergunta que
+  decide não é respondível com a base local**: `radusuarios.id` é estável quando o
+  login é renomeado? A API do IXC está inalcançável ("Name or service not known").
+  Testei um discriminador alternativo (dois logins do mesmo contrato são a mesma
+  instalação se as janelas de atividade não se sobrepõem): 362 coexistem/pontos
+  distintos, 966 não coexistem/migração; acerta Teatro-Câmara (contrato 12371), as
+  migrações `.WMT`→`_UNI` e as câmeras (37907), **erra** quando cada login tem só 1
+  O.S. (contrato 10323). Recomendação: persistir `id_login` (aditivo, exige migration)
+  e confirmar a estabilidade no IXC antes de mexer na regra; **manter `contract`** por
+  enquanto, porque `login` perderia 26% das detecções legítimas.
+  **Decisão registrada (créditos)**: pagar como estão, sem recriar débitos — a
+  ferramenta só passou a operar em julho/2026, cobrar garantia de junho não faz
+  sentido. **Coincide com o `WARRANTY_DEBIT_TOOL_CUTOFF = (2026, 7)` que o código já
+  tem**: 1.293 dos 1.347 débitos compensados (96%) têm origem em 06/2026, ou seja
+  nunca deveriam ter sido criados. **Pendência que a decisão gera**: sobraram **226
+  débitos pendentes com origem em 06/2026 (−R$ 787,50)** que serão cobrados no próximo
+  fechamento pela mesma lógica legada e **precisam ser estornados**; os 189 pendentes
+  com origem em 07/2026 (−R$ 629,16) são legítimos e devem ser cobrados.
+  **Correção de auditoria**: o enquadramento do C3 no relatório estava errado — não
+  são "1.757 pares de clientes diferentes"; **1.756 dos 1.757 têm o mesmo titular**.
+  Corrigido no documento com aviso destacado.
+  Suíte completa: **704 passed, 13 failed** (as mesmas 13 pré-existentes de
+  `test_ai_*`). Sem commit, sem push, sem migration aplicada, sem dado alterado.
+- **Auditoria pós-implementação das Etapas 0–4 (só documentação, nenhum código
+  alterado)**: seção 10.2 de
+  [auditoria-gamificacao-financeira-2026-08-26.md](auditoria-gamificacao-financeira-2026-08-26.md).
+  Os 10 itens verificados estão implementados como descrito. **4 divergências
+  encontradas**: (D1) **A9 estava no plano aprovado da Etapa 2 e não foi entregue** —
+  `portal_dashboard._portal_run` continua pegando o run mais recente sem filtrar
+  status, então o colaborador vê o último rascunho automático enquanto a tela de
+  fechamento e o extrato PDF mostram o pago; nem a seção 10.1 nem esta lista
+  registravam a ausência; (D2) `/dashboard/filtered-breakdowns` não recebeu a guarda
+  de consistência — risco latente, não alcançável pela tela atual; (D3)
+  `gross_final_points`/`gross_estimated_payment` continuam vivendo só no cache JSON,
+  única grandeza financeira que ainda depende dele; (D4) as duas guardas de admin do
+  frontend usam critérios diferentes (`role === "admin"` vs `is_admin_user`), falha
+  para o lado seguro mas é incoerente. A estimativa de performance da A2 foi
+  substituída por medição real: **223.811 → 25.737 linhas materializadas**, SQL de
+  56,1 ms → 26,4 ms (8,7×) — com a ressalva de que 25.737 objetos ORM dentro de uma
+  transação de pagamento ainda é muito, e a correção decisiva segue sendo a retenção
+  de rascunhos, desligada. Confirmado somente leitura: contagens de
+  runs/scores/ledger/O.S. idênticas às da auditoria original, `result_summary` do
+  #1601 intocado em R$ 18.191,18 com a API respondendo R$ 18.271,68 consistente nos
+  quatro lugares, 0 lançamentos aplicados a 08/2026, último `audit_log` anterior à
+  sessão, 0 dos 10 índices da migration no banco, `alembic current` = `20260826_0076`.
+  Testes: Gamificação **119 passed**; suíte completa **696 passed, 13 failed** — as 13
+  são pré-existentes e provadamente alheias (nenhum arquivo alterado está na cadeia de
+  imports delas). Frontend `typecheck`, `test` (35 passed) e `build` limpos; **não
+  existe script `lint`** no `package.json`.
+- **Correção das Etapas 0–4 da auditoria da Gamificação (sem commit, sem push, sem
+  migration aplicada, sem alteração de dado real)**: detalhe completo na seção 10.1
+  de [auditoria-gamificacao-financeira-2026-08-26.md](auditoria-gamificacao-financeira-2026-08-26.md).
+  **Etapa 0 (conciliação)** — novo `backend/scripts/audit_point_balance_reconciliation.py`
+  (somente leitura) classifica os 1.781 lançamentos pendentes. Resultado:
+  **841 créditos (+8.186 pts / R$ 2.865,10) SEM CONTRAPARTIDA** — o débito que eles
+  compensam já foi aplicado e não existe re-lançamento vivo, ou seja, a pessoa
+  recebe o crédito e nunca mais é cobrada por aquela garantia; 489 compensados;
+  17 compensando débito nunca cobrado; 415 débitos a cobrar. Saída em
+  `outputs/conciliacao-saldo-pontos-2026-08-26.csv`. **Ainda pendente de decisão
+  sua** — o próximo fechamento marcado como pago aplica +R$ 3.218,81 para 96 pessoas.
+  Achado colateral: o texto dos próprios lançamentos afirma que a folha de 07/2026
+  saiu de uma planilha extraída **antes** da correção de saldo de 2026-08-05, o que
+  é evidência (não confirmação) de qual valor do #1601 foi realmente pago.
+  **Etapa 1 (testes)** — 6 arquivos, 28 testes; 13 falhavam contra o código antigo.
+  **Etapa 2 (fonte única)** — `serialize_run` lê sempre a linha `collaborator_scores`
+  nos campos financeiros (cache só para `regional` e contadores); novos
+  `result_summary_with_totals_from_scores` (leitura, não muta), 
+  `recompute_run_totals_from_scores`, `collaborator_financial_context` e
+  `refresh_run_breakdowns` (recalcula `cost_by_*` no pagamento em vez de deixá-los
+  congelados no rascunho); `flag_modified` saiu de dentro do `if adjusted`;
+  `apply_leadership_bonus_to_cost_by_regional` virou idempotente via
+  `leadership_amount` por linha. **Efeito medido no #1601 (leitura pura): a API
+  passou a responder R$ 18.271,68 nos quatro lugares** (tabela, resumo, card e soma
+  das linhas), com o `result_summary` gravado intocado em R$ 18.191,18 — a
+  reconciliação acontece na leitura, sem `UPDATE` em fechamento pago.
+  **Etapa 3 (concorrência e permissão)** — `SELECT ... FOR UPDATE` no fechamento antes
+  de ler o status; consumo do ledger virou `UPDATE ... WHERE status='pending'` com
+  checagem de `rowcount`; `_refresh_stale_draft_previews` carrega ~26 mil linhas em
+  vez de ~224 mil; `POST /leadership/bonus-results/calculate` exige admin e recusa
+  fechamento pago/cancelado; extrato PDF saiu de `audit:read` (só admin ou o próprio
+  colaborador). **Etapa 4 (escala)** — migration `20260826_0077` com 10 índices
+  (`CREATE INDEX CONCURRENTLY`) **criada e NÃO aplicada**, e `prune_superseded_drafts`
+  **desligada por padrão** (`gamification_draft_retention_enabled`), preservando
+  não-rascunhos, os N mais recentes e os 9 rascunhos referenciados pelo ledger.
+  **Consumidores de API avaliados**: os 4 pontos de `page.tsx` que recalculavam o
+  bônus como efeito colateral de salvar liderança passariam a falhar com o fechamento
+  pago aberto — viraram `refreshLeadershipBonusForCurrentRun()`, que só chama quando
+  faz sentido; e os botões do extrato PDF agora só aparecem para quem pode emitir.
+  **Validação**: backend **696 passed, 13 failed** (as mesmas 13 pré-existentes de
+  `test_ai_*`, outro módulo); frontend `typecheck`, `test` (35 passed) e `build` limpos.
+  **NÃO executado**: validação visual real no navegador (exigiria `docker compose build
+  frontend` + `up -d`, que é deploy); migration não aplicada (`alembic current` =
+  `20260826_0076`, os 10 índices não existem no banco, e o arquivo foi removido do
+  container em execução pra que um restart não a aplicasse sozinho pelo entrypoint);
+  `prune_superseded_drafts` nunca rodada contra a base real; a API em execução ainda
+  serve o código antigo (os arquivos foram copiados pro container só pra rodar a suíte).
+  **Próximos passos**: decidir os 841 créditos sem contrapartida antes de marcar
+  qualquer fechamento como pago; Etapa 5 (regra financeira — identidade de
+  reincidência C3, `payment_cap` A5, `warranty_mode` A6, clamp do net M6) **exige
+  decisão do dono do produto**; Etapa 6 (`Decimal`, listas truncadas em 30, planilha
+  de pagamento no backend com auditoria, coluna do PDF com multiplicador, badge de
+  origem/frescor dos dados).
+- **Auditoria financeira completa do módulo Gamificação (somente diagnóstico —
+  nenhum código, migration ou dado alterado)**: relatório em
+  [auditoria-gamificacao-financeira-2026-08-26.md](auditoria-gamificacao-financeira-2026-08-26.md).
+  Auditou arquitetura, fluxo financeiro ponta a ponta, fonte única da verdade,
+  filtros/datas/fuso, arredondamento, crescimento do banco, idempotência,
+  rastreabilidade, permissões, testes, divergência operacional e UX.
+  **5 críticos, 8 altos, 9 médios, 7 baixos.**
+  **Diagnóstico central**: o mesmo valor financeiro está persistido em três
+  lugares — a linha `collaborator_scores`, o cache JSON
+  `result_summary.score_summaries` e os totais `result_summary`/`cards` — sem
+  nenhuma invariante que os obrigue a concordar, e cada endpoint lê um lugar
+  diferente. Isso **já divergiu em produção**: o fechamento **#1601 (07/2026,
+  pago)** mostra R$ 18.191,18 na tela/ranking/Excel de pagamento (cache) contra
+  R$ 18.271,68 no histórico e no extrato PDF do colaborador (linhas do banco) —
+  **R$ 80,50 / 230 pontos de diferença, 18 colaboradores afetados**. Causa de
+  código isolada e reproduzida em sqlite isolado:
+  `_apply_point_balance_after_payment` (`api/routes/calculation_runs.py:210-217`)
+  escreve no cache sempre, mas só chama `flag_modified` dentro de `if adjusted:`
+  — e o SQLAlchemy não detecta mutação in-place de coluna JSON.
+  **Outros 4 críticos**: (C2) `apply_leadership_bonus_to_cost_by_regional` não é
+  idempotente e soma o bônus de liderança de novo a cada recálculo — o #1601 tem
+  a tabela "por regional" somando **R$ 38.264,02** contra R$ 24.282,77 reais, com
+  **duas linhas duplicadas** de "Liderança sem regional"; e
+  `POST /leadership/bonus-results/calculate` altera `result_summary` de fechamento
+  **já pago** exigindo só `calculation:run`. (C3) a identidade de reincidência
+  configurada é `contract`, e `contract_id` **não identifica cliente** — um
+  contrato agrupa até **20 logins distintos**, 509 contratos/1.868 O.S. (2,52%)
+  afetados, **1.757 pares** de clientes diferentes elegíveis a virar falsa
+  garantia e anular pontos de quem não errou (as regras `#3` e `#8` não filtram
+  tipo/assunto da O.S. original). (C4) **100% dos 1.377 ajustes manuais de saldo
+  estão sem `created_by`** (criados por script fora da API), e há **+R$ 3.218,81
+  líquidos pendentes para 96 pessoas** que serão somados automaticamente ao
+  próximo fechamento marcado como pago; além disso **280 O.S. originais têm mais
+  de um débito vivo** (263 em `applied`+`pending`), sem constraint única no banco.
+  (C5) marcar como pago **não tem lock de linha nem idempotência** — janela de
+  corrida medida de **33 segundos** no #1601.
+  **Altos**: 1.106 `calculation_runs` e 225.121 `collaborator_scores` (223.811 em
+  rascunhos descartáveis, 779 só de julho) porque `recalculate_current_period`
+  cria um run novo a cada ciclo de 20 min; `_refresh_stale_draft_previews` carrega
+  **todos** os rascunhos do sistema dentro da transação de pagamento; **nenhum
+  índice** em `closed_at`/`opened_at`/`collaborator_id`/`calculation_run_id`
+  (Seq Scan com estimativa de 1 linha para 6.989 reais); tabelas de custo
+  truncadas em 30 itens exibindo o corte como total (57% do valor no #1601);
+  **`payment_cap` não é lido em lugar nenhum** e **`warranty_mode` é inerte**
+  (`is_warranty`/`is_recurrence` = 0 em todas as 75.177 O.S.); planilha de
+  pagamento montada no frontend a partir do cache e **sem auditoria**; extrato
+  PDF com coluna por O.S. **3,3× maior** que o "Valor a pagar" do próprio
+  documento e acessível a qualquer perfil com `audit:read`; portal do colaborador
+  lê o run **mais recente sem filtrar status** (mostra rascunho automático, não o
+  pago).
+  **Testes**: suíte do módulo — **85 passed**. Suíte completa — **668 passed, 13
+  failed**, todas **pré-existentes e de outro módulo** (`test_ai_*`, Operação
+  Analítica/IA; ex.: `TypeError: string indices must be integers` em
+  `test_ai_sla_stage.py:161`). Nenhuma é regressão — nenhum código foi tocado.
+  **Próximos passos (nada implementado ainda, cada fase precisa de aprovação)**:
+  Fase 0 — **não marcar nenhum fechamento como pago** até conferir os 1.377
+  créditos manuais; reconciliar e registrar qual valor do #1601 foi realmente
+  pago; avisar quem opera que a tabela "por regional" do #1601 está inflada;
+  escrever os testes de regressão que hoje faltam (devem falhar contra o código
+  atual); restringir permissão do extrato PDF e do recálculo de bônus.
+  Fase 1 — fonte única da verdade. Fase 2 — idempotência/concorrência/constraints.
+  Fase 3 — correção de regra financeira (exige decisão do dono do produto sobre
+  escopo histórico). Fase 4 — índices e retenção de rascunhos. Fase 5 — `Decimal`,
+  fuso centralizado e UX (origem/frescor dos dados e alerta de divergência).
+  A lista do que **não** pode ser alterado ainda está na seção 12 do relatório.
+- **Backend: campos aditivos pra investigar handoff (preparação B3) + rodada
+  visual forte nos painéis de segunda camada de `/suporte` (ainda sem
+  commit)**:
+  **Backend** — migration `20260826_0076` (aditiva, aplicada: `alembic
+  current` = `20260826_0076 (head)`) adiciona 6 colunas nullable em
+  `support_opa_attendances`: `distinct_human_attendant_ids` (JSON),
+  `first_human_attendant_id`, `last_human_attendant_id`,
+  `human_message_count`, `bot_message_count`, `client_message_count`. Todas
+  calculadas por `_message_attendant_summary()` (novo, em `opa_ingestion.py`)
+  a partir das MESMAS mensagens que `list_messages` já busca pra TMR — **zero
+  chamada nova à API do OPA**. Preenchidas só quando `list_messages` já foi
+  chamada com sucesso (mesmo bloco `try` de `handled_by_bot`/`reached_human`);
+  lista de mensagens vazia → tudo `None` (dado insuficiente, nunca vira
+  zero); mensagens presentes → contagens são zero real quando aplicável (ex.:
+  atendimento só de bot tem `human_message_count == 0`, não `None`).
+  **Não altera nenhum cálculo existente** — `tmr_seconds`,
+  `tmr_all_responses_seconds`, `tma_seconds`, `handled_by_bot`,
+  `reached_human`, `bot_to_human_handoff` continuam exatamente como antes
+  (confirmado por `git diff` nas funções de cálculo — nenhuma linha tocada).
+  5 testes novos em `test_opa_ingestion.py`: sem mensagens (tudo `None`),
+  mensagens só de bot (`human_message_count == 0` real), um atendente
+  humano, múltiplos atendentes humanos com ordenação cronológica correta
+  (a lista de teste é montada propositalmente fora de ordem). Suíte do
+  módulo support — **135 passed** (`test_opa_attendance_table.py`,
+  `test_opa_ingestion.py`, `test_opa_scheduler.py`, `test_opa_client.py`,
+  `test_opa_attendant_overrides.py`).
+  Esses campos preparam uma investigação futura (não resolvem sozinhos a
+  divergência de +149 do B3 — ver
+  [roteiro-comparacao-tmr-opa-suite.md](roteiro-comparacao-tmr-opa-suite.md),
+  seção 11) e não mudam nenhum KPI visível hoje.
+  **Frontend** — rodada de modernização visual nos painéis de segunda
+  camada, sem alterar dado nenhum: (1) painel de Atendentes trocou linhas de
+  tabela administrativa por avatar em gradiente + barra de participação do
+  volume + cores de estado (encerramento/avaliação coloridos por faixa) nas
+  visões desktop e mobile; (2) drawer do atendente ganhou cabeçalho com
+  gradiente e avatar maior (`h-14 w-14`), mais identidade visual — TMR
+  geral/humano continuam ambos visíveis, cobertura do TMR geral continua
+  visível; (3) drawer de detalhe do atendimento: os 6 blocos tipo formulário
+  (Atendimento/Cliente/Atendente/Canal/Motivos/Datas) viraram um resumo
+  executivo único (`AttendanceSummaryHeader`) — status colorido, protocolo
+  discreto em monoespaçado, cliente e atendente como informação primária,
+  códigos internos (cliente/atendente/departamento/canal) rebaixados pra uma
+  linha de metadados no rodapé, tempos como StatCell de destaque; blocos
+  restantes (Canal e contexto, Descrição/observações) só aparecem quando têm
+  conteúdo; (4) tabela de Dados: protocolo virou código discreto
+  monoespaçado (já feito na rodada visual anterior, mantido); (5) painel de
+  Atendentes virtuais (aba Sincronização) ganhou cabeçalho com contador,
+  avatar de iniciais por atendente, status com indicador de cor — mesma
+  permissão e comportamento de antes.
+  **Validado ao vivo** (usuário QA temporário, removido depois): Visão
+  Geral, Atendentes (avatar em gradiente confirmado via `getComputedStyle`),
+  drawer do atendente (cabeçalho em gradiente confirmado), Dados, drawer de
+  detalhe do atendimento (resumo executivo renderiza protocolo/status/
+  cliente/atendente/tempos corretamente, códigos internos no rodapé),
+  Sincronização/Atendentes virtuais — todas sem erro novo no console (só o
+  401 pré-login esperado) em desktop e mobile 375px, sem overflow
+  horizontal em nenhuma tela (`scrollWidth === clientWidth` em todas).
+  `npm run typecheck`, `npm run test -- --run` (35 passed) e `npm run build`
+  limpos. `docker compose build backend frontend` + `up -d` rodados pros
+  dois serviços.
+  Arquivos: `models.py`, `opa_ingestion.py`, `test_opa_ingestion.py`,
+  `20260826_0076_support_opa_message_attendant_summary.py` (novo),
+  `opa-module-components.tsx`, `page.tsx`.
+  **Ainda sem commit por decisão do usuário.**
+- **Bloco B3 — 1ª execução real da comparação com o OPA oficial (Recorte 1,
+  25/08/2026)**: usuário informou os números oficiais do painel do OPA para
+  esse dia (total 828, TMA 01:01:47, TMR 00:03:54, base = encerramento,
+  canal/depto = "Suporte/Financeiro"). Sistema local não tem um filtro
+  "Canal" equivalente (`channel` local é só whatsapp/pabx/page — canal de
+  comunicação, não fila) — tratei canal e departamento do OPA como a mesma
+  dimensão e usei os departamentos locais mais próximos por nome (`Suporte
+  Técnico` + `Financeiro`). **Resultado: o total não bateu** (981 local vs
+  828 OPA, +18,5%) — indício de que essa equivalência de departamento não é
+  exata. Isso impede uma comparação de TMA/TMR com confiança total (médias
+  sobre populações diferentes), mas rendeu um sinal preliminar relevante:
+  **TMR geral local (3min44s) ficou a apenas 10s do TMR do OPA (3min54s)**,
+  enquanto TMR humano local (8min18s) ficou 264s acima — descartadas como
+  causa as hipóteses de `opened_at`/`closed_at` (os dois usaram encerramento),
+  ausência de histórico (25/08 está dentro da janela importada) e cobertura
+  parcial (97,1% nesse recorte). Classificado como **"divergência por
+  equivalência de filtro incerta"** — categoria nova adicionada ao roteiro,
+  não uma das 7 originais, porque nenhuma delas descreve esse caso.
+  **Refinamento (mesma sessão)**: usuário forneceu a tabela oficial do OPA por
+  atendente (21 pessoas somando exatamente 828). Troquei a equivalência de
+  departamento por **atendente nomeado exato** (localizado por nome completo
+  na base, evitando homônimos) — mais preciso que nome de departamento. **O
+  total ainda não bateu** (977 local vs 828 OPA, +18%), descartando a
+  hipótese de que o problema era só o nome do departamento errado. Padrão por
+  atendente: os 4 de volume baixíssimo (1–9 atendimentos) batem exatamente;
+  os demais divergem, majoritariamente pra cima no local (+8 a +22),
+  consistente com diferença de atribuição em atendimentos com transferência
+  entre atendentes (handoff) — não parece ser fuso ou filtro de data.
+  **Achado à parte, resolvido**: a linha "TOTAL/MÉDIA" da tabela por
+  atendente do OPA (TMR 00:03:13) é uma **média simples das médias por
+  atendente** (confirmado recalculando manualmente — bate exato), diferente
+  do TMR do painel geral (00:03:54, aparenta ser ponderado por atendimento
+  como o TMR geral local) — são fórmulas diferentes do próprio OPA, não uma
+  divergência entre sistemas. O comparável ao TMR geral local continua sendo
+  o valor do painel geral (234s), que segue a apenas 10s do TMR geral local.
+  **Investigação da regra de atribuição (mesma sessão)**: checagem só de
+  leitura no Postgres (sem chamar a API do OPA). **Achado estrutural**:
+  `support_opa_attendances` tem uma linha por `source_id` (upsert), sem
+  histórico de transferência — não existe "primeiro atendente" separado de
+  "atendente atual" no schema, então não dá pra testar diretamente "conta só
+  último atendente/responsável final" só com o banco local. Descartadas com
+  evidência numérica: deduplicação por protocolo (977 protocolos distintos =
+  977 linhas), vazamento pra outro departamento (100% dos 977 são Suporte
+  Técnico ou Financeiro), múltiplos atendentes no mesmo registro (nenhum),
+  fuso horário (só 2 dos 977 caem na hora mais sensível do dia), atendimento
+  só-bot (97,2% tem `reached_human=true`), status diferente de finalizado
+  (100% é "F"). **Hipótese nova com evidência favorável, não confirmada**:
+  encerramento em massa por inatividade/timeout — o TMA desses 977 tem cauda
+  longa grande (mediana 1h30, média 2h03, máximo ~100h); filtrando só TMA até
+  2h a média cai pra 3.636s, a 1,9% do TMA oficial do OPA (3.707s); vários
+  exemplos concretos (ex.: `UNI2026760877`, aberto 21/08 e fechado só 25/08,
+  ~100h de TMA) mostram atendimentos abandonados sendo fechados em lote no
+  fim do expediente. **Não é possível confirmar 100% só com o banco local**
+  — precisaria de confirmação do lado do OPA (se o relatório por atendente
+  exclui encerramento automático) ou da API de detalhe do OPA (fora do
+  escopo desta tarefa). **Recomendação (não implementar agora)**: se
+  confirmado, capturar/persistir o motivo do encerramento e mostrar TMA
+  bruto vs. "trabalhado" lado a lado — nunca substituir um pelo outro. É
+  mudança de cálculo, precisa de autorização explícita separada.
+  **Busca exaustiva por campo de encerramento automático (mesma sessão)**:
+  vasculhei `models.py`, todas as migrations do módulo, `opa_ingestion.py`
+  (mapeamento completo de campos do payload) e `opa_client.py`, além do
+  payload bruto salvo integralmente (`raw_payload = record`, sem filtro —
+  confirmado no código). Levantei todas as chaves distintas numa amostra de
+  3.000 registros recentes: `_id, canal, canal_cliente, canal_id, date,
+  descricao, evaluations, fim, id_atendente, id_cliente, id_user, motivos,
+  observacoes, origem, protocolo, setor, status, tags`. **Nenhuma delas é
+  motivo de encerramento, flag de automático/timeout ou "encerrado por"** —
+  `origem.tipo` só tem valor vazio ou `"anuncioWhatsapp"` (origem de
+  campanha, não de encerramento); `status` só tem `"F"` nos dados
+  analisados. **Conclusão: NÃO TESTÁVEL** — o campo não existe no payload
+  que a API de listagem do OPA retorna, não é uma omissão do código de
+  ingestão. Achado colateral (real, mas raro): `observacoes`/`motivos` têm
+  um `id_atendente` por item que às vezes diverge do atendente final do
+  registro (prova de handoff — ex.: `UNI2026760877` tem nota interna
+  assinada por outra pessoa no dia da abertura) — mas só em 11/977 (1,1%) e
+  10/977 (1,0%) dos casos, e 68% dos 977 não têm nenhuma nota registrada, o
+  que é raro demais pra explicar sozinho os 149 de excedente. A hipótese de
+  inatividade/timeout (evidência indireta pela distribuição de TMA)
+  continua sendo a mais provável, mas sem campo dedicado pra confirmar.
+  **Recomendação (não implementar agora)**: a única fonte com mais detalhe
+  seria o histórico de mensagens por atendimento (`opa_client.list_messages`,
+  já chamado durante a importação pra calcular TMR, mas hoje descartado
+  depois do cálculo — não persistido) — capturar um resumo dele (atendentes
+  distintos que responderam, o primeiro deles) seria a mudança mínima pra
+  testar handoff com rigor. É mudança de ingestão/schema, precisa de
+  autorização explícita separada.
+  Nenhum cálculo de TMR foi alterado, nenhum backfill ou importação rodou,
+  nenhuma chamada à API do OPA foi feita — só consultas de leitura via
+  `opa_overview_service.expanded_overview` e SQL direto (sem escrita), e
+  leitura de código-fonte.
+  Resultado completo, tabela por atendente, protocolos de exemplo e números
+  em [roteiro-comparacao-tmr-opa-suite.md](roteiro-comparacao-tmr-opa-suite.md),
+  seções 10, 10.1, 10.2 e 10.3.
+  **Validado que a rodada visual da tarefa anterior segue ativa**: `/suporte`
+  abre sem erro novo no console nas abas Visão Geral/Atendentes/Dados,
+  gradiente do card de volume e borda de destaque do cabeçalho confirmados
+  via `getComputedStyle`, protocolo em fonte monoespaçada discreta
+  confirmado, mobile 375px sem overflow horizontal.
+- **Refinamento visual da tela `/suporte` (ainda sem commit)**: rodada de
+  modernização visual sobre a base já implementada (B1+B2), sem alterar
+  nenhum dado, contrato de API ou regra de negócio. Objetivo: tirar a
+  aparência de sistema cru — mais contraste, hierarquia e cor com intenção,
+  sem virar decoração vazia (norma visual permanente).
+  Mudanças: (1) cabeçalho ganhou uma borda de destaque azul e um badge
+  compacto "Base até DD/MM · N" ao lado do status de sincronização, deixando
+  a janela real da base (B2) visível também no topo, não só no painel de
+  filtros; (2) card de "Volume no período" da Visão Geral virou um destaque
+  em gradiente azul (era um bloco branco igual aos demais) — é o número mais
+  importante da tela e agora se comporta como tal; (3) título de cada seção
+  (`OverviewSection`) ganhou uma barra de acento azul, reforçando hierarquia
+  sem texto extra; (4) `BarListPanel` (canal/status) e "Clientes mais
+  recorrentes" trocaram badge de posição cinza neutro por uma paleta com
+  intensidade decrescente por rank (1º mais forte, últimos mais claros) —
+  comunica ranking sem precisar de legenda; (5) cabeçalhos de painel (Motivos,
+  Automação, Atendentes, Dados) ganharam fundo levemente tingido
+  (`bg-slate-50/60`) e ícone/texto em azul em vez de cinza puro, tirando a
+  repetição de branco-sobre-branco; (6) tabela de "Motivos" ganhou
+  zebra-striping e a coluna TMR geral virou destaque em azul (é a métrica com
+  cobertura registrada em B1, faz sentido chamar mais atenção pra ela); (7)
+  tabela de "Dados": protocolo virou código discreto (monospace, cinza
+  pequeno) em vez de texto preto igual ao nome do cliente — cliente continua
+  sendo a informação primária da linha — e ganhou zebra-striping + hover azul
+  suave.
+  Nenhuma informação de B1/B2 foi removida: cobertura do TMR geral e janela
+  da base importada continuam visíveis nos mesmos lugares (mais o badge novo
+  no cabeçalho). Nenhum dado, filtro, cálculo ou endpoint foi tocado.
+  **Validado ao vivo** (usuário QA temporário, removido depois): gradiente do
+  card de volume, borda de destaque do cabeçalho e badge de base importada
+  confirmados via `getComputedStyle`; abas Visão Geral, Atendentes e Dados
+  navegadas sem erro novo no console (só o 401 pré-login esperado); mobile
+  375px sem overflow horizontal (`scrollWidth === clientWidth`).
+  `npm run typecheck`, `npm run test -- --run` (35 passed) e `npm run build`
+  limpos. `docker compose build frontend` + `up -d` rodados.
+  Arquivos: `opa-module-components.tsx`, `page.tsx`.
+  **Ainda sem commit por decisão do usuário.**
+- **Bloco B2 — janela real da base importada, visível na UI (ainda sem commit)**:
+  a base só tem atendimentos importados a partir de 01/08/2026 — sem essa
+  informação visível, qualquer comparação com um período maior no painel
+  oficial do OPA parece divergência/bug quando na verdade é ausência de
+  histórico local (norma de qualidade de dados, seção 7). Campo novo aditivo
+  `imported_data_window: {min_opened_at, max_opened_at, min_closed_at,
+  max_closed_at, total_attendances}` (schema `SupportOpaImportedDataWindow`)
+  em `/opa/overview`. Calculado por `imported_data_window()` — `MIN`/`MAX`/
+  `COUNT` sobre a tabela **inteira**, sem nenhum filtro de período aplicado
+  (propositalmente sem usar `apply_opa_attendance_filters`) — é sobre a base
+  toda, não sobre o recorte escolhido pelo usuário; os dois nunca podem ser
+  confundidos.
+  Frontend: nota discreta nos filtros globais (`OpaGlobalFilters`), abaixo do
+  texto "O mesmo recorte é aplicado à Visão Geral e aos Dados" — ex.: *"Base
+  importada: 01/08/2026 até 26/08/2026 · 55.925 atendimentos"*. Quando o
+  filtro escolhido (`date_from`) começa antes do início real da base, aparece
+  um aviso amber ao lado: *"Este recorte começa antes da primeira data
+  importada — a comparação com o OPA pode divergir por ausência de histórico
+  local."* Nenhum alerta vermelho/alarmista — nota integrada ao painel.
+  **Validado com dado real**: nota mostra corretamente 01/08/2026–26/08/2026,
+  55.925 atendimentos; aviso amber testado navegando com
+  `date_from=2026-07-20` (antes do início real) — renderiza corretamente, sem
+  erro novo no console, sem overflow horizontal em mobile (375px). Validação
+  de período de 32 dias (pré-existente, não é desta sessão) continua
+  funcionando (422 fora do range).
+  Testes novos (`test_opa_attendance_table.py`): janela reporta MIN/MAX/COUNT
+  da base inteira mesmo filtrando um recorte que não cobre os extremos
+  semeados; janela totalmente `None`/`total_attendances: 0` com base vazia.
+  Suíte completa — **664 passed / 13 failed** (mesmas 13 falhas pré-existentes
+  do módulo AI/governança, não relacionadas; +2 sobre o baseline do B1,
+  confirmando os testes novos).
+  Frontend: `npm run test -- --run` 35 passed, `typecheck` e `build` limpos.
+  `docker compose build` + `up -d` rodados pros dois serviços.
+  Arquivos: `opa_overview_service.py`, `schemas.py`,
+  `test_opa_attendance_table.py`, `opa-module-components.tsx`, `page.tsx`,
+  `frontend/lib/types.ts`.
+  **Bloco B3 (comparação com painel oficial do OPA) — documentado, execução
+  PENDENTE de dados do usuário.** Roteiro completo em
+  [roteiro-comparacao-tmr-opa-suite.md](roteiro-comparacao-tmr-opa-suite.md),
+  com tabela-modelo e critérios de classificação de divergência. A tabela de
+  coleta foi entregue ao usuário no chat, ainda não preenchida. **Faltam,
+  para cada recorte (dia recente ≥20/08, últimos 7 dias, agosto até hoje):**
+  se o OPA usa abertura ou encerramento como base de data; filtros aplicados
+  (status/canal/departamento/atendente/motivo); total de atendimentos;
+  encerrados; em aberto; TMA; TMR; primeira resposta (se existir). **Enquanto
+  esses dados não existirem, nenhuma divergência entre o sistema local e o
+  OPA deve ser classificada como bug** — só dá pra distinguir "diverge por
+  cobertura parcial" / "diverge por ausência de histórico local" / "diverge
+  por abertura vs encerramento" / "bug provável" depois de ter os números
+  reais dos dois lados lado a lado (seção 8 do roteiro).
+  **Ainda sem commit por decisão do usuário** — mudanças na worktree,
+  preservadas junto com o B1 (que também segue sem commit).
+- **Bloco B1 — TMR geral ganhou denominador explícito (cobertura do histórico)**:
+  auditoria anterior mediu 0% de cobertura de `tmr_all_responses_seconds` entre
+  01/08–19/08 e 76–86% entre 20/08–26/08 — a UI mostrava a média sem dizer sobre
+  quantos atendimentos ela foi calculada, violando a norma de qualidade de dados
+  (seção 1: "todo percentual precisa dizer sobre o que foi calculado"; "número
+  errado é pior que número ausente"). Nenhum backfill rodado, nenhum cálculo
+  alterado — só o denominador ficou visível.
+  Campo novo aditivo `tmr_all_responses_coverage: {count, total, percentage}`
+  (schema `SupportOpaMetricCoverage`) em `/opa/overview`,
+  `/opa/attendants/{id}/summary`, `top_reasons`/`by_reason` (por motivo) e
+  `/opa-metrics` (API pública, embora nenhuma tela a consuma). `count` vem de
+  `func.count(tmr_all_responses_seconds)` na MESMA query que já calculava a
+  média — `COUNT` ignora `NULL` igual `AVG`, zero consulta nova ao banco.
+  Frontend: `TimeMetricsStrip` (usado na Visão Geral e no painel individual)
+  ganhou um rodapé discreto dentro do próprio painel (sem card novo) quando a
+  cobertura é parcial — ex.: *"TMR geral: média sobre 10.865 de 55.925
+  atendimentos (cobertura de 19,4%) — histórico mais antigo ainda não foi
+  reprocessado."* Nada aparece quando a cobertura é 100% ou quando não há
+  atendimento no recorte. `TopReasonsSummary` (tabela de motivos) ganhou
+  tooltip com o denominador por motivo, sem adicionar coluna.
+  **Validado com dado real de produção**: `tmr_all_responses_coverage` =
+  `{count: 10865, total: 55925, percentage: 19.4}` no período 01/08–26/08 —
+  bate com a estimativa da auditoria anterior. Painel do Theo (agente virtual)
+  mostra a mesma nota com o denominador escopado ao atendente (4.152 de
+  23.271, 17,8%) — TMR geral continua em destaque, TMR humano continua
+  visível como secundário, nenhum dos dois foi escondido.
+  Testes novos (`test_opa_attendance_table.py`): cobertura parcial (com a
+  média inalterada), cobertura zero, cobertura 100%, `percentage=None` pra
+  universo vazio, e confirmação de que TMR humano fica independente da
+  cobertura de TMR geral. Suíte completa — **662 passed / 13 failed**
+  (mesmas falhas pré-existentes do módulo AI/governança, não relacionadas).
+  Frontend: 35 passed, build e typecheck limpos. `docker compose build` +
+  `up -d` rodados pros dois serviços (container roda em produção, sem hot
+  reload).
+  Arquivos: `opa_overview_service.py`, `opa_attendant_service.py`,
+  `router.py`, `schemas.py`, `test_opa_attendance_table.py`,
+  `opa-module-components.tsx`, `page.tsx`, `frontend/lib/types.ts`.
 - **Bloco A de estabilização — worktree versionada, risco crítico removido**:
   auditoria anterior identificou que 40 arquivos (~3.000 linhas) estavam sem commit
   havia várias sessões, incluindo **3 migrations já aplicadas no Postgres real**
@@ -587,14 +1126,15 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   (exige a permissão granular `support:view_conversation`, ainda não
   implementada) e/ou análise de conversa por IA (Fase 6, bloqueada por
   decisão de infra/autorização).
-- Decidir se compensa fazer backfill do TMR geral histórico — medido em
-  2026-08-26 contra o banco real: **45.009 de 55.700** atendimentos (81%)
-  ainda sem `tmr_all_responses_seconds`, cobertura cai a 0% antes de
-  2026-08-20 (corte exato do dia em que o campo entrou em produção — é o
-  comportamento esperado de "só dado novo", não bug). Classificação
-  bot/humano já está quase completa (190 de 55.700 sem classificar, 0,3%) —
-  não precisa de backfill. Custo do backfill de TMR: 1 chamada extra à API
-  do OPA Suite por atendimento — hoje descartado por custo, mas o número
+- Decidir se compensa fazer backfill do TMR geral histórico — cobertura agora
+  visível na própria UI (Bloco B1, item acima), medida em 2026-08-26 contra o
+  banco real: **45.060 de 55.925** atendimentos (81%) ainda sem
+  `tmr_all_responses_seconds`, cobertura cai a 0% antes de 2026-08-20 (corte
+  exato do dia em que o campo entrou em produção — é o comportamento esperado
+  de "só dado novo", não bug). Classificação bot/humano já está quase
+  completa (190 de 55.925 sem classificar, 0,3%) — não precisa de backfill.
+  Custo do backfill de TMR: 1 chamada extra à API do OPA Suite por
+  atendimento — hoje descartado por custo, mas o número
   real agora permite decidir com base em dado, não estimativa.
 - Seguir consolidando o contrato de filtros único (`proposta-filter-contract-v1.md`)
   entre Operação Analítica, Agendamento e Gestão — agora com a seção 3 de

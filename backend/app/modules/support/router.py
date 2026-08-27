@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time, timedelta, timezone
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Float, case, cast, func, select
+from sqlalchemy import Float, case, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.security import get_current_user, require_permission
+from app.core.security import get_current_user, permissions_for_user, require_permission
 from app.db.session import get_db
 from app.models import User
 from app.services.audit_log import record_audit_log
@@ -30,7 +31,7 @@ from app.services.opa_scheduler import (
 )
 
 from . import opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_timeline_service
-from .models import SupportOpaAttendance
+from .models import SupportOpaAttendance, SupportOpaDimension, SupportOpaSavedFilter
 from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters, opa_period_bounds, validate_opa_period
 from .opa_ingestion import (
     OpaImportInterrupted,
@@ -52,9 +53,12 @@ from .schemas import (
     SupportOpaFilters,
     SupportOpaMetrics,
     SupportOpaOverview,
+    SupportOpaSavedFilter as SupportOpaSavedFilterSchema,
+    SupportOpaSavedFilterCreate,
     SupportOpaSyncSettings,
     SupportOpaSyncSettingsUpdate,
     SupportOpaSyncStatus,
+    SupportOpaTimeseries,
     SupportPeriodRequest,
 )
 
@@ -363,6 +367,47 @@ def _attendance_enriched_detail(payload: dict) -> dict:
     }
 
 
+class OpaExtraFilters:
+    """Filtros adicionais da tela /suporte, agrupados num `Depends` único.
+
+    São declarados aqui em vez de repetidos em cada rota de propósito: já são
+    cinco endpoints lendo o mesmo recorte (atendimentos, visão geral,
+    breakdowns, resumo do atendente, série diária), e um parâmetro esquecido em
+    um deles produziria justamente o pior tipo de bug de dashboard — a tela
+    mostrando números de universos diferentes lado a lado, sem erro nenhum.
+    """
+
+    def __init__(
+        self,
+        # `Annotated` em vez de `= Query(...)` de propósito: assim o default em
+        # Python continua sendo `None` de verdade, e `OpaExtraFilters()` pode ser
+        # instanciado direto (a suíte chama as rotas como função, sem passar pelo
+        # FastAPI) sem receber objetos `Query` no lugar dos valores.
+        tag_id: Annotated[str | None, Query(description="IDs de etiqueta separados por vírgula (OU entre elas).")] = None,
+        customer_id: Annotated[str | None, Query(description="IDs de cliente separados por vírgula.")] = None,
+        rating_min: Annotated[float | None, Query(ge=0, le=5)] = None,
+        rating_max: Annotated[float | None, Query(ge=0, le=5)] = None,
+        bot_human: Annotated[
+            str | None,
+            Query(pattern="^(with_bot|without_bot|reached_human|bot_only|handoff|unclassified)$"),
+        ] = None,
+    ) -> None:
+        self.tag_id = tag_id
+        self.customer_id = customer_id
+        self.rating_min = rating_min
+        self.rating_max = rating_max
+        self.bot_human = bot_human
+
+    def as_kwargs(self) -> dict[str, object]:
+        return {
+            "tag_id": self.tag_id,
+            "customer_id": self.customer_id,
+            "rating_min": self.rating_min,
+            "rating_max": self.rating_max,
+            "bot_human": self.bot_human,
+        }
+
+
 def _apply_attendance_filters(
     statement,
     *,
@@ -380,6 +425,11 @@ def _apply_attendance_filters(
     protocol: str | None,
     customer: str | None,
     search: str | None,
+    tag_id: str | None = None,
+    customer_id: str | None = None,
+    rating_min: float | None = None,
+    rating_max: float | None = None,
+    bot_human: str | None = None,
 ):
     return apply_opa_attendance_filters(
         statement,
@@ -398,6 +448,11 @@ def _apply_attendance_filters(
             protocol=protocol,
             customer=customer,
             search=search,
+            tag_id=tag_id,
+            customer_id=customer_id,
+            rating_min=rating_min,
+            rating_max=rating_max,
+            bot_human=bot_human,
         ),
     )
 
@@ -777,6 +832,7 @@ def opa_attendances(
     reason: str | None = None,
     protocol: str | None = None,
     customer: str | None = None,
+    extra: OpaExtraFilters = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -812,6 +868,7 @@ def opa_attendances(
         protocol=protocol,
         customer=customer,
         search=search,
+        **extra.as_kwargs(),
     )
     count_statement = _apply_attendance_filters(
         select(func.count(SupportOpaAttendance.id)),
@@ -829,6 +886,7 @@ def opa_attendances(
         protocol=protocol,
         customer=customer,
         search=search,
+        **extra.as_kwargs(),
     )
 
     total = int(db.scalar(count_statement) or 0)
@@ -861,6 +919,7 @@ def opa_overview(
     reason_id: str | None = None,
     customer: str | None = None,
     search: str | None = None,
+    extra: OpaExtraFilters = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -875,12 +934,50 @@ def opa_overview(
         reason_id=reason_id,
         customer=customer,
         search=search,
+        **extra.as_kwargs(),
     )
     previous_filters = filters.previous_period()
     return {
         "current_period": {"date_from": date_from, "date_to": date_to},
         "previous_period": {"date_from": previous_filters.date_from, "date_to": previous_filters.date_to},
         **opa_overview_service.expanded_overview(db, filters),
+    }
+
+
+@router.get("/opa/timeseries", response_model=SupportOpaTimeseries)
+def opa_timeseries(
+    date_from: date,
+    date_to: date,
+    date_basis: str = Query(default="opened_at", pattern="^(opened_at|closed_at)$"),
+    status: str | None = None,
+    channel: str | None = None,
+    attendant_id: str | None = None,
+    department_id: str | None = None,
+    reason_id: str | None = None,
+    customer: str | None = None,
+    search: str | None = None,
+    extra: OpaExtraFilters = Depends(),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Série diária do MESMO recorte da Visão Geral — o gráfico de tendência é
+    uma decomposição dos cards, não um cálculo paralelo."""
+    filters = OpaAttendanceFilters(
+        date_from=date_from,
+        date_to=date_to,
+        date_basis=date_basis,
+        status=status,
+        channel=channel,
+        attendant_id=attendant_id,
+        department_id=department_id,
+        reason_id=reason_id,
+        customer=customer,
+        search=search,
+        **extra.as_kwargs(),
+    )
+    return {
+        "date_basis": date_basis,
+        "points": opa_overview_service.daily_timeseries(db, filters),
     }
 
 
@@ -904,6 +1001,7 @@ def opa_breakdowns(
     reason: str | None = None,
     protocol: str | None = None,
     customer: str | None = None,
+    extra: OpaExtraFilters = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -922,6 +1020,7 @@ def opa_breakdowns(
         protocol=protocol,
         customer=customer,
         search=search,
+        **extra.as_kwargs(),
     )
     total, items = _opa_breakdown_rows(
         db,
@@ -946,6 +1045,7 @@ def opa_attendant_summary(
     reason_id: str | None = None,
     customer: str | None = None,
     search: str | None = None,
+    extra: OpaExtraFilters = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -959,6 +1059,7 @@ def opa_attendant_summary(
         reason_id=reason_id,
         customer=customer,
         search=search,
+        **extra.as_kwargs(),
     )
     summary = opa_attendant_service.attendant_summary(db, attendant_id, filters)
     if summary is None:
@@ -1049,13 +1150,113 @@ def opa_filters(
         rows = db.execute(statement.group_by(value_field, label_field).order_by(label_field.asc()).limit(200)).all()
         return [{"value": str(row[0]), "label": str(row[1])} for row in rows if row[0]]
 
+    # Etiquetas não têm coluna de nome no atendimento (só o id vem no payload),
+    # então o rótulo sai da dimensão já sincronizada do OPA — sem isso a tela
+    # mostraria hashes ao usuário. Só aparecem etiquetas ativas do cadastro.
+    tag_rows = db.execute(
+        select(SupportOpaDimension.source_id, SupportOpaDimension.name)
+        .where(SupportOpaDimension.dimension_type == "tag", SupportOpaDimension.name.isnot(None))
+        .order_by(SupportOpaDimension.name.asc())
+        .limit(500)
+    ).all()
+
     return {
         "attendants": options(SupportOpaAttendance.attendant_id, SupportOpaAttendance.attendant_name),
         "departments": options(SupportOpaAttendance.department_id, SupportOpaAttendance.department_name),
         "channels": options(SupportOpaAttendance.channel),
         "statuses": options(SupportOpaAttendance.status),
         "reasons": options(SupportOpaAttendance.reason_id, SupportOpaAttendance.reason_name),
+        "tags": [{"value": str(row[0]), "label": str(row[1])} for row in tag_rows if row[0]],
     }
+
+
+def _can_sync_opa(user: User) -> bool:
+    """Mesma fonte de verdade do `require_permission("support:sync_opa")` usado
+    nas rotas de sincronização — aqui a checagem precisa ser inline porque a
+    rota é acessível a leitores, e só a AÇÃO de publicar/remover um filtro
+    global é restrita."""
+    return "support:sync_opa" in permissions_for_user(user)
+
+
+def _saved_filter_payload(row: SupportOpaSavedFilter) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "scope": row.scope,
+        "filters": row.filters_json or {},
+        "owner_id": row.owner_id,
+        "updated_at": row.updated_at,
+    }
+
+
+def _visible_saved_filters(db: Session, user: User) -> list[SupportOpaSavedFilter]:
+    return list(
+        db.scalars(
+            select(SupportOpaSavedFilter)
+            .where(
+                or_(
+                    SupportOpaSavedFilter.scope == "global",
+                    SupportOpaSavedFilter.owner_id == user.id,
+                )
+            )
+            .order_by(SupportOpaSavedFilter.scope.asc(), SupportOpaSavedFilter.name.asc())
+        ).all()
+    )
+
+
+@router.get("/opa/saved-filters", response_model=list[SupportOpaSavedFilterSchema])
+def opa_saved_filters(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Filtros salvos visíveis pro usuário: os globais da operação e os pessoais
+    dele. Nunca devolve o pessoal de outra pessoa."""
+    return [_saved_filter_payload(row) for row in _visible_saved_filters(db, user)]
+
+
+@router.post("/opa/saved-filters", response_model=SupportOpaSavedFilterSchema, status_code=201)
+def create_opa_saved_filter(
+    payload: SupportOpaSavedFilterCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    # Salvar um recorte como "global" publica ele pra operação inteira, então
+    # exige a mesma permissão de gestão do módulo — qualquer leitor pode criar
+    # os próprios recortes pessoais.
+    if payload.scope == "global" and not _can_sync_opa(user):
+        raise HTTPException(status_code=403, detail="Somente quem administra o SGP pode publicar um filtro global.")
+
+    row = SupportOpaSavedFilter(
+        name=payload.name.strip(),
+        scope=payload.scope,
+        filters_json=payload.filters or {},
+        # Filtro global não pertence a ninguém: se o autor for desativado, o
+        # recorte oficial da operação não pode desaparecer junto (`ondelete=CASCADE`).
+        owner_id=None if payload.scope == "global" else user.id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _saved_filter_payload(row)
+
+
+@router.delete("/opa/saved-filters/{saved_filter_id}")
+def delete_opa_saved_filter(
+    saved_filter_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    row = db.get(SupportOpaSavedFilter, saved_filter_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Filtro salvo não encontrado.")
+    if row.scope == "global":
+        if not _can_sync_opa(user):
+            raise HTTPException(status_code=403, detail="Somente quem administra o SGP pode remover um filtro global.")
+    elif row.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Filtro salvo não encontrado.")
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted"}
 
 
 @router.get("/opa-metrics", response_model=SupportOpaMetrics)
@@ -1073,13 +1274,17 @@ def opa_metrics(
         date_column >= start_at,
         date_column < end_at,
     ]
-    total, closed, avg_tma, avg_tmr, avg_tmr_all, avg_rating = db.execute(
+    total, closed, avg_tma, avg_tmr, avg_tmr_all, tmr_all_count, avg_rating = db.execute(
         select(
             func.count(SupportOpaAttendance.id),
             func.count(SupportOpaAttendance.closed_at),
             func.avg(SupportOpaAttendance.tma_seconds),
             func.avg(SupportOpaAttendance.tmr_seconds),
             func.avg(SupportOpaAttendance.tmr_all_responses_seconds),
+            # COUNT ignora NULL igual AVG - denominador real da media de TMR
+            # geral, que tem cobertura parcial do historico (norma de
+            # qualidade de dados, secao 1 - denominador explicito).
+            func.count(SupportOpaAttendance.tmr_all_responses_seconds),
             func.avg(SupportOpaAttendance.rating),
         ).where(*base_filters)
     ).one()
@@ -1093,6 +1298,7 @@ def opa_metrics(
                 func.avg(SupportOpaAttendance.tma_seconds).label("average_tma_seconds"),
                 func.avg(SupportOpaAttendance.tmr_seconds).label("average_tmr_seconds"),
                 func.avg(SupportOpaAttendance.tmr_all_responses_seconds).label("average_tmr_all_responses_seconds"),
+                func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
                 func.avg(SupportOpaAttendance.rating).label("average_rating"),
             )
             .where(*base_filters)
@@ -1111,19 +1317,22 @@ def opa_metrics(
                     if row.average_tmr_all_responses_seconds is not None
                     else None
                 ),
+                "tmr_all_responses_coverage": opa_overview_service.coverage(int(row.tmr_all_count or 0), int(row.total or 0)),
                 "average_rating": float(row.average_rating) if row.average_rating is not None else None,
             }
             for row in rows
         ]
 
+    total = int(total or 0)
     return {
         "date_from": date_from,
         "date_to": date_to,
-        "total_attendances": int(total or 0),
+        "total_attendances": total,
         "closed_attendances": int(closed or 0),
         "average_tma_seconds": float(avg_tma) if avg_tma is not None else None,
         "average_tmr_seconds": float(avg_tmr) if avg_tmr is not None else None,
         "average_tmr_all_responses_seconds": float(avg_tmr_all) if avg_tmr_all is not None else None,
+        "tmr_all_responses_coverage": opa_overview_service.coverage(int(tmr_all_count or 0), total),
         "average_rating": float(avg_rating) if avg_rating is not None else None,
         "by_attendant": grouped(SupportOpaAttendance.attendant_name),
         "by_reason": grouped(SupportOpaAttendance.reason_name),

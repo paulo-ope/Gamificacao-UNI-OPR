@@ -15,6 +15,7 @@ import {
   GitBranch,
   Headphones,
   History,
+  Info,
   LayoutDashboard,
   ListFilter,
   Loader2,
@@ -46,8 +47,11 @@ import type {
   SupportOpaAttendanceFilters,
   SupportOpaAttendantOverride,
   SupportOpaAttendantOverrideCreate,
+  SupportOpaBotHumanFilter,
   SupportOpaFilters,
+  SupportOpaImportedDataWindow,
   SupportOpaMetricComparison,
+  SupportOpaMetricCoverage,
   SupportOpaOverview,
   SupportOpaReasonMetric,
   SupportOpaRecurringCustomer,
@@ -120,6 +124,23 @@ function localToday() {
   }).formatToParts(new Date());
   const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return new Date(Date.UTC(Number(lookup.year), Number(lookup.month) - 1, Number(lookup.day), 12));
+}
+
+// Converte um timestamp ISO (UTC) pro dia LOCAL (America/Porto_Velho) no
+// formato YYYY-MM-DD, comparável direto com `date_from`/`date_to` do filtro
+// (que já são datas locais, sem componente de hora). Mesmo raciocínio de
+// `localToday()`: nunca usar `.slice(0, 10)` num ISO em UTC pra isso, o
+// resultado pode cair no dia errado perto da virada.
+function toLocalDateString(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SUPPORT_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.year}-${lookup.month}-${lookup.day}`;
 }
 
 function addDays(value: Date, amount: number) {
@@ -228,11 +249,91 @@ function activeFilterBadges(filters: SupportOpaAttendanceFilters, options: Suppo
     filters.department_id ? { key: "department", label: `Departamento: ${labelFrom(options?.departments, filters.department_id)}` } : null,
     filters.reason_id ? { key: "reason", label: `Motivo: ${labelFrom(options?.reasons, filters.reason_id)}` } : null,
     filters.customer ? { key: "customer", label: `Cliente: ${filters.customer}` } : null,
+    filters.tag_id ? { key: "tag", label: `Etiqueta: ${labelFrom(options?.tags, filters.tag_id)}` } : null,
+    filters.bot_human ? { key: "bot_human", label: `Automação: ${BOT_HUMAN_LABELS[filters.bot_human] ?? filters.bot_human}` } : null,
+    filters.rating_min !== undefined || filters.rating_max !== undefined
+      ? {
+          key: "rating",
+          label: `Avaliação: ${filters.rating_min ?? 0} a ${filters.rating_max ?? 5}`,
+        }
+      : null,
   ].filter(Boolean) as Array<{ key: string; label: string }>;
 }
 
+/** A chave do badge nem sempre é o nome do campo (`attendant` -> `attendant_id`),
+ *  e um badge pode limpar mais de um campo (`rating` -> mín. e máx.). Era uma
+ *  cadeia de ternários inline no onClick; virou função pra caber os dois casos
+ *  sem ficar ilegível. */
+function clearPatchForBadge(key: string): Partial<SupportOpaAttendanceFilters> {
+  const aliases: Record<string, keyof SupportOpaAttendanceFilters> = {
+    attendant: "attendant_id",
+    department: "department_id",
+    reason: "reason_id",
+    tag: "tag_id",
+  };
+  if (key === "rating") return { rating_min: undefined, rating_max: undefined, page: 1 };
+  const field = aliases[key] ?? (key as keyof SupportOpaAttendanceFilters);
+  return { [field]: undefined, page: 1 } as Partial<SupportOpaAttendanceFilters>;
+}
+
+const BOT_HUMAN_LABELS: Record<string, string> = {
+  with_bot: "Teve bot",
+  without_bot: "Sem bot",
+  reached_human: "Chegou a humano",
+  bot_only: "Só bot",
+  handoff: "Handoff bot → humano",
+  unclassified: "Não classificado",
+};
+
 function splitFilterValues(value?: string) {
   return (value || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function attendantInitials(label: string | null | undefined) {
+  const words = (label ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[words.length - 1][0]}`.toUpperCase();
+}
+
+function shortDateLabel(isoLocalDate: string) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${isoLocalDate}T12:00:00Z`));
+}
+
+// Janela real da base vs. recorte escolhido — norma de qualidade de dados,
+// seção 7: divergência por ausência de histórico não é bug, mas precisa
+// ficar visível pra não ser confundida com um na hora de comparar com o
+// painel oficial do OPA.
+function ImportedDataWindowNote({
+  window,
+  periodDateFrom,
+}: {
+  window: SupportOpaImportedDataWindow | null | undefined;
+  periodDateFrom: string;
+}) {
+  const minLocal = toLocalDateString(window?.min_opened_at);
+  const maxLocal = toLocalDateString(window?.max_opened_at);
+  if (!window || !minLocal || !maxLocal) return null;
+  const startsBeforeBase = periodDateFrom < minLocal;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
+        <Database className="h-3 w-3 text-slate-400" />
+        Base importada: {shortDateLabel(minLocal)} até {shortDateLabel(maxLocal)} · {number(window.total_attendances)} atendimentos
+      </span>
+      {startsBeforeBase ? (
+        <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800">
+          <TriangleAlert className="h-3 w-3 shrink-0" />
+          Este recorte começa antes da primeira data importada — a comparação com o OPA pode divergir por ausência de histórico local.
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 export function OpaGlobalFilters({
@@ -243,6 +344,7 @@ export function OpaGlobalFilters({
   canSync,
   syncing,
   canImport,
+  importedDataWindow,
   onPeriodChange,
   onFilterChange,
   onApply,
@@ -256,6 +358,7 @@ export function OpaGlobalFilters({
   canSync: boolean;
   syncing: boolean;
   canImport: boolean;
+  importedDataWindow?: SupportOpaImportedDataWindow | null;
   onPeriodChange: (period: Period) => void;
   onFilterChange: (patch: Partial<SupportOpaAttendanceFilters>) => void;
   onApply: () => void;
@@ -271,6 +374,7 @@ export function OpaGlobalFilters({
         <div>
           <p className="text-sm font-semibold text-slate-950">Filtros</p>
           <p className="text-xs text-slate-500">O mesmo recorte é aplicado à Visão Geral e aos Dados.</p>
+          <ImportedDataWindowNote window={importedDataWindow} periodDateFrom={period.date_from} />
           <Button
             type="button"
             variant="outline"
@@ -343,6 +447,56 @@ export function OpaGlobalFilters({
             <div className="grid gap-3 rounded-lg bg-slate-50 p-3 md:grid-cols-2 xl:col-span-3">
               <FilterMultiSelect label="Status" value={filters.status} options={options?.statuses ?? []} formatOption={opaStatusLabel} onChange={(value) => onFilterChange({ status: value, page: 1 })} />
               <FilterMultiSelect label="Motivo" value={filters.reason_id} options={options?.reasons ?? []} onChange={(value) => onFilterChange({ reason_id: value, page: 1 })} />
+              <FilterMultiSelect label="Etiqueta" value={filters.tag_id} options={options?.tags ?? []} onChange={(value) => onFilterChange({ tag_id: value, page: 1 })} />
+              <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
+                Participação bot/humano
+                <select
+                  value={filters.bot_human ?? ""}
+                  onChange={(event) => onFilterChange({ bot_human: (event.target.value || undefined) as SupportOpaBotHumanFilter | undefined, page: 1 })}
+                  className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                >
+                  <option value="">Todos</option>
+                  <option value="with_bot">Teve bot</option>
+                  <option value="without_bot">Sem bot</option>
+                  <option value="reached_human">Chegou a humano</option>
+                  <option value="bot_only">Só bot (sem humano)</option>
+                  <option value="handoff">Handoff bot → humano</option>
+                  <option value="unclassified">Não classificado</option>
+                </select>
+              </label>
+              <div className="grid min-w-0 gap-1.5 md:col-span-2">
+                <span className="text-[11px] font-medium text-slate-600">
+                  Avaliação
+                  <span className="ml-1 font-normal text-slate-400">
+                    só atendimentos avaliados entram neste recorte
+                  </span>
+                </span>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={5}
+                    step={0.5}
+                    value={filters.rating_min ?? ""}
+                    onChange={(event) => onFilterChange({ rating_min: event.target.value === "" ? undefined : Number(event.target.value), page: 1 })}
+                    placeholder="mín."
+                    aria-label="Avaliação mínima"
+                    className="h-9 w-24"
+                  />
+                  <span className="text-xs text-slate-400">até</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={5}
+                    step={0.5}
+                    value={filters.rating_max ?? ""}
+                    onChange={(event) => onFilterChange({ rating_max: event.target.value === "" ? undefined : Number(event.target.value), page: 1 })}
+                    placeholder="máx."
+                    aria-label="Avaliação máxima"
+                    className="h-9 w-24"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         ) : null}
@@ -351,7 +505,7 @@ export function OpaGlobalFilters({
         <div className="mt-2 flex min-h-7 flex-wrap items-center gap-1.5 text-xs text-slate-500">
           <span className="font-medium text-slate-700">{badges.length} filtros aplicados</span>
           {badges.map((item) => (
-            <button key={item.key} type="button" onClick={() => onFilterChange({ [item.key === "search" ? "search" : item.key === "attendant" ? "attendant_id" : item.key === "department" ? "department_id" : item.key === "reason" ? "reason_id" : item.key]: undefined, page: 1 })} className="inline-flex max-w-52 items-center gap-1 truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] text-slate-700 transition-colors hover:bg-slate-100" title={`Remover ${item.label}`}>
+            <button key={item.key} type="button" onClick={() => onFilterChange(clearPatchForBadge(item.key))} className="inline-flex max-w-52 items-center gap-1 truncate rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] text-slate-700 transition-colors hover:bg-slate-100" title={`Remover ${item.label}`}>
               <span className="truncate">{item.label}</span><X className="h-3 w-3 shrink-0" />
             </button>
           ))}
@@ -380,7 +534,8 @@ function OverviewSection({ title, description, children }: { title: string; desc
   return (
     <section>
       <div className="mb-2.5 flex items-baseline gap-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
+        <span className="h-3 w-1 rounded-full bg-blue-600" aria-hidden="true" />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">{title}</h3>
         {description ? <span className="text-[11px] text-slate-400">{description}</span> : null}
       </div>
       {children}
@@ -422,10 +577,26 @@ export function StatCell({
 // operação (fundo âmbar suave, sem selo de ícone por célula) pra não parecer
 // "mais do mesmo": Tempo é uma dimensão distinta de Operação, não uma
 // continuação da mesma grade.
+// Denominador explícito do TMR geral pra tela — norma de qualidade de dados,
+// seção 1 ("todo percentual precisa dizer sobre o que foi calculado") e seção
+// 5 (histórico parcial precisa estar claro, não escondido). `null` quando não
+// há nada a dizer (sem filtro no recorte, ou dado já 100% coberto).
+export function tmrCoverageNote(coverage: SupportOpaMetricCoverage | null | undefined): string | null {
+  if (!coverage || coverage.total === 0) return null;
+  if (coverage.count >= coverage.total) return null;
+  const pct = coverage.percentage ?? 0;
+  if (coverage.count === 0) {
+    return "TMR geral: nenhum atendimento deste recorte tem o cálculo ainda — histórico anterior à ativação do campo não foi reprocessado.";
+  }
+  return `TMR geral: média sobre ${number(coverage.count)} de ${number(coverage.total)} atendimentos (cobertura de ${number(pct, 1)}%) — histórico mais antigo ainda não foi reprocessado.`;
+}
+
 export function TimeMetricsStrip({
   items,
+  note,
 }: {
   items: Array<{ label: string; value: string; helper?: string; emphasis?: boolean; muted?: boolean }>;
+  note?: string | null;
 }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-amber-200/70 bg-amber-50/50 shadow-sm">
@@ -440,6 +611,12 @@ export function TimeMetricsStrip({
           </div>
         ))}
       </div>
+      {note ? (
+        <div className="flex items-start gap-1.5 border-t border-amber-200/70 bg-amber-50 px-4 py-2 text-[11px] leading-relaxed text-amber-800">
+          <Info className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>{note}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -452,13 +629,13 @@ export function OpaOverview({ overview }: { overview: SupportOpaOverview | null 
       <OverviewSection title="Operação">
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="grid divide-y divide-slate-100 lg:grid-cols-[1.1fr_2fr] lg:items-stretch lg:divide-x lg:divide-y-0">
-            <div className="flex flex-col justify-center p-5">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Volume no período</p>
+            <div className="flex flex-col justify-center bg-gradient-to-br from-blue-600 to-blue-700 p-5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-100">Volume no período</p>
               <div className="mt-2 flex items-baseline gap-3">
-                <p className="text-4xl font-bold tabular-nums text-slate-950">{number(overview?.total_attendances.current)}</p>
-                <TrendValue value={overview?.total_attendances.percentage_change} suffix="%" />
+                <p className="text-4xl font-bold tabular-nums text-white">{number(overview?.total_attendances.current)}</p>
+                <TrendValue value={overview?.total_attendances.percentage_change} suffix="%" tone="onDark" />
               </div>
-              <p className="mt-1 text-xs text-slate-500">vs. período anterior</p>
+              <p className="mt-1 text-xs text-blue-100">vs. período anterior</p>
             </div>
             <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-3 sm:divide-y-0">
               <StatCell label="Encerrados" value={number(overview?.closed_attendances.current)} trend={overview?.closed_attendances.percentage_change} />
@@ -480,6 +657,7 @@ export function OpaOverview({ overview }: { overview: SupportOpaOverview | null 
             { label: "TMR geral", value: secondsLabel(overview?.average_tmr_all_responses_seconds.current), helper: "inclui bot", emphasis: true },
             { label: "1ª resposta humana", value: secondsLabel(overview?.average_first_response_seconds) },
           ]}
+          note={tmrCoverageNote(overview?.tmr_all_responses_coverage)}
         />
       </OverviewSection>
 
@@ -540,7 +718,7 @@ export function OpaAttendantsPanel({
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 p-4">
+        <div className="border-b border-slate-200 bg-slate-50/60 p-4">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-2">
               <Users className="h-4 w-4 text-blue-700" />
@@ -555,12 +733,23 @@ export function OpaAttendantsPanel({
           {loading ? <p className="rounded-lg border border-slate-200 p-6 text-center text-sm text-slate-500">Carregando atendentes...</p> : null}
           {!loading && items.map((item) => (
             <button key={item.id ?? item.label} type="button" disabled={!item.id} onClick={() => item.id && onOpenAttendant(item)} className="rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-950">{item.label}</p>
-                  <p className="mt-1 text-xs text-slate-500">{number(item.total)} atendimentos · {number(item.share_percentage, 1)}% do volume</p>
+              <div className="flex items-start gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-xs font-bold text-white">
+                  {attendantInitials(item.label)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="truncate text-sm font-semibold text-slate-950">{item.label}</p>
+                    <TrendValue value={item.total_change_percentage} suffix="%" />
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-500">{number(item.total)} atendimentos</p>
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <div className="h-1.5 w-full max-w-24 overflow-hidden rounded-full bg-slate-100">
+                      <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.max(Math.min(item.share_percentage, 100), 2)}%` }} />
+                    </div>
+                    <span className="text-[11px] text-slate-500">{number(item.share_percentage, 1)}%</span>
+                  </div>
                 </div>
-                <TrendValue value={item.total_change_percentage} suffix="%" />
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                 <MiniStat label="Encerramento" value={`${number(item.closure_rate, 1)}%`} />
@@ -640,13 +829,23 @@ function BreakdownHead({
 
 function AttendantBreakdownRow({ item, onOpenAttendant }: { item: SupportOpaBreakdownItem; onOpenAttendant: (attendant: SupportOpaBreakdownItem) => void }) {
   const evaluations = item.rating_count ? `${number(item.rating_count)} avaliações` : "Sem avaliações";
+  const closureTone = item.closure_rate >= 90 ? "text-emerald-700" : item.closure_rate >= 70 ? "text-amber-700" : "text-slate-700";
+  const ratingTone = item.avg_rating === null ? "text-slate-400" : item.avg_rating >= 4.5 ? "text-emerald-700" : item.avg_rating >= 3.5 ? "text-amber-700" : "text-red-700";
   return (
-    <TableRow className={item.id ? "group cursor-pointer border-l-2 border-l-transparent hover:border-l-blue-600 hover:bg-slate-50" : ""} onClick={() => item.id && onOpenAttendant(item)}>
+    <TableRow className={item.id ? "group cursor-pointer border-l-2 border-l-transparent hover:border-l-blue-600 hover:bg-blue-50/30" : ""} onClick={() => item.id && onOpenAttendant(item)}>
       <TableCell className="min-w-72 max-w-80" title={`${item.label} - abrir detalhe lateral`}>
-        <div className="flex min-w-0 items-center justify-between gap-3">
-          <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-xs font-bold text-white">
+            {attendantInitials(item.label)}
+          </span>
+          <div className="min-w-0 flex-1">
             <p className="truncate font-semibold text-slate-950">{item.label}</p>
-            <p className="mt-0.5 text-[11px] text-slate-500">{number(item.share_percentage, 1)}% do volume filtrado</p>
+            <div className="mt-1 flex items-center gap-1.5">
+              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.max(Math.min(item.share_percentage, 100), 2)}%` }} />
+              </div>
+              <span className="text-[11px] text-slate-500">{number(item.share_percentage, 1)}% do volume</span>
+            </div>
           </div>
         </div>
       </TableCell>
@@ -655,7 +854,7 @@ function AttendantBreakdownRow({ item, onOpenAttendant }: { item: SupportOpaBrea
         <p className="mt-0.5 text-[11px] text-slate-500">{number(item.closed)} encerrados · {number(item.open)} abertos</p>
       </TableCell>
       <TableCell>
-        <p className="font-semibold tabular-nums text-slate-950">{number(item.closure_rate, 1)}%</p>
+        <p className={`font-semibold tabular-nums ${closureTone}`}>{number(item.closure_rate, 1)}%</p>
         <p className="mt-0.5 text-[11px] text-slate-500">do volume encerrado</p>
       </TableCell>
       <TableCell>
@@ -663,7 +862,7 @@ function AttendantBreakdownRow({ item, onOpenAttendant }: { item: SupportOpaBrea
         <p className="mt-0.5 text-[11px] text-slate-500">média dos encerrados</p>
       </TableCell>
       <TableCell>
-        <p className="font-semibold tabular-nums text-slate-950">{number(item.avg_rating, 2)}</p>
+        <p className={`font-semibold tabular-nums ${ratingTone}`}>{number(item.avg_rating, 2)}</p>
         <p className="mt-0.5 text-[11px] text-slate-500">{evaluations}</p>
       </TableCell>
       <TableCell>
@@ -698,21 +897,40 @@ function TrendPill({ label, value, suffix = "" }: { label: string; value: number
   );
 }
 
-export function TrendValue({ value, suffix = "" }: { value: number | null | undefined; suffix?: string }) {
+// `tone="onDark"` existe só pros painéis com fundo colorido cheio (ex.: o
+// destaque de volume da Visão Geral) — as cores padrão (`text-blue-700` etc.)
+// ficam ilegíveis sobre um fundo azul/escuro sólido.
+export function TrendValue({ value, suffix = "", tone = "onLight" }: { value: number | null | undefined; suffix?: string; tone?: "onLight" | "onDark" }) {
   if (value === null || value === undefined) {
-    return <span className="inline-flex items-center justify-end gap-1 text-xs text-slate-400">-</span>;
+    return <span className={`inline-flex items-center justify-end gap-1 text-xs ${tone === "onDark" ? "text-white/60" : "text-slate-400"}`}>-</span>;
   }
   const rounded = number(Math.abs(value), suffix === "" ? 2 : 1);
   const positive = value > 0;
   const negative = value < 0;
   const Icon = positive ? ArrowUpRight : negative ? ArrowDownRight : Minus;
+  const colorClass = tone === "onDark"
+    ? "text-white"
+    : positive ? "text-blue-700" : negative ? "text-slate-600" : "text-slate-400";
   return (
-    <span className={`inline-flex items-center justify-end gap-1 text-xs font-semibold tabular-nums ${positive ? "text-blue-700" : negative ? "text-slate-600" : "text-slate-400"}`}>
+    <span className={`inline-flex items-center justify-end gap-1 text-xs font-semibold tabular-nums ${colorClass}`}>
       <Icon className="h-3.5 w-3.5" />
       {positive ? "+" : negative ? "-" : ""}{rounded}{suffix}
     </span>
   );
 }
+
+// Intensidade decrescente por rank — o item de maior volume herda a cor mais
+// forte da paleta, reforçando hierarquia visual sem precisar de legenda à
+// parte (norma visual: cor precisa comunicar prioridade/agrupamento, não é
+// decoração).
+const RANK_BAR_COLORS = ["bg-blue-600", "bg-blue-500", "bg-sky-500", "bg-sky-400", "bg-slate-400"];
+const RANK_BADGE_TONES = [
+  "bg-blue-600 text-white",
+  "bg-blue-100 text-blue-700",
+  "bg-sky-100 text-sky-700",
+  "bg-slate-100 text-slate-600",
+  "bg-slate-100 text-slate-500",
+];
 
 function BarListPanel({
   title,
@@ -730,20 +948,23 @@ function BarListPanel({
   const max = items.reduce((acc, item) => Math.max(acc, item.total), 0) || 1;
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
-        <Icon className="h-3.5 w-3.5 text-slate-400" />
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
+      <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-4 py-3">
+        <Icon className="h-3.5 w-3.5 text-blue-600" />
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">{title}</h3>
       </div>
-      <div className="grid gap-3 p-4">
-        {items.map((item) => (
-          <div key={item.key} className="grid min-w-0 grid-cols-[1fr_auto] items-center gap-3">
+      <div className="grid gap-2.5 p-4">
+        {items.map((item, index) => (
+          <div key={item.key} className="grid min-w-0 grid-cols-[1.5rem_1fr] items-center gap-2.5">
+            <span className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold tabular-nums ${RANK_BADGE_TONES[Math.min(index, RANK_BADGE_TONES.length - 1)]}`}>
+              {index + 1}
+            </span>
             <div className="min-w-0">
               <div className="flex items-baseline justify-between gap-2">
                 <p className="truncate text-sm font-medium text-slate-800" title={labelFor ? labelFor(item.key) : item.label}>{item.label}</p>
                 <p className="shrink-0 text-sm font-semibold tabular-nums text-slate-950">{number(item.total)}</p>
               </div>
               <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.max((item.total / max) * 100, 2)}%` }} />
+                <div className={`h-full rounded-full ${RANK_BAR_COLORS[Math.min(index, RANK_BAR_COLORS.length - 1)]}`} style={{ width: `${Math.max((item.total / max) * 100, 2)}%` }} />
               </div>
             </div>
           </div>
@@ -779,32 +1000,41 @@ export function StatusSummary({ items }: { items: Array<{ status: string; total:
 export function TopReasonsSummary({ items }: { items: SupportOpaReasonMetric[] }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-4 py-3">
+      <div className="border-b border-slate-100 bg-slate-50/60 px-4 py-3">
         <div className="flex items-center gap-2">
-          <ListFilter className="h-3.5 w-3.5 text-slate-400" />
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Motivos com mais volume</h3>
+          <ListFilter className="h-3.5 w-3.5 text-blue-600" />
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Motivos com mais volume</h3>
         </div>
         <p className="mt-1 text-xs text-slate-400">Considera só o primeiro motivo registrado em cada atendimento.</p>
       </div>
       <div className="overflow-x-auto p-4">
         <Table>
           <TableHeader>
-            <TableRow>
+            <TableRow className="border-slate-200">
               <TableHead>Motivo</TableHead>
               <TableHead className="text-right">Atendimentos</TableHead>
               <TableHead className="text-right">TMA médio</TableHead>
               <TableHead className="text-right">TMR humano</TableHead>
-              <TableHead className="text-right">TMR geral</TableHead>
+              <TableHead className="text-right text-blue-700">TMR geral</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((item) => (
-              <TableRow key={item.label}>
+            {items.map((item, index) => (
+              <TableRow key={item.label} className={index % 2 === 1 ? "bg-slate-50/50" : undefined}>
                 <TableCell className="max-w-72 truncate font-medium text-slate-800" title={item.label}>{item.label}</TableCell>
                 <TableCell className="text-right tabular-nums">{number(item.total)}</TableCell>
                 <TableCell className="text-right tabular-nums">{secondsLabel(item.average_tma_seconds)}</TableCell>
                 <TableCell className="text-right tabular-nums">{secondsLabel(item.average_tmr_seconds)}</TableCell>
-                <TableCell className="text-right tabular-nums">{secondsLabel(item.average_tmr_all_responses_seconds)}</TableCell>
+                <TableCell
+                  className="text-right tabular-nums font-semibold text-blue-700"
+                  title={
+                    item.tmr_all_responses_coverage && item.tmr_all_responses_coverage.total > 0
+                      ? `Média sobre ${number(item.tmr_all_responses_coverage.count)} de ${number(item.tmr_all_responses_coverage.total)} atendimentos deste motivo`
+                      : undefined
+                  }
+                >
+                  {secondsLabel(item.average_tmr_all_responses_seconds)}
+                </TableCell>
               </TableRow>
             ))}
             {!items.length ? (
@@ -823,8 +1053,8 @@ export function TopRecurringCustomers({ items }: { items: SupportOpaRecurringCus
   return (
     <div>
       <div className="flex items-center gap-2 px-4 pb-2 pt-4 lg:px-5">
-        <RotateCcw className="h-3.5 w-3.5 text-slate-400" />
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Clientes mais recorrentes</h3>
+        <RotateCcw className="h-3.5 w-3.5 text-blue-600" />
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Clientes mais recorrentes</h3>
       </div>
       <div className="grid gap-1 px-3 pb-3 lg:px-4">
         {items.map((item, index) => {
@@ -835,7 +1065,7 @@ export function TopRecurringCustomers({ items }: { items: SupportOpaRecurringCus
               className="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-2.5 py-2 transition-colors hover:bg-slate-50"
               title={[item.customer_name, customerCode].filter(Boolean).join(" - ")}
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold tabular-nums text-slate-500">
+              <span className={`flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-bold tabular-nums ${RANK_BADGE_TONES[Math.min(index, RANK_BADGE_TONES.length - 1)]}`}>
                 {index + 1}
               </span>
               <div className="min-w-0">
@@ -906,10 +1136,10 @@ export function BotHumanSummary({ metrics }: { metrics: SupportOpaBotHumanMetric
   const hasClassified = metrics.classified_attendances > 0;
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-4 py-3">
+      <div className="border-b border-slate-100 bg-slate-50/60 px-4 py-3">
         <div className="flex items-center gap-2">
-          <GitBranch className="h-3.5 w-3.5 text-slate-400" />
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">IA (bot) vs. atendimento humano</h3>
+          <GitBranch className="h-3.5 w-3.5 text-blue-600" />
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">IA (bot) vs. atendimento humano</h3>
         </div>
         <p className="mt-1 text-xs text-slate-400">
           Percentuais calculados só sobre atendimentos classificados ({number(metrics.classified_attendances)} de {number(metrics.total_attendances)}) —
@@ -1089,17 +1319,21 @@ export function OpaAttendantOverridesPanel({
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-2 text-slate-800">
-        <Users className="h-5 w-5" />
-        <h3 className="text-base font-semibold">Atendentes virtuais (agente virtual)</h3>
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 bg-slate-50/60 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-blue-700" />
+          <h3 className="text-sm font-semibold text-slate-950">Atendentes virtuais</h3>
+          <Badge className="border-slate-200 bg-white text-slate-600">{number(overrides.length)} cadastrados</Badge>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">
+          Cadastre um <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10.5px] text-slate-700">attendant_id</code> do
+          OPA Suite pra ser sempre tratado como agente virtual — o painel individual passa a priorizar TMR geral pra
+          ele, mesmo que o OPA nunca mande <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10.5px] text-slate-700">tipo=&quot;bot&quot;</code>.
+        </p>
       </div>
-      <p className="mt-1 text-xs text-slate-500">
-        Cadastre aqui um `attendant_id` do OPA Suite que deve ser sempre tratado como agente virtual — o painel
-        individual passa a priorizar TMR geral pra ele, mesmo que o OPA nunca mande `tipo="bot"`.
-      </p>
 
-      <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+      <div className="grid gap-2 border-b border-slate-100 bg-slate-50/30 p-4 sm:grid-cols-[1fr_1fr_auto]">
         <Input placeholder="attendant_id do OPA Suite" value={attendantId} onChange={(event) => setAttendantId(event.target.value)} disabled={saving} />
         <Input placeholder="Nome (opcional)" value={attendantName} onChange={(event) => setAttendantName(event.target.value)} disabled={saving} />
         <Button type="button" onClick={submit} disabled={saving || !attendantId.trim()}>
@@ -1107,19 +1341,18 @@ export function OpaAttendantOverridesPanel({
         </Button>
       </div>
 
-      {error ? <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</div> : null}
+      {error ? <div className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</div> : null}
 
       {loading ? (
-        <div className="mt-4 flex items-center gap-2 text-sm text-slate-500">
+        <div className="flex items-center gap-2 p-4 text-sm text-slate-500">
           <Loader2 className="h-4 w-4 animate-spin" /> Carregando cadastro...
         </div>
       ) : (
-        <div className="mt-4 overflow-x-auto">
+        <div className="overflow-x-auto p-4">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Attendant ID</TableHead>
-                <TableHead>Nome</TableHead>
+                <TableHead>Atendente</TableHead>
                 <TableHead>Classificação</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Ações</TableHead>
@@ -1128,22 +1361,32 @@ export function OpaAttendantOverridesPanel({
             <TableBody>
               {overrides.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-sm text-slate-500">
+                  <TableCell colSpan={4} className="py-10 text-center text-sm text-slate-500">
                     Nenhum atendente virtual cadastrado.
                   </TableCell>
                 </TableRow>
               ) : (
                 overrides.map((override) => (
                   <TableRow key={override.id}>
-                    <TableCell className="font-mono text-xs">{override.attendant_id}</TableCell>
-                    <TableCell>{override.attendant_name ?? "-"}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-[11px] font-bold text-white">
+                          {attendantInitials(override.attendant_name ?? override.attendant_id)}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-slate-900">{override.attendant_name ?? "Sem nome cadastrado"}</p>
+                          <p className="truncate font-mono text-[11px] text-slate-400">{override.attendant_id}</p>
+                        </div>
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <Badge className="border-blue-100 bg-blue-50 text-blue-700">Agente virtual</Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge className={override.active ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-500"}>
+                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${override.active ? "text-emerald-700" : "text-slate-500"}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${override.active ? "bg-emerald-500" : "bg-slate-400"}`} aria-hidden="true" />
                         {override.active ? "Ativo" : "Inativo"}
-                      </Badge>
+                      </span>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">

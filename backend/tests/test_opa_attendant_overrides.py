@@ -15,7 +15,7 @@ from app.modules.support.opa_attendant_overrides import (
     update_override,
 )
 from app.modules.support.opa_ingestion import import_opa_attendances
-from app.modules.support.router import opa_attendant_summary
+from app.modules.support.router import OpaExtraFilters, opa_attendant_summary
 from tests.test_opa_ingestion import FakeOpaClient, _record
 
 
@@ -228,6 +228,7 @@ def test_attendant_summary_marks_manually_overridden_attendant_as_bot(db_session
         reason_id=None,
         customer=None,
         search=None,
+        extra=OpaExtraFilters(),
         db=db_session,
         user=admin_user,
     )
@@ -255,6 +256,7 @@ def test_attendant_summary_not_shown_as_unknown_once_registered_as_virtual_agent
         reason_id=None,
         customer=None,
         search=None,
+        extra=OpaExtraFilters(),
         db=db_session,
         user=admin_user,
     )

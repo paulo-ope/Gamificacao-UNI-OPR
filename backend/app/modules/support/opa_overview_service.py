@@ -6,13 +6,21 @@ chamada à API do OPA Suite acontece aqui.
 """
 from __future__ import annotations
 
+from datetime import date as date_type, timedelta
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from .models import SupportOpaAttendance
-from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters
+from .opa_filters import (
+    DATE_BASIS_COLUMNS,
+    DEFAULT_DATE_BASIS,
+    SUPPORT_TIMEZONE_NAME,
+    OpaAttendanceFilters,
+    apply_opa_attendance_filters,
+)
 
 
 def metric_comparison(current: float | int | None, previous: float | int | None) -> dict[str, Any]:
@@ -30,6 +38,47 @@ def metric_comparison(current: float | int | None, previous: float | int | None)
     }
 
 
+def coverage(count: int, total: int) -> dict[str, Any]:
+    """Denominador explícito pra qualquer média que possa ter cobertura parcial
+    do histórico (norma de qualidade de dados, seção 1: "todo percentual precisa
+    dizer sobre o que foi calculado"). `count` é quantos registros do universo
+    `total` realmente entraram na média (têm valor não-nulo) — nunca confundir
+    com o `total` do recorte de filtros inteiro."""
+    return {
+        "count": count,
+        "total": total,
+        "percentage": (count / total * 100) if total else None,
+    }
+
+
+def imported_data_window(db: Session) -> dict[str, Any]:
+    """Janela real da base importada — MIN/MAX/COUNT sobre a tabela INTEIRA, sem
+    nenhum filtro de período aplicado. Existe pra separar duas perguntas que o
+    usuário costuma confundir na hora de comparar com o painel oficial do OPA:
+    "o que eu pedi no filtro" (pode incluir datas sem dado nenhum aqui) vs "o que
+    a base realmente tem importado" (norma de qualidade de dados, seção 7 —
+    divergência por ausência de histórico não é bug, mas precisa ficar visível
+    pra não ser confundida com um). Nunca usar `apply_opa_attendance_filters`
+    aqui de propósito — isso é sobre a base inteira, não sobre o recorte
+    escolhido."""
+    row = db.execute(
+        select(
+            func.min(SupportOpaAttendance.opened_at).label("min_opened_at"),
+            func.max(SupportOpaAttendance.opened_at).label("max_opened_at"),
+            func.min(SupportOpaAttendance.closed_at).label("min_closed_at"),
+            func.max(SupportOpaAttendance.closed_at).label("max_closed_at"),
+            func.count(SupportOpaAttendance.id).label("total"),
+        )
+    ).one()
+    return {
+        "min_opened_at": row.min_opened_at,
+        "max_opened_at": row.max_opened_at,
+        "min_closed_at": row.min_closed_at,
+        "max_closed_at": row.max_closed_at,
+        "total_attendances": int(row.total or 0),
+    }
+
+
 def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, Any]:
     """Métricas base do período (comportamento idêntico ao `_overview_metrics`
     anterior em `router.py`), acrescido de `average_tmr_seconds` — único campo
@@ -43,6 +92,9 @@ def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, An
             func.avg(SupportOpaAttendance.rating).label("avg_rating"),
             func.avg(SupportOpaAttendance.tmr_seconds).label("avg_tmr"),
             func.avg(SupportOpaAttendance.tmr_all_responses_seconds).label("avg_tmr_all"),
+            # COUNT ignora NULL igual AVG — dá o denominador real da média de
+            # TMR geral sem precisar de uma segunda consulta. Ver `coverage()`.
+            func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
             func.count(func.distinct(SupportOpaAttendance.attendant_id)).label("distinct_attendants"),
             func.count(func.distinct(SupportOpaAttendance.department_id)).label("distinct_departments"),
         ),
@@ -61,6 +113,7 @@ def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, An
         "average_rating": float(row.avg_rating) if row.avg_rating is not None else None,
         "average_tmr_seconds": float(row.avg_tmr) if row.avg_tmr is not None else None,
         "average_tmr_all_responses_seconds": float(row.avg_tmr_all) if row.avg_tmr_all is not None else None,
+        "tmr_all_responses_coverage": coverage(int(row.tmr_all_count or 0), total),
         "distinct_attendants": int(row.distinct_attendants or 0),
         "distinct_departments": int(row.distinct_departments or 0),
     }
@@ -146,6 +199,7 @@ def top_reasons(db: Session, filters: OpaAttendanceFilters, *, limit: int = 5) -
             func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_seconds))).label("avg_tma_seconds"),
             func.avg(SupportOpaAttendance.tmr_seconds).label("avg_tmr_seconds"),
             func.avg(SupportOpaAttendance.tmr_all_responses_seconds).label("avg_tmr_all_responses_seconds"),
+            func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
         )
         .group_by(label)
         .order_by(func.count(SupportOpaAttendance.id).desc())
@@ -162,6 +216,7 @@ def top_reasons(db: Session, filters: OpaAttendanceFilters, *, limit: int = 5) -
             "average_tmr_all_responses_seconds": (
                 float(row.avg_tmr_all_responses_seconds) if row.avg_tmr_all_responses_seconds is not None else None
             ),
+            "tmr_all_responses_coverage": coverage(int(row.tmr_all_count or 0), int(row.total or 0)),
         }
         for row in rows
     ]
@@ -232,6 +287,96 @@ def bot_human_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, A
     }
 
 
+def _local_day_expression(db: Session, column):
+    """Expressão SQL que reduz um timestamp UTC ao DIA LOCAL de operação.
+
+    `America/Porto_Velho` é UTC-4 fixo, sem horário de verão (mesma premissa que
+    `opa_filters.opa_period_bounds` já usa pra converter o período do filtro), o
+    que permite uma expressão simples nos dois dialetos — Postgres em produção e
+    SQLite na suíte de testes. Sem isso, agrupar por dia cairia no fuso do banco
+    e o gráfico mostraria atendimentos da madrugada no dia errado, contradizendo
+    o total do mesmo recorte já exibido nos cards.
+    """
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        return sa.cast(column.op("AT TIME ZONE")(sa.literal(SUPPORT_TIMEZONE_NAME)), sa.Date)
+    return func.date(column, "-4 hours")
+
+
+def daily_timeseries(db: Session, filters: OpaAttendanceFilters) -> list[dict[str, Any]]:
+    """Série diária do recorte atual, pro gráfico de tendência.
+
+    Usa exatamente os mesmos filtros das demais métricas da tela
+    (`apply_opa_attendance_filters`) — o gráfico é uma decomposição do mesmo
+    universo dos cards, nunca um número calculado por outro caminho (norma de
+    qualidade de dados, seção "fonte única de regra").
+
+    Dias sem nenhum atendimento aparecem com zero em vez de sumir da série: um
+    buraco no eixo esconderia justamente o dia parado, que costuma ser o mais
+    relevante de enxergar.
+    """
+    date_column = DATE_BASIS_COLUMNS.get(filters.date_basis, DATE_BASIS_COLUMNS[DEFAULT_DATE_BASIS])
+    bucket = _local_day_expression(db, date_column).label("day")
+    closed_case = case((SupportOpaAttendance.closed_at.isnot(None), 1), else_=0)
+
+    statement = apply_opa_attendance_filters(
+        select(
+            bucket,
+            func.count(SupportOpaAttendance.id).label("total"),
+            func.sum(closed_case).label("closed"),
+            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_seconds))).label("avg_tma"),
+            func.avg(SupportOpaAttendance.tmr_seconds).label("avg_tmr"),
+            func.avg(SupportOpaAttendance.tmr_all_responses_seconds).label("avg_tmr_all"),
+            func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
+            func.avg(SupportOpaAttendance.rating).label("avg_rating"),
+        ),
+        filters,
+    ).group_by(bucket).order_by(bucket)
+
+    rows = {}
+    for row in db.execute(statement).all():
+        day = row.day
+        # SQLite devolve a data como texto; Postgres devolve `date`.
+        key = day if isinstance(day, date_type) else date_type.fromisoformat(str(day))
+        total = int(row.total or 0)
+        closed = int(row.closed or 0)
+        rows[key] = {
+            "day": key,
+            "total": total,
+            "closed": closed,
+            "open": max(0, total - closed),
+            "average_duration_seconds": float(row.avg_tma) if row.avg_tma is not None else None,
+            "average_tmr_seconds": float(row.avg_tmr) if row.avg_tmr is not None else None,
+            "average_tmr_all_responses_seconds": float(row.avg_tmr_all) if row.avg_tmr_all is not None else None,
+            "average_rating": float(row.avg_rating) if row.avg_rating is not None else None,
+            "tmr_all_responses_coverage": coverage(int(row.tmr_all_count or 0), total),
+        }
+
+    if not filters.date_from or not filters.date_to:
+        return [rows[key] for key in sorted(rows)]
+
+    series: list[dict[str, Any]] = []
+    cursor = filters.date_from
+    while cursor <= filters.date_to:
+        series.append(
+            rows.get(
+                cursor,
+                {
+                    "day": cursor,
+                    "total": 0,
+                    "closed": 0,
+                    "open": 0,
+                    "average_duration_seconds": None,
+                    "average_tmr_seconds": None,
+                    "average_tmr_all_responses_seconds": None,
+                    "average_rating": None,
+                    "tmr_all_responses_coverage": coverage(0, 0),
+                },
+            )
+        )
+        cursor += timedelta(days=1)
+    return series
+
+
 def expanded_overview(db: Session, filters: OpaAttendanceFilters) -> dict[str, Any]:
     """Monta a resposta completa de `/opa/overview`. Os campos que já existiam
     (`total_attendances` ... `distinct_departments`) preservam exatamente o
@@ -257,6 +402,7 @@ def expanded_overview(db: Session, filters: OpaAttendanceFilters) -> dict[str, A
         "average_tmr_all_responses_seconds": metric_comparison(
             current["average_tmr_all_responses_seconds"], previous["average_tmr_all_responses_seconds"]
         ),
+        "tmr_all_responses_coverage": current["tmr_all_responses_coverage"],
         "distinct_attendants": metric_comparison(current["distinct_attendants"], previous["distinct_attendants"]),
         "distinct_departments": metric_comparison(current["distinct_departments"], previous["distinct_departments"]),
         "by_channel": channel_counts(db, filters),
@@ -265,4 +411,5 @@ def expanded_overview(db: Session, filters: OpaAttendanceFilters) -> dict[str, A
         "top_reasons": top_reasons(db, filters),
         "average_first_response_seconds": average_first_response_seconds(db, filters),
         "bot_human": bot_human_metrics(db, filters),
+        "imported_data_window": imported_data_window(db),
     }

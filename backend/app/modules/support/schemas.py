@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -79,12 +79,26 @@ class SupportImportResult(BaseModel):
     errors: list[dict] = Field(default_factory=list)
 
 
+class SupportOpaMetricCoverage(BaseModel):
+    """Denominador explícito de uma média que pode ter cobertura parcial do
+    histórico (ex.: TMR geral, calculado só pra importações a partir da data em
+    que o campo entrou em produção — ver docs/normas-qualidade-dados-metricas.md,
+    seção 1). `count` é quantos registros de `total` entraram na média; `total`
+    é o universo do mesmo recorte de filtros. `percentage` é `None` quando
+    `total` é 0 (nada a cobrir)."""
+
+    count: int
+    total: int
+    percentage: float | None = None
+
+
 class SupportOpaMetricItem(BaseModel):
     label: str
     total: int
     average_tma_seconds: float | None = None
     average_tmr_seconds: float | None = None
     average_tmr_all_responses_seconds: float | None = None
+    tmr_all_responses_coverage: SupportOpaMetricCoverage | None = None
     average_rating: float | None = None
 
 
@@ -96,6 +110,7 @@ class SupportOpaMetrics(BaseModel):
     average_tma_seconds: float | None = None
     average_tmr_seconds: float | None = None
     average_tmr_all_responses_seconds: float | None = None
+    tmr_all_responses_coverage: SupportOpaMetricCoverage | None = None
     average_rating: float | None = None
     by_attendant: list[SupportOpaMetricItem] = Field(default_factory=list)
     by_reason: list[SupportOpaMetricItem] = Field(default_factory=list)
@@ -143,6 +158,7 @@ class SupportOpaReasonMetric(BaseModel):
     average_tma_seconds: float | None = None
     average_tmr_seconds: float | None = None
     average_tmr_all_responses_seconds: float | None = None
+    tmr_all_responses_coverage: SupportOpaMetricCoverage | None = None
 
 
 class SupportOpaBotHumanMetrics(BaseModel):
@@ -168,6 +184,7 @@ class SupportOpaAttendantSummary(BaseModel):
     average_tma_seconds: float | None = None
     average_tmr_seconds: float | None = None
     average_tmr_all_responses_seconds: float | None = None
+    tmr_all_responses_coverage: SupportOpaMetricCoverage | None = None
     average_first_response_seconds: float | None = None
     average_rating: float | None = None
     rating_count: int
@@ -205,6 +222,19 @@ class SupportOpaAttendanceTimeline(BaseModel):
     messages_error: str | None = None
 
 
+class SupportOpaImportedDataWindow(BaseModel):
+    """Janela real da base importada (MIN/MAX/COUNT sem filtro de período) —
+    diferente de `current_period`/`previous_period`, que são o recorte escolhido
+    pelo usuário. Serve pra distinguir "divergência por ausência de histórico"
+    de bug de verdade quando alguém compara com o painel oficial do OPA."""
+
+    min_opened_at: datetime | None = None
+    max_opened_at: datetime | None = None
+    min_closed_at: datetime | None = None
+    max_closed_at: datetime | None = None
+    total_attendances: int
+
+
 class SupportOpaOverview(BaseModel):
     current_period: SupportOpaOverviewPeriod
     previous_period: SupportOpaOverviewPeriod
@@ -216,6 +246,7 @@ class SupportOpaOverview(BaseModel):
     average_rating: SupportOpaMetricComparison
     average_tmr_seconds: SupportOpaMetricComparison
     average_tmr_all_responses_seconds: SupportOpaMetricComparison
+    tmr_all_responses_coverage: SupportOpaMetricCoverage
     distinct_attendants: SupportOpaMetricComparison
     distinct_departments: SupportOpaMetricComparison
     by_channel: list[SupportOpaChannelCount] = Field(default_factory=list)
@@ -224,6 +255,7 @@ class SupportOpaOverview(BaseModel):
     top_reasons: list[SupportOpaReasonMetric] = Field(default_factory=list)
     average_first_response_seconds: float | None = None
     bot_human: SupportOpaBotHumanMetrics
+    imported_data_window: SupportOpaImportedDataWindow
 
 
 class SupportOpaAttendanceListItem(BaseModel):
@@ -333,3 +365,39 @@ class SupportOpaFilters(BaseModel):
     channels: list[SupportOpaFilterOption] = Field(default_factory=list)
     statuses: list[SupportOpaFilterOption] = Field(default_factory=list)
     reasons: list[SupportOpaFilterOption] = Field(default_factory=list)
+    tags: list[SupportOpaFilterOption] = Field(default_factory=list)
+
+
+class SupportOpaTimeseriesPoint(BaseModel):
+    """Um dia da série. `day` é o dia LOCAL de operação (America/Porto_Velho),
+    não UTC — mesma convenção do filtro de período da tela."""
+
+    day: date
+    total: int
+    closed: int
+    open: int
+    average_duration_seconds: float | None = None
+    average_tmr_seconds: float | None = None
+    average_tmr_all_responses_seconds: float | None = None
+    average_rating: float | None = None
+    tmr_all_responses_coverage: SupportOpaMetricCoverage | None = None
+
+
+class SupportOpaTimeseries(BaseModel):
+    date_basis: str
+    points: list[SupportOpaTimeseriesPoint] = Field(default_factory=list)
+
+
+class SupportOpaSavedFilter(BaseModel):
+    id: int
+    name: str
+    scope: str
+    filters: dict[str, Any] = Field(default_factory=dict)
+    owner_id: int | None = None
+    updated_at: datetime | None = None
+
+
+class SupportOpaSavedFilterCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    scope: Literal["personal", "global"] = "personal"
+    filters: dict[str, Any] = Field(default_factory=dict)

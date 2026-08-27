@@ -15,6 +15,7 @@ from app.services.opa_client import OpaClient
 
 from . import opa_attendant_overrides
 from .models import SupportOpaAttendance, SupportOpaAttendanceRaw, SupportOpaDimension, SupportOpaImportRun
+from .opa_filters import TAG_SEPARATOR
 
 
 SUPPORT_OPA_IMPORT_LOCK_KEY = 913_275_003
@@ -45,6 +46,26 @@ def _first(record: dict[str, Any], *keys: str) -> str:
         if text:
             return text
     return ""
+
+
+def _tag_ids_text(record: dict[str, Any]) -> str:
+    """Projeta `tags[].id_tag` do payload bruto numa string delimitada pronta
+    pra filtro (ver `SupportOpaAttendance.tag_ids_text`). Sempre devolve pelo
+    menos o separador sozinho (",") — string vazia significaria "não sei", e
+    aqui a gente sabe: o atendimento simplesmente não tem etiqueta."""
+    tags = record.get("tags")
+    if not isinstance(tags, list):
+        return TAG_SEPARATOR
+    ids = []
+    for tag in tags:
+        if not isinstance(tag, dict):
+            continue
+        tag_id = tag.get("id_tag") or tag.get("_id") or tag.get("id")
+        if tag_id and str(tag_id) not in ids:
+            ids.append(str(tag_id))
+    if not ids:
+        return TAG_SEPARATOR
+    return f"{TAG_SEPARATOR}{TAG_SEPARATOR.join(ids)}{TAG_SEPARATOR}"
 
 
 def _first_list_dict(record: dict[str, Any], key: str) -> dict[str, Any] | None:
@@ -234,6 +255,73 @@ def _classify_bot_human(
     else:
         handoff = False
     return handled_by_bot, reached_human, handoff
+
+
+def _message_attendant_summary(
+    messages: list[dict[str, Any]], attendant_types: dict[str, str]
+) -> dict[str, Any]:
+    """Resumo mínimo de quem respondeu (humano) a partir das MESMAS mensagens já
+    buscadas pro TMR/classificação bot-humano — zero chamada extra à API do OPA
+    Suite. Existe só pra preparar uma comparação futura sobre handoff/atendente
+    real (o total de atendimentos por atendente diverge do painel oficial do
+    OPA — ver docs/roteiro-comparacao-tmr-opa-suite.md, seção 10.3), NÃO altera
+    nenhum cálculo de TMA/TMR/bot-humano existente.
+
+    Mesmo critério de classificação de `_classify_bot_human`: tipo "bot" conta
+    como bot, tipo conhecido diferente de bot conta como humano, tipo
+    desconhecido (atendente não sincronizado) é ignorado — nunca tratado como
+    bot nem como humano. Mensagem de humano sem timestamp parseável entra na
+    contagem mas não participa da ordenação primeiro/último (mesmo critério de
+    `_classify_bot_human`, que também descarta timestamp ausente).
+
+    Lista de mensagens vazia -> tudo `None` (dado insuficiente, mesmo critério
+    de `_classify_bot_human` pra `classified` vazio) — não dá pra distinguir
+    "atendimento sem mensagem nenhuma" de "API não devolveu nada pra esse
+    atendimento", então nunca vira zero por padrão. Já com mensagens
+    presentes, `*_message_count` é uma contagem real (pode ser `0` de
+    verdade, ex.: atendimento só de bot tem `human_message_count == 0`)."""
+    if not messages:
+        return {
+            "distinct_human_attendant_ids": None,
+            "first_human_attendant_id": None,
+            "last_human_attendant_id": None,
+            "human_message_count": None,
+            "bot_message_count": None,
+            "client_message_count": None,
+        }
+
+    human_timestamped: list[tuple[str, datetime]] = []
+    human_count = 0
+    bot_count = 0
+    client_count = 0
+    for message in messages:
+        if _message_is_from_client(message):
+            client_count += 1
+            continue
+        attendant_id = message.get("id_atend")
+        if not attendant_id:
+            continue
+        attendant_type = attendant_types.get(attendant_id)
+        if attendant_type == "bot":
+            bot_count += 1
+        elif attendant_type is not None:
+            human_count += 1
+            timestamp = _message_timestamp(message)
+            if timestamp is not None:
+                human_timestamped.append((attendant_id, timestamp))
+        # tipo desconhecido: mensagem não contabilizada (mesmo critério de _classify_bot_human).
+
+    human_timestamped.sort(key=lambda item: item[1])
+    distinct_ids = sorted({attendant_id for attendant_id, _ in human_timestamped})
+
+    return {
+        "distinct_human_attendant_ids": distinct_ids or None,
+        "first_human_attendant_id": human_timestamped[0][0] if human_timestamped else None,
+        "last_human_attendant_id": human_timestamped[-1][0] if human_timestamped else None,
+        "human_message_count": human_count,
+        "bot_message_count": bot_count,
+        "client_message_count": client_count,
+    }
 
 
 def _human_response_metrics(
@@ -503,6 +591,7 @@ def _normalize_attendance(record: dict[str, Any], dimensions: dict[str, dict[str
         "tma_seconds": tma_seconds if tma_seconds is not None else _computed_duration_seconds(opened_at, closed_at),
         "tmr_seconds": _duration_seconds(record, "tmr_seconds", "tmrSegundos", "tempo_medio_resposta_segundos", "tmr"),
         "source_updated_at": source_updated_at,
+        "tag_ids_text": _tag_ids_text(record),
         "raw_payload": record,
     }
 
@@ -763,6 +852,8 @@ def _process_attendance_pages(
                         payload["handled_by_bot"] = handled_by_bot
                         payload["reached_human"] = reached_human
                         payload["bot_to_human_handoff"] = handoff
+
+                        payload.update(_message_attendant_summary(messages, attendant_types))
                     except Exception as exc:
                         logger.warning("falha_calcular_tmr source_id=%s erro=%s", payload["source_id"], exc)
 

@@ -17,8 +17,9 @@ Depois disso, aguarde validacao do usuario antes de escrever codigo, salvo quand
 Excecao: pode ler arquivos, listar estrutura, rodar diagnosticos e explicar o plano sem validacao previa.
 
 ## Fontes do projeto
-Leia estes documentos quando a tarefa envolver a area correspondente:
+Leia estes documentos antes de implementar conforme o escopo:
 
+- `docs/manual_desenvolvimento_senior.md`: contrato oficial obrigatorio de engenharia do UNI Workspace. Deve orientar toda alteracao de codigo, layout, backend, banco, seguranca, testes, deploy e documentacao.
 - `docs/manual_programacao_senior.md`: arquitetura, seguranca, banco, Docker/VM, testes, CI/CD, backup e producao.
 - `docs/manual_frontend_senior.md`: frontend, componentes, estado, roteamento, performance, formularios, acessibilidade e SEO.
 - `docs/code_review.md`: checklist para revisao e validacao de qualidade.
@@ -43,7 +44,7 @@ Leia estes documentos quando a tarefa envolver a area correspondente:
 ## Arquitetura esperada
 Fluxo preferido:
 
-Tela -> API -> validacao -> autenticacao -> permissao -> service -> banco -> resposta tratada
+Cliente -> Router -> autenticacao -> autorizacao -> validacao -> Service -> Persistencia -> Schema de resposta -> Cliente
 
 ## Layout esperado
 Toda tela deve preservar o padrao visual existente, com:
