@@ -158,13 +158,33 @@ export type ManagementShiftPatternSuggestion = {
 };
 
 export type WorkspaceVisibleModule = {
-  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin";
+  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin" | "intelligence";
   name: string;
   description: string;
   web_path: string;
   api_prefix: string;
   required_permission: Permission;
   status: "active" | "planned" | "disabled" | string;
+  pinned: boolean;
+  order_index: number | null;
+};
+
+export type WorkspaceModulePreferenceUpdate = {
+  pinned?: boolean;
+  order_index?: number;
+};
+
+export type WorkspaceOverviewCard = {
+  module_key: string;
+  title: string;
+  metric_label: string;
+  metric_value: string;
+  subtitle: string | null;
+  link: string;
+};
+
+export type WorkspaceOverview = {
+  cards: WorkspaceOverviewCard[];
 };
 
 export type SupportOpaSyncSettings = {
@@ -226,12 +246,23 @@ export type SupportImportResult = {
   errors: Record<string, unknown>[];
 };
 
+// Denominador explícito de uma média com cobertura parcial do histórico (ex.:
+// TMR geral, calculado só a partir de quando o campo entrou em produção).
+// `count` de `total` registros entraram na média; `percentage` é `null` quando
+// `total` é 0.
+export type SupportOpaMetricCoverage = {
+  count: number;
+  total: number;
+  percentage: number | null;
+};
+
 export type SupportOpaMetricItem = {
   label: string;
   total: number;
   average_tma_seconds: number | null;
   average_tmr_seconds: number | null;
   average_tmr_all_responses_seconds: number | null;
+  tmr_all_responses_coverage: SupportOpaMetricCoverage | null;
   average_rating: number | null;
 };
 
@@ -243,6 +274,7 @@ export type SupportOpaMetrics = {
   average_tma_seconds: number | null;
   average_tmr_seconds: number | null;
   average_tmr_all_responses_seconds: number | null;
+  tmr_all_responses_coverage: SupportOpaMetricCoverage | null;
   average_rating: number | null;
   by_attendant: SupportOpaMetricItem[];
   by_reason: SupportOpaMetricItem[];
@@ -290,6 +322,7 @@ export type SupportOpaReasonMetric = {
   average_tma_seconds: number | null;
   average_tmr_seconds: number | null;
   average_tmr_all_responses_seconds: number | null;
+  tmr_all_responses_coverage: SupportOpaMetricCoverage | null;
 };
 
 export type SupportOpaBotHumanMetrics = {
@@ -304,6 +337,18 @@ export type SupportOpaBotHumanMetrics = {
   bot_to_human_handoff_percentage: number | null;
 };
 
+// Janela real da base importada (MIN/MAX/COUNT sem filtro de período) -
+// diferente de current_period/previous_period, que são o recorte escolhido
+// pelo usuário. Serve pra distinguir "divergência por ausência de histórico"
+// de bug de verdade na comparação com o painel oficial do OPA.
+export type SupportOpaImportedDataWindow = {
+  min_opened_at: string | null;
+  max_opened_at: string | null;
+  min_closed_at: string | null;
+  max_closed_at: string | null;
+  total_attendances: number;
+};
+
 export type SupportOpaOverview = {
   current_period: SupportOpaOverviewPeriod;
   previous_period: SupportOpaOverviewPeriod;
@@ -315,6 +360,7 @@ export type SupportOpaOverview = {
   average_rating: SupportOpaMetricComparison;
   average_tmr_seconds: SupportOpaMetricComparison;
   average_tmr_all_responses_seconds: SupportOpaMetricComparison;
+  tmr_all_responses_coverage: SupportOpaMetricCoverage;
   distinct_attendants: SupportOpaMetricComparison;
   distinct_departments: SupportOpaMetricComparison;
   by_channel: SupportOpaChannelCount[];
@@ -323,6 +369,7 @@ export type SupportOpaOverview = {
   top_reasons: SupportOpaReasonMetric[];
   average_first_response_seconds: number | null;
   bot_human: SupportOpaBotHumanMetrics;
+  imported_data_window: SupportOpaImportedDataWindow;
 };
 
 export type SupportOpaTimelineEvent = {
@@ -363,6 +410,7 @@ export type SupportOpaAttendantSummary = {
   average_tma_seconds: number | null;
   average_tmr_seconds: number | null;
   average_tmr_all_responses_seconds: number | null;
+  tmr_all_responses_coverage: SupportOpaMetricCoverage | null;
   average_first_response_seconds: number | null;
   average_rating: number | null;
   rating_count: number;
@@ -481,7 +529,18 @@ export type SupportOpaFilters = {
   channels: SupportOpaFilterOption[];
   statuses: SupportOpaFilterOption[];
   reasons: SupportOpaFilterOption[];
+  tags: SupportOpaFilterOption[];
 };
+
+/** Recortes de participação bot/humano. `unclassified` existe porque as colunas
+ *  por trás são nullable e NULL significa "não classificado" — nunca "sem bot". */
+export type SupportOpaBotHumanFilter =
+  | "with_bot"
+  | "without_bot"
+  | "reached_human"
+  | "bot_only"
+  | "handoff"
+  | "unclassified";
 
 export type SupportOpaAttendanceFilters = {
   page?: number;
@@ -499,6 +558,39 @@ export type SupportOpaAttendanceFilters = {
   reason_id?: string;
   protocol?: string;
   customer?: string;
+  tag_id?: string;
+  customer_id?: string;
+  rating_min?: number;
+  rating_max?: number;
+  bot_human?: SupportOpaBotHumanFilter;
+};
+
+export type SupportOpaTimeseriesPoint = {
+  day: string;
+  total: number;
+  closed: number;
+  open: number;
+  average_duration_seconds: number | null;
+  average_tmr_seconds: number | null;
+  average_tmr_all_responses_seconds: number | null;
+  average_rating: number | null;
+  tmr_all_responses_coverage: SupportOpaMetricCoverage | null;
+};
+
+export type SupportOpaTimeseries = {
+  date_basis: string;
+  points: SupportOpaTimeseriesPoint[];
+};
+
+export type SupportOpaSavedFilterScope = "personal" | "global";
+
+export type SupportOpaSavedFilter = {
+  id: number;
+  name: string;
+  scope: SupportOpaSavedFilterScope;
+  filters: Record<string, string | number>;
+  owner_id: number | null;
+  updated_at: string | null;
 };
 
 export type AdminModuleProfileVisibility = {

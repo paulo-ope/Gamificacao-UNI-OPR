@@ -81,12 +81,17 @@ import type {
   SupportOpaBreakdownDimension,
   SupportOpaBreakdowns,
   SupportOpaFilters,
+  SupportOpaSavedFilter,
+  SupportOpaSavedFilterScope,
+  SupportOpaTimeseries,
   SupportOpaMetrics,
   SupportOpaOverview,
   SupportOpaSyncSettings,
   SupportOpaSyncStatus,
   SlaPenaltyRule,
   UnmappedSubject,
+  WorkspaceModulePreferenceUpdate,
+  WorkspaceOverview,
   WorkspaceVisibleModule
 } from "@/lib/types";
 
@@ -265,6 +270,12 @@ export const api = {
       method: "DELETE"
     }),
   workspaceModules: () => request<WorkspaceVisibleModule[]>("/workspace/modules"),
+  updateModulePreference: (moduleKey: string, payload: WorkspaceModulePreferenceUpdate) =>
+    request<WorkspaceVisibleModule>(`/workspace/modules/${moduleKey}/preference`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  workspaceOverview: () => request<WorkspaceOverview>("/workspace/overview"),
   adminModules: () => request<AdminWorkspaceModule[]>("/admin/modules"),
   updateAdminModuleVisibility: (moduleKey: string, payload: { profile_id: number; visible: boolean; reason?: string | null }) =>
     request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/visibility`, {
@@ -501,9 +512,31 @@ export const api = {
   supportOpaAttendanceDetail: (id: number) => request<SupportOpaAttendanceDetail>(`/support/opa/attendances/${id}`),
   supportOpaAttendanceTimeline: (id: number, includeMessages = true) =>
     request<SupportOpaAttendanceTimeline>(`/support/opa/attendances/${id}/timeline?include_messages=${includeMessages}`),
+  supportOpaTimeseries: (filters: SupportOpaAttendanceFilters) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      // A série é sobre o período inteiro do recorte — paginação/ordenação da
+      // tabela não fazem parte dele e distorceriam a query se vazassem.
+      if (key === "page" || key === "page_size" || key === "sort_by" || key === "sort_dir") return;
+      params.set(key, String(value));
+    });
+    return request<SupportOpaTimeseries>(`/support/opa/timeseries?${params.toString()}`);
+  },
+  supportOpaSavedFilters: () => request<SupportOpaSavedFilter[]>("/support/opa/saved-filters"),
+  createSupportOpaSavedFilter: (payload: { name: string; scope: SupportOpaSavedFilterScope; filters: Record<string, string | number> }) =>
+    request<SupportOpaSavedFilter>("/support/opa/saved-filters", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  deleteSupportOpaSavedFilter: (id: number) =>
+    request<{ status: string }>(`/support/opa/saved-filters/${id}`, { method: "DELETE" }),
   supportOpaAttendantSummary: (attendantId: string, filters: SupportOpaAttendanceFilters) => {
     const params = new URLSearchParams();
-    (["date_from", "date_to", "date_basis", "status", "channel", "department_id", "reason_id", "customer", "search"] as const).forEach((key) => {
+    ([
+      "date_from", "date_to", "date_basis", "status", "channel", "department_id", "reason_id", "customer", "search",
+      "tag_id", "customer_id", "rating_min", "rating_max", "bot_human",
+    ] as const).forEach((key) => {
       const value = filters[key];
       if (value === undefined || value === null || value === "") return;
       params.set(key, String(value));
