@@ -36,11 +36,15 @@ export function ModuleNavigationSidebar<TValue extends string>({
         </Button>
       </SheetTrigger>
       <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r bg-white p-0 text-slate-950 sm:max-w-sm">
-        <SheetHeader className="border-slate-100">
+        <SheetHeader className="shrink-0 border-slate-100">
           <SheetTitle className="text-slate-950">{title}</SheetTitle>
           <SheetDescription className="text-slate-500">{description}</SheetDescription>
         </SheetHeader>
-        <nav className="flex-1 space-y-1 p-3" aria-label={`Navegação de ${title}`}>
+        {/* `min-h-0` é necessário aqui: dentro de um flex-col de altura fixa (`SheetContent` usa
+            `inset-y-0`), um filho `flex-1` sem `min-h-0` nunca encolhe abaixo do tamanho do seu
+            próprio conteúdo - com mais itens de navegação do que cabem na tela, o `nav` extrapolava
+            a altura do Sheet sem gerar rolagem nenhuma, cortando os últimos itens do menu. */}
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3" aria-label={`Navegação de ${title}`}>
           {items.map((item) => {
             const Icon = item.icon;
             const selected = activeItem === item.value;
@@ -74,7 +78,7 @@ export function ModuleNavigationSidebar<TValue extends string>({
             );
           })}
         </nav>
-        {footer ? <div className="border-t border-slate-100 p-4 text-[11px] text-slate-400">{footer}</div> : null}
+        {footer ? <div className="shrink-0 border-t border-slate-100 p-4 text-[11px] text-slate-400">{footer}</div> : null}
       </SheetContent>
     </Sheet>
   );

@@ -8,7 +8,7 @@ import { ManagementCaseDiagnosticsPanel, ManagementCasesPanel } from "@/componen
 import { ManagementModuleSidebar, type ManagementTab } from "@/components/management/management-module-sidebar";
 import { ManagementReasonsPanel } from "@/components/management/management-reasons-panel";
 import { NotificationBell } from "@/components/workspace/notification-bell";
-import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -127,7 +127,7 @@ function metricCards(data: ManagementDashboard | null) {
 }
 
 export default function ManagementPage() {
-  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
+  const { user, checking, logout } = useWorkspaceAuth();
   const [data, setData] = useState<ManagementDashboard | null>(null);
   const [options, setOptions] = useState<ManagementOptions>({ supervisors: [], team_models: [] });
   const [loading, setLoading] = useState(false);
@@ -297,7 +297,7 @@ export default function ManagementPage() {
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando Gestão...</main>;
   }
-  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
+  if (!user) return <RedirectToWorkspaceHome />;
 
   if (!canRead) {
     return (

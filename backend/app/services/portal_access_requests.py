@@ -192,6 +192,17 @@ def approve_access_request(
     if db.scalar(select(User).where(User.email == request.email)):
         raise HTTPException(status_code=409, detail="Já existe uma conta com este e-mail.")
 
+    # Preenche só o que está VAZIO no colaborador - nunca sobrescreve um valor já cadastrado
+    # (mesmo princípio de `enrich_collaborator_from_ixc`). CPF/telefone/e-mail já foram
+    # confirmados nesta própria solicitação, então completar o cadastro aqui evita que essa
+    # confirmação precise ser refeita depois (ver `first_access_completed_at` abaixo).
+    if not collaborator.cpf:
+        collaborator.cpf = request.cpf
+    if not collaborator.phone:
+        collaborator.phone = request.phone
+    if not collaborator.email:
+        collaborator.email = request.email
+
     now = datetime.now(timezone.utc)
     user = User(
         name=request.name,
@@ -202,10 +213,14 @@ def approve_access_request(
         collaborator_id=collaborator_id,
         # A pessoa escolheu esta senha ela mesma, no momento da solicitação - não é uma senha
         # temporária de admin, então `must_change_password` NÃO é forçado (mesmo racional de
-        # `accept_invite`). `first_access_completed_at` continua None: falta confirmar
-        # CPF/telefone/e-mail, responsabilidade da Fase 1 (`portal_first_access_pending`).
+        # `accept_invite`). Diferente de `accept_invite`/`create_user`, aqui `first_access_completed_at`
+        # já vem PREENCHIDO (2026-08-29, pedido do usuário): CPF/telefone/e-mail/senha já foram
+        # confirmados nesta mesma solicitação - pedir pra confirmar tudo de novo no primeiro
+        # login seria repetir uma etapa que acabou de acontecer. Convites e contas criadas pelo
+        # admin continuam exigindo o primeiro acesso normalmente (esses dois caminhos não coletam
+        # CPF/telefone antes de criar a conta).
         must_change_password=False,
-        first_access_completed_at=None,
+        first_access_completed_at=now,
     )
     db.add(user)
     db.flush()
