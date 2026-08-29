@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models import AccessProfile, AccessProfilePermission, Collaborator, User, UserAccessProfile, WorkspaceModuleVisibility
 from app.modules.registry import get_module, list_modules
 from app.modules.operations.models import OperationOrder
+from app.services.documents import mask_document as _mask_document, normalize_document as _normalize_document
 from app.services.regional import normalize_regional
 from app.modules.admin.schemas import (
     AccessProfileCreate,
@@ -114,20 +115,6 @@ def _validate_permissions(permission_keys: list[str]) -> list[str]:
     return sorted(set(permission_keys))
 
 
-def _normalize_document(value: str | None) -> str | None:
-    if value is None:
-        return None
-    digits = "".join(char for char in value if char.isdigit())
-    return digits or None
-
-
-def _mask_document(value: str | None) -> str | None:
-    digits = _normalize_document(value)
-    if not digits:
-        return None
-    if len(digits) <= 4:
-        return "***"
-    return f"***.***.***-{digits[-2:]}"
 
 
 def _validate_choice(field: str, value: str | None, choices: tuple[str, ...]) -> str | None:

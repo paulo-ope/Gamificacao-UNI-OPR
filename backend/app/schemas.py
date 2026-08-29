@@ -23,6 +23,18 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    """Troca de senha voluntária pelo próprio usuário autenticado (Fase 2A, ver
+    docs/portal-ciclo-vida-conta-colaborador.md seção 3) - não tem relação com o primeiro acesso
+    obrigatório da Fase 1, por isso não carrega CPF/telefone/e-mail, só a troca de senha em si."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+
 class UserBase(BaseModel):
     name: str
     email: str
@@ -57,6 +69,9 @@ class UserOut(UserBase):
     permissions: list[str] = []
     collaborator_name: str | None = None
     access_profile_names: list[str] = []
+    # Campo calculado (ver portal_first_access_pending em core/security.py) - nunca escrito
+    # diretamente pelo cliente, só lido. Sempre False pra usuário sem colaborador vinculado.
+    portal_first_access_required: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -65,6 +80,216 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+class AdminForcePasswordResetOut(UserOut):
+    """Resposta do reset administrativo (Fase 2B) - `temporary_password` só existe nesta
+    resposta, uma única vez; nunca é persistida em texto puro nem reaparece em nenhuma consulta
+    posterior (ver docs/portal-ciclo-vida-conta-colaborador.md seção 4)."""
+
+    temporary_password: str
+
+
+class PortalInviteCreate(BaseModel):
+    """Fase 2C - convite seguro com token (ver
+    docs/portal-ciclo-vida-conta-colaborador.md seção 5). `collaborator_id` é obrigatório: é
+    exatamente o vínculo que o princípio de segurança da Fase 2 (seção 2) exige que só o admin
+    decida - a pessoa convidada nunca escolhe."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(..., min_length=1, max_length=180)
+    collaborator_id: int
+    role: str = "collaborator"
+
+
+class PortalInviteOut(BaseModel):
+    """Item de listagem de convites - nunca inclui o token, nem em hash (o hash já não permite
+    reconstruir o valor original, mas mesmo assim não faz parte do contrato de saída)."""
+
+    id: int
+    email: str
+    collaborator_id: int
+    collaborator_name: str | None = None
+    role: str | None = None
+    status: str
+    created_by_user_id: int | None = None
+    created_by_name: str | None = None
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PortalInviteCreateOut(PortalInviteOut):
+    """Resposta da criação do convite - `token` só existe aqui, uma única vez; o admin precisa
+    copiar o link agora, igual ao reset de senha temporária da Fase 2B."""
+
+    token: str
+
+
+class PortalInviteStatusOut(BaseModel):
+    """Resposta pública (sem autenticação) que a tela de aceite de convite consulta antes de
+    mostrar o formulário de senha - nunca expõe collaborator_id, role ou qualquer dado interno,
+    só o necessário pra a pessoa confirmar que é o convite certo."""
+
+    valid: bool
+    email: str | None = None
+    collaborator_name: str | None = None
+    reason: str | None = None
+
+
+class PortalInviteAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+
+class IxcCpfLookupRequest(BaseModel):
+    """Fase 2C - convite inteligente por CPF integrado ao IXC (ver
+    docs/portal-ciclo-vida-conta-colaborador.md). CPF vai no corpo, não na URL/query string -
+    nunca deve aparecer em log de acesso do servidor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cpf: str = Field(..., min_length=1, max_length=32)
+
+
+class IxcCpfLookupOut(BaseModel):
+    """Resposta da busca no IXC - nunca inclui o CPF completo, só `cpf_masked`."""
+
+    ixc_employee_id: int
+    name: str
+    email: str | None = None
+    phone: str | None = None
+    cpf_masked: str | None = None
+    active: bool
+    department_id: int | None = None
+    sector_id: int | None = None
+    # Correspondência local (ver services/ixc_collaborator_lookup.py) - só uma SUGESTÃO, nunca um
+    # vínculo automático (princípio de segurança da Fase 2, seção 2). O admin sempre confirma
+    # explicitamente o `collaborator_id` ao gerar o convite, mesmo quando bate com a sugestão.
+    local_collaborator_id: int | None = None
+    local_collaborator_name: str | None = None
+    local_match_kind: str | None = None  # "ixc_employee_id" | "cpf" | "name" | None
+
+
+class PortalInviteFromIxcRequest(BaseModel):
+    """Confirmação explícita do admin após a busca no IXC - `cpf` é revalidado contra o IXC de
+    novo no backend (nunca confia em dado do lookup anterior vindo do cliente); `collaborator_id`
+    é sempre exigido, mesmo quando bate com a sugestão automática."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cpf: str = Field(..., min_length=1, max_length=32)
+    collaborator_id: int
+    email: str = Field(..., min_length=1, max_length=180)
+    role: str = "collaborator"
+
+
+class PortalAccessRequestCpfLookupRequest(BaseModel):
+    """Autoatendimento (Fase 2D, pedido do usuário em 2026-08-29) - o próprio colaborador digita
+    o CPF pra confirmar identidade antes de solicitar acesso. Pública, sem autenticação."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cpf: str = Field(..., min_length=1, max_length=32)
+
+
+class PortalAccessRequestCpfLookupOut(BaseModel):
+    """Nunca inclui e-mail (sempre digitado por quem solicita, nunca herdado do IXC) nem dado
+    interno do IXC - só o necessário pra confirmar "é você?"."""
+
+    name: str
+    phone_masked: str | None = None
+
+
+class PortalAccessRequestCreate(BaseModel):
+    """Fase 2D - solicitação de acesso (ver docs/portal-ciclo-vida-conta-colaborador.md seção 6).
+    Rota pública: os mesmos dados que a Fase 1 já valida (CPF via `is_valid_cpf`), sem criar
+    `User` nem vínculo nenhum sozinha - só registra o pedido para um admin revisar.
+
+    `name`/`phone` são OPCIONAIS aqui - resguardo só pra quando o CPF não é encontrado no IXC
+    (cadastro ainda não sincronizado); quando encontrado, nome e telefone vêm sempre do IXC, nunca
+    do que o cliente mandar (mesmo princípio de "nunca confia no cliente pra dado que o servidor
+    já pode verificar" da Fase 2C). `email` é SEMPRE digitado por quem solicita (nunca herdado do
+    IXC) e restrito ao domínio corporativo, por pedido explícito do usuário.
+
+    `new_password`/`confirm_password` (2026-08-29): a pessoa já define a própria senha aqui - só o
+    hash é armazenado (`PortalAccessRequest.password_hash`); se o admin aprovar, a conta é criada
+    direto com essa senha (sem convite/link manual). Mesmos limites de `PortalInviteAcceptRequest`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cpf: str = Field(..., min_length=1, max_length=32)
+    email: str = Field(..., min_length=1, max_length=180)
+    name: str | None = Field(default=None, max_length=160)
+    phone: str | None = Field(default=None, max_length=40)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def _validate_corporate_email(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized.endswith("@souuni.com"):
+            raise ValueError("Use seu e-mail corporativo, terminado em @souuni.com.")
+        return normalized
+
+    @field_validator("name", "phone")
+    @classmethod
+    def _strip_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+class PortalAccessRequestSubmitOut(BaseModel):
+    """Resposta pública genérica - nunca revela se o CPF/e-mail já existe no sistema (seção 9)."""
+
+    received: bool = True
+
+
+class PortalAccessRequestOut(BaseModel):
+    """Item de listagem para o admin - `cpf_masked` nunca o CPF completo (seção 9)."""
+
+    id: int
+    name: str
+    cpf_masked: str | None = None
+    phone: str
+    email: str
+    suggested_collaborator_id: int | None = None
+    suggested_collaborator_name: str | None = None
+    status: str
+    reviewed_by_user_id: int | None = None
+    reviewed_by_name: str | None = None
+    reviewed_at: datetime | None = None
+    decision_reason: str | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PortalAccessRequestApprove(BaseModel):
+    """`collaborator_id` é sempre exigido explicitamente, mesmo quando bate com a sugestão
+    automática - o admin precisa confirmar o vínculo de propósito, nunca é aceito por omissão
+    (princípio de segurança da Fase 2, seção 2). Aprovar cria a conta direto (2026-08-29, ver
+    `approve_access_request`) - não há mais token/link de convite para devolver aqui."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    collaborator_id: int
+    decision_reason: str | None = Field(default=None, max_length=300)
+
+
+class PortalAccessRequestReject(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision_reason: str = Field(..., min_length=1, max_length=300)
 
 
 class CollaboratorBase(BaseModel):
@@ -1301,6 +1526,40 @@ class PortalProfileOut(BaseModel):
     has_photo: bool = False
 
 
+class PortalFirstAccessStatusOut(BaseModel):
+    """Estado do onboarding obrigatório + o que já existe pra pré-preencher o formulário. Nunca
+    inclui o CPF completo - só se ele já está cadastrado (o formulário decide entre "confirme o
+    CPF que já temos" e "cadastre seu CPF") e a versão mascarada, útil só como referência visual."""
+
+    required: bool
+    phone: str | None = None
+    email: str | None = None
+    has_cpf: bool = False
+    cpf_masked: str | None = None
+
+
+class PortalFirstAccessCompleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cpf: str = Field(..., min_length=1, max_length=32)
+    phone: str = Field(..., min_length=1, max_length=40)
+    email: str = Field(..., min_length=1, max_length=160)
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("phone", "email")
+    @classmethod
+    def normalize_contact(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        if "@" not in value:
+            raise ValueError("Informe um e-mail de contato válido.")
+        return value
+
+
 class PortalOrderOut(BaseModel):
     id: int
     os_code: str
@@ -1314,6 +1573,9 @@ class PortalOrderOut(BaseModel):
     status: str
     sla_status: str
     sla_status_normalized: str = "NAO_IDENTIFICADO"
+    # Predicado oficial de "fora do prazo" (o que decide a penalidade). `sla_status_normalized` é o
+    # rótulo de exibição e pode discordar dele - contar por um e penalizar pelo outro divergia.
+    is_sla_out_of_time: bool = False
     base_points: float = 0
     penalty_points: float = 0
     net_points: float = 0
@@ -1408,6 +1670,11 @@ class PortalOverviewOut(BaseModel):
     penalty_points: float = 0
     unscored_service_orders: int = 0
     manual_review_service_orders: int = 0
+    # Colaboradores/O.S. com produção no período mas de fora do ranking (inativos ou sem cadastro
+    # completo) - existem só pra explicar por que os totais acima são menores que o fechamento
+    # inteiro, nunca entram em soma de pontos ou pagamento.
+    excluded_collaborators: int = 0
+    excluded_service_orders: int = 0
     regional_summary: list[PortalRegionalOverviewOut] = []
     ranking: list[PortalRankingItemOut] = []
     alerts: list[str] = []

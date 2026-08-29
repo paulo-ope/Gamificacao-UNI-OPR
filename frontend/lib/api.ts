@@ -2,6 +2,7 @@ import type {
   AppSetting,
   AccessProfile,
   AdminWorkspaceModule,
+  AdminForcePasswordResetResult,
   AdminPeopleStructure,
   AdminPersonStructure,
   AuthUser,
@@ -54,6 +55,13 @@ import type {
   PointBalanceEntry,
   PortalOrder,
   PortalOverview,
+  PortalFirstAccessStatus,
+  PortalAccessRequest,
+  PortalAccessRequestCpfLookup,
+  IxcCpfLookupResult,
+  PortalInvite,
+  PortalInviteCreateResult,
+  PortalInviteStatus,
   PortalProfile,
   PortalRules,
   PortalSimulation,
@@ -81,6 +89,7 @@ import type {
   SupportOpaBreakdownDimension,
   SupportOpaBreakdowns,
   SupportOpaFilters,
+  SupportOpaImportMonth,
   SupportOpaSavedFilter,
   SupportOpaSavedFilterScope,
   SupportOpaTimeseries,
@@ -95,6 +104,9 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 const TOKEN_KEY = "gamification_auth_token";
+/** Espelha `PORTAL_ORDERS_MAX` do backend (`services/portal_dashboard.py`) - teto de O.S. que
+ *  `/portal/my-orders` aceita. Pedir menos que isso cortava a lista do colaborador em silêncio. */
+export const PORTAL_ORDERS_MAX = 500;
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
 function readStoredToken() {
@@ -208,6 +220,8 @@ export const api = {
       body: JSON.stringify({ email, password })
     }),
   me: () => request<AuthUser>("/auth/me"),
+  changePassword: (payload: { current_password: string; new_password: string; confirm_password: string }) =>
+    request<AuthUser>("/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
   portalSummary: (period?: { reference_month: number; reference_year: number }) => {
     const query = period ? `?reference_month=${period.reference_month}&reference_year=${period.reference_year}` : "";
     return request<PortalSummary>(`/portal/summary${query}`);
@@ -218,8 +232,11 @@ export const api = {
   uploadPortalProfilePhoto: (file: File) => uploadRequest<PortalProfile>("/portal/profile/photo", file),
   portalProfilePhoto: () => requestBlob("/portal/profile/photo"),
   deletePortalProfilePhoto: () => request<PortalProfile>("/portal/profile/photo", { method: "DELETE", body: JSON.stringify({}) }),
+  portalFirstAccessStatus: () => request<PortalFirstAccessStatus>("/portal/first-access/status"),
+  completePortalFirstAccess: (payload: { cpf: string; phone: string; email: string; new_password: string; confirm_password: string }) =>
+    request<PortalFirstAccessStatus>("/portal/first-access/complete", { method: "POST", body: JSON.stringify(payload) }),
   portalOverview: () => request<PortalOverview>("/portal/overview"),
-  portalOrders: (limit = 80, period?: { reference_month: number; reference_year: number }) => {
+  portalOrders: (limit = PORTAL_ORDERS_MAX, period?: { reference_month: number; reference_year: number }) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (period) {
       params.set("reference_month", String(period.reference_month));
@@ -250,6 +267,29 @@ export const api = {
     request<AuthUser>(`/users/${id}`, {
       method: "DELETE"
     }),
+  forcePasswordReset: (id: number) =>
+    request<AdminForcePasswordResetResult>(`/users/${id}/force-password-reset`, { method: "POST" }),
+  forceFirstAccessReset: (id: number) =>
+    request<AuthUser>(`/users/${id}/force-first-access`, { method: "POST" }),
+  listInvites: () => request<PortalInvite[]>("/invites"),
+  createInvite: (payload: { email: string; collaborator_id: number; role?: string }) =>
+    request<PortalInviteCreateResult>("/invites", { method: "POST", body: JSON.stringify(payload) }),
+  revokeInvite: (id: number) => request<PortalInvite>(`/invites/${id}/revoke`, { method: "POST" }),
+  lookupIxcCpf: (cpf: string) => request<IxcCpfLookupResult>("/invites/lookup-ixc-cpf", { method: "POST", body: JSON.stringify({ cpf }) }),
+  createInviteFromIxc: (payload: { cpf: string; collaborator_id: number; email: string; role?: string }) =>
+    request<PortalInviteCreateResult>("/invites/from-ixc", { method: "POST", body: JSON.stringify(payload) }),
+  inviteStatus: (token: string) => request<PortalInviteStatus>(`/invites/accept?token=${encodeURIComponent(token)}`),
+  acceptInvite: (payload: { token: string; new_password: string; confirm_password: string }) =>
+    request<LoginResult>("/invites/accept", { method: "POST", body: JSON.stringify(payload) }),
+  lookupAccessRequestCpf: (cpf: string) =>
+    request<PortalAccessRequestCpfLookup>("/access-requests/lookup-cpf", { method: "POST", body: JSON.stringify({ cpf }) }),
+  submitAccessRequest: (payload: { cpf: string; email: string; new_password: string; confirm_password: string; name?: string; phone?: string }) =>
+    request<{ received: boolean }>("/access-requests", { method: "POST", body: JSON.stringify(payload) }),
+  listAccessRequests: () => request<PortalAccessRequest[]>("/access-requests"),
+  approveAccessRequest: (id: number, payload: { collaborator_id: number; decision_reason?: string | null }) =>
+    request<PortalAccessRequest>(`/access-requests/${id}/approve`, { method: "POST", body: JSON.stringify(payload) }),
+  rejectAccessRequest: (id: number, payload: { decision_reason: string }) =>
+    request<PortalAccessRequest>(`/access-requests/${id}/reject`, { method: "POST", body: JSON.stringify(payload) }),
   operationRegionals: () => request<string[]>("/admin/operation-regionals"),
   ecosystemPermissions: () => request<EcosystemPermission[]>("/admin/permissions"),
   accessProfiles: () => request<AccessProfile[]>("/admin/access-profiles"),
@@ -467,6 +507,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(period)
     }),
+  supportOpaSyncRun: (runId: number) => request<SupportImportResult>(`/support/opa/sync-runs/${runId}`),
+  supportOpaImportMonths: (months = 6) =>
+    request<SupportOpaImportMonth[]>(`/support/opa/import-months?months=${months}`),
   supportOpaAttendantOverrides: () =>
     request<SupportOpaAttendantOverride[]>("/support/opa/attendant-overrides"),
   createSupportOpaAttendantOverride: (payload: SupportOpaAttendantOverrideCreate) =>

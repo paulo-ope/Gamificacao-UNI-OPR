@@ -95,6 +95,17 @@ class User(Base):
     # em Python depois do usuário já carregado. managed_regional (singular) fica só como legado de
     # leitura pra contas antigas ainda não migradas; toda escrita nova usa managed_regionals.
     managed_regionals: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    # Primeiro acesso obrigatório do colaborador (Fase 1) - `first_access_completed_at is None` é o
+    # sinal canônico de "nunca completou"; `must_change_password` existe à parte pra permitir um
+    # reset administrativo futuro (Fase 2: painel admin) sem mexer na data de conclusão original.
+    # As duas condições bloqueiam por OR (ver `require_portal_access` em core/security.py) de
+    # propósito - depender só de uma seria mais fácil de destravar por engano.
+    # Default seguro (`False`/`None` sem forçar bloqueio): quem cria o usuário decide explicitamente
+    # quando exigir o fluxo (ver `create_user` em api/routes/users.py) - contas existentes antes
+    # desta feature são resolvidas por backfill na migration, nunca pelo default do modelo.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    first_access_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -221,6 +232,74 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     user: Mapped[User | None] = relationship(back_populates="audit_logs")
+
+
+class AccountActionToken(Base):
+    """Fase 2 do Portal (ciclo de vida da conta, ver
+    docs/portal-ciclo-vida-conta-colaborador.md seção 8) - tabela compartilhada entre convite
+    (`purpose="invite"`, Fase 2C) e reset de senha por e-mail (`purpose="password_reset"`, Fase
+    2E, ainda não implementada): mesmo mecanismo de token de uso único, mesma expiração, mesmo
+    hash - de propósito, pra não duplicar essa lógica quando a 2E for implementada.
+
+    `token_hash` guarda só o hash do token (mesmo algoritmo de `hash_password`/`hash_api_key`) -
+    o valor em claro existe só na memória da requisição que cria o convite/reset, nunca é
+    persistido em nenhuma coluna."""
+
+    __tablename__ = "account_action_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    purpose: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    email: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    # Só usado em purpose="invite" - é aqui que o ADMIN fixa o vinculo financeiro/operacional,
+    # nunca a pessoa convidada (principio de seguranca da Fase 2, secao 2 do documento).
+    collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id", ondelete="CASCADE"), nullable=True, index=True)
+    role: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    user: Mapped[User | None] = relationship(foreign_keys=[user_id])
+    collaborator: Mapped[Collaborator | None] = relationship(foreign_keys=[collaborator_id])
+    created_by: Mapped[User | None] = relationship(foreign_keys=[created_by_user_id])
+
+
+class PortalAccessRequest(Base):
+    """Fase 2D do Portal (solicitação de acesso, ver
+    docs/portal-ciclo-vida-conta-colaborador.md seção 6) - canal formal pra quem não tem conta e
+    não recebeu convite pedir acesso. Nunca cria `User` nem `collaborator_id` sozinha:
+    `suggested_collaborator_id` é só uma SUGESTÃO de correspondência automática (prioridade
+    `ixc_employee_id` > CPF > nome, ver `find_local_collaborator`), que um admin confirma (ou
+    troca) explicitamente ao aprovar. Desde 2026-08-29, aprovar cria a conta DIRETO (com a senha
+    que a própria pessoa já definiu no formulário, ver `password_hash` abaixo) - não gera mais
+    convite (Fase 2C continua existindo, só não é mais o caminho da aprovação de solicitação)."""
+
+    __tablename__ = "portal_access_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    # Normalizado (só dígitos), igual `Collaborator.cpf` - nunca exibido completo fora do backend
+    # (ver services/documents.py `mask_document`, seção 9 do documento de planejamento).
+    cpf: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    phone: Mapped[str] = mapped_column(String(40), nullable=False)
+    email: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    # Nunca a senha em claro - só o hash, igual `User.password_hash`/`AccountActionToken.token_hash`.
+    # Nullable: solicitações criadas ANTES desta coluna existir (2026-08-29) não têm senha - a
+    # aprovação recusa essas com um erro claro em vez de criar conta sem senha (ver
+    # `approve_access_request`), nunca apaga ou força um valor nelas.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    suggested_collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id", ondelete="SET NULL"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    suggested_collaborator: Mapped[Collaborator | None] = relationship(foreign_keys=[suggested_collaborator_id])
+    reviewed_by: Mapped[User | None] = relationship(foreign_keys=[reviewed_by_user_id])
 
 
 class ServiceOrder(Base):

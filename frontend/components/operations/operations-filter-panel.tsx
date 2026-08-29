@@ -19,7 +19,7 @@ import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCheckbox } from "@/components/ui/checkbox";
-import { DateRangePicker, type DateRangePreset } from "@/components/ui/date-range-picker";
+import { DateRangePicker, commonDateRangePresets } from "@/components/ui/date-range-picker";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { AppRadio } from "@/components/ui/radio";
@@ -39,6 +39,16 @@ function parseLocalDateForPreset(value?: string | null) {
   const [year, month, day] = value.split("-").map(Number);
   if (!year || !month || !day) return null;
   return new Date(Date.UTC(year, month - 1, day, 12));
+}
+
+// Os presets de período usam a última data com dado disponível (`period.allowed_to`) como
+// "hoje", não a data real do relógio - a importação pode ainda não ter trazido o dia atual,
+// e "Últimos 7 dias" apontando pra um período sem dado nenhum não ajudaria ninguém.
+function effectiveToday(period?: OperationPeriod | null) {
+  return (
+    parseLocalDateForPreset(period?.allowed_to) ||
+    new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate(), 12))
+  );
 }
 
 type ArrayFilterKey = Exclude<
@@ -1064,18 +1074,11 @@ export function OperationsFilterPanel({
           max={period?.allowed_to}
           onChange={onChange}
           presets={[
-            {
-              label: "Mês atual",
-              range: () => {
-                const end = parseLocalDateForPreset(period?.allowed_to) || new Date();
-                const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1, 12));
-                return { from: toDateValue(start), to: toDateValue(end) };
-              },
-            },
+            ...commonDateRangePresets(() => effectiveToday(period)),
             {
               label: "Ano até hoje",
               range: () => {
-                const end = parseLocalDateForPreset(period?.allowed_to) || new Date();
+                const end = effectiveToday(period);
                 const start = parseLocalDateForPreset(period?.allowed_from) || new Date(Date.UTC(end.getUTCFullYear(), 0, 1, 12));
                 return { from: toDateValue(start), to: toDateValue(end) };
               },

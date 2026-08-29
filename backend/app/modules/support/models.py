@@ -39,6 +39,28 @@ class SupportOpaImportRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class SupportOpaImportMonth(Base):
+    """Rastreio de "este mês calendário já foi totalmente importado" - não existe
+    endpoint no OPA Suite que informe um total esperado por mês, então "completo"
+    é definido operacionalmente: uma `SupportOpaImportRun` cujo [date_from, date_to]
+    cobre o mês inteiro terminou com status completed/completed_with_warnings (ver
+    `opa_ingestion._maybe_mark_month_complete`). Usado pelo painel de meses da tela
+    de Suporte e pelo backfill automático de madrugada (`opa_scheduler.run_opa_backfill_once`)
+    pra saber quais meses recentes ainda faltam."""
+
+    __tablename__ = "support_opa_import_months"
+    __table_args__ = (UniqueConstraint("year_month", name="uq_support_opa_import_months_year_month"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    year_month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)  # "2026-07"
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="missing", index=True)
+    attendance_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_run_id: Mapped[int | None] = mapped_column(ForeignKey("support_opa_import_runs.id", ondelete="SET NULL"), nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
 class SupportOpaAttendanceRaw(Base):
     __tablename__ = "support_opa_attendances_raw"
     __table_args__ = (

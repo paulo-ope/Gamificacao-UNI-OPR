@@ -1,18 +1,10 @@
 "use client";
 
-import type { EChartsOption } from "echarts";
 import { BarChart3, Gauge, ListTree, ShieldCheck } from "lucide-react";
-import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { PortalAudit, PortalSummary } from "@/lib/types";
-
-const ReactECharts = dynamic(() => import("echarts-for-react"), {
-  ssr: false,
-  loading: () => <div className="h-[260px] animate-pulse rounded-2xl bg-slate-100" aria-label="Carregando gráfico" />
-});
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
 const moneyFormat = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -38,32 +30,23 @@ function cpkBadgeClass(status: string | null | undefined) {
   return "border-slate-200 bg-slate-50 text-slate-600";
 }
 
-function useIsMobilePortal() {
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 767px)");
-    const update = () => setIsMobile(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  return isMobile;
-}
-
-function mobileBarClass(kind: string, value: number) {
+function stepBarClass(kind: string, value: number) {
   if (kind === "negative" || value < 0) return "bg-rose-500";
   if (kind === "total") return "bg-[#0028f3]";
   if (kind === "subtotal") return "bg-cyan-600";
   return "bg-emerald-500";
 }
 
-function MobileStepBars({ steps }: { steps: Array<{ key: string; label: string; value: number; kind: string; description?: string | null }> }) {
+// Única representação de "Composição do cálculo", em todas as larguras de tela - antes coexistia
+// com um gráfico de barras ECharts que mostrava os MESMOS 6 números (achado da crítica de design
+// de 2026-08-28: mesma pontuação repetida em dois componentes visuais na mesma tela). O gráfico
+// também exigia rótulos do eixo X rotacionados pra caber 6 categorias, o que prejudicava a leitura
+// - a barra com rótulo ao lado não tem esse problema.
+function StepBars({ steps }: { steps: Array<{ key: string; label: string; value: number; kind: string; description?: string | null }> }) {
   const maxValue = Math.max(1, ...steps.map((step) => Math.abs(Number(step.value || 0))));
 
   return (
-    <div className="mt-4 space-y-3 md:hidden">
+    <div className="mt-4 space-y-3">
       {steps.map((step) => {
         const width = Math.max(8, Math.min(100, (Math.abs(step.value) / maxValue) * 100));
         return (
@@ -76,7 +59,7 @@ function MobileStepBars({ steps }: { steps: Array<{ key: string; label: string; 
               <p className={`shrink-0 text-sm font-bold ${step.value < 0 ? "text-rose-700" : "text-slate-950"}`}>{formatPoints(step.value)}</p>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-              <div className={`h-full rounded-full ${mobileBarClass(step.kind, step.value)}`} style={{ width: `${width}%` }} />
+              <div className={`h-full rounded-full ${stepBarClass(step.kind, step.value)}`} style={{ width: `${width}%` }} />
             </div>
           </div>
         );
@@ -85,11 +68,15 @@ function MobileStepBars({ steps }: { steps: Array<{ key: string; label: string; 
   );
 }
 
-function MobileGroupBars({ groups }: { groups: PortalAudit["groups"] }) {
+// Substitui o donut ECharts "Onde seus pontos nasceram". Um donut com furo de 48%-72% de raio,
+// quando uma categoria domina quase tudo (ex: 97% num único grupo), vira majoritariamente um anel
+// fino de uma cor só cercado de espaço em branco - lê como "gráfico vazio", não como dado. Uma
+// barra com o percentual explícito comunica a mesma distribuição sem essa ambiguidade visual.
+function GroupBars({ groups }: { groups: PortalAudit["groups"] }) {
   const maxValue = Math.max(1, ...groups.map((group) => Math.max(0, group.net_points)));
 
   return (
-    <div className="mt-4 space-y-3 md:hidden">
+    <div className="mt-4 space-y-3">
       {groups.map((group) => {
         const width = Math.max(6, Math.min(100, (Math.max(0, group.net_points) / maxValue) * 100));
         return (
@@ -111,11 +98,11 @@ function MobileGroupBars({ groups }: { groups: PortalAudit["groups"] }) {
   );
 }
 
-function MobileHistoryList({ history }: { history: PortalAudit["history"] }) {
+function HistoryList({ history }: { history: PortalAudit["history"] }) {
   const recentHistory = history.slice(-4).reverse();
 
   return (
-    <div className="mt-4 space-y-2 md:hidden">
+    <div className="mt-4 space-y-2">
       {recentHistory.map((item) => (
         <div key={`${item.reference_month}-${item.reference_year}`} className="flex items-center justify-between gap-3 rounded-2xl border bg-white p-3">
           <div>
@@ -136,7 +123,6 @@ type Props = {
 };
 
 export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) {
-  const isMobile = useIsMobilePortal();
   const scoreSteps = audit.score_steps?.length
     ? audit.score_steps
     : [
@@ -148,121 +134,7 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
         { key: "final_points", label: "Resultado final", value: audit.final_points, kind: "total", description: "Pontuação final do ranking." }
       ];
   const visibleScoreSteps = scoreSteps.filter((step) => step.key !== "cpk");
-  const compositionOption: EChartsOption = {
-    tooltip: {
-      trigger: "axis",
-      confine: true,
-      formatter: (params) => {
-        const list = Array.isArray(params) ? params : [params];
-        const first = list[0] as { dataIndex?: number };
-        const item = visibleScoreSteps[first?.dataIndex ?? 0];
-        return [`<strong>${item?.label ?? ""}</strong>`, formatPoints(item?.value ?? 0), item?.description ?? ""].filter(Boolean).join("<br />");
-      }
-    },
-    grid: { left: 36, right: 18, top: 20, bottom: 64 },
-    xAxis: {
-      type: "category",
-      data: visibleScoreSteps.map((step) => step.label),
-      axisLabel: { color: "#475569", interval: 0, rotate: 22, fontSize: 11 }
-    },
-    yAxis: {
-      type: "value",
-      axisLabel: { color: "#64748b" },
-      splitLine: { lineStyle: { color: "#e2e8f0" } }
-    },
-    series: [
-      {
-        type: "bar",
-        barWidth: 28,
-        data: visibleScoreSteps.map((step) => ({
-          value: step.value,
-          itemStyle: {
-            color:
-              step.kind === "negative"
-                ? "#e11d48"
-                : step.kind === "total"
-                  ? "#0028f3"
-                  : step.kind === "subtotal"
-                    ? "#0891b2"
-                    : step.value >= 0
-                      ? "#10b981"
-                      : "#f97316",
-            borderRadius: [8, 8, 4, 4]
-          }
-        })),
-        label: {
-          show: true,
-          position: "top",
-          color: "#0f172a",
-          fontWeight: 700,
-          formatter: (params: { value?: unknown }) => formatPoints(Number(params.value ?? 0))
-        }
-      }
-    ]
-  };
-
   const groupData = audit.groups.slice(0, 7);
-  const groupOption: EChartsOption = {
-    tooltip: {
-      trigger: "item",
-      confine: true,
-      formatter: (params: any) => {
-        const data = params.data as { name: string; value: number; service_orders: number; penalty_points: number };
-        return [
-          `<strong>${data.name}</strong>`,
-          `Líquido: ${formatPoints(data.value)}`,
-          `O.S.: ${data.service_orders}`,
-          `Descontos: ${formatPoints(data.penalty_points)}`
-        ].join("<br />");
-      }
-    },
-    legend: { bottom: 0, type: "scroll", textStyle: { color: "#475569", fontSize: 11 } },
-    color: ["#0028f3", "#2d5fff", "#27d9bf", "#10b981", "#f59e0b", "#f97316", "#e11d48"],
-    series: [
-      {
-        name: "Pontos por origem",
-        type: "pie",
-        radius: ["48%", "72%"],
-        center: ["50%", "42%"],
-        avoidLabelOverlap: true,
-        itemStyle: { borderColor: "#ffffff", borderWidth: 3, borderRadius: 8 },
-        label: { color: "#334155", formatter: "{b}\n{d}%" },
-        data: groupData.map((item) => ({
-          name: item.label,
-          value: Math.max(0, item.net_points),
-          service_orders: item.service_orders,
-          penalty_points: item.penalty_points
-        }))
-      }
-    ]
-  };
-
-  const historyOption: EChartsOption = {
-    tooltip: { trigger: "axis", confine: true },
-    grid: { left: 42, right: 18, top: 24, bottom: 36 },
-    xAxis: {
-      type: "category",
-      data: audit.history.map((item) => `${String(item.reference_month).padStart(2, "0")}/${item.reference_year}`),
-      axisLabel: { color: "#475569" }
-    },
-    yAxis: {
-      type: "value",
-      axisLabel: { color: "#64748b" },
-      splitLine: { lineStyle: { color: "#e2e8f0" } }
-    },
-    series: [
-      {
-        name: "Pontos finais",
-        type: "line",
-        smooth: true,
-        symbolSize: 8,
-        lineStyle: { width: 4, color: "#2d5fff" },
-        itemStyle: { color: "#0028f3" },
-        areaStyle: { color: "rgba(45, 95, 255, 0.10)" },
-        data: audit.history.map((item) => item.final_points)
-      }
-    ]
-  };
 
   return (
     <section className="space-y-4">
@@ -310,11 +182,7 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
               <BarChart3 className="h-4 w-4 text-[#0028f3]" />
               <h4 className="font-semibold text-slate-950">Composição do cálculo</h4>
             </div>
-            {isMobile ? (
-              <MobileStepBars steps={visibleScoreSteps} />
-            ) : (
-              <ReactECharts option={compositionOption} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 320, width: "100%" }} />
-            )}
+            <StepBars steps={visibleScoreSteps} />
           </div>
           <div className="p-5">
             <div className="flex items-center gap-2">
@@ -363,11 +231,7 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
               <h4 className="font-semibold text-slate-950">Onde seus pontos nasceram</h4>
             </div>
             {groupData.length ? (
-              isMobile ? (
-                <MobileGroupBars groups={groupData} />
-              ) : (
-                <ReactECharts option={groupOption} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 300, width: "100%" }} />
-              )
+              <GroupBars groups={groupData} />
             ) : (
               <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Ainda não há grupos com pontuação líquida neste período.</p>
             )}
@@ -378,11 +242,7 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
               <h4 className="font-semibold text-slate-950">Evolução dos fechamentos</h4>
             </div>
             {audit.history.length ? (
-              isMobile ? (
-                <MobileHistoryList history={audit.history} />
-              ) : (
-                <ReactECharts option={historyOption} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 230, width: "100%" }} />
-              )
+              <HistoryList history={audit.history} />
             ) : (
               <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Seu histórico aparecerá a partir dos próximos fechamentos.</p>
             )}

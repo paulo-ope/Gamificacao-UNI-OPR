@@ -15,12 +15,33 @@ class SupportOpaSyncSettings(BaseModel):
     enabled: bool = False
     interval_minutes: int = Field(default=20, ge=5, le=1440)
     lookback_days: int = Field(default=1, ge=1, le=30)
+    # Backfill automático de meses completos (roda de madrugada) - ver
+    # app/services/opa_scheduler.py::run_opa_backfill_once.
+    backfill_enabled: bool = True
+    backfill_run_hour: int = Field(default=3, ge=0, le=23)
+    backfill_lookback_months: int = Field(default=3, ge=1, le=24)
+    # De quantas em quantas horas a sincronização refaz a busca completa de dimensões
+    # (usuários/motivos/departamentos/etiquetas/CLIENTES) do OPA Suite - achado real de
+    # 2026-08-27: rodava em toda sincronização, e o cadastro de clientes sozinho (100 mil+
+    # registros na base real) media mais de 100s por ciclo. Ver opa_ingestion._sync_opa_dimensions.
+    dimensions_refresh_hours: int = Field(default=24, ge=1, le=168)
 
 
 class SupportOpaSyncSettingsUpdate(BaseModel):
     enabled: bool | None = None
     interval_minutes: int | None = Field(default=None, ge=5, le=1440)
     lookback_days: int | None = Field(default=None, ge=1, le=30)
+    backfill_enabled: bool | None = None
+    backfill_run_hour: int | None = Field(default=None, ge=0, le=23)
+    backfill_lookback_months: int | None = Field(default=None, ge=1, le=24)
+    dimensions_refresh_hours: int | None = Field(default=None, ge=1, le=168)
+
+
+class SupportOpaImportMonthOut(BaseModel):
+    year_month: str
+    status: str
+    attendance_count: int = 0
+    last_verified_at: datetime | None = None
 
 
 class SupportOpaSyncStatus(BaseModel):
@@ -28,6 +49,10 @@ class SupportOpaSyncStatus(BaseModel):
     enabled: bool
     interval_minutes: int
     lookback_days: int
+    backfill_enabled: bool = True
+    backfill_run_hour: int = 3
+    backfill_lookback_months: int = 3
+    dimensions_refresh_hours: int = 24
     last_success_at: datetime | None = None
     last_attempt_at: datetime | None = None
     next_allowed_at: datetime | None = None

@@ -80,6 +80,89 @@ export type AuthUser = {
   collaborator_name: string | null;
   managed_regional: string | null;
   managed_regionals: string[];
+  /** Calculado no backend (ver portal_first_access_pending) - só true pra colaborador com
+   *  primeiro acesso pendente. O frontend só lê, nunca recalcula esta condição. */
+  portal_first_access_required: boolean;
+};
+
+/** Resposta do reset administrativo de senha (Fase 2B) - `temporary_password` só existe aqui,
+ *  uma única vez; o admin precisa copiar e repassar antes de sair da tela. */
+export type AdminForcePasswordResetResult = AuthUser & { temporary_password: string };
+
+/** Fase 2C (convite seguro com token) - item de listagem, nunca inclui o token. */
+export type PortalInvite = {
+  id: number;
+  email: string;
+  collaborator_id: number;
+  collaborator_name: string | null;
+  role: string | null;
+  status: "pending" | "accepted" | "revoked" | "expired";
+  created_by_user_id: number | null;
+  created_by_name: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+};
+
+/** `token` só existe nesta resposta, uma única vez - o admin precisa copiar o link agora. */
+export type PortalInviteCreateResult = PortalInvite & { token: string };
+
+/** Resposta pública (sem autenticação) que a tela de aceite de convite consulta antes de mostrar
+ *  o formulário de senha. */
+export type PortalInviteStatus = {
+  valid: boolean;
+  email: string | null;
+  collaborator_name: string | null;
+  reason: string | null;
+};
+
+/** Fase 2D - autoatendimento por CPF (pedido do usuário em 2026-08-29): o próprio colaborador
+ *  confirma nome e telefone antes de solicitar acesso. Nunca inclui e-mail (sempre digitado por
+ *  quem solicita) nem CPF completo. */
+export type PortalAccessRequestCpfLookup = {
+  name: string;
+  phone_masked: string | null;
+};
+
+/** Fase 2C (convite inteligente por CPF/IXC) - resposta da busca, nunca inclui o CPF completo. */
+export type IxcCpfLookupResult = {
+  ixc_employee_id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  cpf_masked: string | null;
+  active: boolean;
+  department_id: number | null;
+  sector_id: number | null;
+  local_collaborator_id: number | null;
+  local_collaborator_name: string | null;
+  local_match_kind: "ixc_employee_id" | "cpf" | "name" | null;
+};
+
+/** Fase 2D (solicitação de acesso) - item de listagem para o admin, `cpf_masked` nunca o CPF
+ *  completo. */
+export type PortalAccessRequest = {
+  id: number;
+  name: string;
+  cpf_masked: string | null;
+  phone: string;
+  email: string;
+  suggested_collaborator_id: number | null;
+  suggested_collaborator_name: string | null;
+  status: "pending" | "approved" | "rejected";
+  reviewed_by_user_id: number | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  decision_reason: string | null;
+  created_at: string;
+};
+
+export type PortalFirstAccessStatus = {
+  required: boolean;
+  phone: string | null;
+  email: string | null;
+  has_cpf: boolean;
+  cpf_masked: string | null;
 };
 
 export type EcosystemPermission = {
@@ -171,6 +254,17 @@ export type SupportOpaSyncSettings = {
   enabled: boolean;
   interval_minutes: number;
   lookback_days: number;
+  backfill_enabled: boolean;
+  backfill_run_hour: number;
+  backfill_lookback_months: number;
+  dimensions_refresh_hours: number;
+};
+
+export type SupportOpaImportMonth = {
+  year_month: string;
+  status: string;
+  attendance_count: number;
+  last_verified_at: string | null;
 };
 
 export type SupportOpaSyncStatus = SupportOpaSyncSettings & {
@@ -888,6 +982,7 @@ export type PortalOrder = {
   status: string;
   sla_status: string;
   sla_status_normalized: string;
+  is_sla_out_of_time: boolean;
   base_points: number;
   penalty_points: number;
   net_points: number;
@@ -1069,6 +1164,8 @@ export type PortalOverview = {
   penalty_points: number;
   unscored_service_orders: number;
   manual_review_service_orders: number;
+  excluded_collaborators: number;
+  excluded_service_orders: number;
   regional_summary: PortalRegionalOverview[];
   ranking: PortalRankingItem[];
   alerts: string[];

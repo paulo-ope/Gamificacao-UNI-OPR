@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import Float, case, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -18,6 +18,9 @@ from app.services.calculation import get_setting, upsert_setting
 from app.services.notifications import create_notification
 from app.services.opa_client import OpaApiError, get_opa_client
 from app.services.opa_scheduler import (
+    SUPPORT_OPA_BACKFILL_ENABLED_KEY,
+    SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY,
+    SUPPORT_OPA_BACKFILL_RUN_HOUR_KEY,
     SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY,
     SUPPORT_OPA_SYNC_ENABLED_KEY,
     SUPPORT_OPA_SYNC_INTERVAL_MINUTES_KEY,
@@ -31,17 +34,30 @@ from app.services.opa_scheduler import (
 )
 
 from . import opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_timeline_service
-from .models import SupportOpaAttendance, SupportOpaDimension, SupportOpaSavedFilter
-from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters, opa_period_bounds, validate_opa_period
+from .models import SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
+from .opa_filters import (
+    SUPPORT_TIMEZONE,
+    OpaAttendanceFilters,
+    apply_opa_attendance_filters,
+    opa_period_bounds,
+    validate_opa_period,
+)
 from .opa_ingestion import (
+    SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_DEFAULT,
+    SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY,
     OpaImportInterrupted,
+    _create_pending_import_run,
+    _opa_import_busy_message,
+    _run_result,
     active_opa_import_run,
-    import_opa_attendances,
+    import_months_status,
     opa_import_lock_busy,
     resume_opa_import_run,
+    run_opa_import_background_job,
 )
 from .schemas import (
     SupportImportResult,
+    SupportOpaImportMonthOut,
     SupportOpaAttendanceDetail,
     SupportOpaAttendancePage,
     SupportOpaAttendanceTimeline,
@@ -242,6 +258,25 @@ def _sync_settings_response(db: Session) -> dict:
             1,
             minimum=1,
             maximum=30,
+        ),
+        "backfill_enabled": _bool_setting(get_setting(db, SUPPORT_OPA_BACKFILL_ENABLED_KEY, ""), True),
+        "backfill_run_hour": _int_setting(
+            get_setting(db, SUPPORT_OPA_BACKFILL_RUN_HOUR_KEY, ""),
+            3,
+            minimum=0,
+            maximum=23,
+        ),
+        "backfill_lookback_months": _int_setting(
+            get_setting(db, SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY, ""),
+            3,
+            minimum=1,
+            maximum=24,
+        ),
+        "dimensions_refresh_hours": _int_setting(
+            get_setting(db, SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY, ""),
+            SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_DEFAULT,
+            minimum=1,
+            maximum=168,
         ),
     }
 
@@ -629,6 +664,34 @@ def update_opa_sync_settings(
             str(payload.lookback_days),
             description="Quantos dias antes de hoje o ciclo automático do OPA Suite reimporta para o módulo Suporte.",
         )
+    if payload.backfill_enabled is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_BACKFILL_ENABLED_KEY,
+            "true" if payload.backfill_enabled else "false",
+            description="Liga ou desliga o backfill automático de meses completos do OPA Suite (roda de madrugada).",
+        )
+    if payload.backfill_run_hour is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_BACKFILL_RUN_HOUR_KEY,
+            str(payload.backfill_run_hour),
+            description="Hora do dia (0-23, fuso America/Porto_Velho) em que o backfill automático de meses roda.",
+        )
+    if payload.backfill_lookback_months is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY,
+            str(payload.backfill_lookback_months),
+            description="Quantos meses (incluindo o atual) o backfill automático de madrugada verifica/completa.",
+        )
+    if payload.dimensions_refresh_hours is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY,
+            str(payload.dimensions_refresh_hours),
+            description="De quantas em quantas horas a sincronização refaz a busca completa de usuários/motivos/departamentos/etiquetas/clientes do OPA Suite (cache local usado nos ciclos intermediários).",
+        )
     after = _sync_settings_response(db)
     record_audit_log(db, user, "update", "support_opa_sync_settings", "opa", before, after)
     db.commit()
@@ -719,50 +782,62 @@ def opa_sync_status(
 @router.post("/opa-imports", response_model=SupportImportResult)
 def import_opa_period(
     payload: SupportPeriodRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("support:sync_opa")),
 ):
+    """Dispara a importação em BACKGROUND (não bloqueia a requisição) - devolve o
+    run_id na hora com status "pending", e o frontend acompanha o progresso via
+    GET /opa/sync-runs/{run_id} (polling, mesmo padrão do sync do IXC em
+    scheduling/router.py). Achado real: import de mês inteiro busca mensagem por
+    mensagem pra calcular TMR e pode levar minutos - antes disso rodava inline na
+    requisição HTTP e arriscava timeout."""
     _validate_period(payload.date_from, payload.date_to)
-    try:
-        result = import_opa_attendances(
-            db,
-            get_opa_client(),
-            date_from=payload.date_from,
-            date_to=payload.date_to,
-            imported_by=user.id,
-        )
-        create_notification(
-            db,
-            user_id=user.id,
-            title="Importação OPA concluída",
-            message=(
-                f"Run #{result['run_id']}: {result['fetched_count']} recebido(s) em "
-                f"{result.get('pages_processed', 0)} página(s), "
-                f"{result['created_count']} novo(s), {result['updated_count']} atualizado(s), "
-                f"{result['unchanged_count']} sem alteração, {result['rejected_count']} rejeitado(s)."
-            ),
-            link_url="/suporte",
-            entity_type="support_opa_import",
-            entity_id=result["run_id"],
-        )
-        db.commit()
-        return result
-    except OpaApiError as exc:
-        db.rollback()
-        raise HTTPException(status_code=502, detail=f"Falha ao consultar a API do OPA Suite: {exc}") from exc
-    except OpaImportInterrupted as exc:
-        db.commit()
-        raise HTTPException(status_code=502, detail=f"Importação OPA interrompida no run #{exc.run_id}: {exc}") from exc
-    except RuntimeError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Falha inesperada na importação do OPA Suite")
-        raise HTTPException(status_code=500, detail="Falha inesperada ao importar o período selecionado do OPA Suite.") from exc
+    if opa_import_lock_busy(db):
+        raise HTTPException(status_code=409, detail=_opa_import_busy_message(db))
+    run_id = _create_pending_import_run(
+        mode="manual", date_from=payload.date_from, date_to=payload.date_to, imported_by=user.id
+    )
+    background_tasks.add_task(run_opa_import_background_job, run_id)
+    run = db.get(SupportOpaImportRun, run_id)
+    return _run_result(run)
+
+
+@router.get("/opa/sync-runs/{run_id}", response_model=SupportImportResult)
+def get_opa_sync_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("support:sync_opa")),
+):
+    """Status/progresso de uma run (pending/running/completed/failed/interrupted) -
+    usado pelo frontend pra fazer polling depois de POST /opa-imports."""
+    run = db.get(SupportOpaImportRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run de importação OPA não encontrada.")
+    return _run_result(run)
+
+
+@router.get("/opa/import-months", response_model=list[SupportOpaImportMonthOut])
+def get_opa_import_months(
+    months: int = Query(default=6, ge=1, le=24),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("support:sync_opa")),
+):
+    """Status (missing/complete) dos últimos `months` meses calendário, do mais
+    antigo pro mais recente - alimenta o painel de meses da tela e o backfill
+    automático de madrugada usa a mesma fonte (`import_months_status`)."""
+    today = datetime.now(SUPPORT_TIMEZONE).date()
+    year_months: list[str] = []
+    year, month = today.year, today.month
+    for _ in range(months):
+        year_months.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    year_months.reverse()
+    status_by_month = import_months_status(db, year_months)
+    return [status_by_month[year_month] for year_month in year_months]
 
 
 @router.post("/opa/sync-runs/{run_id}/resume", response_model=SupportImportResult)

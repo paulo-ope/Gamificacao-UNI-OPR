@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
 
-from app.api.routes import audit, auth, calculation_runs, collaborators, dashboard, gamification, health, imports, leadership, notifications, point_balance, portal, rules, scoring, service_orders, settings, users
+from app.api.routes import access_requests, audit, auth, calculation_runs, collaborators, dashboard, gamification, health, imports, invites, leadership, notifications, point_balance, portal, rules, scoring, service_orders, settings, users
 from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
 from app.core.security import ensure_access_profiles, ensure_initial_admin
@@ -158,6 +158,8 @@ app.add_middleware(
 app.include_router(health.router, prefix=settings_obj.api_prefix)
 app.include_router(auth.router, prefix=settings_obj.api_prefix)
 app.include_router(users.router, prefix=settings_obj.api_prefix)
+app.include_router(invites.router, prefix=settings_obj.api_prefix)
+app.include_router(access_requests.router, prefix=settings_obj.api_prefix)
 app.include_router(imports.router, prefix=settings_obj.api_prefix)
 app.include_router(audit.router, prefix=settings_obj.api_prefix)
 app.include_router(collaborators.router, prefix=settings_obj.api_prefix)

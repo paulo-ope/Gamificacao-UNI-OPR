@@ -29,7 +29,7 @@ export function WorkspaceHome() {
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando UNI Workspace...</main>;
   }
-  if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} />;
+  if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} showPortalLink />;
 
   const fallbackModules = workspaceModules
     .filter((module) => module.status === "active" && user.permissions.includes(module.requiredPermission))

@@ -3,7 +3,7 @@ users.collaborator_id link (identidade do portal): role allowlist now includes c
 regional_manager_viewer, and the link must be validated (collaborator exists, one user per
 collaborator)."""
 
-from app.models import User
+from app.models import AuditLog, User
 
 
 def test_create_user_accepts_collaborator_role(client):
@@ -102,3 +102,60 @@ def test_update_user_rejects_linking_to_already_linked_collaborator(client, make
 
     response = client.put(f"/api/users/{other_id}", json={"collaborator_id": collaborator.id})
     assert response.status_code == 409
+
+
+def test_create_user_audit_log_never_stores_password_hash(client, db_session):
+    response = client.post(
+        "/api/users",
+        json={"name": "Senha Segura", "email": "senha.segura@pytest.local", "password": "SenhaSecreta123", "role": "viewer", "active": True},
+    )
+    assert response.status_code == 201
+    user_id = response.json()["id"]
+    password_hash = db_session.get(User, user_id).password_hash
+
+    entry = db_session.query(AuditLog).filter(AuditLog.action == "create", AuditLog.entity == "users", AuditLog.entity_id == str(user_id)).one()
+    assert entry.before_data is None
+    assert "password_hash" not in entry.after_data
+    assert password_hash not in str(entry.after_data)
+
+
+def test_update_user_audit_log_never_stores_password_hash(client, db_session):
+    created = client.post(
+        "/api/users",
+        json={"name": "Antes da Troca", "email": "antes.troca@pytest.local", "password": "SenhaAntiga123", "role": "viewer", "active": True},
+    )
+    user_id = created.json()["id"]
+
+    response = client.put(f"/api/users/{user_id}", json={"password": "SenhaNova456"})
+    assert response.status_code == 200
+    password_hash = db_session.get(User, user_id).password_hash
+
+    entry = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "update", AuditLog.entity == "users", AuditLog.entity_id == str(user_id))
+        .one()
+    )
+    assert "password_hash" not in entry.before_data
+    assert "password_hash" not in entry.after_data
+    assert password_hash not in str(entry.before_data) + str(entry.after_data)
+
+
+def test_delete_user_audit_log_never_stores_password_hash(client, db_session, admin_user):
+    created = client.post(
+        "/api/users",
+        json={"name": "Vai Ser Excluido", "email": "vai.ser.excluido@pytest.local", "password": "SenhaQueSai789", "role": "viewer", "active": True},
+    )
+    user_id = created.json()["id"]
+    password_hash = db_session.get(User, user_id).password_hash
+
+    response = client.delete(f"/api/users/{user_id}")
+    assert response.status_code == 200
+
+    entry = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "delete", AuditLog.entity == "users", AuditLog.entity_id == str(user_id))
+        .one()
+    )
+    assert "password_hash" not in entry.before_data
+    assert entry.after_data is None
+    assert password_hash not in str(entry.before_data)

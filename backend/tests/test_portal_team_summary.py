@@ -3,7 +3,7 @@ regional_manager_viewer path: unlike a regular collaborator user, this account h
 collaborator_id, only users.managed_regional, and must see the aggregate of every collaborator
 scored in that regional for the latest run."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models import CalculationRun, Collaborator, CollaboratorScore, User
 from app.services.portal_dashboard import build_portal_summary, build_portal_team_summary
@@ -162,3 +162,85 @@ def test_summary_user_permissions_reflect_role(db_session):
 
     result = build_portal_summary(db_session, manager)
     assert "portal:read_regional_summary" in result["user"]["permissions"]
+
+
+def test_team_summary_history_survives_hundreds_of_drafts_in_the_current_month(db_session, make_collaborator):
+    """Mesmo defeito do histórico individual (validação de 2026-08-28), na aba 'Minha equipe':
+    `LIMIT 12` runs ordenados por id desc era consumido por um único período quando o mês corrente
+    acumula centenas de rascunhos automáticos do sincronizador do IXC. O histórico da equipe
+    precisa alcançar o mês anterior mesmo sob essa inundação."""
+    manager = User(
+        name="Gestor Rolim",
+        email="gestor-historico@pytest.local",
+        role="regional_manager_viewer",
+        active=True,
+        password_hash="x",
+        managed_regional="UNI SUL",
+    )
+    db_session.add(manager)
+    db_session.flush()
+
+    collaborator = make_collaborator(name="A", regional="UNI SUL")
+
+    july_run = _make_run(db_session, reference_month=7, reference_year=2026, status="paid")
+    july_score = _make_score(db_session, july_run, collaborator, final_points=100.0)
+    july_run.result_summary = {"score_summaries": {str(collaborator.id): {"final_points": july_score.final_points}}}
+
+    for minute in range(200):
+        august_run = _make_run(
+            db_session,
+            reference_month=8,
+            reference_year=2026,
+            status="draft",
+            created_at=datetime(2026, 8, 1, tzinfo=timezone.utc) + timedelta(minutes=minute),
+        )
+        august_score = _make_score(db_session, august_run, collaborator, final_points=50.0)
+        august_run.result_summary = {
+            "score_summaries": {str(collaborator.id): {"final_points": august_score.final_points}}
+        }
+    db_session.flush()
+
+    result = build_portal_team_summary(db_session, manager)
+
+    periods = {(item["reference_month"], item["reference_year"]) for item in result["history"]}
+    assert (7, 2026) in periods
+    assert (8, 2026) in periods
+
+
+def test_team_summary_history_prefers_paid_run_over_newer_cancelled_one(db_session, make_collaborator):
+    """Mesmo achado A9 aplicado ao histórico da equipe: dentro de um período, o run oficial é o
+    pago, nunca o cancelado mais novo."""
+    manager = User(
+        name="Gestor Rolim",
+        email="gestor-historico-a9@pytest.local",
+        role="regional_manager_viewer",
+        active=True,
+        password_hash="x",
+        managed_regional="UNI SUL",
+    )
+    db_session.add(manager)
+    db_session.flush()
+
+    collaborator = make_collaborator(name="A", regional="UNI SUL")
+
+    july_paid = _make_run(
+        db_session, reference_month=7, reference_year=2026, status="paid",
+        created_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+    paid_score = _make_score(db_session, july_paid, collaborator, final_points=100.0)
+    july_paid.result_summary = {"score_summaries": {str(collaborator.id): {"final_points": paid_score.final_points}}}
+
+    july_cancelled = _make_run(
+        db_session, reference_month=7, reference_year=2026, status="cancelled",
+        created_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+    )
+    cancelled_score = _make_score(db_session, july_cancelled, collaborator, final_points=999.0)
+    july_cancelled.result_summary = {
+        "score_summaries": {str(collaborator.id): {"final_points": cancelled_score.final_points}}
+    }
+    db_session.flush()
+
+    result = build_portal_team_summary(db_session, manager)
+
+    july_entry = next(item for item in result["history"] if (item["reference_month"], item["reference_year"]) == (7, 2026))
+    assert july_entry["final_points"] == 100.0

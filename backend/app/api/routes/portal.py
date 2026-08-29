@@ -4,11 +4,13 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app.core.security import require_permission
+from app.core.security import get_current_user, require_portal_access
 from app.db.session import get_db
 from app.models import Collaborator, User
 from app.schemas import (
     PortalAuditOut,
+    PortalFirstAccessCompleteRequest,
+    PortalFirstAccessStatusOut,
     PortalOrderOut,
     PortalOverviewOut,
     PortalProfileOut,
@@ -20,6 +22,7 @@ from app.schemas import (
 )
 from app.services.audit_log import record_audit_log
 from app.services.portal_dashboard import (
+    PORTAL_ORDERS_MAX,
     build_portal_orders,
     build_portal_audit,
     build_portal_overview,
@@ -28,6 +31,7 @@ from app.services.portal_dashboard import (
     build_portal_summary,
     build_portal_team_summary,
 )
+from app.services.portal_first_access import build_first_access_status, complete_first_access
 
 router = APIRouter(prefix="/portal", tags=["portal"])
 
@@ -59,7 +63,7 @@ def _profile_out(collaborator: Collaborator) -> dict:
 @router.get("/overview", response_model=PortalOverviewOut)
 def portal_overview(
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_overview")),
+    user: User = Depends(require_portal_access("portal:read_overview")),
 ):
     return build_portal_overview(db)
 
@@ -69,7 +73,7 @@ def portal_summary(
     reference_month: int | None = Query(None, ge=1, le=12),
     reference_year: int | None = Query(None, ge=2020, le=2100),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_self")),
+    user: User = Depends(require_portal_access("portal:read_self")),
 ):
     if (reference_month is None) != (reference_year is None):
         raise HTTPException(status_code=422, detail="Informe mês e ano juntos para consultar um fechamento.")
@@ -79,7 +83,7 @@ def portal_summary(
 @router.get("/profile", response_model=PortalProfileOut)
 def portal_profile(
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_self")),
+    user: User = Depends(require_portal_access("portal:read_self")),
 ):
     return _profile_out(_own_collaborator(db, user))
 
@@ -88,7 +92,7 @@ def portal_profile(
 def update_portal_profile(
     payload: PortalProfileUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:update_self_profile")),
+    user: User = Depends(require_portal_access("portal:update_self_profile")),
 ):
     collaborator = _own_collaborator(db, user)
     before = {"phone": collaborator.phone, "email": collaborator.email}
@@ -105,7 +109,7 @@ def update_portal_profile(
 async def upload_portal_profile_photo(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:update_self_profile")),
+    user: User = Depends(require_portal_access("portal:update_self_profile")),
 ):
     collaborator = _own_collaborator(db, user)
     if file.content_type not in ALLOWED_PORTAL_PROFILE_PHOTO_CONTENT_TYPES:
@@ -125,7 +129,7 @@ async def upload_portal_profile_photo(
 @router.get("/profile/photo")
 def portal_profile_photo(
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_self")),
+    user: User = Depends(require_portal_access("portal:read_self")),
 ):
     collaborator = _own_collaborator(db, user)
     if not collaborator.photo:
@@ -136,7 +140,7 @@ def portal_profile_photo(
 @router.delete("/profile/photo", response_model=PortalProfileOut)
 def delete_portal_profile_photo(
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:update_self_profile")),
+    user: User = Depends(require_portal_access("portal:update_self_profile")),
 ):
     collaborator = _own_collaborator(db, user)
     had_photo_before = collaborator.photo is not None
@@ -150,11 +154,11 @@ def delete_portal_profile_photo(
 
 @router.get("/my-orders", response_model=list[PortalOrderOut])
 def portal_my_orders(
-    limit: int = Query(80, ge=1, le=200),
+    limit: int = Query(80, ge=1, le=PORTAL_ORDERS_MAX),
     reference_month: int | None = Query(None, ge=1, le=12),
     reference_year: int | None = Query(None, ge=2020, le=2100),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_self")),
+    user: User = Depends(require_portal_access("portal:read_self")),
 ):
     if (reference_month is None) != (reference_year is None):
         raise HTTPException(status_code=422, detail="Informe mês e ano juntos para consultar um fechamento.")
@@ -166,7 +170,7 @@ def portal_my_audit(
     reference_month: int | None = Query(None, ge=1, le=12),
     reference_year: int | None = Query(None, ge=2020, le=2100),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_self")),
+    user: User = Depends(require_portal_access("portal:read_self")),
 ):
     if (reference_month is None) != (reference_year is None):
         raise HTTPException(status_code=422, detail="Informe mês e ano juntos para consultar um fechamento.")
@@ -176,7 +180,7 @@ def portal_my_audit(
 @router.get("/team-summary", response_model=PortalTeamSummaryOut)
 def portal_team_summary(
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_regional_summary")),
+    user: User = Depends(require_portal_access("portal:read_regional_summary")),
 ):
     return build_portal_team_summary(db, user)
 
@@ -184,7 +188,7 @@ def portal_team_summary(
 @router.get("/rules", response_model=PortalRulesOut)
 def portal_rules(
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:read_rules")),
+    user: User = Depends(require_portal_access("portal:read_rules")),
 ):
     return build_portal_rules(db)
 
@@ -193,6 +197,38 @@ def portal_rules(
 def portal_simulation(
     extra_points: float = Query(0, ge=0, le=100000),
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("portal:simulate_self")),
+    user: User = Depends(require_portal_access("portal:simulate_self")),
 ):
     return build_portal_simulation(db, user, extra_points=extra_points)
+
+
+# As duas rotas abaixo são a exceção deliberada ao bloqueio de primeiro acesso: usam
+# `get_current_user` puro (autenticado, sem exigir `require_portal_access`) porque concluir o
+# primeiro acesso É o que desbloqueia todo o resto - gatear elas também criaria um círculo sem
+# saída (usuário pendente jamais conseguiria consultar o próprio status ou completar o onboarding).
+
+
+@router.get("/first-access/status", response_model=PortalFirstAccessStatusOut)
+def portal_first_access_status(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return build_first_access_status(db, user)
+
+
+@router.post("/first-access/complete", response_model=PortalFirstAccessStatusOut)
+def portal_first_access_complete(
+    payload: PortalFirstAccessCompleteRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    complete_first_access(
+        db,
+        user,
+        cpf=payload.cpf,
+        phone=payload.phone,
+        email=payload.email,
+        new_password=payload.new_password,
+        confirm_password=payload.confirm_password,
+    )
+    return build_first_access_status(db, user)

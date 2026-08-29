@@ -31,11 +31,12 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DateRangePicker, type DateRangePreset } from "@/components/ui/date-range-picker";
+import { InfoHint } from "@/components/gamification/info-hint";
+import { DateRangePicker, commonDateRangePresets, type DateRangePreset } from "@/components/ui/date-range-picker";
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -50,6 +51,7 @@ import type {
   SupportOpaBotHumanFilter,
   SupportOpaFilters,
   SupportOpaImportedDataWindow,
+  SupportOpaImportMonth,
   SupportOpaMetricComparison,
   SupportOpaMetricCoverage,
   SupportOpaOverview,
@@ -108,8 +110,17 @@ export function opaStatusLabel(value: string | null | undefined) {
 
 const SUPPORT_TIMEZONE = "America/Porto_Velho";
 
-function toDateValue(value: Date) {
-  return value.toISOString().slice(0, 10);
+// O backend recusa (422) QUALQUER consulta do OPA Suite - visão geral, gráficos, lista de
+// atendimentos, importação - acima de 32 dias, não só a importação manual (ver
+// `validate_opa_period`/`apply_opa_attendance_filters` em
+// backend/app/modules/support/opa_filters.py). Achado real, 2026-08-27: um preset amplo
+// ("Este ano") barrava a tela inteira com esse erro ao simplesmente trocar o período, sem
+// nem chegar a clicar em importar.
+export const OPA_MAX_PERIOD_DAYS = 32;
+
+export function opaPeriodSpanDays(dateFrom: string, dateTo: string): number {
+  if (!dateFrom || !dateTo) return 0;
+  return Math.round((new Date(`${dateTo}T00:00:00Z`).getTime() - new Date(`${dateFrom}T00:00:00Z`).getTime()) / 86400000) + 1;
 }
 
 // "Hoje" precisa ser o dia corrente no fuso operacional da UNI, não no fuso do
@@ -143,50 +154,14 @@ function toLocalDateString(iso: string | null | undefined): string | null {
   return `${lookup.year}-${lookup.month}-${lookup.day}`;
 }
 
-function addDays(value: Date, amount: number) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate() + amount, 12));
-}
-
-function monthStart(value: Date) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1, 12));
-}
-
-function monthEnd(value: Date) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + 1, 0, 12));
-}
-
+// "Hoje"/"Ontem" etc. precisam ser o dia corrente no fuso operacional da UNI
+// (SUPPORT_TIMEZONE), não no fuso do navegador de quem está olhando a tela - por isso
+// passa `localToday` como fonte de "hoje" pro conjunto de presets compartilhado.
 export function opaPeriodPresets(): DateRangePreset[] {
-  return [
-    { label: "Hoje", range: () => {
-      const today = localToday();
-      return { from: toDateValue(today), to: toDateValue(today) };
-    } },
-    { label: "Ontem", range: () => {
-      const yesterday = addDays(localToday(), -1);
-      return { from: toDateValue(yesterday), to: toDateValue(yesterday) };
-    } },
-    { label: "Últimos 7 dias", range: () => {
-      const today = localToday();
-      return { from: toDateValue(addDays(today, -6)), to: toDateValue(today) };
-    } },
-    { label: "Últimos 30 dias", range: () => {
-      const today = localToday();
-      return { from: toDateValue(addDays(today, -29)), to: toDateValue(today) };
-    } },
-    { label: "Este mês", range: () => {
-      const today = localToday();
-      return { from: toDateValue(monthStart(today)), to: toDateValue(today) };
-    } },
-    { label: "Mês anterior", range: () => {
-      const current = localToday();
-      const previous = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - 1, 1, 12));
-      return { from: toDateValue(monthStart(previous)), to: toDateValue(monthEnd(previous)) };
-    } },
-    { label: "Personalizado", range: () => {
-      const today = localToday();
-      return { from: toDateValue(monthStart(today)), to: toDateValue(today) };
-    } },
-  ];
+  return commonDateRangePresets(localToday).filter((preset) => {
+    const { from, to } = preset.range();
+    return opaPeriodSpanDays(from, to) <= OPA_MAX_PERIOD_DAYS;
+  });
 }
 
 export function number(value: number | null | undefined, digits = 0) {
@@ -225,6 +200,99 @@ export function customerCodeLabel(customerId?: string | null) {
 // uma falha de verdade, só não deve assustar o usuário como se fosse.
 export function isTransientBusyMessage(message: string) {
   return message.includes("em andamento") && (message.includes("Aguarde") || message.includes("aguarde"));
+}
+
+// Tempo decorrido em texto curto ("3h 14min", "42 min") - usado pra avisar quando uma
+// sincronização está rodando por mais tempo que o normal (achado real de 2026-08-27: o usuário
+// olhou pro painel com uma importação travada há mais de 3h e não tinha como perceber isso -
+// o mesmo aviso azul calmo aparecia tanto pra "rodando há 30s" quanto pra "rodando há 3h").
+function elapsedLabel(fromIso: string): string {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(fromIso).getTime()) / 60000));
+  if (minutes < 1) return "menos de 1 min";
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) return `${minutes} min`;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}min`;
+}
+
+// Acima disso, uma sincronização em andamento deixa de ser "normal" (ciclos com TMR podem passar
+// um pouco do intervalo configurado) e vira algo que merece atenção - achado real: um caso
+// observado ficou rodando por mais de 3h, e nada no painel distinguia isso de uma execução comum.
+const SYNC_RUNNING_WARNING_MINUTES = 15;
+
+type SyncHeadline = {
+  tone: "ok" | "running" | "warning" | "error" | "off" | "unconfigured";
+  title: string;
+  detail: string;
+};
+
+function syncHeadline(syncStatus: SupportOpaSyncStatus | null): SyncHeadline {
+  if (!syncStatus) return { tone: "off", title: "Carregando status...", detail: "" };
+  if (!syncStatus.configured) {
+    return {
+      tone: "unconfigured",
+      title: "OPA Suite não está conectado",
+      detail: "Falta configurar o endereço/token da API do OPA Suite - a sincronização não roda sem isso.",
+    };
+  }
+  if (syncStatus.last_error && !isTransientBusyMessage(syncStatus.last_error)) {
+    return {
+      tone: "error",
+      title: "A última sincronização falhou",
+      detail: `${dateTimeLabel(syncStatus.last_error_at)} — ${syncStatus.last_error}`,
+    };
+  }
+  if (syncStatus.sync_in_progress) {
+    const startedAt = syncStatus.active_run_started_at;
+    const elapsedMinutes = startedAt ? Math.round((Date.now() - new Date(startedAt).getTime()) / 60000) : 0;
+    const modeLabel = syncStatus.active_run_mode === "scheduled" ? "automática" : "manual";
+    if (startedAt && elapsedMinutes > SYNC_RUNNING_WARNING_MINUTES) {
+      return {
+        tone: "warning",
+        title: "Sincronização rodando há mais tempo que o normal",
+        detail: `Importação ${modeLabel} em andamento há ${elapsedLabel(startedAt)} (desde ${dateTimeLabel(startedAt)}). Uma sincronização comum leva segundos a poucos minutos — se continuar assim por muito mais tempo, vale olhar os logs do servidor.`,
+      };
+    }
+    return {
+      tone: "running",
+      title: "Sincronizando agora",
+      detail: startedAt
+        ? `Importação ${modeLabel} em andamento há ${elapsedLabel(startedAt)}.`
+        : "Existe uma importação em andamento.",
+    };
+  }
+  if (!syncStatus.enabled) {
+    return {
+      tone: "off",
+      title: "Sincronização automática desligada",
+      detail: "Ninguém está atualizando os dados do OPA Suite sozinho agora — use \"Importar dados\" pra atualizar na mão, ou ligue o automático abaixo.",
+    };
+  }
+  return {
+    tone: "ok",
+    title: "Sincronizado",
+    detail: syncStatus.last_success_at
+      ? `Última atualização com sucesso: ${dateTimeLabel(syncStatus.last_success_at)}. Próxima janela automática: ${dateTimeLabel(syncStatus.next_allowed_at)}.`
+      : "Ainda não teve nenhuma sincronização concluída com sucesso.",
+  };
+}
+
+const SYNC_HEADLINE_STYLES: Record<SyncHeadline["tone"], { box: string; icon: string }> = {
+  ok: { box: "border-emerald-200 bg-emerald-50 text-emerald-800", icon: "text-emerald-600" },
+  running: { box: "border-sky-200 bg-sky-50 text-sky-800", icon: "text-sky-600" },
+  warning: { box: "border-amber-200 bg-amber-50 text-amber-800", icon: "text-amber-600" },
+  error: { box: "border-red-200 bg-red-50 text-red-800", icon: "text-red-600" },
+  off: { box: "border-slate-200 bg-slate-50 text-slate-700", icon: "text-slate-500" },
+  unconfigured: { box: "border-red-200 bg-red-50 text-red-800", icon: "text-red-600" },
+};
+
+function SyncHeadlineIcon({ tone }: { tone: SyncHeadline["tone"] }) {
+  const className = `h-5 w-5 shrink-0 ${SYNC_HEADLINE_STYLES[tone].icon}`;
+  if (tone === "ok") return <CheckCircle2 className={className} />;
+  if (tone === "running") return <Loader2 className={`${className} animate-spin`} />;
+  if (tone === "warning") return <Clock3 className={className} />;
+  if (tone === "error" || tone === "unconfigured") return <TriangleAlert className={className} />;
+  return <Clock3 className={className} />;
 }
 
 export function comparisonLabel(metric: SupportOpaMetricComparison | null | undefined, formatter: (value: number | null | undefined) => string = number) {
@@ -359,7 +427,7 @@ export function OpaGlobalFilters({
   syncing: boolean;
   canImport: boolean;
   importedDataWindow?: SupportOpaImportedDataWindow | null;
-  onPeriodChange: (period: Period) => void;
+  onPeriodChange: (period: Period | ((current: Period) => Period)) => void;
   onFilterChange: (patch: Partial<SupportOpaAttendanceFilters>) => void;
   onApply: () => void;
   onClear: () => void;
@@ -368,6 +436,15 @@ export function OpaGlobalFilters({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const badges = activeFilterBadges(filters, options);
+  // O backend recusa (422) QUALQUER consulta do OPA Suite acima de 32 dias - visão geral,
+  // gráficos, lista de atendimentos e importação, não só "Importar dados" (ver
+  // `opaPeriodSpanDays`/OPA_MAX_PERIOD_DAYS acima e `validate_opa_period` no backend). Os
+  // presets do seletor já ficam de fora desse limite (`opaPeriodPresets` filtra), mas o
+  // usuário ainda pode digitar/clicar um intervalo maior manualmente no calendário - por
+  // isso trava "Filtrar" e "Importar dados" os dois, com uma explicação antes de deixar
+  // estourar o erro. Achado real, 2026-08-27.
+  const periodSpanDays = opaPeriodSpanDays(period.date_from, period.date_to);
+  const periodTooLong = periodSpanDays > OPA_MAX_PERIOD_DAYS;
   return (
     <section className="contents">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 bg-white px-4 pb-3 pt-3 lg:px-7">
@@ -389,10 +466,24 @@ export function OpaGlobalFilters({
           </Button>
         </div>
         {canSync ? (
-          <Button type="button" variant="outline" onClick={onImport} disabled={syncing || loading || !canImport} className="h-9 border-blue-200 text-blue-700 hover:bg-blue-50">
-            {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            Importar dados
-          </Button>
+          <div className="text-right">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onImport}
+              disabled={syncing || loading || !canImport || periodTooLong}
+              title={periodTooLong ? "Período acima de 32 dias - reduza o período pra importar manualmente, ou use o backfill automático de meses na aba de sincronização." : undefined}
+              className="h-9 border-blue-200 text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Importar dados
+            </Button>
+            {periodTooLong ? (
+              <p className="mt-1 max-w-64 text-[11px] text-amber-700">
+                Período de {periodSpanDays} dias - o OPA Suite só aceita consultas de até 32 dias por vez. Pra trazer um histórico maior, use o backfill automático de meses.
+              </p>
+            ) : null}
+          </div>
         ) : null}
       </div>
 
@@ -403,14 +494,30 @@ export function OpaGlobalFilters({
             dateTo={period.date_to}
             presets={opaPeriodPresets()}
             className="w-full"
-            onChange={(key, value) => onPeriodChange({ ...period, [key]: value })}
+            // Atualização funcional - presets e a inversão de intervalo no calendário chamam
+            // onChange duas vezes seguidas (date_from e date_to) na mesma interação; usando
+            // `{ ...period, [key]: value }` direto, a segunda chamada lia o `period` velho (de
+            // antes da primeira) e desfazia a primeira mudança - clicar num preset como "Hoje"
+            // silenciosamente não fazia nada. Achado real, 2026-08-27.
+            onChange={(key, value) => onPeriodChange((current) => ({ ...current, [key]: value }))}
           />
+          {periodTooLong ? (
+            <p className="mt-1 text-[11px] text-amber-700">
+              Período de {periodSpanDays} dias - reduza pra até 32 dias, o OPA Suite não aceita consultas maiores.
+            </p>
+          ) : null}
         </div>
         <FilterMultiSelect label="Atendente" value={filters.attendant_id} options={options?.attendants ?? []} onChange={(value) => onFilterChange({ attendant_id: value, page: 1 })} />
         <FilterMultiSelect label="Departamento" value={filters.department_id} options={options?.departments ?? []} onChange={(value) => onFilterChange({ department_id: value, page: 1 })} />
         <FilterMultiSelect label="Canal" value={filters.channel} options={options?.channels ?? []} onChange={(value) => onFilterChange({ channel: value, page: 1 })} />
         <div className="flex flex-wrap gap-2 xl:flex-nowrap xl:justify-end">
-          <Button type="button" onClick={onApply} disabled={loading} className="h-10">
+          <Button
+            type="button"
+            onClick={onApply}
+            disabled={loading || periodTooLong}
+            title={periodTooLong ? "Período acima de 32 dias - o OPA Suite não aceita consultas maiores que isso." : undefined}
+            className="h-10"
+          >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
             Filtrar
           </Button>
@@ -1155,21 +1262,54 @@ export function BotHumanSummary({ metrics }: { metrics: SupportOpaBotHumanMetric
   );
 }
 
+// Rascunho de texto livre pra um campo numérico de configuração - achado real de
+// 2026-08-27: `value={settings?.x ?? default}` direto num <input type="number">
+// com `onChange={(e) => onDraftSettings({ x: Number(e.target.value) })}` fazia o
+// campo virar "0" ao apagar (Number("") === 0, não NaN, e 0 não é "nullish" então
+// o `?? default` nunca entrava). Mantendo o texto digitado à parte (permite ficar
+// vazio) e só convertendo/gravando no blur resolve isso pros 4 campos numéricos
+// desta tela (intervalo, dias de histórico, hora do backfill, meses do backfill).
+function useNumberDraft(committed: number | undefined, fallback: number) {
+  const [draft, setDraft] = useState(String(committed ?? fallback));
+  useEffect(() => {
+    setDraft(String(committed ?? fallback));
+  }, [committed, fallback]);
+  return [draft, setDraft] as const;
+}
+
 export function OpaSyncPanel({
   canSync,
   syncStatus,
   settings,
   savingSettings,
+  months,
+  monthsLoading,
   onDraftSettings,
   onSaveSettings,
+  onReimportMonth,
 }: {
   canSync: boolean;
   syncStatus: SupportOpaSyncStatus | null;
   settings: SupportOpaSyncSettings | null;
   savingSettings: boolean;
+  months: SupportOpaImportMonth[];
+  monthsLoading: boolean;
   onDraftSettings: (next: Partial<SupportOpaSyncSettings>) => void;
   onSaveSettings: (next: Partial<SupportOpaSyncSettings>) => void;
+  onReimportMonth: (yearMonth: string) => void;
 }) {
+  const [intervalDraft, setIntervalDraft] = useNumberDraft(settings?.interval_minutes, 20);
+  const [lookbackDraft, setLookbackDraft] = useNumberDraft(settings?.lookback_days, 1);
+  const [runHourDraft, setRunHourDraft] = useNumberDraft(settings?.backfill_run_hour, 3);
+  const [backfillMonthsDraft, setBackfillMonthsDraft] = useNumberDraft(settings?.backfill_lookback_months, 3);
+  const [dimensionsRefreshDraft, setDimensionsRefreshDraft] = useNumberDraft(settings?.dimensions_refresh_hours, 24);
+
+  function commit(draft: string, min: number, max: number, fallback: number, apply: (value: number) => void) {
+    const parsed = Number(draft);
+    const value = draft.trim() === "" || Number.isNaN(parsed) ? fallback : Math.min(Math.max(Math.round(parsed), min), max);
+    apply(value);
+  }
+
   if (!canSync) {
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
@@ -1183,61 +1323,29 @@ export function OpaSyncPanel({
         <Settings2 className="h-5 w-5" />
         <h3 className="text-base font-semibold">Sincronização do OPA Suite</h3>
       </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <StatusRow label="Configurado" value={syncStatus?.configured ? "Sim" : "Não"} danger={!syncStatus?.configured} />
-        <StatusRow
-          label="Importação agora"
-          value={
-            syncStatus?.sync_in_progress
-              ? syncStatus.active_run_mode === "scheduled"
-                ? "Automática em andamento"
-                : "Em andamento"
-              : "Nenhuma"
-          }
-        />
-        <StatusRow label="Última tentativa" value={dateTimeLabel(syncStatus?.last_attempt_at)} />
-        <StatusRow label="Último sucesso" value={dateTimeLabel(syncStatus?.last_success_at)} />
-        <StatusRow label="Próxima janela" value={dateTimeLabel(syncStatus?.next_allowed_at)} />
-        <StatusRow label="Falhas seguidas" value={String(syncStatus?.consecutive_failures ?? 0)} danger={Boolean(syncStatus?.consecutive_failures)} />
-        <StatusRow label="Status" value={syncStatus?.enabled ? "Automático ligado" : "Automático desligado"} />
-        <StatusRow label="Intervalo" value={`${settings?.interval_minutes ?? 20} min`} />
-        <StatusRow label="Reimportação" value={`${settings?.lookback_days ?? 1} dia(s)`} />
-      </div>
-      {syncStatus?.sync_in_progress ? (
-        <div className="mt-4 flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800">
-          <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
-          <span>
-            {syncStatus.active_run_mode ? (
-              <>
-                Existe uma importação {syncStatus.active_run_mode === "scheduled" ? "automática" : "manual"} em andamento
-                {syncStatus.active_run_started_at ? ` desde ${dateTimeLabel(syncStatus.active_run_started_at)}` : ""}.
-              </>
-            ) : (
-              "Há uma importação do OPA em andamento, mas a run ativa ainda não pôde ser identificada."
-            )}
-            {syncStatus.next_window_delayed
-              ? " A próxima janela automática está aguardando essa execução terminar — não é um erro."
-              : ""}
-          </span>
-        </div>
-      ) : null}
-      {syncStatus?.last_error ? (
-        isTransientBusyMessage(syncStatus.last_error) ? (
-          <div className="mt-4 flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-            <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-            <span>
-              A última tentativa em {dateTimeLabel(syncStatus.last_error_at)} esbarrou numa importação anterior ainda em
-              andamento (ciclos que buscam mensagem por atendimento pra calcular TMR podem passar do intervalo
-              configurado) — não é uma falha real, o próximo ciclo segue normal quando a execução atual terminar.
-            </span>
+      {(() => {
+        const headline = syncHeadline(syncStatus);
+        const styles = SYNC_HEADLINE_STYLES[headline.tone];
+        return (
+          <div className={`mt-4 flex items-start gap-3 rounded-xl border p-4 ${styles.box}`}>
+            <SyncHeadlineIcon tone={headline.tone} />
+            <div>
+              <p className="text-sm font-semibold">{headline.title}</p>
+              {headline.detail ? <p className="mt-0.5 text-xs opacity-90">{headline.detail}</p> : null}
+            </div>
           </div>
-        ) : (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-            <div className="mb-1 flex items-center gap-1 font-semibold"><TriangleAlert className="h-3.5 w-3.5" /> Último erro</div>
-            {syncStatus.last_error}
-          </div>
-        )
+        );
+      })()}
+      {/* Falhas na sequência atual (contador reseta a cada sucesso) - só aparece quando há alguma,
+          não precisa ocupar espaço quando está tudo em dia. */}
+      {syncStatus && syncStatus.consecutive_failures > 0 ? (
+        <p className="mt-2 text-xs text-red-700">{syncStatus.consecutive_failures} falha(s) seguida(s) antes desta tentativa.</p>
       ) : null}
+      <p className="mt-3 text-xs text-slate-500">
+        {syncStatus?.enabled ? "Automático" : "Automático desligado"} · a cada {settings?.interval_minutes ?? 20} min · reimporta
+        os últimos {settings?.lookback_days ?? 1} dia(s) · atualiza nomes de cliente/atendente/motivo a cada{" "}
+        {settings?.dimensions_refresh_hours ?? 24}h
+      </p>
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm">
           <span className="font-medium text-slate-700">Automático</span>
@@ -1255,10 +1363,10 @@ export function OpaSyncPanel({
             type="number"
             min={5}
             max={1440}
-            value={settings?.interval_minutes ?? 20}
+            value={intervalDraft}
             disabled={savingSettings || !settings}
-            onChange={(event) => onDraftSettings({ interval_minutes: Number(event.target.value) })}
-            onBlur={(event) => onSaveSettings({ interval_minutes: Number(event.target.value) })}
+            onChange={(event) => setIntervalDraft(event.target.value)}
+            onBlur={() => commit(intervalDraft, 5, 1440, 20, (value) => onSaveSettings({ interval_minutes: value }))}
           />
         </label>
         <label className="block">
@@ -1267,22 +1375,144 @@ export function OpaSyncPanel({
             type="number"
             min={1}
             max={30}
-            value={settings?.lookback_days ?? 1}
+            value={lookbackDraft}
             disabled={savingSettings || !settings}
-            onChange={(event) => onDraftSettings({ lookback_days: Number(event.target.value) })}
-            onBlur={(event) => onSaveSettings({ lookback_days: Number(event.target.value) })}
+            onChange={(event) => setLookbackDraft(event.target.value)}
+            onBlur={() => commit(lookbackDraft, 1, 30, 1, (value) => onSaveSettings({ lookback_days: value }))}
+          />
+        </label>
+        <label className="block">
+          <span className="flex items-center gap-1 text-xs font-medium text-slate-600">
+            Atualizar cadastros (horas)
+            <InfoHint
+              ariaLabel="Ajuda sobre atualização de cadastros"
+              side="bottom"
+              title="Usuários, motivos, departamentos, etiquetas e clientes"
+              description="De quantas em quantas horas a sincronização refaz a busca completa desses cadastros no OPA Suite (só nomes/rótulos, não afeta os atendimentos em si). O cadastro de clientes sozinho tem mais de 100 mil registros - buscar ele em toda sincronização (a cada poucos minutos) era o maior custo do módulo. Entre uma atualização e outra, os nomes já conhecidos continuam sendo usados normalmente."
+            />
+          </span>
+          <Input
+            type="number"
+            min={1}
+            max={168}
+            value={dimensionsRefreshDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setDimensionsRefreshDraft(event.target.value)}
+            onBlur={() => commit(dimensionsRefreshDraft, 1, 168, 24, (value) => onSaveSettings({ dimensions_refresh_hours: value }))}
           />
         </label>
       </div>
+      <div className="mt-4 flex items-center gap-2 text-slate-800">
+        <Clock3 className="h-4 w-4" />
+        <h4 className="text-sm font-semibold">Backfill automático de meses (madrugada)</h4>
+        <InfoHint
+          ariaLabel="Ajuda sobre o backfill automático"
+          side="bottom"
+          title="Meses completos, sem esperar clique manual"
+          description="Todo dia, no horário configurado, o sistema verifica os últimos N meses e importa (mês inteiro) qualquer um que ainda não esteja completo - sem travar a tela, roda em background."
+        />
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-3">
+        <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm">
+          <span className="font-medium text-slate-700">Ligado</span>
+          <input
+            type="checkbox"
+            checked={Boolean(settings?.backfill_enabled ?? true)}
+            disabled={savingSettings || !settings}
+            onChange={(event) => onSaveSettings({ backfill_enabled: event.target.checked })}
+            className="h-4 w-4 rounded border-slate-300"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Hora do dia (0-23)</span>
+          <Input
+            type="number"
+            min={0}
+            max={23}
+            value={runHourDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setRunHourDraft(event.target.value)}
+            onBlur={() => commit(runHourDraft, 0, 23, 3, (value) => onSaveSettings({ backfill_run_hour: value }))}
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Meses verificados</span>
+          <Input
+            type="number"
+            min={1}
+            max={24}
+            value={backfillMonthsDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setBackfillMonthsDraft(event.target.value)}
+            onBlur={() => commit(backfillMonthsDraft, 1, 24, 3, (value) => onSaveSettings({ backfill_lookback_months: value }))}
+          />
+        </label>
+      </div>
+      <OpaImportMonthsPanel months={months} loading={monthsLoading} onReimport={onReimportMonth} />
     </div>
   );
 }
 
-function StatusRow({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
+const MONTH_STATUS_LABEL: Record<string, string> = {
+  complete: "Completo",
+  partial: "Parcial",
+  missing: "Faltando",
+};
+
+const MONTH_STATUS_BADGE: Record<string, string> = {
+  complete: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  partial: "border-amber-200 bg-amber-50 text-amber-700",
+  missing: "border-slate-200 bg-slate-100 text-slate-600",
+};
+
+function monthLabel(yearMonth: string): string {
+  const [year, month] = yearMonth.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, 1));
+  return date.toLocaleDateString("pt-BR", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+function OpaImportMonthsPanel({
+  months,
+  loading,
+  onReimport,
+}: {
+  months: SupportOpaImportMonth[];
+  loading: boolean;
+  onReimport: (yearMonth: string) => void;
+}) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-      <span className="text-xs font-medium text-slate-500">{label}</span>
-      <span className={`text-right text-xs font-semibold ${danger ? "text-red-700" : "text-slate-800"}`}>{value}</span>
+    <div className="mt-4">
+      <div className="flex items-center gap-2 text-slate-800">
+        <Database className="h-4 w-4" />
+        <h4 className="text-sm font-semibold">Meses importados</h4>
+      </div>
+      <p className="mt-1 text-xs text-slate-500">
+        "Completo" = já existiu uma importação de mês inteiro concluída com sucesso. Clique em "Reimportar" pra forçar de novo.
+      </p>
+      {loading ? (
+        <div className="mt-2 h-16 animate-pulse rounded-xl bg-slate-100" />
+      ) : (
+        <ul className="mt-2 flex flex-wrap gap-2">
+          {months.map((month) => (
+            <li
+              key={month.year_month}
+              className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs"
+            >
+              <span className="font-medium capitalize text-slate-700">{monthLabel(month.year_month)}</span>
+              <Badge className={MONTH_STATUS_BADGE[month.status] ?? MONTH_STATUS_BADGE.missing}>
+                {MONTH_STATUS_LABEL[month.status] ?? month.status}
+              </Badge>
+              <button
+                type="button"
+                onClick={() => onReimport(month.year_month)}
+                className="font-medium text-blue-700 hover:underline"
+              >
+                Reimportar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

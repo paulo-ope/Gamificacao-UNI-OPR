@@ -40,6 +40,8 @@ import {
   OpaGlobalFilters,
   OpaAttendantsPanel,
   OPA_NAV_ITEMS,
+  OPA_MAX_PERIOD_DAYS,
+  opaPeriodSpanDays,
   OpaOverview,
   OpaSyncPanel,
   opaStatusLabel,
@@ -69,6 +71,7 @@ import type {
   SupportOpaBreakdownItem,
   SupportOpaBreakdowns,
   SupportOpaFilters,
+  SupportOpaImportMonth,
   SupportOpaOverview,
   SupportOpaSyncSettings,
   SupportOpaSyncStatus,
@@ -230,10 +233,14 @@ function filtersFromParams(params: URLSearchParams): SupportOpaAttendanceFilters
 
 function periodFromParams(params: URLSearchParams) {
   const fallback = defaultPeriod();
-  return {
-    date_from: params.get("date_from") || fallback.date_from,
-    date_to: params.get("date_to") || fallback.date_to,
-  };
+  const date_from = params.get("date_from") || fallback.date_from;
+  const date_to = params.get("date_to") || fallback.date_to;
+  // Um link/URL antigo pode ter guardado um período que hoje excede o limite de 32 dias do
+  // OPA Suite (ex.: alguém tentou puxar meses de uma vez antes desse limite existir na tela) -
+  // sem isso, a tela abriria já travada (Filtrar/Importar desabilitados) sem o usuário ter
+  // feito nada, o que parece um bug em vez de uma URL desatualizada. Achado real, 2026-08-27.
+  if (opaPeriodSpanDays(date_from, date_to) > OPA_MAX_PERIOD_DAYS) return fallback;
+  return { date_from, date_to };
 }
 
 export default function SupportPage() {
@@ -292,6 +299,8 @@ function SupportPageContent() {
   const [attendanceTimelineError, setAttendanceTimelineError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SupportOpaSyncStatus | null>(null);
   const [settings, setSettings] = useState<SupportOpaSyncSettings | null>(null);
+  const [importMonths, setImportMonths] = useState<SupportOpaImportMonth[]>([]);
+  const [importMonthsLoading, setImportMonthsLoading] = useState(false);
   const [attendantOverrides, setAttendantOverrides] = useState<SupportOpaAttendantOverride[]>([]);
   const [attendantOverridesLoading, setAttendantOverridesLoading] = useState(false);
   const [attendantOverridesError, setAttendantOverridesError] = useState<string | null>(null);
@@ -327,6 +336,7 @@ function SupportPageContent() {
       if (canSync) {
         requests.push(api.supportOpaSyncStatus().then(setSyncStatus));
         requests.push(api.supportOpaSyncSettings().then(setSettings));
+        requests.push(loadImportMonths());
       }
       await Promise.all(requests);
       setAppliedPeriod(nextPeriod);
@@ -606,23 +616,59 @@ function SupportPageContent() {
     }
   }
 
-  async function importPeriod() {
+  async function loadImportMonths() {
+    setImportMonthsLoading(true);
+    try {
+      setImportMonths(await api.supportOpaImportMonths());
+    } catch {
+      // Painel é auxiliar - uma falha aqui não deve derrubar o resto da tela.
+    } finally {
+      setImportMonthsLoading(false);
+    }
+  }
+
+  // Achado real de 2026-08-27: import de mês inteiro busca mensagem por mensagem
+  // pra calcular TMR e podia levar minutos rodando dentro da requisição HTTP
+  // (risco de timeout). Agora o backend devolve o run_id na hora e processa em
+  // background - aqui só ficamos perguntando o status a cada 2s até terminar,
+  // mesmo padrão já usado pelo sync do IXC na tela de Agendamento.
+  async function runImportJob(dateFrom: string, dateTo: string) {
     setSyncing(true);
     setError(null);
     setMessage(null);
     try {
-      const result = await api.importSupportOpaPeriod(period);
+      let result = await api.importSupportOpaPeriod({ date_from: dateFrom, date_to: dateTo });
+      while (result.status === "pending" || result.status === "running") {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        result = await api.supportOpaSyncRun(result.run_id);
+      }
+      if (result.status === "failed") {
+        throw new Error("Falha ao importar o período selecionado do OPA Suite.");
+      }
       setMessage(
         `Run #${result.run_id}: ${result.fetched_count} recebido(s) em ${result.pages_processed} página(s), ${result.created_count} criado(s), ` +
         `${result.updated_count} atualizado(s), ${result.unchanged_count} sem alteração, ${result.rejected_count} rejeitado(s).`,
       );
       window.dispatchEvent(new Event("notifications:refresh"));
       await load(period);
+      await loadImportMonths();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Falha ao importar dados do OPA Suite.");
     } finally {
       setSyncing(false);
     }
+  }
+
+  async function importPeriod() {
+    await runImportJob(period.date_from, period.date_to);
+  }
+
+  async function reimportMonth(yearMonth: string) {
+    const [year, month] = yearMonth.split("-").map(Number);
+    const dateFrom = `${yearMonth}-01`;
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const dateTo = `${yearMonth}-${String(lastDay).padStart(2, "0")}`;
+    await runImportJob(dateFrom, dateTo);
   }
 
   async function saveSettings(next: Partial<SupportOpaSyncSettings>) {
@@ -727,10 +773,21 @@ function SupportPageContent() {
           // Um recorte salvo substitui o recorte inteiro — aplicar por cima do
           // que já está na tela misturaria dois filtros e daria um terceiro
           // resultado que o usuário nunca salvou.
-          const nextPeriod = {
+          const savedPeriod = {
             date_from: String(saved.date_from ?? period.date_from),
             date_to: String(saved.date_to ?? period.date_to),
           };
+          // Mesmo problema da URL antiga (ver periodFromParams): um recorte salvo antes do
+          // limite de 32 dias existir na tela pode carregar um período que o backend recusa -
+          // sem isso, aplicar o filtro salvo travava Filtrar/Importar direto, sem o usuário
+          // entender por quê. Achado real, 2026-08-27.
+          const periodTooLong = opaPeriodSpanDays(savedPeriod.date_from, savedPeriod.date_to) > OPA_MAX_PERIOD_DAYS;
+          const nextPeriod = periodTooLong ? defaultPeriod() : savedPeriod;
+          if (periodTooLong) {
+            setMessage(
+              `O período salvo neste filtro (${savedPeriod.date_from} a ${savedPeriod.date_to}) passa de 32 dias e não é mais aceito - ajustado pro mês atual. Os demais critérios do filtro foram aplicados normalmente.`,
+            );
+          }
           const nextFilters: SupportOpaAttendanceFilters = {
             page: 1,
             page_size: attendanceFilters.page_size ?? 25,
@@ -820,8 +877,11 @@ function SupportPageContent() {
                 syncStatus={syncStatus}
                 settings={settings}
                 savingSettings={savingSettings}
+                months={importMonths}
+                monthsLoading={importMonthsLoading}
                 onDraftSettings={(next) => setSettings((current) => current ? { ...current, ...next } : current)}
                 onSaveSettings={(next) => void saveSettings(next)}
+                onReimportMonth={(yearMonth) => void reimportMonth(yearMonth)}
               />
               <OpaAttendantOverridesPanel
                 canManage={canSync}
