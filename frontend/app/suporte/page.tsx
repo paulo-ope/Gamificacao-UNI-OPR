@@ -40,6 +40,8 @@ import {
   OpaGlobalFilters,
   OpaAttendantsPanel,
   OPA_NAV_ITEMS,
+  OPA_MAX_PERIOD_DAYS,
+  opaPeriodSpanDays,
   OpaOverview,
   OpaSyncPanel,
   opaStatusLabel,
@@ -231,10 +233,14 @@ function filtersFromParams(params: URLSearchParams): SupportOpaAttendanceFilters
 
 function periodFromParams(params: URLSearchParams) {
   const fallback = defaultPeriod();
-  return {
-    date_from: params.get("date_from") || fallback.date_from,
-    date_to: params.get("date_to") || fallback.date_to,
-  };
+  const date_from = params.get("date_from") || fallback.date_from;
+  const date_to = params.get("date_to") || fallback.date_to;
+  // Um link/URL antigo pode ter guardado um período que hoje excede o limite de 32 dias do
+  // OPA Suite (ex.: alguém tentou puxar meses de uma vez antes desse limite existir na tela) -
+  // sem isso, a tela abriria já travada (Filtrar/Importar desabilitados) sem o usuário ter
+  // feito nada, o que parece um bug em vez de uma URL desatualizada. Achado real, 2026-08-27.
+  if (opaPeriodSpanDays(date_from, date_to) > OPA_MAX_PERIOD_DAYS) return fallback;
+  return { date_from, date_to };
 }
 
 export default function SupportPage() {
@@ -767,10 +773,21 @@ function SupportPageContent() {
           // Um recorte salvo substitui o recorte inteiro — aplicar por cima do
           // que já está na tela misturaria dois filtros e daria um terceiro
           // resultado que o usuário nunca salvou.
-          const nextPeriod = {
+          const savedPeriod = {
             date_from: String(saved.date_from ?? period.date_from),
             date_to: String(saved.date_to ?? period.date_to),
           };
+          // Mesmo problema da URL antiga (ver periodFromParams): um recorte salvo antes do
+          // limite de 32 dias existir na tela pode carregar um período que o backend recusa -
+          // sem isso, aplicar o filtro salvo travava Filtrar/Importar direto, sem o usuário
+          // entender por quê. Achado real, 2026-08-27.
+          const periodTooLong = opaPeriodSpanDays(savedPeriod.date_from, savedPeriod.date_to) > OPA_MAX_PERIOD_DAYS;
+          const nextPeriod = periodTooLong ? defaultPeriod() : savedPeriod;
+          if (periodTooLong) {
+            setMessage(
+              `O período salvo neste filtro (${savedPeriod.date_from} a ${savedPeriod.date_to}) passa de 32 dias e não é mais aceito - ajustado pro mês atual. Os demais critérios do filtro foram aplicados normalmente.`,
+            );
+          }
           const nextFilters: SupportOpaAttendanceFilters = {
             page: 1,
             page_size: attendanceFilters.page_size ?? 25,

@@ -13,9 +13,1090 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-08-26** — branch `claude/agendamentos-filtros-kpi-5xdjq1`
+**2026-08-29** — branch `claude/suporte-sync-backfill-madrugada`
 
 ## O que foi feito recentemente
+
+- **Fase 2D: aprovação de solicitação de acesso passa a criar a conta direto, sem convite/link
+  manual (backend + frontend + migration aplicada, ainda sem commit, sem push)**: pedido do
+  usuário em 2026-08-29, em três partes - (1) prioridade de sugestão de colaborador na aprovação,
+  (2) aprovar não gera mais convite, a pessoa já define a própria senha ao solicitar, (3) reforço
+  visual de pendências/sugestão em `/admin` (a separação de contas internas/Portal/convites/
+  solicitações já tinha sido entregue na rodada anterior, ver entrada abaixo).
+
+  **Backend**: `submit_access_request` (`services/portal_access_requests.py`) agora reaproveita
+  `find_local_collaborator` (mesma função já usada pelo convite por CPF/IXC, Fase 2C) pra sugerir
+  colaborador com prioridade completa `ixc_employee_id` > CPF > nome - antes só casava por CPF
+  exato. Só entra em jogo quando o nome vem CONFIRMADO pelo IXC (o caminho manual, sem IXC, segue
+  casando só por CPF, porque ali o nome não é verificado). `find_funcionario_identity_by_cpf`
+  (`services/ixc_collaborator_lookup.py`) passou a expor `ixc_employee_id` internamente pra isso -
+  nunca serializado em resposta pública.
+
+  **Mudança de segurança principal**: `PortalAccessRequestCreate` ganhou `new_password`/
+  `confirm_password` (mesmos limites de `PortalInviteAcceptRequest`, min. 8 caracteres) - a pessoa
+  já escolhe a própria senha ao solicitar acesso; só o hash vai para `PortalAccessRequest.
+  password_hash` (coluna nova, nullable - migration `20260829_0084_portal_access_request_password.py`,
+  puramente aditiva). `approve_access_request` não chama mais `create_invite` (Fase 2C) - cria o
+  `User` DIRETO, reaproveitando exatamente o padrão de `accept_invite` (role `collaborator`,
+  `active=True`, senha já hasheada, `must_change_password=False`, `first_access_completed_at=None`
+  - o onboarding da Fase 1 continua rodando depois, normalmente). Continua exigindo
+  `collaborator_id` explícito no corpo (nunca aceito por omissão) e recusa (409) colaborador já
+  vinculado ou e-mail já cadastrado. Solicitação criada ANTES desta coluna existir (havia uma real
+  em uso) fica com `password_hash` nulo - a aprovação recusa com erro claro (422) pedindo reenvio,
+  nunca cria conta sem senha nem apaga o dado antigo. `password_hash` é limpo da solicitação
+  (aprovada ou rejeitada) depois de decidida - minimiza retenção de hash sem propósito. **O
+  convite manual e o convite por CPF/IXC (Fase 2C) continuam exatamente como estavam** - só a
+  aprovação de solicitação de acesso mudou de mecanismo.
+
+  **Frontend**: `access-request-form.tsx` ganhou campos de senha + confirmação nas duas telas
+  finais (achou no IXC / manual), texto de conclusão atualizado (já pode entrar, sem mencionar
+  link). `access-requests-panel.tsx` (`/admin`) ganhou badge "Sugestão por CPF/IXC: {nome}" visível
+  acima do select (antes só um `(sugestão)` discreto dentro da opção) e destaque de fundo nas
+  linhas pendentes; aprovar mostra mensagem de conta criada em vez de abrir banner de link.
+
+  **Testes**: `test_portal_access_requests.py` reescrito - 31 casos (era 23). Novos: prioridade
+  `ixc_employee_id` sobre CPF conflitante; prioridade por nome quando não há match mais forte;
+  senha armazenada como hash (nunca em claro, nem na auditoria); confirmação de senha divergente
+  e senha curta rejeitadas (422); aprovação cria o `User` direto (sem `AccountActionToken`) com
+  todos os campos certos; **login real no `/portal` com o e-mail e a senha da solicitação,
+  depois de aprovado**; solicitação sem senha (legado) recusa aprovação; colaborador/e-mail já
+  vinculado recusa aprovação (409); `password_hash` limpo após aprovar/rejeitar.
+
+  **Validado**: backend **847 passed, as mesmas 13 falhas pré-existentes do módulo AI**; `npx tsc
+  --noEmit`, `npm run test -- --run` (45/45), `npm run build` - limpos. **Validado ao vivo, de
+  ponta a ponta, no navegador real**: solicitação enviada pelo formulário público (CPF de teste
+  sintético, caminho manual) com senha definida na hora → confirmado no banco que só o hash foi
+  gravado e que ele valida a senha digitada → aprovada em `/admin` contra um colaborador QA
+  temporário → confirmado no banco **exatamente 1 `User` criado**, sem nenhum `AccountActionToken`,
+  `password_hash` da solicitação limpo → **login real em `/portal` com o e-mail e a senha
+  cadastrados funcionou**, caiu no onboarding da Fase 1 normalmente (esperado, mesmo
+  comportamento de quem entra por convite). Colaborador, usuário e solicitação de teste apagados
+  ao final (mais as entradas de auditoria correspondentes) - 0 linhas residuais.
+
+  Migration aplicada ao banco real (`docker exec ... alembic upgrade head`, confirmado `alembic
+  current` = `20260829_0084`). Rebuild de produção feito (`docker compose build backend frontend`
+  + `up -d`) - confirmado que a imagem de produção reflete o código novo.
+
+  Arquivos: `backend/app/models.py`,
+  `backend/alembic/versions/20260829_0084_portal_access_request_password.py` (novo, migration
+  aplicada ao banco real), `backend/app/schemas.py`,
+  `backend/app/services/ixc_collaborator_lookup.py`,
+  `backend/app/services/portal_access_requests.py`, `backend/app/api/routes/access_requests.py`,
+  `backend/tests/test_portal_access_requests.py`, `frontend/lib/types.ts`, `frontend/lib/api.ts`,
+  `frontend/components/portal/access-request-form.tsx`, `frontend/app/admin/page.tsx`,
+  `frontend/components/admin/access-requests-panel.tsx`. Sem commit, sem push, sem regra
+  financeira alterada, sem dado real alterado (colaborador/usuário/solicitação eram só QA,
+  apagados ao final).
+
+- **Refatoração visual da Administração + tela inicial sem menção à "Gamificação" (frontend, sem
+  commit, sem push)**: pedido do usuário em 2026-08-29 pra modernizar `/admin` (hoje um arquivo
+  único de 1834 linhas com uma aba "Usuários" misturando contas internas, contas do Portal,
+  convites e solicitações) e ajustar a tela inicial de login.
+
+  **`/admin` quebrado em componentes** dentro de `frontend/components/admin/` - `admin/page.tsx`
+  manteve 100% do estado, handlers e chamadas de API (nada de regra de negócio movida), só o JSX
+  virou orquestração de componentes menores: `admin-overview-panel` (novo painel "Visão geral" -
+  KPIs, cards de pendências clicáveis pra convites/solicitações/estrutura, absorve o conteúdo da
+  antiga aba "Parametrizações"), `accounts-table` + `internal-accounts-panel`/
+  `portal-accounts-panel` (split da antiga tabela única de usuários por `collaborator_id` - null
+  = conta interna, preenchido = conta do Portal, só um filtro visual sobre os mesmos dados),
+  `invites-panel`, `access-requests-panel`, `people-structure-panel`, `profiles-panel` +
+  `profile-editor-drawer`, `modules-panel`, `integrations-panel`, `audit-panel-section`,
+  `user-editor-drawer`, `person-editor-drawer`, `admin-shared.ts` (tipos/constantes/helpers
+  compartilhados). Menu lateral passou de 8 para 10 itens (Visão geral, Contas internas, Contas
+  do Portal, Convites, Solicitações, Pessoas, Perfis, Módulos, Integrações, Auditoria) - "Gestão
+  API/MCP" e a antiga aba "Parametrizações" saíram do menu, mas continuam 100% acessíveis (a
+  primeira pelo card de atalho que já existia dentro de Integrações, a segunda incorporada à Visão
+  geral). `"structure"` manteve o mesmo valor de aba de propósito - `frontend/app/gestao/page.tsx`
+  linka `/admin?tab=structure&person=...` de fora deste arquivo.
+
+  **Tela inicial (`workspace-login.tsx`, variant padrão usada por `/`)**: subtítulo trocado de
+  "Use o mesmo usuário da Gamificação." para "Use seu usuário do UNI Workspace." (única menção a
+  "Gamificação" na tela inicial - conferido não haver outra). Novo botão secundário "Acessar
+  Portal do Colaborador" abaixo do "Entrar", visível só na tela inicial via prop `showPortalLink`
+  (não aparece nos outros 9 logins de módulo que reaproveitam o mesmo componente).
+
+  **Validado**: `npx tsc --noEmit`, `npm run build`, `npm run test -- --run` (45/45) - limpos.
+  Validado ao vivo no navegador com admin QA temporário: os 10 itens do menu, os dois drawers
+  (perfil, colaborador) e o atalho pra "Gestão API/MCP" conferidos um a um contra dados reais
+  (usuários, perfis, módulos, convites e a única solicitação pendente real da época, todos exibidos
+  corretamente, nenhum decidido/alterado); tela inicial conferida em mobile (375px) e desktop, com
+  o botão novo levando a `/portal` corretamente.
+
+  Rebuild de produção feito. Sem migration, sem alteração de backend, sem regra de negócio nova no
+  frontend, sem dado real alterado.
+
+  Arquivos: `frontend/app/admin/page.tsx`, `frontend/components/admin/admin-shared.ts` (novo),
+  `admin-overview-panel.tsx` (novo), `accounts-table.tsx` (novo), `internal-accounts-panel.tsx`
+  (novo), `portal-accounts-panel.tsx` (novo), `invites-panel.tsx` (novo),
+  `access-requests-panel.tsx` (novo), `people-structure-panel.tsx` (novo), `profiles-panel.tsx`
+  (novo), `profile-editor-drawer.tsx` (novo), `modules-panel.tsx` (novo),
+  `integrations-panel.tsx` (novo), `audit-panel-section.tsx` (novo), `user-editor-drawer.tsx`
+  (novo), `person-editor-drawer.tsx` (novo), `frontend/components/workspace/workspace-login.tsx`,
+  `frontend/components/workspace/workspace-home.tsx`.
+
+- **Fase 2D: correção de telefone no autoatendimento por CPF (backend + frontend, sem migration,
+  ainda sem commit, sem push)**: pedido do usuário em 2026-08-29, logo depois da entrega anterior
+  - se o colaborador não reconhecer o telefone que o IXC devolveu (cadastro desatualizado), ele
+  precisa poder atualizar o número que fica salvo, não só recusar ou ser mandado falar com o
+  gestor. **O nome continua intocável** (sempre do IXC, é a confirmação de identidade) - só o
+  telefone ganhou essa flexibilidade, por pedido explícito.
+
+  **Backend**: `submit_access_request` (`services/portal_access_requests.py`) agora dá
+  PRIORIDADE ao telefone que o cliente manda explicitamente sobre o do IXC (antes, o IXC sempre
+  vencia) - continua preferindo o do IXC quando o cliente não manda nada (fluxo normal de
+  confirmação). Auditoria ganhou `phone_source` (`"ixc"` ou `"manual"`, nunca o número em si) pro
+  admin saber, sem dado sensível, se o telefone da solicitação veio confirmado ou corrigido.
+
+  **Frontend**: novo passo "Qual é o seu telefone atual?" em `access-request-form.tsx` - aparece
+  quando a pessoa clica em "Não é o meu" na etapa de confirmação de telefone (antes só reiniciava
+  o fluxo ou apontava pro gestor). O número digitado aí é o que vai no envio, com prioridade sobre
+  o do IXC.
+
+  **Testes**: `test_portal_access_requests.py` ganhou 3 casos novos (23 no total, era 20) -
+  telefone do cliente vence o do IXC quando informado; telefone do IXC continua vencendo quando o
+  cliente não informa nada; nome nunca muda mesmo quando o telefone é corrigido; auditoria grava
+  `phone_source` corretamente nos dois casos.
+
+  **Validado**: backend **839 passed, as mesmas 13 falhas pré-existentes do módulo AI**; `npx tsc
+  --noEmit`, `npm run test -- --run` (45/45), `npm run build` - limpos. **Validado ao vivo, de
+  ponta a ponta, contra a API real do IXC** (mesmo CPF de teste real das duas entregas
+  anteriores): cliquei em "Não é o meu", digitei um telefone diferente do que o IXC tinha,
+  completei o envio - **confirmado no banco que o nome salvo continuou vindo do IXC
+  ("PAULO HENRIQUE ALVES PEIXOTO SOARES") e o telefone salvo foi exatamente o que digitei
+  (`(69) 91234-5678`), não o do IXC**. Solicitação de teste apagada ao final - 0 linhas residuais.
+
+  Rebuild de produção feito (`docker compose build backend frontend` + `up -d`). Sem migration.
+
+  Arquivos: `backend/app/services/portal_access_requests.py`,
+  `backend/tests/test_portal_access_requests.py`,
+  `frontend/components/portal/access-request-form.tsx`. Sem commit, sem push, sem regra
+  financeira alterada, sem migration, sem dado real alterado (linha de teste apagada).
+
+- **Fase 2D redesenhada: autoatendimento por CPF na solicitação de acesso (backend + frontend,
+  sem migration, ainda sem commit, sem push)**: pedido do usuário em 2026-08-29 pra que o próprio
+  colaborador sem acesso digite o CPF, confirme o próprio nome, confirme o próprio telefone (os
+  dois vindos do IXC, nunca digitados) e só então informe o e-mail - sempre digitado por quem
+  solicita, nunca herdado do IXC, e restrito ao domínio corporativo `@souuni.com`.
+
+  **Backend**: novo endpoint público `POST /access-requests/lookup-cpf` (rate limit próprio,
+  10/15min por IP - mais sensível que o de envio, porque revela nome + telefone parcialmente
+  mascarado pra qualquer CPF de dígito verificador válido, não só pra quem de fato é o dono) -
+  novo `lookup_own_identity_by_cpf` em `services/ixc_collaborator_lookup.py`, reaproveita
+  `_fetch_funcionarios_by_cpf` (mesma correção do formato mascarado da entrada anterior). Nunca
+  devolve e-mail, `ixc_employee_id`, departamento, setor ou vínculo local - isso é informação só
+  do admin (`/invites/lookup-ixc-cpf`, Fase 2C). Telefone mascarado parcialmente (DDD + últimos 4
+  dígitos, ex. `(69) ****-8543`) - o suficiente pra a pessoa reconhecer "é o meu número" sem expor
+  o telefone inteiro a quem só adivinhou um CPF válido.
+
+  **`POST /access-requests` redesenhado**: `name`/`phone` agora são OPCIONAIS no schema - só
+  usados como resguardo quando o CPF NÃO é encontrado no IXC (cadastro ainda não sincronizado,
+  preserva a capacidade original do formulário manual). Quando o CPF É encontrado, o servidor
+  **revalida contra o IXC de novo, na mesma chamada de envio, e usa esse nome/telefone como
+  autoridade - nunca o que o cliente mandar** (mesmo princípio de "nunca confia no cliente pra
+  dado que o servidor já pode verificar" já usado em `create_invite_from_ixc`, Fase 2C). `email`
+  ganhou validação de domínio (`field_validator`, rejeita qualquer coisa que não termine em
+  `@souuni.com`, com 422 e mensagem clara).
+
+  **Frontend**: `components/portal/access-request-form.tsx` virou um assistente em etapas (CPF →
+  confirma nome → confirma telefone → e-mail → enviado), com fallback pro formulário manual
+  original quando o CPF não é encontrado no IXC - preserva essa capacidade, não regride.
+
+  **Testes**: `backend/tests/test_portal_access_requests.py` reescrito (20 casos, era 13) -
+  cobre a busca própria (achado/não achado/CPF inválido nunca consulta/auditoria mascarada), o
+  envio ignorando nome/telefone forjados pelo cliente quando o IXC encontra, o fallback manual
+  quando não encontra (com e sem dados preenchidos), e-mail fora do domínio corporativo rejeitado,
+  e todos os casos antigos de sugestão/duplicação/aprovação/rejeição adaptados pro novo contrato.
+
+  **Validado**: backend **836 passed, as mesmas 13 falhas pré-existentes do módulo AI**; `npx tsc
+  --noEmit`, `npm run test -- --run` (45/45), `npm run build` - limpos. **Validado ao vivo, de
+  ponta a ponta, contra a API real do IXC** (mesmo CPF de teste real da correção anterior): CPF →
+  nome real apareceu pra confirmação → telefone mascarado apareceu pra confirmação → e-mail fora
+  do domínio corporativo rejeitado no cliente (sem chamar o servidor) → e-mail corporativo aceito
+  → solicitação enviada com sucesso, **confirmado no banco que nome e telefone gravados vieram do
+  IXC** (não foram digitados em nenhuma etapa). Solicitação de teste apagada ao final (usava CPF
+  de uma pessoa real só para validar o fluxo) - 0 linhas residuais. Auditoria confirmada sem CPF
+  completo em nenhuma entrada, incluindo as do autoatendimento público.
+
+  Rebuild de produção feito (`docker compose build backend frontend` + `up -d`). Sem migration
+  (nenhuma coluna/tabela nova).
+
+  Arquivos: `backend/app/schemas.py`, `backend/app/services/ixc_collaborator_lookup.py`,
+  `backend/app/services/portal_access_requests.py`, `backend/app/api/routes/access_requests.py`,
+  `backend/tests/test_portal_access_requests.py`, `frontend/lib/types.ts`, `frontend/lib/api.ts`,
+  `frontend/components/portal/access-request-form.tsx`. Sem commit, sem push, sem regra
+  financeira alterada, sem migration, sem dado real alterado (linha de teste apagada).
+
+- **Correção: busca por CPF no IXC não achava funcionário que existia de verdade (backend, sem
+  commit, sem push)**: o usuário reportou em 2026-08-29 que o CPF `70240110250` (dígito
+  verificador válido) não era encontrado na busca por CPF/IXC recém-implementada. Investigado ao
+  vivo, direto contra a API real (não só teste): **`funcionarios.cpf_cnpj` nesta instalação do
+  IXC guarda o CPF COM MÁSCARA** (`702.401.102-50`), não só dígitos - confirmado consultando o
+  campo com os dois formatos manualmente (mascarado achou 1 registro na hora; só dígitos, 0). A
+  implementação original normalizava o CPF pra dígitos puros antes de consultar (seguindo a
+  instrução literal do pedido original e o padrão do resto do projeto, onde `Collaborator.cpf`
+  guarda só dígitos) - certo em geral, errado especificamente pra esse campo do IXC.
+
+  **Corrigido em `services/ixc_collaborator_lookup.py`**: nova função `_fetch_funcionarios_by_cpf`
+  tenta primeiro o formato mascarado (`format_cpf_with_mask`, novo em `services/documents.py`,
+  reaproveitável por qualquer integração futura que precise do mesmo formato) - confirmado como o
+  formato real desta instalação; só tenta dígitos puros depois, como resguardo pra um eventual
+  registro legado gravado sem máscara, nunca o contrário (evita pagar uma segunda chamada no caso
+  comum). **`OP: IN` com os dois formatos numa única chamada foi tentado e descartado** - o
+  webservice desta instalação devolve uma página de erro (`RESPOSTA_INVALIDA`) pra `IN` com
+  valores contendo pontuação, achado também ao vivo contra a API real.
+
+  **Validado ao vivo, contra a API real, antes e depois da correção**: antes, `70240110250` → 404
+  "não encontrado"; depois, mesmo CPF → encontra "Paulo Henrique Alves Peixoto Soares" (funcionário
+  #378, ativo), na primeira tentativa (sem precisar do fallback). Testes novos em
+  `test_ixc_collaborator_lookup.py` (+2, agora 18 no arquivo) fixam os dois casos - mascarado
+  encontrado de primeira, e o fallback pra dígitos puros quando o mascarado não bate. Suíte
+  completa: **829 passed, as mesmas 13 falhas pré-existentes do módulo AI** (nada novo quebrado).
+
+  **Achado operacional**: os containers do projeto tinham caído (provavelmente reinício da
+  máquina/Docker Desktop - `docker ps -a` mostrou os três com `Exited (137)`/`Exited (143)`,
+  código de SIGKILL) - subidos de novo antes de investigar. Rebuild de produção feito depois da
+  correção (`docker compose build backend` + `up -d`) - confirmado ao vivo contra a imagem nova
+  que o CPF agora é encontrado. Sem migration (mudança é só na consulta ao IXC, nenhuma tabela
+  nova).
+
+  Arquivos: `backend/app/services/documents.py` (`format_cpf_with_mask`, novo),
+  `backend/app/services/ixc_collaborator_lookup.py`,
+  `backend/tests/test_ixc_collaborator_lookup.py`. Sem commit, sem push, sem regra financeira
+  alterada, sem migration, sem dado real alterado.
+
+- **Fase 2C estendida: convite inteligente por CPF integrado ao IXC (backend + frontend, sem
+  migration, ainda sem commit, sem push)**: pedido do usuário em 2026-08-29 pra resolver o maior
+  atrito do convite manual - o admin tinha que saber de cor o `collaborator_id` certo e digitar
+  o e-mail à mão, sem nenhuma confirmação de que estava vinculando a pessoa certa. Contexto já
+  validado pelo usuário antes de pedir a implementação: tabela `funcionarios` do IXC (~864
+  registros) é a fonte correta de colaborador (RH/técnico de campo) - **nunca** `cliente`
+  (assinante de contrato); filtro `funcionarios.cpf_cnpj = <CPF>` devolve exatamente 1
+  funcionário; campos `id`, `funcionario`, `cpf_cnpj`, `email`, `fone_celular`, `ativo`,
+  `id_departamento`, `id_setor_padrao` confirmados presentes.
+
+  **Segurança crítica corrigida ANTES de usar a busca por CPF** (pré-requisito do próprio
+  pedido): `IxcClient.list` (`services/ixc_client.py`) logava o valor bruto de qualquer filtro em
+  nível INFO - inofensivo até então (só id/data/status já eram filtrados na integração
+  existente), mas vira vazamento sério assim que uma busca por `funcionarios.cpf_cnpj` passa a
+  existir. Corrigido pra mascarar CPF/CNPJ (reaproveita `mask_document` de
+  `services/documents.py`, mesmo formato `***.***.***-NN`), e-mail (`fu***@dominio.com`) e
+  telefone (`***NNNN`) antes de logar - **confirmado ao vivo, contra a API real do IXC**, não só
+  em teste: o log mostrou `filtros=[funcionarios.cpf_cnpj = ***.***.***-35]`, nunca o CPF cru.
+  Os logs úteis de tabela/página/rp/total/duração continuam intactos.
+
+  **Backend**: novo service `services/ixc_collaborator_lookup.py` e dois endpoints em
+  `api/routes/invites.py` (reaproveita o router da Fase 2C, não cria um módulo novo):
+  - `POST /invites/lookup-ixc-cpf` (admin, `users:manage`) - CPF vai no CORPO, nunca em
+    URL/query string; valida formato (`is_valid_cpf`, mesma função da Fase 1); consulta
+    `funcionarios.cpf_cnpj = <CPF>`; devolve nome/e-mail/telefone/ativo/departamento/setor +
+    `cpf_masked` (nunca o CPF completo); tenta correspondência local por `ixc_employee_id` → CPF
+    → nome normalizado, nessa ordem de força - sempre uma SUGESTÃO, nunca vínculo automático
+    (princípio da seção 2 do documento de planejamento). CPF não encontrado → 404 controlado;
+    múltiplos resultados (nunca deveria acontecer, CPF é único) → 409, exige revisão manual;
+    falha de rede do IXC → 502 controlado, sem stack trace.
+  - `POST /invites/from-ixc` - **revalida o CPF contra o IXC de novo**, dentro da mesma chamada
+    que cria o convite (nunca confia em dado ecoado de uma busca anterior vinda do cliente).
+    `collaborator_id` é sempre exigido explicitamente no corpo, mesmo quando bate com a sugestão
+    automática - nunca aceito por omissão. Enriquece o `Collaborator` (preenche
+    `ixc_employee_id`/CPF/e-mail/telefone só quando estão VAZIOS - nunca sobrescreve valor já
+    cadastrado; diverge do que já existe → bloqueia com 409, mesmo princípio "confirma, nunca
+    sobrescreve" da Fase 1, estendido a `ixc_employee_id` porque esse campo também é usado pela
+    Operação Analítica pra casar colaborador com técnico de O.S. - trocá-lo por engano
+    reatribuiria esse histórico pra outra pessoa) e só então chama `create_invite` (Fase 2C
+    original, sem duplicar a lógica de token/expiração). **Sem `Collaborator` local
+    correspondente, o sistema NÃO cria um cadastro novo sozinho** - `role`/`regional` (campos
+    obrigatórios do modelo) não vêm dessa busca, e inventar um placeholder poluiria uma entidade
+    usada por outros módulos; a busca continua útil (mostra nome/e-mail), mas exige cadastro
+    manual do colaborador antes de convidar.
+  - Auditoria própria (`entity="ixc_collaborator"`) pra toda consulta - achada, não achada,
+    ambígua ou erro - sempre com CPF mascarado, **commitada mesmo quando a consulta termina em
+    erro** (a tentativa de consulta não pode se perder por causa de `get_db` não fazer rollback
+    automático). Enriquecimento audita separado (`entity="collaborators"`,
+    `action="collaborator.enriched_from_ixc"`), só quando algo de fato muda.
+
+  **Frontend**: novo componente `components/admin/ixc-cpf-invite-panel.tsx` - card com header em
+  gradiente (`uni-gradient`, mesma linguagem visual do login/portal), campo de CPF com máscara
+  (reaproveita `formatCpf`/`isValidCpf` de `lib/masks.ts`, não duplicado), botão "Buscar no IXC"
+  com loading, estado encontrado (nome, e-mail, telefone, CPF mascarado, badge ativo/inativo,
+  alerta quando o colaborador sugerido já tem conta ou convite pendente - cruza com
+  `peopleStructure`/`invites` que a página já carrega, sem endpoint novo só pra isso), estado não
+  encontrado com orientação clara, estado de erro amigável. "Gerar convite" só habilita depois de
+  escolher explicitamente o colaborador (pré-preenchido com a sugestão, mas sempre editável) e
+  confirmar o e-mail. Sucesso reaproveita o mesmo banner "copie agora" já usado pra convite manual
+  e senha temporária. Adicionado em `/admin`, acima do card de convite manual (que continua
+  existindo, renomeado "Convite manual e histórico", pra quando o colaborador ainda não estiver
+  no IXC).
+
+  **Testes novos**: `backend/tests/test_ixc_collaborator_lookup.py` (11 casos) - CPF inválido
+  nunca chega a consultar o IXC; usuário sem permissão não consulta (403); CPF não encontrado
+  (404) e erro de API (502) controlados, sem stack trace, auditados com CPF mascarado; múltiplos
+  resultados exigem revisão manual (409); CPF encontrado devolve dados seguros (CPF nunca
+  completo na resposta nem na auditoria); sugestão por `ixc_employee_id` já vinculado; convite
+  usa o `ixc_employee_id` corretamente e enriquece só os campos vazios; não duplica colaborador
+  quando já existe (por CPF); bloqueia CPF conflitante (409) e `ixc_employee_id` conflitante
+  (409), sem criar convite nesses casos. `backend/tests/test_ixc_client_log_masking.py` (5 casos)
+  - CPF/CNPJ/e-mail/telefone nunca em claro no log; filtros não sensíveis (ids, datas, status) e
+  os campos de tabela/página/rp/total/duração continuam aparecendo normalmente.
+
+  **Validado**: backend **827 passed, as mesmas 13 falhas pré-existentes do módulo AI** (nada
+  novo quebrado, os 16 testes novos incluídos no total); `npx tsc --noEmit`, `npm run test --
+  run` (45/45), `npm run build` - limpos. **Sem infraestrutura de teste de componente React
+  neste projeto** (sem `@testing-library/react`/jsdom) - a cobertura de máscara de CPF/loading/
+  estados pedida no escopo foi feita por leitura cuidadosa do componente + validação ao vivo
+  abaixo, não por teste automatizado de UI; registrado aqui como limitação real, não omitido em
+  silêncio.
+
+  **Validado ao vivo, contra a API real do IXC** (não só contra fake em teste): CPF de formato
+  inválido bloqueado antes de qualquer chamada ao IXC; CPF de formato válido mas sem funcionário
+  correspondente fez o round-trip completo contra o `funcionarios` real (206ms, confirmado no log
+  mascarado) e mostrou o estado "não encontrado" corretamente na tela; máscara de CPF confirmada
+  no campo do formulário. **O caminho "encontrado + gerar convite" não foi testado ao vivo contra
+  um funcionário real** - de propósito: exigiria usar o CPF de uma pessoa real da empresa e criar
+  um convite de verdade pra ela, uma ação com efeito real que não deveria ser disparada por mim
+  sem uma pessoa específica autorizada; esse caminho está coberto pelos 11 testes automatizados
+  (com IXC fake) e pela leitura cuidadosa do fluxo - fica como validação recomendada pro usuário
+  fazer com um CPF real da própria escolha. Usuário admin QA temporário criado e apagado só pra
+  esta validação, 0 linhas residuais.
+
+  **Rebuild de produção feito** (`docker compose build backend frontend` + `up -d`) - sem
+  migration nesta entrega (nenhuma tabela nova, só service/rotas/schemas novos e a correção de
+  log), então não há achado de banco à frente do código desta vez.
+
+  Arquivos: `backend/app/services/ixc_client.py` (mascaramento de log), `backend/app/schemas.py`,
+  `backend/app/services/ixc_collaborator_lookup.py` (novo),
+  `backend/app/api/routes/invites.py`, `backend/tests/test_ixc_collaborator_lookup.py` (novo),
+  `backend/tests/test_ixc_client_log_masking.py` (novo), `frontend/lib/types.ts`,
+  `frontend/lib/api.ts`, `frontend/components/admin/ixc-cpf-invite-panel.tsx` (novo),
+  `frontend/app/admin/page.tsx`,
+  [`docs/portal-ciclo-vida-conta-colaborador.md`](portal-ciclo-vida-conta-colaborador.md) (seção
+  5.1 nova). Sem commit, sem push, sem regra financeira alterada, sem migration, sem dado real
+  alterado além do enriquecimento opt-in que só acontece quando um admin confirma um convite
+  (nenhum aconteceu nesta validação).
+
+- **Correção: revogar convite e rejeitar solicitação de acesso não funcionavam de verdade
+  (frontend, sem commit, sem push)**: o usuário reportou em 2026-08-29 que não conseguia deletar
+  um convite nem recusar uma solicitação de acesso em `/admin` (Fase 2C/2D). Causa raiz encontrada
+  ao reproduzir ao vivo: as duas ações (e mais quatro outras já existentes na mesma tela) dependiam
+  de `window.confirm()`/`window.prompt()` nativos do navegador - `window.prompt()` chegou a lançar
+  uma exceção não tratada (`prompt() is not supported.`) e `window.confirm()` podia ser
+  silenciosamente ignorado, dependendo do contexto de navegador/ambiente (iframe, extensão,
+  política de segurança) - a ação simplesmente não fazia nada, sem erro visível pro usuário.
+
+  **Corrigido reaproveitando componentes já existentes no projeto** (não inventado do zero):
+  `hooks/use-confirm.tsx` (`useConfirm`, já usado em `app/gamificacao/page.tsx`) substitui todo
+  `window.confirm()` por um diálogo controlado (`components/ui/dialog.tsx`, Radix). Criado
+  `hooks/use-prompt.tsx` (novo, mesmo padrão do `useConfirm`, mas devolve o texto digitado em vez
+  de um booleano - não existia equivalente pra `window.prompt()` no projeto) pra substituir o
+  `window.prompt()` do motivo de rejeição.
+
+  **Seis ações corrigidas em `app/admin/page.tsx`** (todas usavam diálogo nativo, mesma causa
+  raiz): revogar convite, rejeitar solicitação de acesso, aprovar solicitação de acesso, forçar
+  troca de senha, forçar primeiro acesso completo, excluir usuário, excluir perfil de acesso -
+  corrigidas juntas porque são o mesmo defeito, não seis defeitos separados (ver
+  `manual_desenvolvimento_senior.md` seção 3.1, "não corrigir apenas o efeito visível quando há
+  causa raiz identificável no mesmo escopo).
+
+  **Validado**: `npx tsc --noEmit`, `npm run test -- --run` (45/45), `npm run build` - limpos.
+  Confirmado ao vivo, sem nenhum stub/simulação (diferente da validação de fases anteriores, que
+  precisava contornar a supressão de diálogo nativo do navegador de teste - aqui não há mais
+  diálogo nativo nenhum): revogar convite abre o diálogo, mostra "Revogar o convite de
+  [email]?", clique em "Revogar" chama a API de verdade (200) e atualiza a lista; rejeitar
+  solicitação abre o diálogo com campo de texto, botão "Rejeitar" fica desabilitado até haver
+  texto digitado, confirma e chama a API (200), toast "Solicitação rejeitada." aparece. Dados QA
+  criados só para reproduzir e validar (1 admin, 1 colaborador, 2 convites, 1 solicitação) - todos
+  apagados ao final, 0 linhas residuais. Confirmado que dados reais pré-existentes na mesma tela
+  (um convite revogado e uma solicitação pendente de pessoas reais) permaneceram intocados durante
+  toda a reprodução e correção.
+
+  Arquivos: `frontend/hooks/use-prompt.tsx` (novo), `frontend/app/admin/page.tsx`. Sem commit, sem
+  push, sem alteração de backend, sem migration, sem regra financeira, sem dado real alterado.
+
+- **Fase 2D do Portal implementada: solicitação de acesso (backend + frontend + migration
+  aplicada, ainda sem commit, sem push)**: pedido do usuário em 2026-08-28 para implementar a
+  sub-fase 2D descrita em
+  [`docs/portal-ciclo-vida-conta-colaborador.md`](portal-ciclo-vida-conta-colaborador.md) seção 6 -
+  canal formal pra quem não tem conta nem convite pedir acesso, dependia da Fase 2C já existir
+  (aprovar gera um convite, não duplica a criação de conta).
+
+  **Modelo de dados**: `PortalAccessRequest` (tabela `portal_access_requests`, `models.py`) -
+  exatamente o desenho da seção 8 do documento de planejamento. Migration
+  `20260828_0083_portal_access_requests.py` (aditiva, só cria a tabela nova).
+
+  **Backend**: novo router `api/routes/access_requests.py` (`/access-requests`), novo service
+  `services/portal_access_requests.py`:
+  - `POST /access-requests` (**pública, sem autenticação**) - nome/CPF/telefone/e-mail, mesma
+    validação de CPF da Fase 1 (`is_valid_cpf`/`normalize_document`); tenta correspondência
+    automática por CPF contra `Collaborator` (só SUGESTÃO, nunca vínculo - princípio de segurança
+    da seção 2); dedup silenciosa contra solicitação pendente com o mesmo CPF (atualiza em vez de
+    duplicar a fila); **resposta sempre genérica** (`{"received": true}`) - nunca revela se o
+    CPF/e-mail já existe no sistema, nem se era um reenvio, seguindo a regra da seção 9 à risca.
+    Rate limiting próprio (10/15min por IP, mesmo padrão de `/invites/accept`).
+  - `GET /access-requests` (admin, `users:manage`) - lista com `cpf_masked` (nunca o CPF completo,
+    nem pro admin).
+  - `POST /access-requests/{id}/approve` (admin) - `collaborator_id` é **sempre exigido no corpo**,
+    mesmo quando bate com `suggested_collaborator_id` - nunca aceito por omissão. Aprovar chama
+    `create_invite` (reaproveita a Fase 2C direto, não duplica a criação de conta) e devolve o
+    token do convite uma única vez, igual ao fluxo direto de convite.
+  - `POST /access-requests/{id}/reject` (admin) - exige `decision_reason` não vazio.
+  - Só solicitação `pending` pode ser decidida (409 em decisão duplicada).
+
+  **Frontend**: seção "Solicitações de acesso" nova em `/admin` (aba Usuários, abaixo de
+  Convites) - CPF mascarado, select de colaborador (pré-preenchido com a sugestão quando existe,
+  mas sempre exigindo confirmação explícita pra aprovar), rejeitar pede motivo
+  (`window.prompt`). Tela pública nova `/solicitar-acesso`
+  (`components/portal/access-request-form.tsx`) - mesmo padrão visual das outras telas da Fase 2,
+  reaproveita `formatCpf`/`formatPhone`/`isValidCpf` de `lib/masks.ts`; tela de sucesso sempre
+  genérica, sem confirmar nem negar que os dados já existiam. `WorkspaceLogin.helperText` passou a
+  aceitar `ReactNode` (era só `string`) para o Portal (`app/portal/page.tsx`) linkar
+  "/solicitar-acesso" no lugar do texto estático anterior ("peça ao seu gestor") - só usuário desse
+  prop antes, sem quebra.
+
+  **Testes novos**: `backend/tests/test_portal_access_requests.py` (13 casos) - resposta pública
+  sempre genérica; CPF inválido rejeitado (422); sugestão de colaborador por CPF (com e sem
+  correspondência); reenvio com mesmo CPF atualiza em vez de duplicar; não-admin não lista nem
+  decide (403); listagem sempre com CPF mascarado; aprovar gera convite com o `collaborator_id`
+  exato informado (não o da sugestão, ainda que iguais); aprovar sem `collaborator_id` é rejeitado
+  mesmo havendo sugestão (422); decisão duplicada é rejeitada (409) tanto para aprovar quanto para
+  rejeitar; rejeitar exige motivo; auditoria nunca guarda CPF completo. Fixture de teste própria
+  (`_reset_submit_rate_limit`) pra isolar o rate limiter entre testes - achado real: sem isso, o
+  contador em memória (mesmo padrão do `/auth/login`) acumulava entre os 13 testes do arquivo e um
+  no meio do caminho tomava 429 em vez do status esperado (só isolamento de teste, não muda o
+  rate limiter de verdade).
+
+  **Validado**: backend **811 passed, as mesmas 13 falhas pré-existentes do módulo AI** (nada novo
+  quebrado); `npx tsc --noEmit`, `npm run test -- --run` (45/45), `npm run build` - limpos (rota
+  `/solicitar-acesso` nova aparece no build). Fluxo completo validado ao vivo: solicitação enviada
+  pelo navegador de verdade em `/solicitar-acesso` (tela de sucesso genérica confirmada); seção
+  "Solicitações de acesso" em `/admin` conferida visualmente (CPF mascarado, select de colaborador,
+  botões Aprovar/Rejeitar) - **decisão de aprovar/rejeitar feita por chamada direta de API, não
+  clique na tela**, para não repetir o incidente da rodada anterior (a tabela de admin tem linhas
+  de dados reais ao lado das de teste); aprovação gerou convite com o `collaborator_id` exato;
+  rejeição registrou o motivo e bloqueou nova decisão (409). Confirmado que um convite PRÉ-EXISTENTE
+  de uma pessoa real (não criado por mim) na mesma tela permaneceu intocado durante toda a
+  validação. Todos os dados QA (2 solicitações, 1 convite gerado, 1 colaborador, 1 admin) apagados
+  ao final, 0 linhas residuais.
+
+  **Achado operacional (mesmo padrão das duas entregas anteriores, resolvido nesta rodada)**:
+  alternar o backend pro modo dev pra rodar os testes aplicou a migration `20260828_0083`
+  automaticamente ao Postgres real via entrypoint. Resolvido reconstruindo as duas imagens
+  (`docker compose build backend frontend`) antes da validação ao vivo - confirmado `alembic
+  current` = `head` = `20260828_0083`, rotas `/api/access-requests` respondendo, `/solicitar-acesso`
+  respondendo 200, tabela `portal_access_requests` com **0 linhas** ao final. A imagem de produção
+  agora reflete todo o código até a Fase 2D.
+
+  Arquivos: `backend/app/models.py`, `backend/alembic/versions/20260828_0083_*.py` (novo, migration
+  aplicada ao banco real), `backend/app/schemas.py`,
+  `backend/app/services/portal_access_requests.py` (novo),
+  `backend/app/api/routes/access_requests.py` (novo), `backend/app/main.py`,
+  `backend/tests/test_portal_access_requests.py` (novo), `frontend/lib/types.ts`,
+  `frontend/lib/api.ts`, `frontend/app/admin/page.tsx`, `frontend/app/portal/page.tsx`,
+  `frontend/app/solicitar-acesso/page.tsx` (novo),
+  `frontend/components/portal/access-request-form.tsx` (novo),
+  `frontend/components/workspace/workspace-login.tsx`. Sem commit, sem push, sem regra financeira
+  alterada, sem dado real alterado (tabela nova permanece vazia; o convite real pré-existente de
+  outra pessoa foi conferido intocado).
+
+  **Próxima sub-fase recomendada: 2E (esqueci minha senha)** - ver
+  `docs/portal-ciclo-vida-conta-colaborador.md` seção 7. Reaproveita a mesma tabela
+  `account_action_tokens` da Fase 2C (`purpose="password_reset"`) - antes dela, avaliar o risco já
+  registrado de não existir infraestrutura de e-mail no projeto (seção 12): sem isso, o link de
+  reset não tem como ser entregue automaticamente.
+
+- **Fase 2C do Portal implementada: convite seguro com token (backend + frontend + migration
+  aplicada, ainda sem commit, sem push)**: pedido do usuário em 2026-08-28 para implementar a
+  sub-fase 2C descrita em
+  [`docs/portal-ciclo-vida-conta-colaborador.md`](portal-ciclo-vida-conta-colaborador.md) seção 5 -
+  primeira sub-fase da Fase 2 que precisa de tabela nova.
+
+  **Modelo de dados**: `AccountActionToken` (tabela `account_action_tokens`, `models.py`) -
+  compartilhada entre convite (`purpose="invite"`, implementado agora) e reset de senha por
+  e-mail (`purpose="password_reset"`, Fase 2E futura), exatamente como o documento de
+  planejamento (seção 8) desenhou, pra não duplicar o mecanismo de token depois. Migration
+  `20260828_0082_account_action_tokens.py` (aditiva, só cria a tabela nova).
+
+  **Backend**: novo router `api/routes/invites.py` (`/invites`), novo service
+  `services/portal_invites.py`:
+  - `POST /invites` (admin, `users:manage`) - cria convite com `email` + `collaborator_id`
+    (obrigatório - é aqui que o vínculo é fixado, princípio de segurança da seção 2) + `role`
+    (default `"collaborator"`); gera token com `secrets.token_urlsafe(32)`, guarda só o HASH
+    (`hash_password`, mesmo algoritmo de `hash_api_key`); expira em 72h
+    (`INVITE_EXPIRES_HOURS`); rejeita colaborador já vinculado, e-mail/CPF inválido e convite
+    pendente duplicado (409).
+  - `GET /invites` (admin) - lista convites; `status` exibido (`pending`/`accepted`/`revoked`/
+    `expired`) é sempre CALCULADO na leitura para expiração (uma consulta GET nunca escreve no
+    banco) - só criação/aceite/revogação mudam a coluna de verdade.
+  - `POST /invites/{id}/revoke` (admin) - só convite `pending` pode ser revogado.
+  - `GET /invites/accept?token=` e `POST /invites/accept` (**públicas, sem autenticação** - é
+    assim que a conta nasce) - a primeira só confirma se o convite ainda vale (pra tela mostrar
+    e-mail/colaborador antes do formulário); a segunda valida o token (hash, expiração, uso
+    único), cria o `User` com `collaborator_id` EXATAMENTE igual ao do convite, senha escolhida
+    pela própria pessoa (`must_change_password=False` - diferente de `create_user`, aqui não é
+    senha temporária de admin) e devolve um token de acesso (mesmo formato do login) pra entrar
+    direto no Portal. **Decisão registrada explicitamente, como o documento pedia**: o convite só
+    resolve a senha inicial - `first_access_completed_at` continua `None` de propósito, então o
+    onboarding da Fase 1 (CPF/telefone/e-mail) roda normalmente depois, sem duplicar essa coleta
+    dentro do fluxo de convite. Rate limiting próprio em `/invites/accept` (10 tentativas/15min
+    por IP, mesmo padrão de `/auth/login`, implementado à parte para não mexer no login por causa
+    disso).
+
+  **Frontend**: seção "Convites de colaborador" nova na tela `/admin` (aba Usuários, abaixo da
+  tabela) - formulário (colaborador ainda sem usuário + e-mail) reaproveitando
+  `peopleStructure.people` que a aba "Estrutura" já carrega (nenhum endpoint novo só pra listar
+  colaborador); tabela de convites com badge de status e revogar; link de convite revelado uma
+  vez no mesmo padrão "copie agora" já usado pra chave de API e senha temporária. Tela pública
+  nova `/convite` (`app/convite/page.tsx` + `components/portal/invite-accept.tsx`) - mesmo
+  padrão visual de `WorkspaceLogin`/`FirstAccessOnboarding` (painel azul responsivo, logo branca),
+  valida o token, formulário de senha, ao concluir guarda o token de acesso e manda pro `/portal`
+  (que já mostra o onboarding da Fase 1 sozinho).
+
+  **Testes novos**: `backend/tests/test_portal_invites.py` (13 casos) - token nunca em claro no
+  banco; não-admin não cria convite (403); colaborador inexistente (404) ou já vinculado (409);
+  convite duplicado pendente (409); aceite cria a conta com o `collaborator_id` exato do convite e
+  a senha escolhida pela própria pessoa; aceite ainda deixa o primeiro acesso pendente (confirma
+  bloqueio real do portal); confirmação de senha divergente (422); token usado ou expirado não
+  pode ser reaproveitado; listagem mostra "expirado" sem escrever isso no banco; revogar convite
+  pendente e impedir reaceite; revogar duas vezes rejeita (409); auditoria nunca guarda token nem
+  senha.
+
+  **Validado**: backend **795 passed, as mesmas 13 falhas pré-existentes do módulo AI** (nada novo
+  quebrado, os 13 testes novos incluídos); `npx tsc --noEmit`, `npm run test -- --run` (45/45),
+  `npm run build` - limpos (rota `/convite` nova aparece no build). Fluxo completo validado ao vivo
+  com admin e colaborador QA temporários: convite criado via API, tela `/convite` renderiza e
+  valida o token corretamente, formulário de senha aceito pelo navegador de verdade → login
+  automático → redirecionado ao `/portal` → onboarding da Fase 1 disparado (CPF/contato), exatamente
+  como desenhado; conferido direto no banco que `collaborator_id`, senha e os dois campos da Fase 1
+  ficaram certos. Todos os dados QA apagados ao final (usuário, colaborador, convite), 0 linhas
+  residuais.
+
+  **Achado operacional durante a validação (resolvido nesta mesma rodada)**: alternar o backend
+  para o modo dev (bind mount, pra rodar os testes) faz o entrypoint rodar `alembic upgrade head`
+  automaticamente contra o Postgres real - isso **aplicou a migration `20260828_0082` ao banco
+  real** sem um comando explícito meu (mesmo mecanismo, não uma ação nova). Como é puramente
+  aditiva (tabela nova, vazia, nenhuma coluna existente tocada), o risco é baixo, mas isso deixou a
+  imagem de produção (código antigo, sem o router `/invites`) com o banco à frente do código -
+  estado inconsistente. Resolvido reconstruindo as duas imagens (`docker compose build backend
+  frontend`) e subindo de novo: confirmado `alembic current` = `head` = `20260828_0082`, rotas
+  `/api/invites` respondendo, `/convite` respondendo 200, tabela `account_action_tokens` com
+  **0 linhas** antes e depois de toda a validação (nenhum dado real tocado). Diferente das
+  entregas anteriores desta sessão, **a imagem de produção agora reflete todo o código até a Fase
+  2C**, não só até a Fase 1.
+
+  **Achado real fora do escopo, sinalizado para tarefa separada (não corrigido aqui)**:
+  `create_user`/`update_user` (`api/routes/users.py`) gravam `snapshot(item)` inteiro no
+  `AuditLog.after_data`, o que inclui `password_hash` - diferente de todo o resto da Fase 2
+  (2A/2B/2C), que sempre monta um before/after explícito sem senha. Sinalizado via tarefa em
+  segundo plano, não alterado nesta entrega (fora do escopo da Fase 2C).
+
+  Arquivos: `backend/app/models.py`, `backend/alembic/versions/20260828_0082_*.py` (novo, **migration
+  aplicada ao banco real** - ver achado operacional acima), `backend/app/schemas.py`,
+  `backend/app/services/portal_invites.py` (novo), `backend/app/api/routes/invites.py` (novo),
+  `backend/app/main.py`, `backend/tests/test_portal_invites.py` (novo), `frontend/lib/types.ts`,
+  `frontend/lib/api.ts`, `frontend/app/admin/page.tsx`, `frontend/app/convite/page.tsx` (novo),
+  `frontend/components/portal/invite-accept.tsx` (novo). Sem commit, sem push, sem regra
+  financeira alterada, sem dado real alterado (tabela nova permanece vazia).
+
+  **Próxima sub-fase recomendada: 2D (solicitação de acesso)** - ver
+  `docs/portal-ciclo-vida-conta-colaborador.md` seção 6. Depende desta 2C já existir (aprovar uma
+  solicitação deve gerar um convite, não duplicar a criação de conta).
+
+- **Fase 2B do Portal implementada: reset administrativo de senha e forçar primeiro acesso
+  (backend + frontend, ainda sem commit, sem push)**: pedido do usuário em 2026-08-28 para
+  implementar a sub-fase 2B descrita em
+  [`docs/portal-ciclo-vida-conta-colaborador.md`](portal-ciclo-vida-conta-colaborador.md) seção 4 -
+  duas ações administrativas distintas, resolvendo a pendência "painel admin pra resetar primeiro
+  acesso" registrada várias vezes nas entradas anteriores deste log.
+
+  **Backend**: dois endpoints novos em `api/routes/users.py`, ambos atrás de `users:manage` (mesma
+  permissão de `create_user`/`update_user`):
+  - `POST /users/{id}/force-password-reset` - gera uma senha temporária aleatória
+    (`generate_temporary_password`, novo em `core/security.py`, usa `secrets.choice` sobre um
+    alfabeto sem caracteres ambíguos como `0/O/1/l/I` - é lida e digitada por uma pessoa, diferente
+    de `secrets.token_urlsafe` já usado pra chave de API), grava o hash, força
+    `must_change_password=True` e **retorna a senha temporária em texto puro só nesta resposta,
+    uma única vez** - nunca fica em log nem em auditoria. **Não mexe em
+    `first_access_completed_at`** - só reseta a senha, de propósito, ação distinta da outra.
+  - `POST /users/{id}/force-first-access` - zera `first_access_completed_at` **e** força
+    `must_change_password=True` juntos (mesmo estado "pendente" de um colaborador recém-criado em
+    `create_user`) - reabre CPF/telefone/e-mail, não só a senha. Rejeita (422) usuário sem
+    `collaborator_id` - primeiro acesso não existe pra quem não representa um colaborador.
+  - Lógica em `services/account_security.py` (`admin_force_password_reset`,
+    `admin_force_first_access`), reaproveitando 100% o gate já existente da Fase 1
+    (`require_portal_access`/`portal_first_access_pending`) - nenhuma lógica de bloqueio nova.
+    Auditoria (`action="user.password_reset_forced"` / `"user.first_access_reset"`) sem a senha
+    temporária em nenhuma forma. Schema `AdminForcePasswordResetOut` (`schemas.py`).
+
+  **Frontend**: dois botões novos na tabela de usuários já existente em `/admin`
+  (`app/admin/page.tsx`) - ícone `KeyRound` ("Forçar troca de senha", todo usuário) e `RotateCcw`
+  ("Forçar primeiro acesso completo", só quando `collaborator_id` existe), ambos atrás de
+  `canWriteUsers`, com confirmação antes de agir. A senha temporária gerada aparece num banner
+  âmbar "Copie agora - não será mostrada de novo" - reaproveita **literalmente o mesmo padrão
+  visual** já usado em `components/admin/ai-governance-panel.tsx` pra revelar uma chave de API
+  nova, em vez de inventar um componente novo. `api.forcePasswordReset`/`api.forceFirstAccessReset`
+  novos em `lib/api.ts`.
+
+  **Testes novos**: `backend/tests/test_admin_account_reset.py` (8 casos) - senha temporária
+  funciona de verdade e bloqueia o portal até trocar; `first_access_completed_at` não é tocado
+  pelo reset de senha; primeiro acesso reaberto não toca na senha atual; rejeita usuário sem
+  `collaborator_id`; ambos os endpoints exigem `users:manage` (403 sem a permissão); 404 pra
+  usuário inexistente; auditoria nunca guarda a senha temporária.
+
+  **Validado**: backend **782 passed, as mesmas 13 falhas pré-existentes do módulo AI** (nada novo
+  quebrado, os 8 testes novos incluídos); `npx tsc --noEmit`, `npm run test -- --run` (45/45),
+  `npm run build` - limpos.
+
+  **Achado real durante a validação no navegador (corrigido na hora)**: um clique de teste
+  (coordenada de tela, não por seletor) acabou acertando, por engano, o botão de "forçar primeiro
+  acesso" de um **colaborador real** (`WILKER MENEZES DE OLIVEIRA`, `users.id=66`) em vez da conta
+  QA - a tabela de usuários reflow/reordenou entre uma ação e outra. Detectado imediatamente ao
+  conferir o `AuditLog` (entrada `user.first_access_reset` com o autor sendo o admin QA temporário)
+  e **revertido na hora, direto no banco, para o estado exato anterior** (`must_change_password` e
+  `first_access_completed_at` restaurados com o mesmo timestamp que o próprio audit log
+  registrava) - confirmado depois que o colaborador real ficou exatamente como estava antes,
+  0 dado real alterado ao final. A partir daí, a validação do segundo endpoint passou a ser feita
+  por chamada HTTP direta (mesmo JWT do admin QA, sem clique de UI) para eliminar esse risco -
+  confirmado que `force-first-access` bloqueia o portal (`403 Conclua seu primeiro acesso`) e que
+  `force-password-reset` gera uma senha que realmente autentica. Usuários e colaborador QA temporários
+  apagados ao final, 0 linhas residuais (além da conta real já restaurada).
+
+  **Achado operacional**: como nas entregas anteriores, a imagem de produção rodando agora **não
+  contém** este código (só validado em modo dev) - precisa de rebuild antes de ir para produção.
+
+  Arquivos: `backend/app/core/security.py`, `backend/app/schemas.py`,
+  `backend/app/services/account_security.py`, `backend/app/api/routes/users.py`,
+  `backend/tests/test_admin_account_reset.py` (novo), `frontend/lib/types.ts`, `frontend/lib/api.ts`,
+  `frontend/app/admin/page.tsx`. Sem commit, sem push, sem migration, sem regra financeira alterada,
+  sem dado real alterado ao final (o toque acidental foi revertido na mesma sessão).
+
+  **Próxima sub-fase recomendada: 2C (convite seguro com token)** - ver
+  `docs/portal-ciclo-vida-conta-colaborador.md` seção 5. Antes dela, avaliar o risco já registrado
+  de não existir infraestrutura de e-mail no projeto (seção 12).
+
+- **Fase 2A do Portal implementada: troca de senha pelo próprio usuário (backend + frontend,
+  ainda sem commit, sem push)**: pedido do usuário em 2026-08-28 para implementar a sub-fase 2A
+  descrita em [`docs/portal-ciclo-vida-conta-colaborador.md`](portal-ciclo-vida-conta-colaborador.md)
+  seção 3 - primeira sub-fase da Fase 2, a de menor risco, sem tabela nova.
+
+  **Backend**: `POST /auth/change-password` (novo, `api/routes/auth.py`) - só exige autenticação
+  (`get_current_user`), sem `require_portal_access` nem permissão de módulo, porque vale pra
+  qualquer usuário do ecossistema (admin, operador, colaborador...), não só quem tem
+  `collaborator_id`. Lógica em `services/account_security.py` (novo,
+  `change_own_password`): confirma a senha atual (`verify_password`), exige nova senha ≠
+  confirmação, exige nova senha ≠ senha atual, grava `password_hash`/`password_changed_at` - **não
+  mexe em `must_change_password` nem `first_access_completed_at`** (troca voluntária não é
+  primeiro acesso, ao contrário da Fase 1). Schema `ChangePasswordRequest` (`schemas.py`) reaproveita
+  a mesma política mínima de 8 caracteres da Fase 1. Auditoria via `record_audit_log`
+  (`action="change_own_password"`) sem a senha em nenhuma forma, nem hash.
+
+  **Frontend**: nova seção "Trocar senha" dentro de `ProfileSettings`
+  (`components/portal/profile-settings.tsx`), a tela "Perfil" que já existia no Portal - card
+  próprio com senha atual/nova/confirmação, mostrar/ocultar senha, campos limpos após sucesso.
+  `api.changePassword` novo em `lib/api.ts`.
+
+  **Testes novos**: `backend/tests/test_change_password.py` (7 casos) - sucesso mantém
+  `must_change_password`/`first_access_completed_at` intocados; senha atual errada (401);
+  confirmação divergente (422); nova igual à atual (422); senha fraca (422); usuário interno sem
+  `collaborator_id` também consegue trocar (a 2A não é exclusiva do Portal); auditoria sem senha em
+  nenhuma forma.
+
+  **Validado**: backend **774 passed, as mesmas 13 falhas pré-existentes do módulo AI** (nada novo
+  quebrado, os 7 testes novos incluídos no total); `npx tsc --noEmit`, `npm run test -- --run`
+  (45/45), `npm run build` - limpos. Navegador (modo dev temporário, revertido pro modo produção ao
+  final), com usuário e colaborador QA temporários (senha conhecida só para o teste, apagados ao
+  final, 0 linhas residuais): senha atual incorreta → "Senha atual incorreta." sem alterar nada;
+  fluxo correto → sucesso, campos limpos; confirmado direto no banco que a senha nova passou a
+  validar e a antiga não, e que `must_change_password`/`first_access_completed_at` continuam
+  exatamente como estavam antes da troca.
+
+  **Achado operacional**: como nas entregas anteriores desta sessão, a imagem de produção rodando
+  agora **não contém** este código (só foi validado em modo dev, com bind mount) - precisa de
+  rebuild (`docker compose build backend frontend`) antes de ir para produção de fato.
+
+  Arquivos: `backend/app/schemas.py`, `backend/app/api/routes/auth.py`,
+  `backend/app/services/account_security.py` (novo), `backend/tests/test_change_password.py`
+  (novo), `frontend/lib/api.ts`, `frontend/components/portal/profile-settings.tsx`. Sem commit,
+  sem push, sem migration (reaproveita colunas da Fase 1), sem dado real alterado.
+
+  **Próxima sub-fase recomendada: 2B (reset administrativo e forçar primeiro acesso)** - ver
+  `docs/portal-ciclo-vida-conta-colaborador.md` seção 4.
+
+- **Fase 2 do Portal estruturada em documento próprio (só documentação, sem commit, sem
+  push)**: pedido do usuário em 2026-08-28 para documentar o ciclo de vida da conta do
+  colaborador depois do primeiro acesso obrigatório (Fase 1) - a pendência que já
+  aparecia registrada duas vezes nesta mesma entrada de log ("painel admin pra
+  acompanhar e resetar primeiro acesso") agora tem plano detalhado.
+
+  Novo documento: [`docs/portal-ciclo-vida-conta-colaborador.md`](portal-ciclo-vida-conta-colaborador.md)
+  - princípio de segurança (colaborador troca a própria senha e completa o próprio
+    cadastro, mas nunca escolhe o próprio `collaborator_id` - esse vínculo só nasce de
+    admin, convite ou aprovação de solicitação);
+  - cinco sub-fases: **2A** troca de senha pelo próprio usuário, **2B** reset
+    administrativo e forçar primeiro acesso, **2C** convite seguro com token, **2D**
+    solicitação de acesso, **2E** esqueci minha senha;
+  - modelo de dados sugerido (`account_action_tokens` compartilhada entre convite e
+    reset de senha, `portal_access_requests` para a fila de solicitação);
+  - regras de segurança, ordem recomendada de implementação, critérios de aceite por
+    fase e riscos com mitigação - incluindo o risco real já identificado de **não
+    existir nenhuma infraestrutura de envio de e-mail no projeto hoje**, o que bloqueia
+    a entrega automática de convite (2C) e reset de senha (2E) até existir um serviço
+    mínimo de envio.
+
+  **Próxima implementação recomendada: Fase 2A (troca de senha pelo próprio
+  usuário)** - menor risco, nenhuma tabela nova, reaproveita 100% do que a Fase 1 já
+  criou (`verify_password`, `hash_password`, `password_changed_at`).
+
+  Também atualizado: [`docs/00-TRILHA-0.md`](00-TRILHA-0.md) (novo documento adicionado
+  ao índice comentado).
+
+  **Nenhum código, migration, dado real, commit ou push nesta entrega** - só os três
+  arquivos de documentação citados.
+
+- **Card azul (painel de marca) também no mobile do login/onboarding do Portal (sem commit, sem
+  push)**: pedido do usuário em 2026-08-28, logo depois da troca de logo pra branca: no mobile, o
+  painel `uni-gradient` era `hidden md:flex` - sumia por completo, sobrava só a logo colorida
+  pequena e o formulário branco puro, sem o mesmo acabamento do desktop. Trocado pra aparecer em
+  toda largura de tela: como o container pai já usa `md:grid-cols-[1fr_1.1fr]` (1 coluna abaixo de
+  `md`), bastou tirar o `hidden` do painel gradiente pra ele empilhar sozinho acima do formulário no
+  mobile, sem precisar duplicar nenhum bloco de markup.
+
+  **O que aparece no card azul do mobile**: logo branca, selo (ex. "Portal do Colaborador"), título
+  e subtítulo - mesmo conteúdo do desktop. **O que fica só a partir de `md`**: a lista de destaques
+  (`highlights`) e o rodapé "UNI Internet · Ecossistema operacional", pra não empurrar os campos de
+  e-mail/senha pra fora da primeira tela num celular. Como consequência, o bloco de
+  título/subtítulo que existia duplicado dentro do formulário (visível em toda largura antes) agora
+  só aparece a partir de `md` - no mobile, ele ficaria colado embaixo do título que o card azul já
+  mostra, uma repetição sem função; o mesmo vale pro `<img>` de logo colorida que ficava solto no
+  topo do formulário no mobile - removido, porque a logo branca do card azul já cumre esse papel.
+  Afeta `frontend/components/workspace/workspace-login.tsx` (todos os 9 logins de módulo, já que é
+  o componente compartilhado) e `frontend/components/portal/first-access-onboarding.tsx`.
+
+  **Validações executadas**: `npx tsc --noEmit`, `npm run test -- --run` (45/45), `npm run build` -
+  limpos. Navegador em 375px (modo dev temporário, revertido pro modo produção ao final): `/suporte`
+  e `/portal` deslogados com card azul completo no topo (logo, selo, título, subtítulo), formulário
+  branco embaixo, sem overflow horizontal (`scrollWidth === clientWidth`); onboarding de primeiro
+  acesso também com card azul no mobile, validado com usuário+colaborador QA temporários
+  (`must_change_password=true`, apagados ao final, 0 linhas residuais); desktop conferido sem
+  regressão (lista de destaques e título duplicado no formulário continuam só a partir de `md`,
+  como já era); console sem erro novo.
+
+  **Sem push, sem alteração de backend, sem migration, sem regra financeira, sem dado real tocado.**
+
+- **Logo branca no painel escuro do login/onboarding do Portal (sem commit, sem push)**: pedido do
+  usuário em 2026-08-28 pra trocar a logo colorida por uma versão branca nas áreas escuras/gradiente
+  do login e do onboarding de primeiro acesso, melhorando contraste. Puramente visual/asset - nenhum
+  fluxo de login, CPF, senha, permissão, regra financeira ou dado real foi tocado; nenhum arquivo de
+  backend foi aberto para edição nesta rodada.
+
+  **Asset**: `frontend/public/brand/uni-logo-white.png` (novo arquivo, 804×535, mesma arte-base da
+  logo colorida existente, PNG com canal alpha real). Validado visualmente antes de usar: dimensão
+  natural igual à logo colorida; transparência real confirmada (mapa de alpha gerado via
+  PowerShell/`System.Drawing`, já que o host Windows não tem Python instalado); composição sobre um
+  fundo azul sólido aproximando `--uni-midnight` mostrou a marca "uni Internet" nítida, sem
+  artefatos. A varredura de bounding box (alpha>10 e alpha>128) já mostrava a arte ocupando quase
+  todo o canvas 804×535 - **sem espaço vazio sobrando pra recortar**, então o arquivo foi usado como
+  veio, sem crop.
+
+  **Onde foi usada**: só no `<img>` do painel gradiente (`uni-gradient`, fundo escuro) de
+  `frontend/components/workspace/workspace-login.tsx` e
+  `frontend/components/portal/first-access-onboarding.tsx` - `object-contain` adicionado (faltava),
+  `self-start` mantido (evita o bug antigo de esticar a logo, já documentado nesses arquivos),
+  `h-9 w-auto` mantido (mesma proporção 804:535, sem distorção). Como `WorkspaceLogin` é o
+  componente compartilhado por **todos os 9 logins** de módulo (Suporte, Gestão, Operação etc.), a
+  troca vale pra todos eles no painel escuro - validado ao vivo que `/suporte` continua correto. O
+  `<img>` do painel branco/mobile (`md:hidden`) **continua com a logo colorida** em ambos os
+  arquivos, como pedido - nenhuma mudança de espaçamento foi necessária (badge/título/subtítulo
+  intactos), porque a nova logo tem exatamente a mesma proporção natural da colorida.
+
+  **Validações executadas**: `npx tsc --noEmit`, `npm run test -- --run` (45/45), `npm run build` -
+  todos limpos. Navegador, modo dev temporário (`docker compose -f docker-compose.yml -f
+  docker-compose.dev.yml up -d`, revertido pro modo produção ao final): `/portal` deslogado com logo
+  branca nítida sobre o gradiente, proporção 804:535 preservada no render (`naturalWidth/Height` vs.
+  `getBoundingClientRect` conferidos via JS); `/suporte` (logo compartilhada) sem quebra; onboarding
+  de primeiro acesso validado com usuário e colaborador QA temporários (`must_change_password=true`,
+  criados e apagados só pra este teste, nenhuma senha real usada, 0 linhas residuais confirmadas
+  depois) - logo branca renderiza igual no painel do onboarding; mobile 375px sem overflow
+  horizontal (`scrollWidth === clientWidth`); console sem erro novo (só os 401/403 esperados de
+  fluxo deslogado/pendente, já existentes antes desta mudança).
+
+  **Sem push, sem alteração de backend, sem migration, sem regra financeira, sem dado real tocado.**
+  `git status --branch` confirma o branch local sem `[ahead]` do remoto - nada commitado nesta
+  rodada.
+
+- **Checkpoint seguro do Portal/primeiro acesso: risco de imagem de produção divergente
+  RESOLVIDO (sem commit, sem push)**: pedido do usuário em 2026-08-28 pra revalidar o estado real
+  e preparar o ambiente pra não quebrar por divergência entre banco e imagem. Nenhuma feature nova,
+  nenhuma regra de negócio alterada - só checkpoint e operação.
+
+  **Estado real revalidado, idêntico ao das duas entradas anteriores**: `alembic current` e
+  `alembic heads` == `20260828_0081 (head)` (cadeia linear, sem branching); as 3 colunas
+  (`must_change_password`, `first_access_completed_at`, `password_changed_at`) confirmadas em
+  `users` no Postgres real; **13 usuários, 0 pendentes, 0 forçados** - backfill continua íntegro,
+  nada mudou desde a aplicação da migration.
+
+  **Rebuild de produção FEITO nesta rodada** (`docker compose build backend` +
+  `docker compose build frontend`, depois `docker compose up -d backend frontend`) - resolve
+  definitivamente o aviso operacional registrado nas duas entradas anteriores. Confirmado ao vivo:
+  o entrypoint rodou `alembic upgrade head` **sem erro** (a imagem agora contém o arquivo da
+  migration `0081`, então reconcilia com o banco - que já estava em `head` - em vez de falhar com
+  `Can't locate revision`); container subiu saudável, sem bind mount de dev, `uvicorn` rodando sem
+  `--reload` (modo produção real, não dev); `GET /portal` → 200; `GET /api/auth/me` e
+  `GET /api/portal/summary` → 401 sem token (correto) e 200 com token de usuário real autenticado,
+  `portal_first_access_required:false` confirmado pra usuário já onboardado.
+  **O risco de "subir a imagem antiga e falhar" não existe mais** - a imagem rodando agora é a
+  mesma que subiria em um restart/deploy real.
+
+  **Validações executadas**: backend (`test_portal_first_access.py` + `test_portal_profile.py` +
+  `test_portal_dashboard.py` + `test_portal_run_selection.py` + `test_portal_team_summary.py`) -
+  **48/48 passed**; `npx tsc --noEmit`, `npm run test -- --run` (45/45), `npm run build` - limpos.
+  Navegador, **contra a imagem de produção recém-reconstruída** (não mais modo dev), com usuário e
+  colaborador de teste criados e apagados só para a validação (nenhum dado real tocado): deslogado
+  com logo nítido; senha errada → "Email ou senha inválidos."; login válido sem pendência → entra
+  direto no portal; mesmo usuário revertido pra pendente → onboarding aparece; onboarding
+  concluído numa aba nova (sem nenhuma ação de teste anterior) → CPF/telefone/e-mail salvos
+  corretamente, **console sem nenhum erro**; mobile 375px sem overflow horizontal
+  (`scrollWidth === clientWidth`).
+
+  **Estado final dos containers**: `opr-gamification-backend` e `opr-gamification-frontend`
+  saudáveis, rodando as imagens reconstruídas nesta rodada (modo produção, sem bind mount);
+  `opr-gamification-db` saudável, inalterado.
+
+  **Sem push.** `git status --branch` confirma o branch local no mesmo commit do remoto
+  (`origin/claude/suporte-sync-backfill-madrugada`, sem `[ahead]`) - tudo que existe desde a
+  Fase 1 até este checkpoint está só no working tree, não commitado.
+
+  **Sugestão de commits para quando houver autorização** (não executado): ver seção própria
+  abaixo, "Commits sugeridos (checkpoint 2026-08-28)".
+
+  **Pendência real declarada (Fase 2, fora do escopo)**: painel admin pra acompanhar e resetar
+  primeiro acesso - hoje só existe o campo `must_change_password` no banco, sem tela.
+
+- **Rodada final de validação e refinamento visual do login/onboarding do Portal (só frontend,
+  sem commit)**: pedido do usuário em 2026-08-28 depois da Fase 1 já estar com a migration
+  aplicada - confirmar o estado real do ambiente e polir o visual, sem mudar regra de negócio.
+  **Nenhuma linha de backend foi tocada nesta rodada** - não apareceu bug bloqueante causado pela
+  Fase 1 (a única condição que autorizaria mexer lá).
+
+  **Estado real confirmado**: `alembic current` → `20260828_0081 (head)`; as 3 colunas
+  (`must_change_password`, `first_access_completed_at`, `password_changed_at`) existem em `users`
+  no Postgres real; **13 usuários, 0 pendentes** (backfill continua íntegro); containers
+  `opr-gamification-backend`/`frontend` saudáveis, rodando em modo dev (`docker-compose.dev.yml`)
+  pelo motivo já registrado na entrada anterior.
+
+  **Bug real encontrado e corrigido - o logo "grande/borrado/esticado" que o usuário reportou**:
+  não era resolução de imagem, era CSS. `<img className="h-10 w-auto">` dentro de um container
+  `flex-col` sem `align-items` explícito herda `stretch` (o padrão do flexbox) - o navegador
+  ignorava a proporção natural da imagem (804×535) e forçava o elemento a ocupar 100% da largura
+  do painel, medido ao vivo em **367×40px** (proporção ~9:1) onde deveria ser ~60×40px (proporção
+  ~1,5:1, a da imagem original). Corrigido com `self-start` nos dois componentes
+  (`workspace-login.tsx`, `first-access-onboarding.tsx`) - o logo agora renderiza nítido, na
+  proporção certa, em qualquer um dos 9 lugares que usam `WorkspaceLogin`.
+
+  **Outros refinamentos visuais** (`WorkspaceLogin` e `FirstAccessOnboarding`, mesma linguagem
+  visual nos dois):
+  - proporção do grid ajustada de `1fr/1fr` pra `1fr/1.1fr` - formulário ganha um pouco mais de
+    espaço, painel de marca fica menos "genérico 50/50";
+  - **novo achado durante a validação visual**: ao adicionar a lista de destaques, o
+    `justify-between` do painel zerou o espaço entre o último item e o rodapé (`gap` medido em
+    **0px** via DOM) - o conteúdo do meio cresceu e passou a ocupar 100% do espaço que o
+    `justify-between` tinha pra distribuir. Trocado por um espaçador flexível
+    (`<div className="flex-1" />`) + margem mínima garantida (`mt-8`) no rodapé, que não colapsa
+    mesmo sem espaço sobrando - confirmado depois em 32px de gap real;
+  - foco ciano (`--ring`, token global usado em todo o app) suavizado só nestas duas telas pra
+    `#2d5fff` (`--uni-royal`, a cor primária do produto) via `focus-visible:ring-[#2d5fff]` local -
+    **o token global não foi alterado**, então nenhuma outra tela do sistema muda de comportamento;
+  - hierarquia de texto reforçada (`tracking-tight` nos títulos, `leading-relaxed` na descrição);
+  - **elementos úteis, não decorativos, adicionados só na variante `portal`** (`WorkspaceLogin`
+    ganhou um campo `highlights` por variante - vazio pro `workspace` genérico, preenchido só pro
+    portal, pra não impor copy específica do Portal nos outros 8 logins que usam o mesmo
+    componente): "Acesso seguro e individual", "Só os seus próprios dados", "Pontuação, O.S. e
+    fechamento", "Mesmo login do ecossistema UNI". No onboarding: "CPF só confirma quem é você",
+    "Nunca exibido por completo depois", "Senha nova, só sua, a partir de agora";
+  - reforço textual de que o CPF é confirmação cadastral: texto de ajuda dinâmico abaixo do campo
+    - "É só uma confirmação de identidade - o CPF já cadastrado não muda" quando já existe CPF, ou
+    a explicação de privacidade quando ainda não existe. CPF continua sempre mascarado
+    (`***.***.***-XX`) quando já cadastrado, nunca completo em tela nenhuma - comportamento da
+    Fase 1, não tocado.
+
+  **Validado ao vivo, com usuário e colaborador de teste criados e apagados só para a validação
+  (nenhum dado real tocado)**: `/portal` deslogado → visual novo confirmado; senha errada → "Email
+  ou senha inválidos." com o mesmo visual; login válido com primeiro acesso pendente → onboarding
+  com logo nítido, CPF já cadastrado mostrando "Confirme seu CPF (cadastrado como ***.***.***-25)"
+  e o texto de reforço certo; máscaras de CPF e telefone testadas digitando de verdade
+  (`529.982.247-25`, `(69) 99999-0000`); conclusão → CPF confirmado sem sobrescrever, telefone e
+  e-mail salvos, `AuditLog` conferido no banco sem CPF completo nem senha; mobile 375px sem
+  overflow horizontal (`scrollWidth === clientWidth`); console **sem nenhum erro** numa aba nova
+  que só passou pelo fluxo válido (os 401 vistos em abas anteriores eram os testes deliberados de
+  senha errada, não erro novo). `/suporte` (variante `workspace`, sem lista de destaques)
+  conferido sem regressão - mesma copy de sempre, só o logo e a proporção mudaram.
+
+  **Validações executadas**: `npx tsc --noEmit`, `npm run test -- --run` (45/45), `npm run build` -
+  limpos. Backend: `test_portal_first_access.py` + `test_portal_profile.py` +
+  `test_portal_dashboard.py` + `test_portal_run_selection.py` + `test_portal_team_summary.py` -
+  **48/48 passed**, sem precisar de mudança de banco (nenhum arquivo de backend foi alterado nesta
+  rodada).
+
+  **Aviso operacional (repetido da entrada anterior, continua valendo)**: a imagem de produção
+  atual (última reconstruída, antes da Fase 1) não contém o arquivo da migration `20260828_0081` -
+  o Postgres real já está na revisão `head`, então **subir essa imagem antiga vai falhar**
+  (`Can't locate revision identified by '20260828_0081'`, confirmado ao vivo). Antes de qualquer
+  restart ou deploy em produção, é obrigatório reconstruir a imagem com o código atual (`docker
+  compose build backend`). Isso não foi feito nesta rodada porque não foi pedido.
+
+  **Pendência real declarada (Fase 2, fora do escopo)**: painel admin pra acompanhar e resetar
+  primeiro acesso - hoje só existe o campo `must_change_password` no banco, sem tela.
+
+  Arquivos: `frontend/components/workspace/workspace-login.tsx`,
+  `frontend/components/portal/first-access-onboarding.tsx`. Nenhum arquivo de backend, migration
+  ou dado real alterado. Sem commit, sem push.
+
+- **Fase 1 do primeiro acesso obrigatório do colaborador no Portal (backend + frontend, ainda sem
+  commit; migration aplicada - ver o parágrafo "Migration aplicada" mais abaixo nesta mesma
+  entrada, e a entrada mais recente acima para a rodada de validação/refinamento visual)**: pedido
+  do usuário em 2026-08-28 para forçar CPF/telefone/e-mail + troca de senha no primeiro acesso,
+  antes de ver ranking, O.S., auditoria ou qualquer dado financeiro/operacional individual.
+
+  **Campos novos em `users`** (migration `20260828_0081_users_first_access.py`): `must_change_password` (bool, default false), `first_access_completed_at` (datetime
+  nullable - `NULL` é o sinal canônico de "nunca completou"), `password_changed_at` (datetime
+  nullable, informativo). **A migration faz backfill de `first_access_completed_at = created_at`
+  para toda linha já existente** - sem isso, todo colaborador que já usa o portal hoje seria
+  bloqueado retroativamente na primeira requisição depois do deploy. Só usuário **novo** criado com
+  `collaborator_id` (`create_user`, api/routes/users.py) nasce com `must_change_password=true`.
+
+  **Bloqueio real no backend**: `require_portal_access` (core/security.py), um wrapper de
+  `require_permission` trocado 1:1 em toda rota de `portal.py` (nunca espalhado rota por rota, pra
+  não ter como esquecer uma) - se `user.collaborator_id` existe e (`must_change_password` OU
+  `first_access_completed_at is None`), devolve 403 com mensagem amigável. Usuário interno
+  (admin/operator/viewer sem `collaborator_id`) nunca é afetado. As duas rotas de onboarding (`GET
+  /portal/first-access/status`, `POST /portal/first-access/complete`) usam só `get_current_user` -
+  gatear elas também criaria um círculo sem saída.
+
+  **CPF**: `backend/app/services/documents.py` (novo) centraliza `normalize_document`,
+  `mask_document` (nunca CPF completo pro frontend) e `is_valid_cpf` (dígito verificador módulo
+  11, que não existia em lugar nenhum do projeto antes). `_mask_document`/`_normalize_document` de
+  `modules/admin/router.py` foram promovidas pra lá em vez de duplicadas - o admin agora importa
+  do mesmo lugar. Se o colaborador já tem CPF cadastrado, o primeiro acesso CONFIRMA (precisa
+  bater) e nunca sobrescreve; se não tem, o primeiro acesso é quem grava.
+
+  **Senha**: não existia política de senha no projeto - mínimo de 8 caracteres introduzido
+  especificamente para esta troca (decisão nova, registrada como tal, não "política existente"
+  reaproveitada).
+
+  **Auditoria**: `complete_first_access` grava em `AuditLog` sem CPF completo (só mascarado) e sem
+  senha em nenhuma forma (nem hash, nem indicação de tamanho) - testado explicitamente
+  (`test_audit_log_never_stores_full_cpf_or_password`).
+
+  **Frontend**: `FirstAccessOnboarding` (novo, `components/portal/first-access-onboarding.tsx`) -
+  mesma linguagem visual do `WorkspaceLogin` modernizado (painel `.uni-gradient` + formulário),
+  três seções (Identificação/Contato/Nova senha), máscara de CPF e telefone
+  (`frontend/lib/masks.ts`, novo - não existia utilitário de máscara no projeto), validação de CPF
+  no cliente (mesmo algoritmo do backend, só feedback imediato - quem decide é sempre o servidor).
+  `useWorkspaceAuth` ganhou `refresh()` (reconsulta `/auth/me` sem novo login) - usado depois de
+  completar o onboarding pra sair do estado de pendência sem reload de página inteira.
+  `portal/page.tsx` ganhou um gate novo: `user.portal_first_access_required` (calculado no backend,
+  em `serialize_user`/`UserOut`, o frontend só lê) decide entre onboarding e portal normal.
+
+  **Testes**: `backend/tests/test_portal_first_access.py` (novo, 13 casos) cobre as 8 cenários
+  pedidos - pendente bloqueia as 4 rotas nomeadas, status/complete continuam alcançáveis, CPF já
+  cadastrado confirma, CPF ausente grava, CPF divergente recusa (409) sem mudar nada, senha ≠
+  confirmação recusa, senha fraca recusa, CPF com dígito verificador inválido recusa, admin nunca é
+  bloqueado, auditoria sem CPF/senha, usuário novo nasce pendente, usuário "antigo" (backfill)
+  continua liberado. `frontend/lib/masks.test.ts` (novo, 10 casos) cobre CPF/telefone/checksum.
+
+  **Migration aplicada em 2026-08-28, autorizada explicitamente pelo usuário.** Rodou pelo
+  entrypoint padrão do container (`alembic upgrade head` na subida). Backfill conferido no banco:
+  13 usuários existentes, **0 ficaram pendentes, 0 com `must_change_password` forçado** - ninguém
+  foi bloqueado retroativamente.
+
+  **Achado operacional durante a aplicação**: o `lifespan` do app roda `ensure_initial_admin`/
+  `ensure_access_profiles` direto contra o Postgres real (`SessionLocal()`, não o `get_db` que os
+  testes sobrescrevem) - não existe banco de teste separado neste projeto. Antes da migration, isso
+  já quebrava **13 testes que existiam desde antes desta entrega** (`test_portal_profile.py`,
+  `test_management_cases.py`, `test_opa_backfill.py`) com `UndefinedColumn`, característica
+  estrutural do projeto, não regressão. Depois de aplicar a migration, a imagem de produção antiga
+  (não reconstruída, sem o arquivo da migration) passou a falhar ao subir
+  (`Can't locate revision identified by '20260828_0081'`) - alembic não consegue reconciliar um
+  banco que já está numa revisão que o histórico local não conhece. **Efeito prático**: o ambiente
+  só roda de forma saudável no modo dev (`docker-compose.dev.yml`, código via bind mount) até a
+  imagem de produção ser reconstruída com o código atual - não fiz esse rebuild/publish porque não
+  foi pedido nesta tarefa (só a migration foi autorizada).
+
+  **Validado ao vivo, tudo confirmado**: `npx tsc --noEmit`, `npm run test -- --run` (45/45),
+  `npm run build` - limpos. Backend: **767 passed, as mesmas 13 falhas pré-existentes do módulo
+  AI** (nada novo quebrado) - inclui os 13 testes que estavam bloqueados antes da migration, agora
+  passando de novo. Navegador, com usuário e colaborador de teste criados e apagados só para a
+  validação (nenhum dado real tocado): deslogado → tela de login nova; senha errada → "Email ou
+  senha inválidos."; login válido com primeiro acesso pendente → tela de onboarding (rótulo
+  "Cadastre seu CPF", máscaras de CPF/telefone corretas em tempo real digitando de verdade);
+  conclusão → CPF gravado só em dígitos, telefone com máscara (mesmo padrão do `/portal/profile`
+  já existente), `auditLogs` confirmado sem CPF completo (`cpf_masked: "***.***.***-25"`) nem
+  senha em nenhuma forma; logout + login de novo com a senha nova → entra direto no portal, sem
+  onboarding; mesma conta, segunda passagem pelo onboarding revertido manualmente → campos vêm
+  pré-preenchidos (`GET /first-access/status`) e o rótulo do CPF muda pra "Confirme seu CPF
+  (cadastrado como ***.***.***-25)"; mobile 375px sem overflow horizontal
+  (`scrollWidth === clientWidth`).
+
+  **Pendência real declarada (Fase 2, fora do escopo desta entrega)**: painel admin pra acompanhar
+  e resetar primeiro acesso (hoje só existe o campo `must_change_password` no banco, sem tela pra
+  um admin forçar reset manualmente).
+
+  Arquivos: `models.py`, `schemas.py`, `core/security.py`, `api/routes/auth.py`,
+  `api/routes/portal.py`, `api/routes/users.py`, `modules/admin/router.py`, `services/documents.py`
+  (novo), `services/portal_first_access.py` (novo), `alembic/versions/20260828_0081_*.py` (novo,
+  não aplicada), `tests/test_portal_first_access.py` (novo), `tests/test_portal_profile.py`,
+  `hooks/use-workspace-auth.ts`, `components/portal/first-access-onboarding.tsx` (novo),
+  `components/workspace/workspace-login.tsx`, `app/portal/page.tsx`, `lib/api.ts`, `lib/types.ts`,
+  `lib/masks.ts` (novo), `lib/masks.test.ts` (novo). Sem commit, sem push, sem migration aplicada,
+  sem dado real alterado.
+
+- **Login do Portal unificado com a base do UNI Workspace (frontend, ainda sem commit)**:
+  o Portal (`/portal`) tinha formulário de login manual próprio (`handleLogin`,
+  `email`/`password`/`loginLoading` locais), diferente do resto do ecossistema, que já
+  usa `WorkspaceLogin` + `useWorkspaceAuth` (`/admin`, `/agendamento`, `/cockpit`,
+  `/gestao`, `/intelligence`, `/operacao`, `/suporte`, `politica-de-privacidade`,
+  `workspace-home`). O Portal passou a usar os dois também - formulário próprio
+  removido, autenticação (login válido, login inválido, logout, checagem de sessão)
+  agora vem do mesmo hook que todo o resto do Workspace já usa. **Nada de backend,
+  regra de negócio, migration ou dado real foi tocado** - troca só da camada de UI de
+  autenticação; permissões do portal continuam vindo 100% de `/portal/summary` no
+  backend, sem mudança.
+  `WorkspaceLogin` (`frontend/components/workspace/workspace-login.tsx`) evoluiu pra
+  reutilizável: props opcionais `eyebrow`, `title`, `subtitle`, `description`,
+  `helperText` e `variant` ("workspace" | "portal", copy padrão por contexto). Visual
+  modernizado - painel de marca com `.uni-gradient` (token oficial já usado no
+  Portal) exibindo o logo, hierarquia clara, formulário em coluna única no mobile,
+  `Label` associado a cada campo (`useId`), erro anunciado via `aria-describedby`.
+  **Os 8 outros consumidores do componente não mudaram de copy nem de comportamento**
+  - só ganharam o layout novo automaticamente, por ser o mesmo componente
+  compartilhado (confirmado ao vivo em `/suporte`: mesmo texto "Acesse o
+  ecossistema" / "Use o mesmo usuário da Gamificação.").
+  **Efeito colateral necessário e deliberado**: antes, `/portal` usava
+  `summary === null` como proxy de "não está logado" - uma falha ao *carregar dado*
+  do portal (backend fora do ar, por exemplo) também jogava a pessoa de volta pro
+  formulário de login, mesmo com sessão válida. Separar "está autenticado"
+  (`useWorkspaceAuth`) de "os dados carregaram" (`loadPortal`) tornou essa reação
+  sem sentido (reenviar e-mail/senha não resolveria um dado que falhou ao
+  carregar), então esse caso agora mostra um estado de erro com botão "Tentar
+  novamente" em vez de voltar pro login.
+  **Validado**: `npx tsc --noEmit` limpo, `npm run test -- --run` 35/35, `npm run
+  build` limpo. Ao vivo no navegador (Docker dev, `docker-compose.dev.yml`): `/portal`
+  deslogado mostra a tela nova; login com credencial errada mostra "Email ou senha
+  inválidos." sem sair da tela; login válido carrega o portal normalmente (testado
+  com usuário `viewer` temporário criado só para a validação e removido logo depois
+  - nenhum dado real foi criado, alterado ou lido); logout limpa o token
+  (`localStorage` confirmado vazio) e volta pro login; mobile 375px sem overflow
+  horizontal (`scrollWidth === clientWidth` confirmado). Console sem erro
+  inesperado - os únicos 401 registrados são a checagem de sessão antes do login e
+  o teste deliberado de senha errada.
+  **Pendência real, fora do escopo desta tarefa**: o pedido original também incluía
+  forçar CPF e redefinição de senha no primeiro acesso do colaborador. Isso exige
+  campo novo em `Collaborator`/`User`, endpoint e migration - inevitavelmente
+  backend, o que as instruções desta tarefa proibiram explicitamente ("não mexer em
+  backend", "não alterar dados reais"). Não foi implementado. O desenho do login
+  já comporta esse fluxo depois (ex: checar uma flag em `summary.user` e mostrar um
+  passo extra antes do portal), mas isso é decisão e trabalho de uma tarefa futura,
+  com backend liberado.
+  Arquivos: `workspace-login.tsx`, `portal/page.tsx`. Nenhum arquivo de backend,
+  teste de backend ou migration alterado nesta entrega. Sem commit, sem push.
 
 - **Gráficos, drill-down e filtros novos na `/suporte` (ainda sem commit)**:
   rodada pedida como "preciso ter gráficos, drill-down, melhorar os filtros".

@@ -16,10 +16,24 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models import CalculationRun, CollaboratorScore
+from app.models import CalculationRun, CollaboratorScore, User
 from app.services.portal_dashboard import _portal_run
 
 BASE = datetime(2026, 8, 1, tzinfo=timezone.utc)
+
+
+def _linked_user(db_session, collaborator, email="colab@pytest.local"):
+    user = User(
+        name=collaborator.name,
+        email=email,
+        role="collaborator",
+        active=True,
+        password_hash="x",
+        collaborator_id=collaborator.id,
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
 
 
 def _run(db_session, collaborator, *, status, minutes, payment, month=7, year=2026):
@@ -137,3 +151,94 @@ def test_default_entry_skips_a_period_whose_only_run_was_cancelled(db_session, m
     _run(db_session, collaborator, status="cancelled", minutes=10, payment=0.0, month=8)
 
     assert _portal_run(db_session).id == july_paid.id
+
+
+# --------------------------------------------------------------------------------------------
+# Historico do portal por periodo oficial (validacao de 2026-08-28)
+#
+# O historico de `build_portal_audit`/`build_portal_team_summary` lia as ultimas N linhas de
+# `collaborator_scores` ordenadas por `id desc` e deduplicava por periodo - dois defeitos ao
+# mesmo tempo:
+#
+# 1. O limite era consumido por um UNICO periodo. `recalculate_current_period` cria um
+#    `CalculationRun` a cada ciclo do sincronizador do IXC (20 min); 08/2026 acumulou 316
+#    rascunhos, e as 120 linhas lidas eram TODAS de agosto. O historico voltava com 1 mes so, e
+#    como a tela monta o seletor de periodo a partir dele, o colaborador ficava sem acesso a
+#    julho pago.
+# 2. `id desc` escolhe o run mais NOVO, nao o oficial. Em 07/2026 o maior id e o #1646
+#    CANCELADO; o pago e o #1601, criado antes. O historico mostraria ao colaborador um valor
+#    diferente do que ele recebeu - o mesmo achado A9 que ja tinha sido corrigido no `_portal_run`
+#    e nao tinha sido propagado ate aqui.
+#
+# `_recent_official_runs` resolve o periodo primeiro (agrupando por ano/mes) e so entao aplica
+# `pick_run_by_status_priority` dentro de cada periodo - o mesmo criterio do `_portal_run`.
+# --------------------------------------------------------------------------------------------
+
+
+def test_recent_official_runs_survives_hundreds_of_drafts_in_one_period(db_session, make_collaborator):
+    """O caso real: um periodo com centenas de rascunhos automaticos nao pode consumir sozinho o
+    espaco reservado para os demais periodos."""
+    from app.services.portal_dashboard import _recent_official_runs
+
+    collaborator = make_collaborator()
+    _run(db_session, collaborator, status="paid", minutes=0, payment=70.0, month=7)
+    for minute in range(200):
+        _run(db_session, collaborator, status="draft", minutes=minute, payment=1.0, month=8)
+
+    runs = _recent_official_runs(db_session, limit=12)
+
+    periods = [(run.reference_year, run.reference_month) for run in runs]
+    assert (2026, 7) in periods
+    assert (2026, 8) in periods
+    assert len(periods) == len(set(periods))  # um run por periodo, nunca dois do mesmo mes
+
+
+def test_recent_official_runs_picks_the_paid_closure_not_the_newest_id(db_session, make_collaborator):
+    """Dentro de um periodo, o escolhido e o PAGO - nunca o rascunho/cancelado mais novo."""
+    from app.services.portal_dashboard import _recent_official_runs
+
+    collaborator = make_collaborator()
+    paid = _run(db_session, collaborator, status="paid", minutes=0, payment=70.0, month=7)
+    _run(db_session, collaborator, status="cancelled", minutes=999, payment=0.0, month=7)
+
+    runs = _recent_official_runs(db_session, limit=12)
+
+    assert [run.id for run in runs if run.reference_month == 7] == [paid.id]
+
+
+def test_portal_audit_history_shows_the_paid_value_not_the_cancelled_revision(db_session, make_collaborator):
+    """Reproducao do achado real: colaborador com 07/2026 pago e uma revisao cancelada DEPOIS -
+    o historico da aba Auditoria precisa mostrar o valor pago, nao o cancelado."""
+    from app.services.portal_dashboard import build_portal_audit
+
+    collaborator = make_collaborator()
+    user = _linked_user(db_session, collaborator, email="historico@pytest.local")
+    _run(db_session, collaborator, status="paid", minutes=0, payment=378.0, month=7)
+    _run(db_session, collaborator, status="cancelled", minutes=999, payment=453.47, month=7)
+    current = _run(db_session, collaborator, status="draft", minutes=0, payment=280.28, month=8)
+
+    audit = build_portal_audit(db_session, user)
+
+    history_by_period = {(item["reference_month"], item["reference_year"]): item for item in audit["history"]}
+    assert history_by_period[(7, 2026)]["estimated_payment"] == 378.0
+    assert history_by_period[(8, 2026)]["estimated_payment"] == 280.28
+    assert audit["period"] if "period" in audit else True  # smoke: nao quebrou o resto da resposta
+    assert current.id  # referencia viva
+
+
+def test_portal_audit_history_covers_multiple_months_despite_current_month_flood(db_session, make_collaborator):
+    """A prova direta do defeito relatado: mesmo com 200 rascunhos automaticos em 08/2026, o
+    historico precisa alcancar 07/2026 - antes ficava restrito a 1 mes so."""
+    from app.services.portal_dashboard import build_portal_audit
+
+    collaborator = make_collaborator()
+    user = _linked_user(db_session, collaborator, email="flood@pytest.local")
+    _run(db_session, collaborator, status="paid", minutes=0, payment=70.0, month=7)
+    for minute in range(200):
+        _run(db_session, collaborator, status="draft", minutes=minute, payment=1.0, month=8)
+
+    audit = build_portal_audit(db_session, user)
+
+    periods = {(item["reference_month"], item["reference_year"]) for item in audit["history"]}
+    assert (7, 2026) in periods
+    assert (8, 2026) in periods

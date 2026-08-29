@@ -1,9 +1,17 @@
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.main import app
 from app.models import User
+
+# Os dois usuários abaixo representam colaboradores JÁ ATIVOS no portal, não alguém em primeiro
+# acesso - por isso nascem com o onboarding já concluído. Sem isso, `require_portal_access`
+# (Fase 1 do primeiro acesso obrigatório, 2026-08-28) bloquearia as duas rotas destes testes com
+# 403, quebrando um teste que não tem nada a ver com onboarding.
+_ALREADY_ONBOARDED = {"first_access_completed_at": datetime.now(timezone.utc)}
 
 
 def _portal_client(db_session, user: User):
@@ -24,6 +32,7 @@ def test_portal_profile_allows_only_own_contact_fields(db_session, make_collabor
         active=True,
         password_hash="x",
         collaborator_id=collaborator.id,
+        **_ALREADY_ONBOARDED,
     )
     db_session.add(user)
     db_session.commit()
@@ -61,6 +70,7 @@ def test_portal_profile_photo_is_limited_to_linked_collaborator(db_session, make
         active=True,
         password_hash="x",
         collaborator_id=collaborator.id,
+        **_ALREADY_ONBOARDED,
     )
     db_session.add(user)
     db_session.commit()

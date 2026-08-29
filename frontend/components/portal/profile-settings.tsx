@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, Check, ImageUp, Loader2, Mail, Phone, Trash2, Upload, X } from "lucide-react";
+import { Camera, Check, Eye, EyeOff, ImageUp, KeyRound, Loader2, Lock, Mail, Phone, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +31,12 @@ export function ProfileSettings() {
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
     let isActive = true;
@@ -133,6 +139,42 @@ export function ProfileSettings() {
     }
   }
 
+  async function handleChangePassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setNotice(null);
+    // Feedback imediato no cliente - quem decide de verdade é sempre o backend (mesma política
+    // mínima de 8 caracteres da Fase 1, ver docs/portal-ciclo-vida-conta-colaborador.md seção 3).
+    if (newPassword.length < 8) {
+      setError("A nova senha precisa de pelo menos 8 caracteres.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("A nova senha e a confirmação não são iguais.");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setError("A nova senha precisa ser diferente da senha atual.");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await api.changePassword({
+        current_password: currentPassword,
+        new_password: newPassword,
+        confirm_password: confirmPassword
+      });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setNotice("Senha atualizada.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível trocar sua senha.");
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
   async function handleRemovePhoto() {
     if (!window.confirm("Remover sua foto de perfil?")) return;
     setPhotoLoading(true);
@@ -211,6 +253,81 @@ export function ProfileSettings() {
             <div className="space-y-2"><Label htmlFor="profile-email">E-mail de contato</Label><div className="relative"><Mail className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><Input className="pl-9" id="profile-email" inputMode="email" placeholder="voce@exemplo.com" type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></div></div>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4"><p className="text-xs text-slate-500">Regional, cargo e acesso são atualizados pela gestão.</p><Button disabled={saving} type="submit">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}Salvar contato</Button></div>
+        </form>
+      </section>
+
+      <section className="rounded-lg border bg-white p-5 sm:p-6">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2d5fff]/10 text-[#0028f3]"><KeyRound className="h-5 w-5" /></div>
+          <div>
+            <h3 className="text-base font-semibold text-slate-950">Trocar senha</h3>
+            <p className="text-xs text-slate-500">Vale a qualquer momento, sem afetar seu acesso atual.</p>
+          </div>
+        </div>
+
+        <form className="mt-5 grid gap-4" onSubmit={handleChangePassword}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="profile-current-password">Senha atual</Label>
+              <div className="relative">
+                <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <Input
+                  className="pl-9 focus-visible:ring-[#2d5fff]"
+                  id="profile-current-password"
+                  autoComplete="current-password"
+                  type={showPassword ? "text" : "password"}
+                  value={currentPassword}
+                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="profile-new-password">Nova senha</Label>
+              <div className="relative">
+                <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <Input
+                  className="px-9 focus-visible:ring-[#2d5fff]"
+                  id="profile-new-password"
+                  autoComplete="new-password"
+                  type={showPassword ? "text" : "password"}
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  required
+                />
+                <button
+                  aria-label={showPassword ? "Ocultar senhas" : "Mostrar senhas"}
+                  className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-slate-400">Pelo menos 8 caracteres.</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="profile-confirm-password">Confirmar nova senha</Label>
+              <div className="relative">
+                <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <Input
+                  className="pl-9 focus-visible:ring-[#2d5fff]"
+                  id="profile-confirm-password"
+                  autoComplete="new-password"
+                  type={showPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  required
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end border-t pt-4">
+            <Button disabled={changingPassword} type="submit">
+              {changingPassword ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+              Salvar nova senha
+            </Button>
+          </div>
         </form>
       </section>
     </section>

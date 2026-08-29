@@ -94,6 +94,11 @@ arquivos antes de continuar o trabalho.
 - `plano-integracao-ixc.md` / `plano-integracao-opa-suite.md` — planos de integração externa.
 - `plano-analise-opa-suite-atendimentos.md` — plano de evolução do módulo SGP em análise completa de atendimentos (visão geral, individual, histórico/timeline, metas, IA).
 - `plano-ux-visual-sgp-suporte-fase-4a.md` — planejamento da fase visual/UX do SGP Suporte após as fases estruturais da OPA Suite.
+- `portal-ciclo-vida-conta-colaborador.md` — planejamento da Fase 2 do Portal do
+  Colaborador (ciclo de vida da conta após o primeiro acesso da Fase 1): troca de
+  senha pelo próprio usuário, reset administrativo, convite com token, solicitação de
+  acesso e recuperação de senha, com modelo de dados sugerido e ordem recomendada de
+  implementação.
 - `roteiro-comparacao-tmr-opa-suite.md` — roteiro pra comparar TMR do sistema local
   contra o painel oficial do OPA Suite (qual métrica local corresponde ao TMR deles),
   com tabela-modelo e critérios de classificação de divergência.

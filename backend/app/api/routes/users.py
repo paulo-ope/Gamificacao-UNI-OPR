@@ -6,12 +6,24 @@ from app.api.routes.auth import serialize_user
 from app.core.security import hash_password, require_permission
 from app.db.session import get_db
 from app.models import AccessProfile, AuditLog, Collaborator, User, UserAccessProfile
-from app.schemas import UserCreate, UserOut, UserUpdate
+from app.schemas import AdminForcePasswordResetOut, UserCreate, UserOut, UserUpdate
+from app.services.account_security import admin_force_first_access, admin_force_password_reset
 from app.services.audit_log import record_audit_log, snapshot
 from app.services.regional import effective_managed_regionals, normalize_regional
 
 router = APIRouter(prefix="/users", tags=["users"])
 ALLOWED_ROLES = {"viewer", "operator", "admin", "collaborator", "regional_manager_viewer", "base_manager", "workspace_restricted"}
+
+
+def _user_audit_snapshot(item: User | None) -> dict | None:
+    """Snapshot de auditoria de `User` - usa o `snapshot()` genérico como base, mas nunca inclui
+    `password_hash`: diferente de outras entidades, aqui o campo é sempre um segredo (mesmo em
+    hash), então o log de create/update nunca deve carregá-lo, seguindo o mesmo princípio já
+    aplicado em `change_own_password`/`admin_force_password_reset`/`portal_invites`."""
+    data = snapshot(item)
+    if data is not None:
+        data.pop("password_hash", None)
+    return data
 
 
 def _resolve_collaborator_link(db: Session, collaborator_id: int | None, current_user_id: int | None) -> Collaborator | None:
@@ -77,11 +89,16 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), user: User =
         collaborator_id=payload.collaborator_id,
         managed_regional=None,
         managed_regionals=managed_regionals,
+        # Primeiro acesso obrigatório (Fase 1) só se aplica a quem REPRESENTA um colaborador -
+        # usuário interno (sem vínculo) nunca precisa confirmar CPF/contato de ninguém. Usuário já
+        # existente nunca passa por aqui de novo (é create, não update) - ver migration
+        # 20260828_0081 para o backfill de quem já tinha conta antes desta feature.
+        must_change_password=payload.collaborator_id is not None,
     )
     db.add(item)
     db.flush()
     _set_user_profiles(db, item, payload.access_profile_ids)
-    record_audit_log(db, user, "create", "users", item.id, None, snapshot(item))
+    record_audit_log(db, user, "create", "users", item.id, None, _user_audit_snapshot(item))
     db.commit()
     db.refresh(item)
     return serialize_user(item)
@@ -97,7 +114,7 @@ def update_user(
     item = db.get(User, user_id)
     if not item:
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
-    before = snapshot(item)
+    before = _user_audit_snapshot(item)
     updates = payload.model_dump(exclude_unset=True)
     if "role" in updates and updates["role"] not in ALLOWED_ROLES:
         raise HTTPException(status_code=422, detail="Perfil inválido.")
@@ -120,9 +137,41 @@ def update_user(
             setattr(item, field, updates[field])
     if "access_profile_ids" in updates:
         _set_user_profiles(db, item, updates["access_profile_ids"])
-    record_audit_log(db, user, "update", "users", item.id, before, snapshot(item))
+    record_audit_log(db, user, "update", "users", item.id, before, _user_audit_snapshot(item))
     db.commit()
     db.refresh(item)
+    return serialize_user(item)
+
+
+@router.post("/{user_id}/force-password-reset", response_model=AdminForcePasswordResetOut)
+def force_password_reset(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("users:manage")),
+):
+    """Fase 2B - reset administrativo (ver docs/portal-ciclo-vida-conta-colaborador.md seção 4).
+    Gera uma senha temporária e força a troca no próximo login - não reabre a confirmação de
+    CPF/contato (isso é `force_first_access`, ação distinta)."""
+    item = db.get(User, user_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    temporary_password = admin_force_password_reset(db, user, item)
+    return {**serialize_user(item), "temporary_password": temporary_password}
+
+
+@router.post("/{user_id}/force-first-access", response_model=UserOut)
+def force_first_access(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("users:manage")),
+):
+    """Fase 2B - reabre o primeiro acesso completo (CPF/contato + senha nova), não só a senha (ver
+    docs/portal-ciclo-vida-conta-colaborador.md seção 4). Só se aplica a usuário vinculado a um
+    colaborador."""
+    item = db.get(User, user_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    admin_force_first_access(db, user, item)
     return serialize_user(item)
 
 
@@ -137,7 +186,7 @@ def delete_user(
         raise HTTPException(status_code=404, detail="Usuário não encontrado.")
     if item.id == user.id:
         raise HTTPException(status_code=400, detail="Não é possível excluir o próprio usuário logado.")
-    before = snapshot(item)
+    before = _user_audit_snapshot(item)
     response = serialize_user(item)
     record_audit_log(db, user, "delete", "users", item.id, before, None)
     db.execute(update(AuditLog).where(AuditLog.user_id == item.id).values(user_id=None))

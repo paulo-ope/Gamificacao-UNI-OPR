@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token, get_current_user, permissions_for_user, verify_password
+from app.core.security import create_access_token, get_current_user, permissions_for_user, portal_first_access_pending, verify_password
 from app.db.session import get_db
 from app.models import User
-from app.schemas import LoginRequest, TokenOut, UserOut
+from app.schemas import ChangePasswordRequest, LoginRequest, TokenOut, UserOut
+from app.services.account_security import change_own_password
 from app.services.regional import effective_managed_regionals
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -33,6 +34,10 @@ def serialize_user(user: User) -> dict:
         "collaborator_name": user.collaborator.name if user.collaborator else None,
         "managed_regional": user.managed_regional,
         "managed_regionals": effective_managed_regionals(user.managed_regional, user.managed_regionals),
+        # Único sinal que o frontend precisa pra decidir "mostrar o portal ou o onboarding" - a
+        # regra em si (quem precisa, por quê) mora só em `portal_first_access_pending`; o frontend
+        # não recalcula nada, só lê este booleano (norma de qualidade de dados, seção 2).
+        "portal_first_access_required": portal_first_access_pending(user),
     }
 
 
@@ -79,4 +84,23 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
+    return serialize_user(user)
+
+
+@router.post("/change-password", response_model=UserOut)
+def change_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Troca de senha voluntária (Fase 2A) - só exige autenticação, não `require_portal_access`
+    nem nenhuma permissão de módulo: vale para qualquer usuário do ecossistema, não só quem tem
+    `collaborator_id`, então não faz sentido gatear atrás de uma permissão de portal."""
+    change_own_password(
+        db,
+        user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+        confirm_password=payload.confirm_password,
+    )
     return serialize_user(user)

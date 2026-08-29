@@ -10,6 +10,7 @@ from typing import Any, Iterator
 import httpx
 
 from app.core.config import get_settings
+from app.services.documents import mask_document
 
 # Log de auditoria de TODA requisição feita ao webservice do IXC (tabela, página, tamanho de página,
 # filtros, quantidade de registros devolvidos e duração) - pedido do dono do produto pra ter
@@ -30,6 +31,44 @@ class IxcApiError(RuntimeError):
 
 class IxcQueryLimitError(IxcApiError):
     """Consulta filtrada que excede o limite de segurança definido pelo consumidor."""
+
+
+# Achado real (Fase 2C - convite inteligente por CPF, 2026-08-29): o log de auditoria de consultas
+# (abaixo, `safe_filter_summary`) logava o valor CRU do filtro - inofensivo para os filtros que a
+# integração usava até aqui (ids, datas, status), mas um vazamento sério de dado sensível assim que
+# a busca por `funcionarios.cpf_cnpj` (ou qualquer filtro por CPF/CNPJ/e-mail/telefone) passou a
+# existir. Mascarado ANTES de logar, não depois - nenhuma versão em claro do valor sensível deve
+# tocar o logger em nenhum momento. `mask_document` é o mesmo usado no resto do projeto para CPF
+# (services/documents.py) - não reimplementado aqui.
+_SENSITIVE_DOCUMENT_FIELD_MARKERS = ("cpf", "cnpj")
+_SENSITIVE_EMAIL_FIELD_MARKERS = ("email",)
+_SENSITIVE_PHONE_FIELD_MARKERS = ("fone", "celular", "telefone")
+
+
+def _mask_email_value(value: str) -> str:
+    local, separator, domain = value.partition("@")
+    if not separator:
+        return "***"
+    visible = local[:2] if len(local) > 2 else local[:1] or "*"
+    return f"{visible}***@{domain}" if domain else f"{visible}***"
+
+
+def _mask_phone_value(value: str) -> str:
+    digits = "".join(char for char in value if char.isdigit())
+    if len(digits) <= 4:
+        return "***"
+    return f"***{digits[-4:]}"
+
+
+def _mask_sensitive_filter_value(field: str, value: str) -> str:
+    field_lower = field.lower()
+    if any(marker in field_lower for marker in _SENSITIVE_DOCUMENT_FIELD_MARKERS):
+        return mask_document(value) or "***"
+    if any(marker in field_lower for marker in _SENSITIVE_EMAIL_FIELD_MARKERS):
+        return _mask_email_value(value)
+    if any(marker in field_lower for marker in _SENSITIVE_PHONE_FIELD_MARKERS):
+        return _mask_phone_value(value)
+    return value
 
 
 @dataclass
@@ -83,12 +122,15 @@ class IxcClient:
             payload["sortorder"] = sortorder
 
         def safe_filter_summary(item: dict[str, str]) -> str:
+            field = str(item.get("TB") or "")
             operator = str(item.get("OP") or "")
             raw_value = str(item.get("P") or "")
             if operator.upper() == "IN":
                 count = len([value for value in raw_value.split(",") if value])
-                return f"{item.get('TB')} IN [{count} valores]"
-            return f"{item.get('TB')} {operator} {raw_value}"
+                return f"{field} IN [{count} valores]"
+            # CPF/CNPJ/e-mail/telefone nunca em claro no log, mesmo em nível INFO (ver comentário
+            # de `_mask_sensitive_filter_value` acima) - só o campo/operador ficam sempre visíveis.
+            return f"{field} {operator} {_mask_sensitive_filter_value(field, raw_value)}"
 
         filters_summary = ", ".join(safe_filter_summary(item) for item in (grid_param or []))
         started_at = time.monotonic()

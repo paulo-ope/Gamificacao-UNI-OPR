@@ -33,7 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AppCheckbox } from "@/components/ui/checkbox";
-import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { DateRangePicker, commonDateRangePresets } from "@/components/ui/date-range-picker";
 import { Input } from "@/components/ui/input";
 import { MultiSelect as SharedMultiSelect } from "@/components/ui/multi-select";
 import { AppRadio } from "@/components/ui/radio";
@@ -568,34 +568,7 @@ export default function AgendamentoPage() {
             onChange={(key, value) => setFilters((current) => ({ ...current, [key]: value }))}
             min={options.data_available_from ? isoDate(new Date(options.data_available_from)) : undefined}
             max={options.data_available_to ? isoDate(new Date(options.data_available_to)) : undefined}
-            presets={[
-              {
-                label: "Mês atual",
-                range: () => {
-                  const today = new Date();
-                  return {
-                    from: isoDate(new Date(today.getFullYear(), today.getMonth(), 1)),
-                    to: isoDate(today),
-                  };
-                },
-              },
-              {
-                label: "Últimos 7 dias",
-                range: () => {
-                  const today = new Date();
-                  const start = new Date(today);
-                  start.setDate(start.getDate() - 6);
-                  return { from: isoDate(start), to: isoDate(today) };
-                },
-              },
-              {
-                label: "Ano até hoje",
-                range: () => {
-                  const today = new Date();
-                  return { from: isoDate(new Date(today.getFullYear(), 0, 1)), to: isoDate(today) };
-                },
-              },
-            ]}
+            presets={commonDateRangePresets()}
           />
           <SchedulingMultiSelect
             label="Filial"

@@ -29,6 +29,15 @@ from app.services.regional import (
 )
 from app.services.scoring_detail import explain_orders, period_orders
 
+# Teto de O.S. que o portal devolve numa consulta. É uma pessoa em um mês: o maior caso real
+# medido na base é 173 O.S. (06/2026), então 500 cobre com folga e existe só como trava contra
+# consulta patológica - não como corte de rotina. O teto anterior (200 na função, 80 pedido pela
+# tela) cortava em silêncio: em 07/2026, 62 dos 107 colaboradores cadastrados passavam de 80 O.S.,
+# e a tela listava o que veio sem nunca dizer que havia mais (um deles tinha 123 O.S. e via 80).
+# Limite artificial que ninguém revisita é bug silencioso - ver seção 1.5 da norma de qualidade de
+# dados. Quando este teto cortar de fato, a tela precisa dizer "X de Y".
+PORTAL_ORDERS_MAX = 500
+
 
 def _serialize_portal_user(user: User) -> dict[str, Any]:
     """`PortalSummaryOut.user` é um `UserOut`, mas o valor embutido aqui vinha sendo a instância
@@ -113,6 +122,48 @@ def _portal_run(
 
 def _latest_run(db: Session) -> CalculationRun | None:
     return _portal_run(db)
+
+
+def _recent_official_runs(db: Session, limit: int = 12) -> list[CalculationRun]:
+    """Os últimos `limit` PERÍODOS com apuração, cada um representado pelo seu fechamento oficial.
+
+    Resolve o período primeiro e o status depois - `pick_run_by_status_priority`, o mesmo critério
+    do `_portal_run`, da tela de fechamento e do extrato PDF. Devolve do mais recente para o mais
+    antigo.
+
+    Substitui o padrão "pega N linhas ordenadas por id desc e deduplica por período", que estava
+    errado de duas formas ao mesmo tempo:
+
+    1. **O limite era consumido por um período só.** `recalculate_current_period` cria um
+       `CalculationRun` a cada ciclo do sincronizador do IXC (20 min), e 08/2026 acumulou 316
+       rascunhos. As 120 linhas que o histórico lia eram TODAS de agosto, então o gráfico voltava
+       com 1 mês e a tela - que monta o seletor de período a partir do próprio histórico - deixava
+       o colaborador sem acesso nenhum ao fechamento pago de julho. A aba "Minha equipe" tinha o
+       mesmo defeito com `limit(12)`.
+    2. **`id desc` escolhe o run mais novo, não o oficial.** Em 07/2026 o maior id é o #1646,
+       CANCELADO (R$ 18.453,47), e não o #1601, PAGO (R$ 18.271,68): 65 colaboradores veriam no
+       histórico um valor diferente do que receberam, somando R$ 536,83. É o mesmo achado A9 que
+       já havia sido corrigido no `_portal_run` e não tinha sido propagado até aqui.
+    """
+    periods = db.execute(
+        select(CalculationRun.reference_year, CalculationRun.reference_month)
+        .where(CalculationRun.status != "cancelled")
+        .group_by(CalculationRun.reference_year, CalculationRun.reference_month)
+        .order_by(desc(CalculationRun.reference_year), desc(CalculationRun.reference_month))
+        .limit(limit)
+    ).all()
+    runs: list[CalculationRun] = []
+    for reference_year, reference_month in periods:
+        run = pick_run_by_status_priority(
+            db,
+            select(CalculationRun).where(
+                CalculationRun.reference_month == reference_month,
+                CalculationRun.reference_year == reference_year,
+            ),
+        )
+        if run:
+            runs.append(run)
+    return runs
 
 
 def _score_rows(db: Session, run: CalculationRun) -> list[dict[str, Any]]:
@@ -434,6 +485,21 @@ def build_portal_orders(
     reference_month: int | None = None,
     reference_year: int | None = None,
 ) -> list[dict[str, Any]]:
+    """O.S. do colaborador no período, no MESMO escopo que produziu o card dele.
+
+    O recorte vem de `run.regional` - o escopo que `calculate_scores` gravou no fechamento e que
+    `_run_extra_summaries` reusa pra montar os contadores oficiais -, nunca da regional do
+    colaborador. Filtrar pela regional DELE reconstruía um recorte que o fechamento não usou: em
+    fechamento global (`run.regional is None`, o caso de 100% da base hoje) o cálculo conta toda
+    O.S. da pessoa e agrupa por `collaborator_id`, enquanto esta lista descartava tudo que estava
+    em outra regional ou com regional `NAO IDENTIFICADO`. Medido na base real em 08/2026: 18 dos
+    107 colaboradores cadastrados tinham O.S. no card que não apareciam na lista - 81 O.S. e 818
+    pontos base invisíveis, chegando a 19 O.S./226 pts em um único colaborador. O card dizia 68 e a
+    lista mostrava 49, então a pessoa não tinha como somar a própria pontuação e conferir.
+
+    `collaborator_id` continua sendo o que garante o isolamento - tirar o filtro de regional não
+    amplia o que a pessoa vê, só devolve O.S. que já eram dela.
+    """
     run = _portal_run(db, reference_month, reference_year)
     if not run:
         return []
@@ -444,9 +510,9 @@ def build_portal_orders(
 
     orders = [
         order
-        for order in period_orders(db, run.reference_month, run.reference_year, str(collaborator["regional"]))
+        for order in period_orders(db, run.reference_month, run.reference_year, run.regional)
         if order.collaborator_id == int(collaborator["id"])
-    ][: max(1, min(limit, 200))]
+    ][: max(1, min(limit, PORTAL_ORDERS_MAX))]
     details = explain_orders(db, orders, default_point_value=run.point_value)
     detail_by_id = {int(detail.get("id") or detail.get("service_order_id") or 0): detail for detail in details}
 
@@ -468,6 +534,13 @@ def build_portal_orders(
                 "status": order.status,
                 "sla_status": order.sla_status,
                 "sla_status_normalized": detail.get("sla_status_normalized") or "NAO_IDENTIFICADO",
+                # Predicado OFICIAL de "fora do prazo": o mesmo `is_sla_out_of_time` que decide a
+                # penalidade de SLA e que alimenta o contador `sla_out_service_orders` do
+                # fechamento. `sla_status_normalized` é o RÓTULO de exibição e pode discordar dele
+                # (quando o texto vindo do IXC afirma um status que as horas contradizem), então
+                # contar "fora do prazo" pelo rótulo produzia um total diferente do oficial na
+                # mesma resposta. Quem conta usa este campo; quem exibe usa o rótulo.
+                "is_sla_out_of_time": bool(detail.get("is_sla_out_of_time")),
                 "base_points": float(detail.get("base_points") or 0),
                 "penalty_points": float(detail.get("penalty_points") or 0),
                 "net_points": float(detail.get("net_points") or 0),
@@ -677,18 +750,9 @@ def build_portal_team_summary(db: Session, user: User) -> dict[str, Any]:
             }
         )
 
-    historical_runs = db.scalars(
-        select(CalculationRun)
-        .order_by(desc(CalculationRun.reference_year), desc(CalculationRun.reference_month), desc(CalculationRun.id))
-        .limit(12)
-    ).all()
+    historical_runs = _recent_official_runs(db, limit=6)
     history = []
-    seen_periods: set[tuple[int, int]] = set()
     for historical_run in historical_runs:
-        period = (historical_run.reference_year, historical_run.reference_month)
-        if period in seen_periods:
-            continue
-        seen_periods.add(period)
         period_rows = [
             row
             for row in _score_rows(db, historical_run)
@@ -715,8 +779,6 @@ def build_portal_team_summary(db: Session, user: User) -> dict[str, Any]:
                 "recurrence_rate": round((period_recurrence / period_orders) * 100, 2) if period_orders else 0,
             }
         )
-        if len(history) >= 6:
-            break
     history.reverse()
     alerts: list[str] = []
     below_count = sum(1 for item in ranking if item.get("performance_band") == "Abaixo da faixa")
@@ -753,6 +815,18 @@ def build_portal_overview(db: Session) -> dict[str, Any]:
         return {"period": {}, "message": "Nenhum fechamento foi calculado ainda."}
 
     rows = sorted(_score_rows(db, run), key=lambda item: float(item.get("final_points") or 0), reverse=True)
+    # `_score_rows` filtra pra ativo+cadastrado de propósito: o ranking não pode comparar a pessoa
+    # contra cadastros incompletos que estruturalmente nunca são pagos. Isso faz esta Visão Geral
+    # contar menos gente e menos O.S. que o fechamento inteiro (ex: 107 vs 224 colaboradores, 5.760
+    # vs 6.989 O.S. no run #1936) - sem dizer o porquê, a tela contradiz a tela de fechamento sem
+    # explicar (achado da crítica de design de 2026-08-28). Os dois contadores abaixo existem só
+    # pra tornar esse recorte explícito (norma de qualidade de dados, seção 1.3: "denominador
+    # explícito") - não entram em nenhuma soma de pontos ou pagamento.
+    counted_ids = {int(row.get("collaborator_id") or 0) for row in rows}
+    all_scores = serialize_run(run, db).get("scores", [])
+    excluded_rows = [row for row in all_scores if int(row.get("collaborator_id") or 0) not in counted_ids]
+    excluded_collaborators = len(excluded_rows)
+    excluded_service_orders = sum(int(row.get("service_orders_count") or 0) for row in excluded_rows)
     regionals: dict[str, dict[str, Any]] = {}
     for row in rows:
         regional = normalize_regional(str(row.get("regional") or "")) or "Sem regional"
@@ -789,6 +863,7 @@ def build_portal_overview(db: Session) -> dict[str, Any]:
     return {
         "period": {"calculation_run_id": run.id, "reference_month": run.reference_month, "reference_year": run.reference_year, "status": run.status, "updated_at": run.executed_at or run.created_at},
         "total_collaborators": len(rows), "total_regionals": len(regional_summary), "total_service_orders": total_orders, "scored_service_orders": scored_orders,
+        "excluded_collaborators": excluded_collaborators, "excluded_service_orders": excluded_service_orders,
         "final_points": round(sum(float(row.get("final_points") or 0) for row in rows), 2),
         "estimated_payment": round(sum(float(row.get("estimated_payment") or 0) for row in rows), 2),
         "penalty_points": round(sum(float(row.get("penalty_points") or 0) for row in rows), 2),
@@ -836,10 +911,21 @@ def build_portal_audit(
         str(collaborator.get("regional") or ""),
     )
 
-    orders = build_portal_orders(db, user, limit=200, reference_month=reference_month, reference_year=reference_year)
-    sla_on_time_service_orders = sum(1 for order in orders if order.get("sla_status_normalized") == "NO_PRAZO")
-    sla_out_service_orders = sum(1 for order in orders if order.get("sla_status_normalized") == "FORA_DO_PRAZO")
-    sla_unidentified_service_orders = max(0, len(orders) - sla_on_time_service_orders - sla_out_service_orders)
+    orders = build_portal_orders(
+        db, user, limit=PORTAL_ORDERS_MAX, reference_month=reference_month, reference_year=reference_year
+    )
+    # As três faixas de SLA saem da MESMA lista e do MESMO predicado oficial, e por construção
+    # somam o total de O.S. Antes, `sla_out` vinha do contador do fechamento e `sla_on_time` era
+    # recontado aqui pelo rótulo de exibição: duas fontes e dois predicados na mesma resposta, que
+    # não fechavam com o total nem entre si (colab 180 em 08/2026: 5 pelo contador, 4 pelo rótulo).
+    # "Não identificado" é o resto explícito - O.S. sem prazo mensurável NÃO é O.S. atrasada.
+    sla_out_service_orders = sum(1 for order in orders if order.get("is_sla_out_of_time"))
+    sla_unidentified_service_orders = sum(
+        1
+        for order in orders
+        if not order.get("is_sla_out_of_time") and order.get("sla_status_normalized") == "NAO_IDENTIFICADO"
+    )
+    sla_on_time_service_orders = max(0, len(orders) - sla_out_service_orders - sla_unidentified_service_orders)
     sla_measured_service_orders = sla_on_time_service_orders + sla_out_service_orders
     sla_rate = round((sla_on_time_service_orders / sla_measured_service_orders) * 100, 1) if sla_measured_service_orders else None
     positive_orders = sorted(
@@ -872,39 +958,42 @@ def build_portal_audit(
             for item in sorted(items.values(), key=lambda item: (-float(item["net_points"]), str(item["label"])))[:8]
         ]
 
-    historical_scores = db.execute(
-        select(CalculationRun, CollaboratorScore)
-        .join(CollaboratorScore, CollaboratorScore.calculation_run_id == CalculationRun.id)
-        .where(CollaboratorScore.collaborator_id == int(collaborator["id"]))
-        .order_by(desc(CalculationRun.reference_year), desc(CalculationRun.reference_month), desc(CalculationRun.id))
-        .limit(120)
-    ).all()
+    official_runs = _recent_official_runs(db, limit=12)
+    score_by_run = {
+        int(item.calculation_run_id): item
+        for item in db.scalars(
+            select(CollaboratorScore).where(
+                CollaboratorScore.calculation_run_id.in_([run.id for run in official_runs]),
+                CollaboratorScore.collaborator_id == int(collaborator["id"]),
+            )
+        )
+    }
     history = []
-    seen_periods: set[tuple[int, int]] = set()
-    for run, item in historical_scores:
-        period = (run.reference_year, run.reference_month)
-        if period in seen_periods:
+    for historical_run in official_runs:
+        item = score_by_run.get(historical_run.id)
+        if item is None:
             continue
-        seen_periods.add(period)
         history.append(
             {
-                "reference_month": run.reference_month,
-                "reference_year": run.reference_year,
+                "reference_month": historical_run.reference_month,
+                "reference_year": historical_run.reference_year,
                 "final_points": float(item.final_points),
                 "estimated_payment": float(item.estimated_payment),
                 "service_orders_count": int(item.service_orders_count),
             }
         )
-        if len(history) == 12:
-            break
     history.reverse()
     return {
         **{key: score.get(key) for key in (
             "gross_points", "penalty_points", "net_points", "health_multiplier", "final_points", "estimated_payment",
             "balance_adjustment_points",
             "health_status", "service_orders_count", "scored_service_orders", "unscored_service_orders", "penalized_service_orders",
-            "warranty_service_orders", "recurrence_service_orders", "pending_service_orders", "sla_out_service_orders", "manual_review_service_orders",
+            "warranty_service_orders", "recurrence_service_orders", "pending_service_orders", "manual_review_service_orders",
         )},
+        # Reafirmado DEPOIS do spread de propósito: `sla_out_service_orders` sai da lista de O.S.
+        # desta mesma resposta, não do contador em cache, pra que as três faixas de SLA fechem com
+        # o total exibido ao lado delas.
+        "sla_out_service_orders": sla_out_service_orders,
         "sla_on_time_service_orders": sla_on_time_service_orders,
         "sla_unidentified_service_orders": sla_unidentified_service_orders,
         "sla_rate": sla_rate,

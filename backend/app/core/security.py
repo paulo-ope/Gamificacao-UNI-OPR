@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
+import string
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -288,6 +290,19 @@ def is_admin_user(user: User | None) -> bool:
     return bool(user and ("admin:users:write" in permissions_for_user(user) or user.role == "admin"))
 
 
+# Alfabeto sem caracteres ambíguos (0/O, 1/l/I) - a senha temporária é lida e digitada por uma
+# pessoa (Fase 2B, reset administrativo), diferente de `secrets.token_urlsafe` (já usado em
+# `hash_api_key`/módulo de IA), que gera um token pra colar, não pra digitar.
+_TEMP_PASSWORD_ALPHABET = "".join(sorted(set(string.ascii_letters + string.digits) - set("0O1lI")))
+
+
+def generate_temporary_password(length: int = 12) -> str:
+    """Gera uma senha temporária aleatória segura (`secrets`, não `random`) para o reset
+    administrativo (Fase 2B) - o admin nunca escolhe nem digita a senha de outra pessoa, só recebe
+    esta uma vez para repassar por um canal já existente."""
+    return "".join(secrets.choice(_TEMP_PASSWORD_ALPHABET) for _ in range(length))
+
+
 def hash_password(password: str) -> str:
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 260_000)
@@ -381,6 +396,36 @@ def require_permission(permission: str):
     def dependency(user: User = Depends(get_current_user)) -> User:
         if permission not in permissions_for_user(user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permissão insuficiente.")
+        return user
+
+    return dependency
+
+
+def portal_first_access_pending(user: User) -> bool:
+    """`True` só pra usuário que REPRESENTA um colaborador (`collaborator_id` vinculado) e nunca
+    completou o primeiro acesso obrigatório. Usuário interno (admin/operator/viewer sem vínculo) ou
+    gestor regional (`managed_regional`, sem colaborador próprio) nunca cai aqui - o fluxo de
+    primeiro acesso é sobre confirmar o CADASTRO DE UMA PESSOA (CPF, contato), não faz sentido pra
+    conta que não representa uma pessoa física cadastrada como colaborador.
+
+    As duas condições valem por OR de propósito (ver comentário do campo em models.py): depender só
+    de uma seria mais fácil de destravar por engano - ex. um reset administrativo futuro que só
+    zera `must_change_password` sem repensar `first_access_completed_at`, ou vice-versa."""
+    return user.collaborator_id is not None and (user.must_change_password or user.first_access_completed_at is None)
+
+
+def require_portal_access(permission: str):
+    """Mesma checagem de `require_permission`, mais o bloqueio de primeiro acesso pendente. Troca
+    1:1 de `require_permission` em toda rota de `portal.py` que expõe dado financeiro/operacional
+    do colaborador - as duas rotas de onboarding (`/portal/first-access/status` e
+    `/portal/first-access/complete`) são a única exceção, porque completar o primeiro acesso É o
+    que desbloqueia o resto; gatear elas também criaria um círculo sem saída."""
+    def dependency(user: User = Depends(require_permission(permission))) -> User:
+        if portal_first_access_pending(user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Conclua seu primeiro acesso para continuar.",
+            )
         return user
 
     return dependency

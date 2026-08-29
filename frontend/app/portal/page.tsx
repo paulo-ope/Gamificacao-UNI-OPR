@@ -7,7 +7,6 @@ import {
   Loader2,
   LogOut,
   Search,
-  ShieldCheck,
   Sparkles,
   Trophy,
   Users as Users2Icon,
@@ -15,6 +14,7 @@ import {
   CircleUserRound
 } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CollaboratorOverview } from "@/components/portal/collaborator-overview";
@@ -22,10 +22,13 @@ import { HowScoringWorks } from "@/components/portal/how-scoring-works";
 import { ManagerTeamOverview } from "@/components/portal/manager-team-overview";
 import { OrderAuditTags } from "@/components/portal/order-audit-tags";
 import { ProfileSettings } from "@/components/portal/profile-settings";
+import { FirstAccessOnboarding } from "@/components/portal/first-access-onboarding";
+import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api, setAuthToken } from "@/lib/api";
+import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import { PORTAL_ORDERS_MAX, api } from "@/lib/api";
 import type { PortalAudit, PortalOrder, PortalOverview, PortalRules, PortalSimulation, PortalSummary, PortalTeamSummary } from "@/lib/types";
 
 type PortalTab = "overview" | "home" | "audit" | "ranking" | "orders" | "simulation" | "rules" | "team" | "profile";
@@ -126,8 +129,6 @@ export default function PortalPage() {
   const [rules, setRules] = useState<PortalRules | null>(null);
   const [simulation, setSimulation] = useState<PortalSimulation | null>(null);
   const [teamSummary, setTeamSummary] = useState<PortalTeamSummary | null>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [extraPoints, setExtraPoints] = useState("10");
   const [selectedPeriod, setSelectedPeriod] = useState<{ reference_month: number; reference_year: number } | null>(null);
   const [auditQuery, setAuditQuery] = useState("");
@@ -135,8 +136,12 @@ export default function PortalPage() {
   const [auditBreakdown, setAuditBreakdown] = useState<"groups" | "subjects">("groups");
   const [orderFilter, setOrderFilter] = useState<"all" | "scored" | "impact" | "recurrence">("all");
   const [loading, setLoading] = useState(true);
-  const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Autenticação e a base do login vêm do mesmo hook/tela usados pelo resto do UNI Workspace
+  // (ver frontend/app/suporte/page.tsx para o mesmo padrão) - o Portal deixa de ter formulário de
+  // login próprio. `user` aqui só decide "está autenticado?"; as permissões que a tela usa
+  // continuam vindo de `summary.user` (endpoint /portal/summary), sem mudança nenhuma.
+  const { user, checking, error: authError, login, logout: authLogout, refresh: refreshAuth } = useWorkspaceAuth();
 
   const loadPortal = useCallback(async () => {
     setLoading(true);
@@ -144,7 +149,7 @@ export default function PortalPage() {
     try {
       const [summaryData, orderData, ruleData, auditData] = await Promise.all([
         api.portalSummary(selectedPeriod ?? undefined),
-        api.portalOrders(80, selectedPeriod ?? undefined),
+        api.portalOrders(PORTAL_ORDERS_MAX, selectedPeriod ?? undefined),
         api.portalRules(),
         api.portalAudit(selectedPeriod ?? undefined)
       ]);
@@ -175,8 +180,12 @@ export default function PortalPage() {
   }, [selectedPeriod]);
 
   useEffect(() => {
-    loadPortal();
-  }, [loadPortal]);
+    // Só carrega dado do portal depois que a sessão for confirmada E o primeiro acesso (quando
+    // pendente) tiver sido concluído - antes disso a chamada sempre voltaria 403
+    // (require_portal_access no backend). `loadPortal` muda de identidade quando `selectedPeriod`
+    // muda, então trocar de período continua recarregando (mesmo comportamento de antes).
+    if (user && !user.portal_first_access_required) loadPortal();
+  }, [user, loadPortal]);
 
   const score = summary?.score ?? null;
   const periodOptions = useMemo(() => {
@@ -215,14 +224,17 @@ export default function PortalPage() {
       if (orderFilter === "recurrence") return order.status_label.toLowerCase().includes("reincid");
       return true;
     });
-    if (!query) return byFilter.slice(0, 80);
+    // Sem `.slice(0, 80)`: este corte cortava a lista DEPOIS de filtrar e buscar, escondendo O.S.
+    // que o colaborador tinha pedido explicitamente para ver. Em 07/2026, 62 dos 107 colaboradores
+    // cadastrados passavam de 80 O.S. no período.
+    if (!query) return byFilter;
     return byFilter.filter((order) =>
       [order.os_code, order.customer_name, order.os_subject, order.os_type, order.group_name, order.status_label, order.status]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(query)
-    ).slice(0, 80);
+    );
   }, [orderFilter, orderQuery, orders]);
   const auditOrders = useMemo(() => {
     const query = auditQuery.trim().toLowerCase();
@@ -235,23 +247,14 @@ export default function PortalPage() {
         .includes(query)
     );
   }, [audit, auditQuery]);
+  // Denominador explícito da aba "Minhas O.S." (norma de qualidade de dados, seção 1.3): o total
+  // oficial vem do fechamento (`audit.service_orders_count`), não do tamanho da lista carregada -
+  // é justamente a diferença entre os dois que precisa ficar visível. Só formata dois campos que a
+  // API já entregou; não recalcula KPI nenhum no cliente.
+  const ordersTotal = audit?.service_orders_count ?? orders.length;
+  const ordersTruncatedByApi = orders.length < ordersTotal;
   const auditBreakdowns = audit ? audit[auditBreakdown] : [];
   const auditMaxBreakdownPoints = Math.max(1, ...auditBreakdowns.map((item) => item.net_points));
-
-  async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoginLoading(true);
-    setError(null);
-    try {
-      const result = await api.login(email.trim(), password);
-      setAuthToken(result.access_token);
-      await loadPortal();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível entrar.");
-    } finally {
-      setLoginLoading(false);
-    }
-  }
 
   async function handleSimulation() {
     const parsed = Number(extraPoints.replace(",", "."));
@@ -264,7 +267,7 @@ export default function PortalPage() {
   }
 
   function logout() {
-    setAuthToken(null);
+    authLogout();
     setSummary(null);
     setOrders([]);
     setRules(null);
@@ -273,6 +276,57 @@ export default function PortalPage() {
     setSimulation(null);
     setTeamSummary(null);
     setSelectedPeriod(null);
+  }
+
+  // Sessão ainda não confirmada (primeira renderização, antes de `api.me()` responder): mesmo
+  // spinner que a tela já usava, só que agora cobre a checagem de auth em vez do carregamento do
+  // portal - a diferença não é visível para quem usa.
+  if (checking) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="flex items-center gap-3 rounded-lg border bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+          <Loader2 className="h-4 w-4 animate-spin text-[#2d5fff]" />
+          Carregando portal
+        </div>
+      </main>
+    );
+  }
+
+  // Sem sessão: mesma tela de login do resto do UNI Workspace (ver frontend/app/suporte/page.tsx)
+  // - login válido, inválido e o comportamento de erro amigável vêm de `useWorkspaceAuth`, sem
+  // formulário próprio do Portal.
+  if (!user) {
+    return (
+      <WorkspaceLogin
+        isLoading={checking}
+        error={authError}
+        onLogin={login}
+        variant="portal"
+        helperText={
+          <>
+            Precisa de acesso?{" "}
+            <Link href="/solicitar-acesso" className="font-medium text-[#0028f3] hover:underline">
+              Solicite aqui
+            </Link>
+            .
+          </>
+        }
+      />
+    );
+  }
+
+  // Sessão válida, mas primeiro acesso pendente (Fase 1, 2026-08-28): bloqueia ranking, O.S.,
+  // auditoria e qualquer dado financeiro/operacional individual até CPF, contato e senha nova
+  // serem confirmados. O backend já recusa (403) essas rotas pra este usuário de qualquer forma -
+  // este gate é só pra não tentar carregar (e mostrar erro de) dado que nunca vai vir.
+  if (user.portal_first_access_required) {
+    return (
+      <FirstAccessOnboarding
+        onComplete={() => {
+          void refreshAuth();
+        }}
+      />
+    );
   }
 
   if (loading && !summary) {
@@ -286,33 +340,20 @@ export default function PortalPage() {
     );
   }
 
+  // Sessão válida, mas os dados do portal não carregaram (backend fora do ar, permissão do
+  // colaborador rejeitada etc.). Antes esse caso caía de volta na tela de login, o que não fazia
+  // sentido depois de separar "está autenticado" (useWorkspaceAuth) de "os dados carregaram"
+  // (loadPortal) - reenviar e-mail/senha não ajudaria, já que a sessão está válida.
   if (!summary) {
     return (
-      <main className="min-h-screen bg-background px-4 py-8">
-        <section className="uni-surface mx-auto max-w-md rounded-lg p-5">
-          <div className="mb-5 flex items-center gap-3">
-            <Image alt="UNI Internet" className="h-10 w-16 object-contain object-left" height={40} priority src="/brand/uni-logo.png" width={64} />
-            <div>
-              <h1 className="text-lg font-semibold text-slate-950">Portal do ranking</h1>
-              <p className="text-sm text-slate-500">Acompanhamento individual e regional.</p>
-            </div>
-          </div>
-          <form className="space-y-3" onSubmit={handleLogin}>
-            <Input autoComplete="email" placeholder="E-mail" value={email} onChange={(event) => setEmail(event.target.value)} />
-            <Input
-              autoComplete="current-password"
-              placeholder="Senha"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            {error ? <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
-            <Button className="w-full" disabled={loginLoading} type="submit">
-              {loginLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              Entrar
-            </Button>
-          </form>
-        </section>
+      <main className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="w-full max-w-md rounded-lg border bg-white p-6 text-center shadow-sm">
+          <p className="text-sm font-medium text-slate-950">Não foi possível carregar o portal</p>
+          <p className="mt-2 text-sm text-slate-500">{error ?? "Tente novamente em instantes."}</p>
+          <Button className="mt-4" onClick={() => loadPortal()}>
+            Tentar novamente
+          </Button>
+        </div>
       </main>
     );
   }
@@ -389,11 +430,19 @@ export default function PortalPage() {
               <Badge className="border-[#2d5fff]/25 bg-[#2d5fff]/10 text-[#0028f3]">{overview.total_regionals} regionais</Badge>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard label="Colaboradores" value={formatNumber(overview.total_collaborators)} detail={`${formatNumber(overview.total_service_orders)} O.S. no período`} />
+              <StatCard label="Colaboradores cadastrados" value={formatNumber(overview.total_collaborators)} detail={`${formatNumber(overview.total_service_orders)} O.S. no período`} />
               <StatCard label="Pontuação total" value={`${formatNumber(overview.final_points)} pts`} detail={`${formatNumber(overview.scored_service_orders)} O.S. pontuadas`} />
               <StatCard label="Pagamento estimado" value={formatMoney(overview.estimated_payment)} detail={`${formatNumber(overview.penalty_points)} pts em descontos`} />
               <StatCard label="Pendências" value={formatNumber(overview.unscored_service_orders + overview.manual_review_service_orders)} detail={`${overview.unscored_service_orders} sem regra, ${overview.manual_review_service_orders} em revisão`} />
             </div>
+            {overview.excluded_collaborators ? (
+              <p className="text-sm text-slate-500">
+                Esta visão conta só quem está ativo e com cadastro completo. Mais {formatNumber(overview.excluded_collaborators)} colaborador
+                {overview.excluded_collaborators === 1 ? "" : "es"} com produção no período ({formatNumber(overview.excluded_service_orders)} O.S.) ainda
+                {overview.excluded_collaborators === 1 ? " não está" : " não estão"} no ranking, sem cadastro concluído ou inativo(s) - o fechamento completo
+                (aba Gamificação) inclui todo mundo.
+              </p>
+            ) : null}
             {overview.alerts.length ? <div className="rounded-lg border border-amber-200 bg-amber-50 p-4"><h3 className="text-sm font-semibold text-amber-900">Pontos de atenção</h3><ul className="mt-2 space-y-1 text-sm text-amber-800">{overview.alerts.map((alert) => <li key={alert}>{alert}</li>)}</ul></div> : null}
             <div className="grid gap-5 lg:grid-cols-2">
               <section className="overflow-hidden rounded-lg border bg-white shadow-sm">
@@ -558,6 +607,20 @@ export default function PortalPage() {
                 ["recurrence", "Reincidências"]
               ].map(([value, label]) => <Button key={value} className="shrink-0" size="sm" variant={orderFilter === value ? "default" : "outline"} onClick={() => setOrderFilter(value as typeof orderFilter)}>{label}</Button>)}
             </div>
+            <p className="text-xs text-slate-500">
+              Mostrando {formatNumber(filteredOrders.length)} de {formatNumber(ordersTotal)} O.S. do período.
+              {ordersTruncatedByApi ? ` A consulta traz no máximo ${formatNumber(PORTAL_ORDERS_MAX)} O.S. por período.` : ""}
+            </p>
+            {!filteredOrders.length ? (
+              <div className="rounded-lg border bg-white p-6 text-center shadow-sm">
+                <p className="text-sm font-medium text-slate-950">Nenhuma O.S. encontrada</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {orders.length
+                    ? "Nenhuma O.S. atende à busca ou ao filtro selecionado. Ajuste os filtros para ver as demais."
+                    : "Não há O.S. registradas para você neste período."}
+                </p>
+              </div>
+            ) : null}
             {filteredOrders.map((order) => (
               <details key={order.id} className="group rounded-lg border bg-white shadow-sm">
                 <summary className="grid cursor-pointer list-none gap-3 p-4 [&::-webkit-details-marker]:hidden sm:grid-cols-[1fr_auto] sm:items-center">
@@ -611,7 +674,6 @@ export default function PortalPage() {
                 </div>
               </details>
             ))}
-            {!filteredOrders.length ? <p className="rounded-lg border bg-white p-4 text-sm text-slate-500">Nenhuma O.S. encontrada no período.</p> : null}
           </section>
         ) : null}
 
