@@ -1,17 +1,18 @@
 "use client";
 
-import { BriefcaseBusiness, ClipboardList, ListChecks, Menu, Tag } from "lucide-react";
+import { BriefcaseBusiness, ClipboardList, ListChecks, Menu, ShieldAlert, Tag } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
-export type ManagementTab = "structure" | "cases" | "diagnostics" | "reasons";
+export type ManagementTab = "structure" | "cases" | "diagnostics" | "reasons" | "audit";
 
 const ITEMS: Array<{ value: ManagementTab; label: string; description: string; icon: typeof BriefcaseBusiness }> = [
   { value: "structure", label: "Estrutura operacional", description: "Colaboradores, supervisor e modelo de equipe", icon: BriefcaseBusiness },
   { value: "cases", label: "Casos de gestão", description: "Justificativas e decisão da matriz", icon: ListChecks },
   { value: "diagnostics", label: "Diagnóstico", description: "Ranking por motivo, colaborador e regional", icon: ClipboardList },
+  { value: "audit", label: "Auditoria da estrutura", description: "Inconsistências antes da capacidade regional", icon: ShieldAlert },
   { value: "reasons", label: "Motivos de justificativa", description: "Catálogo de motivos pré-cadastrados", icon: Tag },
 ];
 
@@ -21,15 +22,19 @@ const ITEMS: Array<{ value: ManagementTab; label: string; description: string; i
 export function ManagementModuleSidebar({
   activeTab,
   canAdminReasons,
+  canAudit,
   openCasesCount = 0,
   onChange,
 }: {
   activeTab: ManagementTab;
   canAdminReasons: boolean;
+  canAudit: boolean;
   openCasesCount?: number;
   onChange: (tab: ManagementTab) => void;
 }) {
-  const visibleItems = ITEMS.filter((item) => item.value !== "reasons" || canAdminReasons);
+  const visibleItems = ITEMS.filter((item) => item.value !== "reasons" || canAdminReasons).filter(
+    (item) => item.value !== "audit" || canAudit
+  );
   return (
     <Sheet>
       <SheetTrigger asChild>
@@ -38,11 +43,15 @@ export function ManagementModuleSidebar({
         </Button>
       </SheetTrigger>
       <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r bg-white p-0 text-slate-950 sm:max-w-sm">
-        <SheetHeader className="border-slate-100">
+        <SheetHeader className="shrink-0 border-slate-100">
           <SheetTitle className="text-slate-950">Gestão Integrada</SheetTitle>
           <SheetDescription className="text-slate-500">Navegação modular do UNI Workspace</SheetDescription>
         </SheetHeader>
-        <nav className="flex-1 space-y-1 p-3" aria-label="Navegação de Gestão Integrada">
+        {/* `min-h-0` + `overflow-y-auto`: sem isso, um flex-col de altura fixa (`SheetContent`
+            usa `inset-y-0`) nunca deixa este `nav` rolar - com itens suficientes pra passar da
+            altura da tela, os últimos ficam cortados sem como alcançá-los (mesmo bug corrigido em
+            `module-navigation-sidebar.tsx`). */}
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3" aria-label="Navegação de Gestão Integrada">
           {visibleItems.map((item) => {
             const Icon = item.icon;
             const selected = activeTab === item.value;
@@ -73,7 +82,7 @@ export function ManagementModuleSidebar({
             );
           })}
         </nav>
-        <div className="border-t border-slate-100 p-4 text-[11px] text-slate-400">Novos módulos podem ser adicionados a este menu sem alterar a navegação principal.</div>
+        <div className="shrink-0 border-t border-slate-100 p-4 text-[11px] text-slate-400">Novos módulos podem ser adicionados a este menu sem alterar a navegação principal.</div>
       </SheetContent>
     </Sheet>
   );

@@ -56,6 +56,7 @@ from app.modules.management.schemas import (
     ManagementOptionsOut,
     ManagementSettingsUpdate,
     ManagementShiftPatternSuggestionOut,
+    StructureAuditOut,
 )
 from app.modules.management.scheduler import (
     AUTO_GENERATE_LAST_RUN_DATE_KEY,
@@ -64,6 +65,7 @@ from app.modules.management.scheduler import (
 )
 from app.modules.management import services as management_services
 from app.modules.management.services import member_out, refresh_operational_members, summarize_members, visible_member_filters
+from app.modules.management.structure_audit import run_structure_audit
 from app.modules.operations.models import OperationTeamModel
 from app.services import notifications as notifications_service
 from app.services.audit_log import record_audit_log, snapshot
@@ -140,6 +142,16 @@ def refresh_structure(
     record_audit_log(db, user, "refresh", "management_operational_members", "structure", None, {"created_candidates": created})
     db.commit()
     return {"created_candidates": created}
+
+
+@router.get("/structure-audit", response_model=StructureAuditOut)
+def structure_audit(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("management:audit_structure:read")),
+):
+    """Auditoria da Estrutura Operacional Confiável (pedido do usuário em 2026-08-29) - só leitura,
+    nenhuma chamada ao IXC, nenhuma alteração de dado. Ver `structure_audit.run_structure_audit`."""
+    return run_structure_audit(db)
 
 
 @router.post("/members/{member_id}/claim", response_model=ManagementOperationalMemberOut)

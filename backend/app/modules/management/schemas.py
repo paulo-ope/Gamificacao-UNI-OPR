@@ -372,3 +372,44 @@ class ManagementAutoGenerateSettingsOut(BaseModel):
 
 class ManagementAutoGenerateSettingsUpdate(BaseModel):
     enabled: bool
+
+
+class StructureAuditFinding(BaseModel):
+    """Um achado da Auditoria da Estrutura Operacional (pedido do usuário em 2026-08-29) - nunca
+    inclui CPF completo nem nenhum outro dado sensível, só identificadores e nomes já expostos em
+    outras telas do módulo (`ManagementOperationalMemberOut`, `AdminPersonStructureOut`)."""
+
+    type: str
+    severity: str  # "critico" | "atencao" | "informativo"
+    description: str
+    entity_type: str  # "collaborator" | "responsible_assignment" | "team_model" | "branch_capacity" | "operational_member"
+    entity_id: int | None = None
+    regional: str | None = None
+    subject_name: str | None = None
+    suggestion: str
+    blocks_capacity: bool
+
+
+class StructureAuditSummary(BaseModel):
+    total_collaborators: int
+    active_collaborators: int
+    collaborators_with_ixc_id: int
+    collaborators_with_cpf: int
+    active_collaborators_without_team_type: int
+    responsible_assignments: int
+    responsible_assignments_with_team_model: int
+    branch_capacity_rows: int
+    management_members: int
+    management_members_with_team_model: int
+
+
+class StructureAuditOut(BaseModel):
+    summary: StructureAuditSummary
+    findings: list[StructureAuditFinding]
+    # Contadores SEMPRE refletem o total real, mesmo se `findings` for cortado pelo limite de
+    # segurança abaixo (nunca minta sobre quantos achados existem por causa de um corte de lista).
+    critical_count: int
+    attention_count: int
+    informative_count: int
+    total_findings: int
+    generated_at: datetime
