@@ -48,6 +48,7 @@ import type {
   ManagementOperationalMember,
   ManagementOptions,
   ManagementShiftPatternSuggestion,
+  StructureAudit,
   Notification,
   EcosystemPermission,
   Permission,
@@ -357,6 +358,7 @@ export const api = {
     return request<ManagementDashboard>(`/management/dashboard${query ? `?${query}` : ""}`);
   },
   managementOptions: () => request<ManagementOptions>("/management/options"),
+  managementStructureAudit: () => request<StructureAudit>("/management/structure-audit"),
   refreshManagementStructure: () =>
     request<{ created_candidates: number }>("/management/structure/refresh", {
       method: "POST",

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Home, Loader2, LogOut } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -42,7 +42,7 @@ import { operationsApi, type OperationIxcSyncSettings } from "@/lib/operations-a
 import type { AccessProfile, AdminPeopleStructure, AdminPersonStructure, AdminWorkspaceModule, AuthUser, EcosystemPermission, Permission, PortalAccessRequest, PortalInvite, PortalInviteCreateResult } from "@/lib/types";
 
 export default function AdminPage() {
-  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
+  const { user, checking, logout } = useWorkspaceAuth();
   // Substituem `window.confirm`/`window.prompt` (achado real, 2026-08-29: `window.prompt` lançava
   // exceção não tratada e `window.confirm` podia ser silenciosamente ignorado em determinados
   // ambientes de navegador, deixando revogar convite/rejeitar solicitação sem efeito nenhum,
@@ -190,7 +190,7 @@ export default function AdminPage() {
       </main>
     );
   }
-  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
+  if (!user) return <RedirectToWorkspaceHome />;
 
   if (!canAdmin) {
     return (

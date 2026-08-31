@@ -17,6 +17,157 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **Correção de nomes de atendente do SGP Suporte na VM**:
+  na VM vários atendentes apareciam como ID na tela; local está normalizado.
+  **Causa**: `_normalize_attendance` já resolve o nome pela dimensão `user`,
+  mas o fallback só entra quando o campo de nome vem **vazio**. Quando a API do
+  OPA devolve o próprio `id_atendente` no campo de nome — ou quando o
+  atendimento foi importado antes de a dimensão existir localmente — o id fica
+  gravado em `attendant_name`, e ranking, tabela, filtros e `/opa-metrics` leem
+  essa coluna crua. Já existia `_backfill_customer_names` fazendo exatamente
+  essa auto-cura para **cliente**; não havia equivalente para **atendente**.
+  **Solução versionada, em três partes**:
+  1. `backfill_attendant_names(db)` em `opa_ingestion.py` — helper único,
+     espelha o de cliente e cobre também `attendant_name == attendant_id`.
+     Exige que o nome da dimensão seja diferente do id, senão trocar id por id
+     quebraria a idempotência.
+  2. Chamado no sync de dimensões, ao lado do de cliente — **auto-cura**: toda
+     sincronização normaliza o que passou a ter tradução disponível.
+  3. `backend/scripts/fix_opa_attendant_names.py` — correção explícita e
+     idempotente, `--dry-run` como padrão seguro, `--apply` para gravar. Usa o
+     mesmo helper (fonte única). Não chama API do OPA, não importa, não toca
+     `attendant_id`, `raw_payload`, TMA nem TMR.
+  **Correção preventiva adicional**: `resolve_attendant_identity` usava
+  `attendance_name or dimension_name` — o id gravado como nome é "truthy" e
+  vencia o nome bom da dimensão, então o painel individual mostrava hash mesmo
+  com a dimensão sincronizada. Passou a usar `_readable_name()`, helper único
+  no service (sem duplicar lógica em rota).
+  **Detalhe que teria quebrado na VM**: rodando `python scripts/x.py`, o Python
+  põe `/app/scripts` em `sys.path[0]`, não `/app` — `import app` falhava com
+  `ModuleNotFoundError`. O script tem bootstrap de `sys.path`, então as duas
+  formas de chamada funcionam sem PYTHONPATH nem ajuste de ambiente na VM.
+  **Comandos na VM** (sem instalar nada):
+  ```
+  docker compose build backend
+  docker compose up -d backend
+  docker compose exec -T backend python scripts/fix_opa_attendant_names.py --dry-run
+  docker compose exec -T backend python scripts/fix_opa_attendant_names.py --apply
+  docker compose exec -T backend python scripts/fix_opa_attendant_names.py --dry-run
+  ```
+  A terceira execução confirma a idempotência (deve reportar 0 corrigíveis).
+  Se sobrar "pendentes sem dimensão", é atendente que o OPA não tem no cadastro
+  de usuários: sincronizar dimensões e rodar de novo. O script nunca inventa
+  nome.
+  **Validado**: o diagnóstico reproduz exatamente o baseline local medido
+  (122.208 atendimentos, 121.730 com id, 0 com nome == id, 11 com nome vazio,
+  245 dimensões `user`); `--apply` em dado real local é no-op (0 atualizados,
+  exit 0). 13 testes novos em `test_opa_attendant_name_fix.py` (dry-run não
+  grava, corrige vazio, corrige nome == id, não sobrescreve nome humano, deixa
+  pendente sem dimensão, idempotência, não toca id/payload, ranking passa a
+  exibir nome, painel individual prefere dimensão). Suíte backend
+  **888 passed / 13 failed** (as mesmas 13 falhas pré-existentes do módulo AI).
+  Frontend não foi tocado.
+  Arquivos: `opa_ingestion.py`, `opa_attendant_service.py`,
+  `scripts/fix_opa_attendant_names.py` (novo),
+  `tests/test_opa_attendant_name_fix.py` (novo).
+
+
+- **Auditoria da Estrutura Operacional Confiável - nova (backend + frontend, sem migration)**:
+  pedido do usuário em 2026-08-29 - fase preparatória antes de
+  "capacidade regional automática": mostrar de forma clara as divergências entre Gamificação
+  (`Collaborator`), Operação (`OperationOrder`/`OperationResponsibleAssignment`/
+  `OperationTeamModel`/`OperationBranchCapacity`) e Gestão (`ManagementOperationalMember`) antes de
+  avançar. **Só leitura, nenhuma chamada ao IXC, nenhum dado alterado.**
+
+  **Backend**: novo service dedicado `backend/app/modules/management/structure_audit.py`
+  (`run_structure_audit`) - reaproveita `resolve_responsible_regional_candidates`
+  (operations/responsible_regional.py) e `_find_collaborator`/`_norm_name`
+  (management/services.py), mesmas funções já usadas por `refresh_operational_members`, em vez de
+  duplicar a lógica de casamento responsável×colaborador. Novo endpoint
+  `GET /api/management/structure-audit` (permissão nova `management:audit_structure:read`,
+  registrada em `PERMISSION_LABELS`/`ROLE_PERMISSIONS["admin"]`, `core/security.py`), schemas
+  `StructureAuditFinding`/`StructureAuditSummary`/`StructureAuditOut`
+  (management/schemas.py).
+
+  **13 auditorias cobertas** (uma função por grupo, todas independentes e aditivas à mesma lista de
+  achados): colaborador ativo sem `ixc_employee_id`; sem CPF local; sem `team_type`; campo sem
+  supervisor; responsável da Operação sem `Collaborator` correspondente; responsável com produção
+  em mais de uma regional; regional oficial do colaborador divergente da regional predominante das
+  O.S. (via `responsible_ixc_id`); membro de Gestão sem modelo de equipe; modelo de equipe inativo
+  ainda referenciado por membro/cadastro ativo; regional com estrutura ativa mas sem
+  `OperationBranchCapacity` configurada; capacidade com limiar zerado/ausente/fora de ordem
+  (bom < ótimo < excelente); membro pendente de validação; membro com produção nos últimos 30 dias
+  mas status estrutural ainda pendente (o achado mais acionável - já está trabalhando sem estrutura
+  resolvida). Cada achado carrega severidade (`critico`/`atencao`/`informativo`), descrição em
+  pt-BR, entidade/regional/responsável afetados, sugestão de correção e se bloqueia o cálculo de
+  capacidade - nunca CPF completo (só ausência/presença).
+
+  **Achado real corrigido durante a própria validação ao vivo**: o corte de segurança contra lista
+  ilimitada (`manual_desenvolvimento_senior.md`) inicialmente cortava a lista JÁ ORDENADA por
+  severidade (crítico primeiro) - com `atencao` tendo muito mais linhas que `informativo`, um corte
+  global de "top N" deixava `informativo` inteiro de fora da lista (aparecia certo no card com
+  contador, mas filtrar por ele mostrava "nenhum achado"). Corrigido para cortar POR SEVERIDADE
+  (`MAX_FINDINGS_PER_SEVERITY = 700`) - toda severidade com achado real aparece com pelo menos uma
+  amostra. Os contadores (`critical_count`/`attention_count`/`informative_count`/`total_findings`)
+  sempre refletem o total real, mesmo com a lista cortada.
+
+  **Frontend**: novo componente `frontend/components/management/structure-audit-panel.tsx` (busca
+  os próprios dados, sem props - mesmo padrão de `ManagementCaseDiagnosticsPanel`) - resumo com
+  KPIs, 3 cards clicáveis por severidade (cor própria, funcionam como filtro), filtros de
+  severidade/regional/tipo, tabela escaneável com badge de severidade e de "bloqueia capacidade",
+  estados de loading/vazio/erro, aviso visível quando a lista está cortada pelo limite de
+  segurança. Nova aba "Auditoria da estrutura" em `/gestao` (`management-module-sidebar.tsx`,
+  `gestao/page.tsx`), atrás da permissão nova.
+
+  **Corrigido de propósito, fora do escopo original mas no mesmo arquivo tocado**: o mesmo menu
+  lateral de Gestão Integrada (`management-module-sidebar.tsx`) tinha o mesmo bug de rolagem já
+  corrigido em `module-navigation-sidebar.tsx` (`nav` sem `overflow-y-auto`/`min-h-0` corta o
+  último item em telas baixas) - corrigido junto, antes de adicionar o 5º item.
+
+  **Testes**: `backend/tests/test_management_structure_audit.py` (28 casos) - um por tipo de
+  achado (presente e ausente), contadores de resumo batendo com o dado bruto, permissão (403 sem
+  `management:audit_structure:read`, 200 com ela), nenhum CPF completo em nenhum campo da resposta,
+  e um teste de regressão específico do bug do corte por severidade (via `monkeypatch` no limite,
+  reproduz o "informativo sumia da lista" e confirma a correção).
+
+  **Validado**: backend **874 passed, as mesmas 13 falhas pré-existentes do módulo de IA**; `npx
+  tsc --noEmit`, `npm run test -- --run` (45/45), `npm run build` - limpos. **Validado ao vivo
+  contra o banco real de desenvolvimento**: números batem exatamente com o levantamento manual que
+  motivou a tarefa (383 colaboradores, 356 com `ixc_employee_id`, 1 com CPF local - o pedido
+  original registrava 0, diferença de dado real entre o levantamento e agora, não bug -, 370
+  ativos, 369 sem `team_type`, 207 `OperationResponsibleAssignment` todos com modelo de equipe, 0
+  linhas em `operations_branch_capacity`, 1283 membros de Gestão, 206 com modelo de equipe);
+  resultado real: **491 achados críticos, 3027 de atenção, 382 informativos**. Filtro por
+  severidade/regional/tipo conferido na tela (incluindo o cenário que expôs e validou a correção do
+  bug de corte). Nenhum dado alterado - endpoint é 100% leitura.
+
+  **Limitações conhecidas**: lista de achados tem limite de segurança de 700 por severidade
+  (`MAX_FINDINGS_PER_SEVERITY`) - com a base de hoje (3900 achados totais) a severidade `atencao`
+  fica cortada (700 de 3027), os contadores continuam exatos. "Regional divergente da produção"
+  (achado 7) só compara contra o histórico de `OperationOrder.responsible_ixc_id` - não considera
+  peso por recência (uma mudança de base recente pode não superar meses de histórico antigo na
+  regional anterior). Auditoria é um retrato do momento da chamada (sem histórico/tendência) -
+  correto para o objetivo desta fase (fase preparatória), mas não serve pra acompanhar evolução ao
+  longo do tempo ainda.
+
+  **Próximos passos sugeridos para a Fase 3B (capacidade regional automática)**: usar os achados
+  desta auditoria como pré-requisito de bloqueio (`blocks_capacity=true`) antes de calcular
+  capacidade por regional de verdade - hoje `operations_branch_capacity` está com 0 linhas, então
+  nenhuma regional tem capacidade configurada; decidir se a Fase 3B exige zerar os achados críticos
+  primeiro ou se calcula capacidade só para as regionais sem achado bloqueante; considerar guardar
+  um snapshot periódico desta auditoria (`management_structure_audit_runs`, mesmo padrão de outras
+  tabelas de execução já usadas no projeto) para medir se o número de achados está diminuindo ao
+  longo do tempo.
+
+  Sem migration (nenhuma tabela nova, só service/schema/rota/permissão/tela). Arquivos:
+  `backend/app/core/security.py`, `backend/app/modules/management/structure_audit.py` (novo),
+  `backend/app/modules/management/schemas.py`, `backend/app/modules/management/router.py`,
+  `backend/tests/test_management_structure_audit.py` (novo), `frontend/lib/types.ts`,
+  `frontend/lib/api.ts`, `frontend/components/management/structure-audit-panel.tsx` (novo),
+  `frontend/components/management/management-module-sidebar.tsx`, `frontend/app/gestao/page.tsx`.
+  Sem commit, sem push, sem regra financeira alterada, sem regra de gamificação alterada, sem
+  chamada ao IXC, sem dado real alterado (endpoint só de leitura).
+
 - **Fase 2D: aprovação de solicitação de acesso passa a criar a conta direto, sem convite/link
   manual (backend + frontend + migration aplicada, ainda sem commit, sem push)**: pedido do
   usuário em 2026-08-29, em três partes - (1) prioridade de sugestão de colaborador na aprovação,
@@ -1162,7 +1313,7 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   `types.ts`, `api.ts`, `support-chart-options.ts` (novo), `opa-charts.tsx`
   (novo), `opa-drilldown.tsx` (novo), `opa-saved-filters.tsx` (novo),
   `opa-module-components.tsx`, `page.tsx`.
-  **Ainda sem commit.**
+
 
 - **D1 corrigido (portal) + investigação do C3 + decisão dos créditos registrada**:
   seção 10.3 de

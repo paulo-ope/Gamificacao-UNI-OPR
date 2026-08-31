@@ -49,6 +49,7 @@ export type Permission =
   | "management:review"
   | "management:generate_cases"
   | "management:admin"
+  | "management:audit_structure:read"
   | "admin:users:read"
   | "admin:users:write"
   | "admin:users:delete"
@@ -869,6 +870,46 @@ export type ManagementCaseDiagnostics = {
   by_regional: ManagementCaseDiagnosticsBucket[];
   by_responsible: ManagementCaseDiagnosticsBucket[];
   by_reason: ManagementCaseDiagnosticsBucket[];
+};
+
+/** Auditoria da Estrutura Operacional Confiável (2026-08-29) - `severity` nunca é recalculada no
+ *  cliente, só filtrada/exibida (fonte única de regra vive no backend, ver
+ *  `structure_audit.py`). */
+export type StructureAuditSeverity = "critico" | "atencao" | "informativo";
+
+export type StructureAuditFinding = {
+  type: string;
+  severity: StructureAuditSeverity;
+  description: string;
+  entity_type: string;
+  entity_id: number | null;
+  regional: string | null;
+  subject_name: string | null;
+  suggestion: string;
+  blocks_capacity: boolean;
+};
+
+export type StructureAuditSummary = {
+  total_collaborators: number;
+  active_collaborators: number;
+  collaborators_with_ixc_id: number;
+  collaborators_with_cpf: number;
+  active_collaborators_without_team_type: number;
+  responsible_assignments: number;
+  responsible_assignments_with_team_model: number;
+  branch_capacity_rows: number;
+  management_members: number;
+  management_members_with_team_model: number;
+};
+
+export type StructureAudit = {
+  summary: StructureAuditSummary;
+  findings: StructureAuditFinding[];
+  critical_count: number;
+  attention_count: number;
+  informative_count: number;
+  total_findings: number;
+  generated_at: string;
 };
 
 export type LoginResult = {

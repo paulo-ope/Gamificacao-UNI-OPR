@@ -30,7 +30,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { NotificationBell } from "@/components/workspace/notification-bell";
-import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { configuredCockpitWidgetSize } from "@/lib/intelligence-cockpit-layout";
 import {
@@ -132,7 +132,7 @@ function FilterValuesEditor({
 }
 
 export default function IntelligencePage() {
-  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
+  const { user, checking, logout } = useWorkspaceAuth();
   const [tab, setTab] = useState("cockpit");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,7 +144,7 @@ export default function IntelligencePage() {
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando UNI Intelligence...</main>;
   }
-  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
+  if (!user) return <RedirectToWorkspaceHome />;
 
   if (!canRead) {
     return (

@@ -39,7 +39,7 @@ import { MultiSelect as SharedMultiSelect } from "@/components/ui/multi-select";
 import { AppRadio } from "@/components/ui/radio";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import {
   schedulingApi,
@@ -264,7 +264,7 @@ function SchedulingMultiSelect({
 }
 
 export default function AgendamentoPage() {
-  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
+  const { user, checking, logout } = useWorkspaceAuth();
   const canRead = Boolean(user?.permissions.includes("scheduling:read"));
   const canSync = Boolean(user?.permissions.includes("scheduling:sync"));
   const canManage = Boolean(user?.permissions.includes("scheduling:manage"));
@@ -504,7 +504,7 @@ export default function AgendamentoPage() {
 
   if (checking && !user)
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando UNI Workspace...</main>;
-  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
+  if (!user) return <RedirectToWorkspaceHome />;
   if (!canRead) {
     return (
       <main className="flex min-h-screen items-center justify-center px-4">

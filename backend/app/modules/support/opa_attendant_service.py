@@ -18,6 +18,20 @@ from .models import SupportOpaAttendance, SupportOpaDimension
 from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters
 
 
+def _readable_name(attendance_name: str | None, dimension_name: str | None, attendant_id: str) -> str | None:
+    """Escolhe o melhor nome disponivel para exibicao.
+
+    Prefere o que esta gravado no atendimento, mas descarta valor vazio ou que
+    seja literalmente o `attendant_id` -- nesses casos o nome da dimensao `user`
+    do OPA e melhor. Se nenhum dos dois servir, devolve o que houver (ate mesmo
+    o id), porque a tela precisa de algum rotulo e um id cru e mais honesto que
+    um vazio silencioso.
+    """
+    for candidate in (attendance_name, dimension_name):
+        value = (candidate or "").strip()
+        if value and value != attendant_id:
+            return value
+    return (attendance_name or dimension_name) or None
 def resolve_attendant_identity(db: Session, attendant_id: str) -> dict[str, Any] | None:
     """Confirma que o atendente existe (em algum atendimento já importado, ou na
     dimensão de usuários sincronizada) antes de montar um resumo — evita
@@ -51,7 +65,11 @@ def resolve_attendant_identity(db: Session, attendant_id: str) -> dict[str, Any]
 
     return {
         "attendant_id": attendant_id,
-        "attendant_name": attendance_name or dimension_name,
+        # `attendance_name` pode ser o proprio id quando a API do OPA mandou o id
+        # no campo de nome (ver backfill_attendant_names). Nesse caso ele e
+        # "truthy" e venceria o nome bom da dimensao, mostrando hash na tela --
+        # por isso a comparacao explicita em vez de um `or` simples.
+        "attendant_name": _readable_name(attendance_name, dimension_name, attendant_id),
         "attendant_type": attendant_type,
     }
 

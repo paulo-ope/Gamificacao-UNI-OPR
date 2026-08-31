@@ -7,8 +7,9 @@ import { useEffect, useMemo, useState } from "react";
 import { ManagementCaseDiagnosticsPanel, ManagementCasesPanel } from "@/components/management/management-cases-panel";
 import { ManagementModuleSidebar, type ManagementTab } from "@/components/management/management-module-sidebar";
 import { ManagementReasonsPanel } from "@/components/management/management-reasons-panel";
+import { StructureAuditPanel } from "@/components/management/structure-audit-panel";
 import { NotificationBell } from "@/components/workspace/notification-bell";
-import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -127,7 +128,7 @@ function metricCards(data: ManagementDashboard | null) {
 }
 
 export default function ManagementPage() {
-  const { user, checking, error: authError, login, logout } = useWorkspaceAuth();
+  const { user, checking, logout } = useWorkspaceAuth();
   const [data, setData] = useState<ManagementDashboard | null>(null);
   const [options, setOptions] = useState<ManagementOptions>({ supervisors: [], team_models: [] });
   const [loading, setLoading] = useState(false);
@@ -155,6 +156,7 @@ export default function ManagementPage() {
   const canJustify = Boolean(user?.permissions.includes("management:write_justification"));
   const canClaim = Boolean(user?.permissions.includes("management:claim_member"));
   const canAdminReasons = Boolean(user?.permissions.includes("management:admin"));
+  const canAudit = Boolean(user?.permissions.includes("management:audit_structure:read"));
   const regionals = useMemo(() => Array.from(new Set((data?.members ?? []).map((item) => item.regional))).sort(), [data]);
   // "Regional de origem" (Collaborator.regional) - lista separada da regional operacional acima,
   // pra responder "quantos colaboradores temos na Regional X" sem contar quem só atendeu lá
@@ -297,7 +299,7 @@ export default function ManagementPage() {
   if (checking && !user) {
     return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando Gestão...</main>;
   }
-  if (!user) return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
+  if (!user) return <RedirectToWorkspaceHome />;
 
   if (!canRead) {
     return (
@@ -319,6 +321,7 @@ export default function ManagementPage() {
             <ManagementModuleSidebar
               activeTab={tab}
               canAdminReasons={canAdminReasons}
+              canAudit={canAudit}
               openCasesCount={data?.summary.open_cases ?? 0}
               onChange={setTab}
             />
@@ -345,12 +348,18 @@ export default function ManagementPage() {
               <p className="text-[10px] font-bold uppercase tracking-[0.22em]">Controle da matriz</p>
             </div>
             <h2 className="mt-2 text-2xl font-semibold text-slate-950">
-              {tab === "structure" ? "Estrutura operacional e pendências" : "Casos de gestão e justificativas"}
+              {tab === "structure"
+                ? "Estrutura operacional e pendências"
+                : tab === "audit"
+                  ? "Auditoria da estrutura operacional"
+                  : "Casos de gestão e justificativas"}
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-500">
               {tab === "structure"
                 ? "Valide quem pertence à Operação, vincule supervisor e modelo de equipe, e acompanhe riscos antes de cobrar metas ou justificativas."
-                : "Acompanhe os desvios de meta abertos como caso formal, cobre a justificativa do supervisor e registre a decisão da matriz."}
+                : tab === "audit"
+                  ? "Inconsistências entre Gamificação, Operação e Gestão que precisam ser resolvidas antes da capacidade regional automática."
+                  : "Acompanhe os desvios de meta abertos como caso formal, cobre a justificativa do supervisor e registre a decisão da matriz."}
             </p>
           </div>
           {canManage && tab === "structure" ? (
@@ -375,6 +384,8 @@ export default function ManagementPage() {
         ) : null}
 
         {tab === "diagnostics" ? <ManagementCaseDiagnosticsPanel /> : null}
+
+        {tab === "audit" && canAudit ? <StructureAuditPanel /> : null}
 
         {tab === "reasons" && canAdminReasons ? <ManagementReasonsPanel /> : null}
 

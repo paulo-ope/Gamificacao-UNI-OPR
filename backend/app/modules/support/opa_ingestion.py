@@ -552,6 +552,12 @@ def _sync_opa_dimensions(db: Session, client: OpaClient, now: datetime, *, force
                 logger.warning("falha_sincronizar_dimensao_opa type=%s erro=%s", dimension_type, exc)
         db.flush()
         _backfill_customer_names(db)
+        # Mesma auto-cura pro nome do atendente: a dimensao `user` acabou de ser
+        # sincronizada, entao este e o momento em que ids gravados como nome
+        # passam a ter tradução disponivel. Ver `backfill_attendant_names`.
+        corrigidos = backfill_attendant_names(db)
+        if corrigidos:
+            logger.info("nomes_atendente_normalizados total=%s", corrigidos)
         upsert_setting(db, SUPPORT_OPA_DIMENSIONS_LAST_SYNCED_AT_KEY, now.isoformat())
     return {
         "user": _load_dimension_map(db, "user"),
@@ -594,6 +600,62 @@ def _backfill_customer_names(db: Session) -> None:
         .values(customer_name=customer_name)
     )
 
+
+
+
+def backfill_attendant_names(db: Session) -> int:
+    """Normaliza `attendant_name` já gravado usando a dimensão `user` do OPA.
+
+    Espelha `_backfill_customer_names`, com uma diferença que importa: além do
+    nome vazio/nulo, também corrige o caso em que o nome gravado É o próprio
+    `attendant_id`. Isso acontece quando a API do OPA devolve o id no campo de
+    nome (`_first(record, "atendente", ...)` acerta um id) e a dimensão de
+    usuários ainda não estava sincronizada no momento da importação — o
+    fallback de `_normalize_attendance` só entra quando o campo vem vazio, não
+    quando vem preenchido com lixo.
+
+    Nunca sobrescreve nome humano válido: a cláusula exige que o valor atual
+    esteja vazio ou seja idêntico ao id. E exige que o nome da dimensão seja
+    diferente do id, senão trocar id por id deixaria a operação eternamente
+    "pendente" e quebraria a idempotência.
+
+    Só toca `attendant_name`. Não altera `attendant_id`, `raw_payload`, TMA,
+    TMR nem qualquer métrica. Devolve quantas linhas foram atualizadas.
+    """
+    dimension_name = (
+        select(SupportOpaDimension.name)
+        .where(
+            SupportOpaDimension.dimension_type == "user",
+            SupportOpaDimension.source_id == SupportOpaAttendance.attendant_id,
+            SupportOpaDimension.name.isnot(None),
+            SupportOpaDimension.name != "",
+            SupportOpaDimension.name != SupportOpaAttendance.attendant_id,
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
+    dimension_exists = exists().where(
+        SupportOpaDimension.dimension_type == "user",
+        SupportOpaDimension.source_id == SupportOpaAttendance.attendant_id,
+        SupportOpaDimension.name.isnot(None),
+        SupportOpaDimension.name != "",
+        SupportOpaDimension.name != SupportOpaAttendance.attendant_id,
+    )
+    result = db.execute(
+        update(SupportOpaAttendance)
+        .where(
+            SupportOpaAttendance.attendant_id.isnot(None),
+            SupportOpaAttendance.attendant_id != "",
+            or_(
+                SupportOpaAttendance.attendant_name.is_(None),
+                SupportOpaAttendance.attendant_name == "",
+                SupportOpaAttendance.attendant_name == SupportOpaAttendance.attendant_id,
+            ),
+            dimension_exists,
+        )
+        .values(attendant_name=dimension_name)
+    )
+    return int(result.rowcount or 0)
 
 def _normalize_attendance(record: dict[str, Any], dimensions: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
     dimensions = dimensions or {}

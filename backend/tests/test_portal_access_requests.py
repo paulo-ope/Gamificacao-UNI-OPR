@@ -491,8 +491,15 @@ def test_approve_creates_user_directly_with_submitted_password(db_session, make_
     assert user.role == "collaborator"
     assert user.active is True
     assert user.must_change_password is False
-    assert user.first_access_completed_at is None
+    # Diferente de convite/criação por admin: o primeiro acesso já vem completo, porque
+    # CPF/telefone/e-mail/senha já foram confirmados nesta mesma solicitação.
+    assert user.first_access_completed_at is not None
     assert verify_password(VALID_PASSWORD, user.password_hash)
+
+    db_session.refresh(collaborator)
+    assert collaborator.cpf == VALID_CPF_DIGITS
+    assert collaborator.phone == "69999990001"
+    assert collaborator.email == "aprovado@souuni.com"
 
 
 def test_approved_user_can_login_to_portal_with_submitted_password(db_session, make_collaborator, admin_user, monkeypatch):

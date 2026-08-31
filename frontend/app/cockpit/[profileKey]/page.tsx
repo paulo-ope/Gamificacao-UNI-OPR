@@ -7,7 +7,7 @@ import type { EChartsOption } from "echarts";
 import { Minus, MapPinned, Moon, Plus, Sun } from "lucide-react";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { buildBacklogChartOption, buildProductionChartOption, buildSlaChartOption } from "@/lib/cockpit-chart-options";
 import { configuredCockpitWidgetSize, type CockpitWidgetSize } from "@/lib/intelligence-cockpit-layout";
@@ -366,7 +366,7 @@ const ZOOM_STEP = 0.1;
 export default function CockpitPage() {
   const params = useParams<{ profileKey: string }>();
   const profileKey = params.profileKey;
-  const { user, checking, error: authError, login } = useWorkspaceAuth();
+  const { user, checking } = useWorkspaceAuth();
 
   const [payload, setPayload] = useState<CockpitPayload | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -469,7 +469,7 @@ export default function CockpitPage() {
     return <main className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">Carregando UNI Workspace...</main>;
   }
   if (!user) {
-    return <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />;
+    return <RedirectToWorkspaceHome />;
   }
   if (!canRead) {
     return (

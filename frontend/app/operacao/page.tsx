@@ -20,7 +20,7 @@ import { OperationsSlaHierarchyTable } from "@/components/operations/operations-
 import { OperationsTeamConfiguration } from "@/components/operations/operations-team-configuration";
 import { OperationsWarrantyAnalytics } from "@/components/operations/operations-warranty-analytics";
 import { OperationsWorkScheduleOverview } from "@/components/operations/operations-work-schedule-overview";
-import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
 import { Badge } from "@/components/ui/badge";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Button } from "@/components/ui/button";
@@ -557,13 +557,7 @@ function ProgressDrillPanel({
 }
 
 export default function OperacaoPage() {
-  const {
-    user,
-    checking,
-    error: authError,
-    login,
-    logout,
-  } = useWorkspaceAuth();
+  const { user, checking, logout } = useWorkspaceAuth();
   const [period, setPeriod] = useState<OperationPeriod | null>(null);
   const [filters, setFilters] = useState<OperationFilterState | null>(null);
   const [filterOptions, setFilterOptions] =
@@ -1509,10 +1503,7 @@ export default function OperacaoPage() {
         Carregando UNI Workspace...
       </main>
     );
-  if (!user)
-    return (
-      <WorkspaceLogin isLoading={checking} error={authError} onLogin={login} />
-    );
+  if (!user) return <RedirectToWorkspaceHome />;
   if (!canRead) {
     return (
       <main className="flex min-h-screen items-center justify-center px-4">
