@@ -17,6 +17,62 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **Correção de nomes de atendente do SGP Suporte na VM**:
+  na VM vários atendentes apareciam como ID na tela; local está normalizado.
+  **Causa**: `_normalize_attendance` já resolve o nome pela dimensão `user`,
+  mas o fallback só entra quando o campo de nome vem **vazio**. Quando a API do
+  OPA devolve o próprio `id_atendente` no campo de nome — ou quando o
+  atendimento foi importado antes de a dimensão existir localmente — o id fica
+  gravado em `attendant_name`, e ranking, tabela, filtros e `/opa-metrics` leem
+  essa coluna crua. Já existia `_backfill_customer_names` fazendo exatamente
+  essa auto-cura para **cliente**; não havia equivalente para **atendente**.
+  **Solução versionada, em três partes**:
+  1. `backfill_attendant_names(db)` em `opa_ingestion.py` — helper único,
+     espelha o de cliente e cobre também `attendant_name == attendant_id`.
+     Exige que o nome da dimensão seja diferente do id, senão trocar id por id
+     quebraria a idempotência.
+  2. Chamado no sync de dimensões, ao lado do de cliente — **auto-cura**: toda
+     sincronização normaliza o que passou a ter tradução disponível.
+  3. `backend/scripts/fix_opa_attendant_names.py` — correção explícita e
+     idempotente, `--dry-run` como padrão seguro, `--apply` para gravar. Usa o
+     mesmo helper (fonte única). Não chama API do OPA, não importa, não toca
+     `attendant_id`, `raw_payload`, TMA nem TMR.
+  **Correção preventiva adicional**: `resolve_attendant_identity` usava
+  `attendance_name or dimension_name` — o id gravado como nome é "truthy" e
+  vencia o nome bom da dimensão, então o painel individual mostrava hash mesmo
+  com a dimensão sincronizada. Passou a usar `_readable_name()`, helper único
+  no service (sem duplicar lógica em rota).
+  **Detalhe que teria quebrado na VM**: rodando `python scripts/x.py`, o Python
+  põe `/app/scripts` em `sys.path[0]`, não `/app` — `import app` falhava com
+  `ModuleNotFoundError`. O script tem bootstrap de `sys.path`, então as duas
+  formas de chamada funcionam sem PYTHONPATH nem ajuste de ambiente na VM.
+  **Comandos na VM** (sem instalar nada):
+  ```
+  docker compose build backend
+  docker compose up -d backend
+  docker compose exec -T backend python scripts/fix_opa_attendant_names.py --dry-run
+  docker compose exec -T backend python scripts/fix_opa_attendant_names.py --apply
+  docker compose exec -T backend python scripts/fix_opa_attendant_names.py --dry-run
+  ```
+  A terceira execução confirma a idempotência (deve reportar 0 corrigíveis).
+  Se sobrar "pendentes sem dimensão", é atendente que o OPA não tem no cadastro
+  de usuários: sincronizar dimensões e rodar de novo. O script nunca inventa
+  nome.
+  **Validado**: o diagnóstico reproduz exatamente o baseline local medido
+  (122.208 atendimentos, 121.730 com id, 0 com nome == id, 11 com nome vazio,
+  245 dimensões `user`); `--apply` em dado real local é no-op (0 atualizados,
+  exit 0). 13 testes novos em `test_opa_attendant_name_fix.py` (dry-run não
+  grava, corrige vazio, corrige nome == id, não sobrescreve nome humano, deixa
+  pendente sem dimensão, idempotência, não toca id/payload, ranking passa a
+  exibir nome, painel individual prefere dimensão). Suíte backend
+  **888 passed / 13 failed** (as mesmas 13 falhas pré-existentes do módulo AI).
+  Frontend não foi tocado.
+  Arquivos: `opa_ingestion.py`, `opa_attendant_service.py`,
+  `scripts/fix_opa_attendant_names.py` (novo),
+  `tests/test_opa_attendant_name_fix.py` (novo).
+
+
+
 - **Fase 2D: aprovação de solicitação de acesso passa a criar a conta direto, sem convite/link
   manual (backend + frontend + migration aplicada, ainda sem commit, sem push)**: pedido do
   usuário em 2026-08-29, em três partes - (1) prioridade de sugestão de colaborador na aprovação,
