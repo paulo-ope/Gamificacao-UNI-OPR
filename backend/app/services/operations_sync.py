@@ -624,7 +624,12 @@ def reconcile_missing_service_orders_from_operations(
                     "error_count": len(batch_refs),
                 }
             )
-            break
+            # Um lote com erro nao interrompe os demais - o objetivo da reconciliacao e cobrir o
+            # intervalo de datas inteiro; um lote com problema (achado real: um unico registro
+            # inesperado abortava silenciosamente todos os lotes seguintes, sem nenhum sinal no
+            # resultado de que o restante do intervalo nunca foi tentado) so deve pular esse lote,
+            # nunca os demais.
+            continue
     return final_result
 
 
