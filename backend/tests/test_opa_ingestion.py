@@ -836,3 +836,49 @@ def test_opa_sync_status_endpoint_shows_active_run_during_execution(db_session, 
     assert seen["sync_in_progress"] is True
     assert seen["active_run_mode"] == "scheduled"
     assert seen["active_run_id"] is not None
+
+
+def test_import_aceita_atendimento_aberto_no_fim_do_dia_local(db_session):
+    """Regressao: `opened_at` e UTC e `run.date_from/date_to` sao datas LOCAIS
+    (America/Porto_Velho, UTC-4). Comparar a data UTC direto rejeitava tudo que
+    abriu entre 20h e 24h locais -- ja e o dia seguinte em UTC --, descartando
+    ~4h do ultimo dia de cada importacao sem nenhum erro visivel (so subia o
+    `rejected_count`, e a tela mostrava o dia como se estivesse completo).
+
+    23:30 local de 31/08 = 03:30Z de 01/09: precisa entrar na importacao de 31/08.
+    """
+    record = _record(
+        id="OPA-FIM-DO-DIA",
+        data_abertura="2026-09-01T03:30:00+00:00",   # 31/08 23:30 local
+        data_encerramento="2026-09-01T03:45:00+00:00",
+    )
+    client = FakeOpaClient([record])
+
+    result = import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 31), date_to=date(2026, 8, 31), imported_by=None
+    )
+
+    assert result["rejected_count"] == 0
+    assert db_session.scalar(
+        select(func.count(SupportOpaAttendance.id)).where(SupportOpaAttendance.source_id == "OPA-FIM-DO-DIA")
+    ) == 1
+
+
+def test_import_ainda_rejeita_atendimento_de_outro_dia_local(db_session):
+    """A guarda continua servindo pra detectar API ignorando o filtro de data:
+    01/09 10:00 local (14:00Z) nao pertence a importacao de 31/08."""
+    record = _record(
+        id="OPA-OUTRO-DIA",
+        data_abertura="2026-09-01T14:00:00+00:00",   # 01/09 10:00 local
+        data_encerramento="2026-09-01T14:30:00+00:00",
+    )
+    client = FakeOpaClient([record])
+
+    result = import_opa_attendances(
+        db_session, client, date_from=date(2026, 8, 31), date_to=date(2026, 8, 31), imported_by=None
+    )
+
+    assert result["rejected_count"] == 1
+    assert db_session.scalar(
+        select(func.count(SupportOpaAttendance.id)).where(SupportOpaAttendance.source_id == "OPA-OUTRO-DIA")
+    ) == 0

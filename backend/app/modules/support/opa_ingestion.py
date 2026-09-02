@@ -23,7 +23,7 @@ from .models import (
     SupportOpaImportMonth,
     SupportOpaImportRun,
 )
-from .opa_filters import TAG_SEPARATOR
+from .opa_filters import SUPPORT_TIMEZONE, TAG_SEPARATOR
 
 
 SUPPORT_OPA_IMPORT_LOCK_KEY = 913_275_003
@@ -968,7 +968,15 @@ def _process_attendance_pages(
                 row_number += 1
                 try:
                     payload = _normalize_attendance(record, dimensions)
-                    if payload["opened_at"].date() < run.date_from or payload["opened_at"].date() > run.date_to:
+                    # `opened_at` é armazenado em UTC, mas `run.date_from`/`date_to`
+                    # são datas LOCAIS (America/Porto_Velho, UTC-4) — o mesmo dia
+                    # que a API do OPA usa ao receber `dataInicialAbertura`. Comparar
+                    # a data UTC direto rejeitava todo atendimento aberto das 20h às
+                    # 24h locais (já é o dia seguinte em UTC), descartando ~4h de cada
+                    # último dia do intervalo importado. Era silencioso: só engordava
+                    # `rejected_count`, e o dia aparecia completo na tela.
+                    opened_local_date = payload["opened_at"].astimezone(SUPPORT_TIMEZONE).date()
+                    if opened_local_date < run.date_from or opened_local_date > run.date_to:
                         raise ValueError("Atendimento fora do período solicitado; a API OPA pode ter ignorado o filtro de data.")
 
                     try:

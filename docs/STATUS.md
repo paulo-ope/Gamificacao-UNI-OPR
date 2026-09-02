@@ -13,9 +13,59 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-08-29** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-02** — branch `claude/suporte-sync-backfill-madrugada`
 
 ## O que foi feito recentemente
+
+- **Bug de importação do SGP Suporte: 4 horas perdidas em todo último dia de
+  cada importação (corrigido + reimportado)**: investigação da divergência de
+  Jennyfer Tavares (cockpit 260 × SGP 216 em 23–31/08) com exportação real do
+  cockpit em CSV — primeira comparação protocolo a protocolo.
+  **Causa raiz** (`opa_ingestion.py`, guarda de período): comparava a data
+  **UTC** de `opened_at` contra `run.date_from`/`date_to`, que são datas
+  **locais** (America/Porto_Velho, UTC-4). Atendimento aberto às 21h locais já
+  é o dia seguinte em UTC → rejeitado, mesmo tendo sido devolvido corretamente
+  pela API. Silencioso: só engordava `rejected_count` e o dia aparecia
+  completo na tela. Como o guard só corta o **último dia do intervalo**,
+  backfills mensais perdiam só a cauda do último dia, mas runs diárias perdem
+  4h **todo dia**.
+  **Prova aritmética**: run de 31/08 tinha `fetched 2660 / rejeitados 182` e a
+  base tinha exatamente 2.478 (`2478 + 182 = 2660`). Após a correção: `criados
+  182, rejeitados 0`.
+  **Correção**: converter para o fuso local antes de comparar
+  (`.astimezone(SUPPORT_TIMEZONE).date()`), com 2 testes de regressão (aceita
+  23:30 local do dia importado; continua rejeitando outro dia). 164 testes do
+  módulo passando.
+  **Reimportação**: 587 atendimentos recuperados nos 5 dias afetados de 94
+  analisados — 30/06 +143, 31/07 +89, 31/08 +182, 01/09 +136, 02/09 +37,
+  todos com `rejeitados 0`. Imagem do backend reconstruída para o scheduler
+  carregar a correção; `support_opa_sync_enabled` pausado durante a operação e
+  **restaurado para `true`** ao final.
+  **Resultado**: dos 260 do cockpit, o SGP passou a ter **260/260**. Total,
+  regra de atribuição e avaliação (**4,49 exato**) agora batem.
+  **Regra de atribuição confirmada**: o CSV do cockpit tem a coluna "Último
+  atendente" = nosso `attendant_id`. Zero divergência de atribuição — encerra
+  a hipótese de "equivalência de filtro incerta" levantada na seção 10.1 do
+  roteiro. `first_human_attendant_id` e `distinct_human_attendant_ids` são
+  conceitos diferentes e não são o que o cockpit usa.
+  **TMA — pendência conhecida, não é bug**: o endpoint de detalhe do OPA
+  devolve as mesmas 18 chaves da listagem, ou seja **não existe campo de TMA
+  na API deles**. Medido com mensagens reais (amostra de 20): bruto 00:42:48,
+  ativo descontando ocioso >10min **00:20:50** contra o alvo **00:19:18** do
+  cockpit. O TMA do OPA é **tempo efetivo com desconto de ociosidade**; o
+  nosso `tma_seconds` (`fim` − `date`) é outra métrica. O mesmo mecanismo
+  explica o TMR: os 44 recuperados têm TMR médio 00:03:40 contra 00:00:15 dos
+  demais, mas **mediana igual** (12s vs 10s) — a responsividade é a mesma, o
+  que difere são as lacunas de madrugada. **Encaminhamento**: (1) renomear
+  nossa métrica para "duração total" — imediato e risco zero; (2) calcular
+  tempo efetivo no mesmo passo que já busca mensagens, exibindo ao lado do
+  bruto, nunca no lugar; (3) pedir a definição oficial ao OPA — único caminho
+  definitivo, já que o limiar de ociosidade foi ajustado para casar com o
+  agregado (confirma a classe da métrica, não a fórmula).
+  Detalhamento completo em
+  [roteiro-comparacao-tmr-opa-suite.md](roteiro-comparacao-tmr-opa-suite.md),
+  seção 12.
+  Arquivos: `opa_ingestion.py`, `test_opa_ingestion.py`.
 
 - **Correção de nomes de atendente do SGP Suporte na VM**:
   na VM vários atendentes apareciam como ID na tela; local está normalizado.

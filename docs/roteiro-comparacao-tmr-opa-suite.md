@@ -452,3 +452,99 @@ pra inferir indiretamente via `observacoes`/`motivos` (seção 10.3, ~1% de cobe
 **Não altera nenhum cálculo existente** — `tmr_seconds`, `tmr_all_responses_seconds`,
 `handled_by_bot`, `reached_human`, `bot_to_human_handoff` continuam calculados
 exatamente como antes; os campos novos são só um resumo adicional, aditivo.
+
+## 12. Execução — Recorte 2 (Jennyfer Tavares, 23/08–31/08/2026): bug de importação encontrado
+
+Primeira comparação feita com **exportação real do cockpit** (CSV com os 260 protocolos),
+e não só com números agregados de tela. Isso permitiu o diff protocolo a protocolo que a
+seção 10.1 não tinha como fazer.
+
+**Números do cockpit**: 260 atendimentos · avaliação 4,49 · TMA 00:19:18 · TMR 00:00:17.
+
+### 12.1 Regra de atribuição: CONFIRMADA idêntica
+
+O cabeçalho do CSV resolveu a dúvida da seção 10.1: a coluna é **"Último atendente"**.
+Corresponde exatamente ao nosso `attendant_id`. Dos 260 do cockpit, **todos os que
+existiam no SGP (216) já estavam atribuídos a ela — zero divergência de atribuição**.
+`first_human_attendant_id` (269) e `distinct_human_attendant_ids` (271) são conceitos
+diferentes e **não** são o que o cockpit usa.
+
+Isso encerra a hipótese de "divergência por equivalência de filtro incerta" que a seção
+10.1 levantou: não era atribuição.
+
+### 12.2 Causa raiz: guard de período comparava data UTC contra data local
+
+Os 44 atendimentos faltantes formavam faixa contígua (`UNI2026799223`→`UNI2026799513`),
+todos abertos entre 31/08 20:00 e 01/09 00:00 local, e **nenhum deles estava sequer na
+tabela `support_opa_attendances_raw`** — nunca foram gravados.
+
+`opa_ingestion.py`, guarda de período pós-normalização:
+
+```python
+# ANTES (errado)
+if payload["opened_at"].date() < run.date_from or payload["opened_at"].date() > run.date_to:
+    raise ValueError("Atendimento fora do período solicitado; ...")
+```
+
+`opened_at` é gravado em UTC, então `.date()` devolve a data **UTC**. Já `run.date_from`/
+`date_to` são datas **locais** (America/Porto_Velho, UTC-4) — o mesmo dia que a API do OPA
+usa ao receber `dataInicialAbertura`. Um atendimento aberto às 21h local de 31/08 é
+01/09 01:00 em UTC → `.date()` = 01/09 → maior que `date_to` = 31/08 → **rejeitado**,
+apesar de a API tê-lo devolvido corretamente.
+
+**Prova aritmética**: a run de 31/08 registrava `fetched_count=2660`, `rejected_count=182`,
+e a base tinha exatamente 2.478 (`2478 + 182 = 2660`). Depois da correção, a mesma run
+devolveu `criados 182, rejeitados 0`.
+
+Como o guard só corta o **último dia do intervalo**, o padrão observado se explica sozinho:
+backfills mensais perdiam apenas a cauda do último dia; runs diárias perdem 4h **todo dia**.
+Dias afetados em 94 analisados: **30/06, 31/07, 31/08, 01/09** (últimos dias de cada
+backfill mensal + runs diárias). Nenhum outro.
+
+**Correção**: converter para o fuso local antes de comparar
+(`payload["opened_at"].astimezone(SUPPORT_TIMEZONE).date()`), com dois testes de regressão
+(aceita 23:30 local do dia importado; continua rejeitando outro dia).
+
+**Reimportação**: 587 atendimentos recuperados (30/06 +143, 31/07 +89, 31/08 +182,
+01/09 +136, 02/09 +37), todos com `rejeitados 0`.
+
+**Resultado**: dos 260 do cockpit, o SGP passou a ter **260/260**. Total, regra de
+atribuição e avaliação (**4,49 exato**) agora batem.
+
+### 12.3 TMA: é tempo efetivo, não bruto — com medição
+
+O endpoint de **detalhe** do OPA devolve as mesmas 18 chaves da listagem
+(`_id, canal, canal_cliente, canal_id, date, descricao, evaluations, fim, id_atendente,
+id_cliente, id_user, motivos, observacoes, origem, protocolo, setor, status, tags`) —
+**não existe campo de TMA na API do OPA**. Eles calculam internamente.
+
+Testado com mensagens reais (amostra de 20 atendimentos da Jennyfer):
+
+| Fórmula | Média |
+|---|---|
+| **Alvo do cockpit** | **00:19:18** |
+| Bruto (`fim` − `date`) | 00:42:48 |
+| Janela de mensagens (última − primeira) | 00:42:48 |
+| **Ativo, descontando ocioso > 10 min** | **00:20:50** |
+| Ativo, descontando ocioso > 5 min | 00:13:45 |
+
+O TMA do OPA é **tempo efetivo com desconto de ociosidade**, limiar entre 5 e 10 min.
+Nossa métrica (`tma_seconds` = `fim` − `date`) é estruturalmente outra coisa.
+
+O mesmo mecanismo explica o TMR: os 44 recuperados (fim de expediente) têm TMR médio
+00:03:40 contra 00:00:15 dos demais, mas **mediana praticamente igual (12s vs 10s)** — a
+responsividade real é a mesma, o que difere são as lacunas de relógio (madrugada) que o
+OPA desconta e nós contamos.
+
+**Ressalva de método**: o limiar de ociosidade é um parâmetro ajustado para casar com o
+agregado numa amostra de 20. Isso confirma a **classe** da métrica (descarta ociosidade),
+não a fórmula exata. Fechar com certeza exige a definição oficial do OPA.
+
+**Encaminhamento recomendado**:
+1. **Renomear (imediato, risco zero)** — nossa métrica é *duração total
+   (abertura→encerramento)*, a do OPA é *tempo trabalhado*. Hoje a tela sugere que são a
+   mesma coisa. Norma de qualidade de dados: definição explícita.
+2. **Calcular tempo efetivo** — as mensagens já são buscadas na importação para o TMR,
+   então dá para computar no mesmo passo, sem chamada nova à API. Exibir **ao lado** do
+   bruto, nunca no lugar. Exige migration e calibração do limiar.
+3. **Perguntar ao OPA a definição exata** — único caminho definitivo; fazer em paralelo.
