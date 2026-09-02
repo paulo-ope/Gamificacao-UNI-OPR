@@ -14,6 +14,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleX,
+  Download,
   Loader2,
   Maximize2,
   Minimize2,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/operations-api";
 import { slaBadgeClass, slaTone } from "@/lib/operations-sla";
 import { cn } from "@/lib/utils";
+import { useSlaExport } from "@/hooks/use-sla-export";
 
 const FIT_MIN_SCALE = 0.88;
 const FIT_BOTTOM_MARGIN = 16;
@@ -295,6 +297,24 @@ export function OperationsSlaHierarchyTable({
   const [rootData, setRootData] = useState(data);
   const [rootLoading, setRootLoading] = useState(false);
   const [presentationMode, setPresentationMode] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const exportSla = useSlaExport();
+
+  async function handleExport() {
+    setExporting(true);
+    setError(null);
+    try {
+      await exportSla(rootLevel, rootData, filters);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Não foi possível gerar a planilha de SLA.",
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
   const showSubject = rootLevel === "os_type";
   const showDiagnosis = rootLevel === "os_type";
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
@@ -590,6 +610,21 @@ export function OperationsSlaHierarchyTable({
             </label>
           ))}
         </fieldset>
+        <button
+          type="button"
+          onClick={() => void handleExport()}
+          disabled={exporting || rootLoading}
+          title="Exportar planilha de SLA (.xlsx)"
+          aria-label="Exportar planilha de SLA"
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-sm transition hover:border-blue-300 hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {exporting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
+          Exportar
+        </button>
         <button
           type="button"
           onClick={() => setPresentationMode((current) => !current)}
