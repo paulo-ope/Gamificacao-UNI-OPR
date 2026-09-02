@@ -30,7 +30,17 @@ export type SchedulingSummary = {
 };
 
 export type SchedulingBucket = { bucket: string; label: string; count: number };
-export type SchedulingDailyPoint = { date: string; opened: number; schedule_events: number };
+export type SchedulingDailyPoint = {
+  date: string;
+  opened: number;
+  schedule_events: number;
+  first_schedule_events: number;
+  reschedule_events: number;
+  team_reschedule_events: number;
+  field_reschedule_events: number;
+  unknown_reschedule_events: number;
+  rescheduled_orders_distinct: number;
+};
 
 export type SchedulingOperatorRow = {
   ixc_operator_id: number;
@@ -169,6 +179,8 @@ export type SchedulingOperatorEventItem = {
   technician_name: string | null;
   filial: string;
   assunto: string;
+  mensagem: string | null;
+  historico: string | null;
 };
 
 export type SchedulingOperatorEventPage = {
@@ -188,6 +200,8 @@ export type SchedulingTechnicianEventItem = {
   operator_name: string | null;
   filial: string;
   assunto: string;
+  mensagem: string | null;
+  historico: string | null;
 };
 
 export type SchedulingTechnicianEventPage = {
@@ -195,6 +209,40 @@ export type SchedulingTechnicianEventPage = {
   total: number;
   page: number;
   page_size: number;
+};
+
+export type SchedulingRescheduleDayItem = {
+  ixc_os_id: number;
+  event_at: string;
+  operator_name: string | null;
+  origin: "equipe" | "campo" | "desconhecido";
+  technician_name: string | null;
+  filial: string;
+  assunto: string;
+  mensagem: string | null;
+  historico: string | null;
+};
+
+export type SchedulingRescheduleDayPage = {
+  date: string;
+  items: SchedulingRescheduleDayItem[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type SchedulingRescheduleBreakdownItem = { key: string; label: string; count: number };
+
+export type SchedulingRescheduleDayBreakdown = {
+  date: string;
+  by_technician: SchedulingRescheduleBreakdownItem[];
+  by_operator: SchedulingRescheduleBreakdownItem[];
+  by_filial: SchedulingRescheduleBreakdownItem[];
+};
+
+export type SchedulingBacklogBreakdown = {
+  by_filial: SchedulingRescheduleBreakdownItem[];
+  by_assunto: SchedulingRescheduleBreakdownItem[];
 };
 
 export type SchedulingOrderDrillParams = {
@@ -225,6 +273,18 @@ export type SchedulingSyncStatus = {
   last_job: SchedulingSyncJob | null;
   orders_count: number;
   events_count: number;
+};
+
+export type SchedulingSyncHealth = {
+  configured: boolean;
+  enabled: boolean;
+  interval_minutes: number;
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  next_allowed_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  consecutive_failures: number;
 };
 
 export type SchedulingFilterState = {
@@ -317,6 +377,8 @@ export const schedulingApi = {
     ),
   backlog: (filters: SchedulingFilterState, limit = 100, signal?: AbortSignal) =>
     request<SchedulingBacklogItem[]>(`/scheduling/backlog?${filterQuery(filters, { limit })}`, { signal }),
+  backlogBreakdown: (filters: SchedulingFilterState, signal?: AbortSignal) =>
+    request<SchedulingBacklogBreakdown>(`/scheduling/backlog/breakdown?${filterQuery(filters)}`, { signal }),
   reschedulesByTechnician: (filters: SchedulingFilterState, signal?: AbortSignal) => {
     const params = new URLSearchParams();
     params.set("date_from", filters.date_from);
@@ -334,6 +396,38 @@ export const schedulingApi = {
     filters.setor_ids.forEach((id) => params.append("setor_ids", id));
     filters.assunto_ids.forEach((id) => params.append("assunto_ids", id));
     return request<SchedulingRescheduleByOperator>(`/scheduling/reschedules-by-operator?${params.toString()}`, { signal });
+  },
+  reschedulesByDay: (
+    day: string,
+    filters: SchedulingFilterState,
+    page = 1,
+    pageSize = 50,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    params.set("day", day);
+    params.set("date_from", filters.date_from);
+    params.set("date_to", filters.date_to);
+    filters.filial_ids.forEach((id) => params.append("filial_ids", id));
+    filters.setor_ids.forEach((id) => params.append("setor_ids", id));
+    filters.assunto_ids.forEach((id) => params.append("assunto_ids", id));
+    filters.operator_ids.forEach((id) => params.append("operator_ids", String(id)));
+    filters.technician_ids.forEach((id) => params.append("technician_ids", String(id)));
+    params.set("page", String(page));
+    params.set("page_size", String(pageSize));
+    return request<SchedulingRescheduleDayPage>(`/scheduling/reschedules/by-day?${params.toString()}`, { signal });
+  },
+  reschedulesBreakdown: (day: string, filters: SchedulingFilterState, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    params.set("day", day);
+    params.set("date_from", filters.date_from);
+    params.set("date_to", filters.date_to);
+    filters.filial_ids.forEach((id) => params.append("filial_ids", id));
+    filters.setor_ids.forEach((id) => params.append("setor_ids", id));
+    filters.assunto_ids.forEach((id) => params.append("assunto_ids", id));
+    filters.operator_ids.forEach((id) => params.append("operator_ids", String(id)));
+    filters.technician_ids.forEach((id) => params.append("technician_ids", String(id)));
+    return request<SchedulingRescheduleDayBreakdown>(`/scheduling/reschedules/breakdown?${params.toString()}`, { signal });
   },
   orders: (
     filters: SchedulingFilterState,
@@ -418,6 +512,7 @@ export const schedulingApi = {
       body: JSON.stringify({ date_from: dateFrom ?? null, date_to: dateTo ?? null }),
     }),
   syncStatus: () => request<SchedulingSyncStatus>("/scheduling/sync/status"),
+  syncHealth: () => request<SchedulingSyncHealth>("/scheduling/sync-health"),
   startMessagesBackfill: () => request<SchedulingSyncJob>("/scheduling/messages/backfill", { method: "POST" }),
   messagesBackfillStatus: () => request<SchedulingSyncJob | null>("/scheduling/messages/backfill/status"),
   savedFilters: () => request<SchedulingSavedFilter[]>("/scheduling/saved-filters"),

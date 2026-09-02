@@ -168,12 +168,26 @@ export function AppCombobox({
           // herda o `none` do body e fica com clique E scroll bloqueados por dentro - mesmo estando
           // visualmente por cima (z-index não tem nenhum efeito sobre isso). Achado real: usuário
           // reportou que nem clicar nem rolar a lista funcionava dentro do drawer de colaborador.
-          style={{ width: "var(--radix-popover-trigger-width)", pointerEvents: "auto" }}
+          // width: max(18rem, trigger) em vez de só a largura do trigger - o trigger deste combobox
+          // costuma viver em colunas de tabela estreitas (ex.: "Grupo destino"), e travar a largura
+          // do popover nessa largura cortava o texto das opções no meio (ex.: "Manutenção Urbana
+          // ..."). Um w-max/min-content NÃO resolve aqui: os itens usam truncate (text-overflow:
+          // ellipsis), e elementos com ellipsis contam como "encolhíveis" no cálculo de shrink-to-fit,
+          // então o navegador continua colapsando a largura. Por isso a largura mínima é um valor fixo
+          // generoso (18rem), não baseada no conteúdo.
+          //
+          // max-width usa --radix-popover-content-available-width (não um rem fixo tipo 28rem):
+          // quando o trigger já é largo (ex.: os selects "Aplicar Tipo Geral"/"Aplicar grupo aos
+          // assuntos filtrados", que ocupam uma coluna inteira do grid), um cap fixo baixo deixava o
+          // popover MAIS ESTREITO que o próprio trigger, voltando a cortar o texto. A variável do
+          // Radix já é a largura disponível na tela descontando collisionPadding, então nunca deixa o
+          // popover maior que o viewport nem menor que o necessário.
+          style={{ width: "max(18rem, var(--radix-popover-trigger-width))", pointerEvents: "auto" }}
           // z-[90]: precisa ficar ACIMA de qualquer modal/drawer do app - AppModal usa z-[80], o
           // Dialog/Sheet do shadcn usam z-[70] (ver dialog.tsx/sheet.tsx). Com z-50 (padrão anterior),
           // o popover deste combobox renderizava visualmente atrás do modal/drawer quando usado
           // dentro de um (mesmo empilhamento via portal no body).
-          className="z-[90] flex max-h-[min(24rem,var(--radix-popover-content-available-height))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
+          className="z-[90] flex max-h-[min(24rem,var(--radix-popover-content-available-height))] max-w-[var(--radix-popover-content-available-width)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
         >
           <Command className="flex min-h-0 flex-1 flex-col border-0 shadow-none">
             <CommandInput value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} className="h-10 shrink-0" />
@@ -293,8 +307,8 @@ export function AppMultiSelect({
           sideOffset={8}
           avoidCollisions
           collisionPadding={12}
-          style={{ width: "var(--radix-popover-trigger-width)", pointerEvents: "auto" }}
-          className="z-[90] flex max-h-[min(24rem,var(--radix-popover-content-available-height))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
+          style={{ width: "max(18rem, var(--radix-popover-trigger-width))", pointerEvents: "auto" }}
+          className="z-[90] flex max-h-[min(24rem,var(--radix-popover-content-available-height))] max-w-[var(--radix-popover-content-available-width)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
         >
           <Command className="flex min-h-0 flex-1 flex-col border-0 shadow-none">
             <CommandInput value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} className="h-10 shrink-0" />

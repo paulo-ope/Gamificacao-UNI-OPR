@@ -15,6 +15,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.security import permissions_for_user, require_permission
 from app.db.session import SessionLocal, get_db
 from app.models import SchedulingJob, User
@@ -27,6 +28,7 @@ from app.modules.scheduling.models import (
     SchedulingTechnician,
 )
 from app.modules.scheduling.schemas import (
+    SchedulingBacklogBreakdown,
     SchedulingBacklogItem,
     SchedulingDashboard,
     SchedulingFilterOptions,
@@ -35,9 +37,12 @@ from app.modules.scheduling.schemas import (
     SchedulingOrderTimeline,
     SchedulingRescheduleByOperator,
     SchedulingRescheduleByTechnician,
+    SchedulingRescheduleDayBreakdown,
+    SchedulingRescheduleDayPage,
     SchedulingSavedFilterCreate,
     SchedulingSavedFilterOut,
     SchedulingSavedFilterUpdate,
+    SchedulingSyncHealth,
     SchedulingTechnicianEventPage,
     SchedulingSettingsUpdate,
     SchedulingSyncJobOut,
@@ -46,7 +51,18 @@ from app.modules.scheduling.schemas import (
     SchedulingTeamMember,
     SchedulingTeamUpdate,
 )
+from app.modules.scheduling.scheduler import (
+    SCHEDULING_SYNC_CONSECUTIVE_FAILURES_KEY,
+    SCHEDULING_SYNC_LAST_ATTEMPT_AT_KEY,
+    SCHEDULING_SYNC_LAST_ERROR_AT_KEY,
+    SCHEDULING_SYNC_LAST_ERROR_KEY,
+    SCHEDULING_SYNC_LAST_SUCCESS_AT_KEY,
+    SCHEDULING_SYNC_NEXT_ALLOWED_AT_KEY,
+    _current_interval_minutes,
+    _current_sync_enabled,
+)
 from app.modules.scheduling.sync import WATERMARK_KEY, backfill_messages, run_sync, _get_watermark
+from app.services.calculation import get_setting
 from app.services.ixc_client import IxcApiError, fetch_funcionarios_by_ids, fetch_usuarios_by_ids, get_ixc_client
 
 logger = logging.getLogger("scheduling_router")
@@ -132,6 +148,51 @@ def get_reschedules_by_operator(
     return metrics_engine.reschedules_by_operator(db, filters)
 
 
+@router.get("/reschedules/by-day", response_model=SchedulingRescheduleDayPage)
+def get_reschedules_by_day(
+    day: date,
+    date_from: date,
+    date_to: date,
+    filial_ids: list[str] = Query(default_factory=list),
+    setor_ids: list[str] = Query(default_factory=list),
+    assunto_ids: list[str] = Query(default_factory=list),
+    operator_ids: list[int] = Query(default_factory=list),
+    technician_ids: list[int] = Query(default_factory=list),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Drilldown do card "Reagendamentos por dia" do dashboard - lista os reagendamentos (evento
+    tipo 10) do dia clicado, com os mesmos filtros da tela aplicados."""
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, operator_ids, technician_ids)
+    if day < filters.date_from or day > filters.date_to:
+        raise HTTPException(status_code=400, detail="O dia informado está fora do período filtrado.")
+    return metrics_engine.reschedule_day_detail(db, filters, day=day, page=page, page_size=page_size)
+
+
+@router.get("/reschedules/breakdown", response_model=SchedulingRescheduleDayBreakdown)
+def get_reschedules_breakdown(
+    day: date,
+    date_from: date,
+    date_to: date,
+    filial_ids: list[str] = Query(default_factory=list),
+    setor_ids: list[str] = Query(default_factory=list),
+    assunto_ids: list[str] = Query(default_factory=list),
+    operator_ids: list[int] = Query(default_factory=list),
+    technician_ids: list[int] = Query(default_factory=list),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Ranking agregado (não paginado) de técnico/operador/filial com mais reagendamento NAQUELE
+    DIA - usado pelo painel "Hoje" pra responder "quem eu preciso cobrar", sem o risco de truncar
+    que uma soma de páginas de `/reschedules/by-day` teria."""
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, operator_ids, technician_ids)
+    if day < filters.date_from or day > filters.date_to:
+        raise HTTPException(status_code=400, detail="O dia informado está fora do período filtrado.")
+    return metrics_engine.reschedule_day_breakdown(db, filters, day=day)
+
+
 @router.get("/backlog", response_model=list[SchedulingBacklogItem])
 def get_backlog(
     date_from: date,
@@ -145,6 +206,22 @@ def get_backlog(
 ):
     filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, [])
     return metrics_engine.backlog_items(db, filters, limit=limit)
+
+
+@router.get("/backlog/breakdown", response_model=SchedulingBacklogBreakdown)
+def get_backlog_breakdown(
+    date_from: date,
+    date_to: date,
+    filial_ids: list[str] = Query(default_factory=list),
+    setor_ids: list[str] = Query(default_factory=list),
+    assunto_ids: list[str] = Query(default_factory=list),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Onde a fila sem agendamento está concentrada (filial/assunto) - agregado no banco, sem o
+    truncamento de `limit` que `/backlog` tem, usado pelo card "Fila de trabalho"."""
+    filters = _parse_filters(date_from, date_to, filial_ids, setor_ids, assunto_ids, [])
+    return metrics_engine.backlog_breakdown(db, filters)
 
 
 @router.get("/orders", response_model=SchedulingOrderDetailPage)
@@ -609,4 +686,31 @@ def sync_status(
         last_job=last_job,
         orders_count=db.execute(select(func.count(SchedulingOrder.id))).scalar() or 0,
         events_count=db.execute(select(func.count(SchedulingEvent.id))).scalar() or 0,
+    )
+
+
+@router.get("/sync-health", response_model=SchedulingSyncHealth)
+def sync_health(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Saúde do loop automático incremental (`scheduler.py`) - mesmo contrato de
+    `/ixc-sync-status`/`/opa-sync-status`, para a tela mostrar "sincronizado há X min" sem depender
+    de alguém clicar em "Sincronizar" manualmente."""
+    settings = get_settings()
+    configured = bool(settings.ixc_api_base_url and settings.ixc_api_token)
+    try:
+        consecutive_failures = int(get_setting(db, SCHEDULING_SYNC_CONSECUTIVE_FAILURES_KEY, "0") or "0")
+    except ValueError:
+        consecutive_failures = 0
+    return SchedulingSyncHealth(
+        configured=configured,
+        enabled=_current_sync_enabled(default=settings.scheduling_sync_enabled),
+        interval_minutes=_current_interval_minutes(default=settings.scheduling_sync_interval_minutes),
+        last_success_at=get_setting(db, SCHEDULING_SYNC_LAST_SUCCESS_AT_KEY, "") or None,
+        last_attempt_at=get_setting(db, SCHEDULING_SYNC_LAST_ATTEMPT_AT_KEY, "") or None,
+        next_allowed_at=get_setting(db, SCHEDULING_SYNC_NEXT_ALLOWED_AT_KEY, "") or None,
+        last_error=get_setting(db, SCHEDULING_SYNC_LAST_ERROR_KEY, "") or None,
+        last_error_at=get_setting(db, SCHEDULING_SYNC_LAST_ERROR_AT_KEY, "") or None,
+        consecutive_failures=consecutive_failures,
     )
