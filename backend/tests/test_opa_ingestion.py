@@ -882,3 +882,109 @@ def test_import_ainda_rejeita_atendimento_de_outro_dia_local(db_session):
     assert db_session.scalar(
         select(func.count(SupportOpaAttendance.id)).where(SupportOpaAttendance.source_id == "OPA-OUTRO-DIA")
     ) == 0
+
+
+def test_theo_tool_call_messages_count_as_bot_in_tmr_geral(db_session):
+    """Mensagens `tipo="assistant"` sem `id_user` nem `id_atend` sao o log
+    interno do agente virtual Theo (chamada de ferramenta/retorno) -- sem essa
+    checagem elas nao fechavam nenhum intervalo (nem bot, nem humano, nem
+    cliente) e o TMR geral ficava artificialmente alto, ignorando uma resposta
+    do bot que realmente aconteceu."""
+    record = _record(
+        id="OPA-THEO",
+        atendente={"id": "A-1", "nome": "Atendente Um"},
+        data_abertura="2026-09-03T10:00:00+00:00",
+        data_encerramento="2026-09-03T10:30:00+00:00",
+    )
+    messages = [
+        {"id_user": "U-1", "data": "2026-09-03T10:00:00+00:00"},
+        {"tipo": "assistant", "mensagem": "tool_call interno", "data": "2026-09-03T10:00:10+00:00"},
+        {"id_user": "U-1", "data": "2026-09-03T10:20:00+00:00"},
+        {"id_atend": "A-1", "data": "2026-09-03T10:25:00+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[{"_id": "A-1", "nome": "Atendente Um", "tipo": "user"}],
+        messages={"OPA-THEO": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 9, 3), date_to=date(2026, 9, 3), imported_by=None
+    )
+
+    attendance = db_session.scalar(select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-THEO"))
+    assert attendance is not None
+    # TMR geral: gap 1 fechado pelo Theo (10s), gap 2 fechado pelo humano
+    # (300s) -> media (10+300)/2 = 155.
+    assert attendance.tmr_all_responses_seconds == 155
+    # TMR humano: a mensagem do Theo não fecha nem reinicia o intervalo
+    # pendente do cliente, então o pendente continua sendo a 1a mensagem
+    # (10:00:00) -- a 2a mensagem de cliente (10:20:00) é ignorada por já
+    # haver um pendente (mesmo critério do teste de handoff bot/humano
+    # acima). Só a resposta de A-1 fecha: 10:25:00 - 10:00:00 = 1500s.
+    assert attendance.tmr_seconds == 1500
+    assert attendance.handled_by_bot is True
+    assert attendance.reached_human is True
+    assert attendance.bot_to_human_handoff is True
+    assert attendance.bot_message_count == 1
+    assert attendance.human_message_count == 1
+    assert attendance.client_message_count == 2
+
+
+def test_theo_only_attendance_without_any_human_id_atend(db_session):
+    """Reproduz o caso real (UNI2026810881): atendimento inteiro trabalhado
+    pelo Theo antes de chegar num humano, sem nenhum `id_atend` de bot
+    cadastrado -- só as mensagens `tipo=assistant` sem remetente."""
+    record = _record(
+        id="OPA-THEO-SOZINHO",
+        atendente={"id": "A-1", "nome": "Atendente Um"},
+        data_abertura="2026-09-03T10:00:00+00:00",
+        data_encerramento="2026-09-03T10:10:00+00:00",
+        tmr_seconds=None,  # sem isso, o `_record()` base (90s) sobrevive: o
+        # payload calculado só sobrescreve `tmr_seconds` quando ha gap
+        # humano, e aqui nao ha nenhum.
+    )
+    messages = [
+        {"id_user": "U-1", "data": "2026-09-03T10:00:00+00:00"},
+        {"tipo": "assistant", "mensagem": "raciocinio", "data": "2026-09-03T10:00:05+00:00"},
+        {"tipo": "assistant", "mensagem": "resposta ao cliente", "data": "2026-09-03T10:00:08+00:00"},
+    ]
+    client = FakeOpaClient(
+        [record],
+        users=[{"_id": "A-1", "nome": "Atendente Um", "tipo": "user"}],
+        messages={"OPA-THEO-SOZINHO": messages},
+    )
+
+    import_opa_attendances(
+        db_session, client, date_from=date(2026, 9, 3), date_to=date(2026, 9, 3), imported_by=None
+    )
+
+    attendance = db_session.scalar(
+        select(SupportOpaAttendance).where(SupportOpaAttendance.source_id == "OPA-THEO-SOZINHO")
+    )
+    # TMR geral: só a primeira mensagem do Theo fecha um intervalo pendente
+    # (10:00:05 - 10:00:00 = 5s); a segunda (10:00:08) não tem cliente
+    # pendente pra fechar, então não gera um segundo gap. TMR humano fica
+    # None: nenhuma mensagem humana de verdade aconteceu.
+    assert attendance.tmr_all_responses_seconds == 5
+    assert attendance.tmr_seconds is None
+    assert attendance.handled_by_bot is True
+    assert attendance.reached_human is False
+    assert attendance.bot_message_count == 2
+    assert attendance.human_message_count == 0
+
+
+def test_theo_messages_do_not_leak_into_client_or_human_counts(db_session):
+    from app.modules.support.opa_ingestion import _message_attendant_summary
+
+    messages = [
+        {"id_user": "U-1", "data": "2026-09-03T10:00:00+00:00"},
+        {"tipo": "assistant", "mensagem": "x", "data": "2026-09-03T10:00:01+00:00"},
+        {"id_atend": "A-1", "data": "2026-09-03T10:00:02+00:00"},
+    ]
+    summary = _message_attendant_summary(messages, {"A-1": "user"})
+
+    assert summary["client_message_count"] == 1
+    assert summary["bot_message_count"] == 1
+    assert summary["human_message_count"] == 1
+    assert summary["first_human_attendant_id"] == "A-1"

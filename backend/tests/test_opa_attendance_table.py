@@ -1386,6 +1386,30 @@ def test_opa_attendance_timeline_live_messages_classify_client_bot_and_human(db_
     assert all("mensagem" not in event or event.get("mensagem") is None for event in message_events)
 
 
+def test_opa_attendance_timeline_classifies_theo_tool_calls_as_bot(db_session, admin_user, monkeypatch):
+    """Reproduz UNI2026810881: mensagens `tipo="assistant"` sem `id_user` nem
+    `id_atend` sao o log interno do Theo, nao "remetente nao identificado"."""
+    row = _attendance(6, opened_at=datetime(2026, 8, 1, 8, tzinfo=timezone.utc))
+    db_session.add(row)
+    db_session.flush()
+
+    class Client:
+        def list_messages(self, source_id):
+            return [
+                {"id_user": "U-1", "data": "2026-08-01T08:00:00+00:00"},
+                {"tipo": "assistant", "mensagem": "tool_call interno", "data": "2026-08-01T08:00:05+00:00"},
+            ]
+
+    monkeypatch.setattr(opa_timeline_service, "get_opa_client", lambda: Client())
+
+    body = opa_attendance_timeline(row.id, include_messages=True, db=db_session, user=admin_user)
+
+    message_events = [event for event in body["events"] if event["type"] == "message"]
+    assert [event["actor_type"] for event in message_events] == ["client", "bot"]
+    assert message_events[1]["label"] == "Mensagem do atendimento automatizado"
+    assert "unknown" not in [event["actor_type"] for event in message_events]
+
+
 def test_opa_attendance_timeline_external_failure_keeps_structural_events(db_session, admin_user, monkeypatch):
     row = _attendance(6)
     db_session.add(row)

@@ -181,6 +181,19 @@ def _message_is_from_client(message: dict[str, Any]) -> bool:
     return bool(message.get("id_user")) and not message.get("id_atend")
 
 
+# `tipo: "assistant"` sem `id_user` nem `id_atend` é o log interno do agente
+# virtual Theo — chamadas de ferramenta e retornos (`role: "assistant"` /
+# `role: "tool"` dentro de `mensagem`), não uma conversa atribuída a um
+# cadastro de atendente. Confirmado em amostra de 40 atendimentos recentes:
+# 100 mensagens nessa condição (sem `id_user` e sem `id_atend`), 100%
+# `tipo=="assistant"` — nenhum outro tipo aparece sem remetente identificável.
+# Sem essa checagem, essas mensagens ficavam de fora de toda métrica (nem
+# bot, nem humano, nem cliente) e apareciam na timeline como "remetente não
+# identificado" — o Theo desaparecia do TMR geral e virava ruído pro usuário.
+def _message_is_from_theo_bot(message: dict[str, Any]) -> bool:
+    return message.get("tipo") == "assistant" and not message.get("id_user") and not message.get("id_atend")
+
+
 def _message_is_from_human_attendant(message: dict[str, Any], human_attendant_ids: set[str]) -> bool:
     attendant_id = message.get("id_atend")
     return bool(attendant_id) and attendant_id in human_attendant_ids
@@ -240,6 +253,9 @@ def _classify_bot_human(
     for message in messages:
         timestamp = _message_timestamp(message)
         if timestamp is None:
+            continue
+        if _message_is_from_theo_bot(message):
+            classified.append(("bot", timestamp))
             continue
         attendant_id = message.get("id_atend")
         if not attendant_id:
@@ -305,6 +321,9 @@ def _message_attendant_summary(
     for message in messages:
         if _message_is_from_client(message):
             client_count += 1
+            continue
+        if _message_is_from_theo_bot(message):
+            bot_count += 1
             continue
         attendant_id = message.get("id_atend")
         if not attendant_id:
@@ -374,7 +393,7 @@ def _human_response_metrics(
 
 
 def _message_is_from_any_attendant(message: dict[str, Any]) -> bool:
-    return bool(message.get("id_atend"))
+    return bool(message.get("id_atend")) or _message_is_from_theo_bot(message)
 
 
 def _all_response_metrics(messages: list[dict[str, Any]]) -> int | None:
@@ -382,8 +401,10 @@ def _all_response_metrics(messages: list[dict[str, Any]]) -> int | None:
     próxima mensagem de QUALQUER atendente (bot, humano, ou tipo
     desconhecido) — permite comparação com painéis que não separam bot de
     humano no TMR. Diferente de `_human_response_metrics`: aqui toda resposta
-    de atendente fecha o intervalo, mesmo vinda de bot. `tmr_seconds` (TMR
-    humano) não é afetado por esta função."""
+    de atendente fecha o intervalo, mesmo vinda de bot — incluindo o log
+    interno do Theo (`_message_is_from_theo_bot`), que é participação real do
+    agente virtual mesmo sem `id_atend`. `tmr_seconds` (TMR humano) não é
+    afetado por esta função nem por essa mudança."""
     timestamped: list[tuple[str, datetime]] = []
     for message in messages:
         timestamp = _message_timestamp(message)

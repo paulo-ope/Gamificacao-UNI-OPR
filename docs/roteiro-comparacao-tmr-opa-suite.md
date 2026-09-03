@@ -548,3 +548,70 @@ não a fórmula exata. Fechar com certeza exige a definição oficial do OPA.
    então dá para computar no mesmo passo, sem chamada nova à API. Exibir **ao lado** do
    bruto, nunca no lugar. Exige migration e calibração do limiar.
 3. **Perguntar ao OPA a definição exata** — único caminho definitivo; fazer em paralelo.
+
+## 13. Correção — mensagens do agente virtual Theo entravam como "remetente não identificado"
+
+Encontrado investigando `UNI2026810881` (TMR humano registrado em 13min, atendente
+Gabrieli Milani, 03/09/2026). A timeline mostrava 14 eventos "Mensagem (remetente não
+identificado)" concentrados na janela de maior espera do atendimento.
+
+### 13.1 Diagnóstico
+
+As 14 mensagens não têm `id_user` nem `id_atend` — não são do cliente nem de um
+atendente cadastrado. Inspecionando o payload bruto: `tipo: "assistant"`, conteúdo com
+`role: "assistant"` / `role: "tool"` e `tool_calls` — é o **log interno do agente
+virtual Theo** (chamadas de ferramenta e retornos), não uma mensagem de conversa comum.
+
+**Confirmado como padrão, não coincidência**: amostra de 40 atendimentos recentes
+(qualquer atendente/departamento) → 100 mensagens sem `id_user`/`id_atend`, **100%**
+`tipo=="assistant"`. Nenhum outro tipo aparece nessa condição.
+
+**Efeito colateral antes da correção**: como essas mensagens não batiam em nenhuma
+categoria (client/bot/human), elas eram **completamente descartadas** de toda métrica —
+não fechavam intervalo no TMR geral, não contavam em `bot_message_count`, e apareciam
+na timeline como "remetente não identificado". O Theo desaparecia do TMR geral quando
+ele mesmo era quem tinha respondido.
+
+### 13.2 Correção (pedido explícito do usuário)
+
+> "preciso que ele entre na mesma metrica de tmr geral, e o tmr humano seja so os
+> identificados"
+
+Novo helper único, `_message_is_from_theo_bot()` em `opa_ingestion.py` — fonte de
+verdade compartilhada entre ingestão e timeline (a timeline importa direto do módulo de
+ingestão, mesma convenção já usada por `_load_attendant_types`/`_message_is_from_client`):
+
+```python
+def _message_is_from_theo_bot(message: dict[str, Any]) -> bool:
+    return message.get("tipo") == "assistant" and not message.get("id_user") and not message.get("id_atend")
+```
+
+Aplicado em 4 pontos, todos tratando o Theo como **bot**:
+- `_all_response_metrics` (TMR geral): fecha intervalo pendente do cliente, igual a
+  qualquer resposta de bot.
+- `_classify_bot_human`: conta como participação de bot (`handled_by_bot`,
+  `bot_to_human_handoff`).
+- `_message_attendant_summary`: soma em `bot_message_count`.
+- Timeline (`opa_timeline_service.py`): rótulo "Mensagem do atendimento automatizado",
+  `actor_type="bot"` — não mais "remetente não identificado".
+
+**`_human_response_metrics` (TMR humano) não foi tocado** — já excluía essas mensagens
+corretamente (não são client nem estão em `human_attendant_ids`), que é exatamente o
+comportamento pedido ("TMR humano seja só os identificados"). O Theo nunca fecha nem
+reinicia o intervalo pendente do cliente nessa métrica.
+
+### 13.3 Testes
+
+4 novos: TMR geral conta o Theo mas TMR humano não (`test_theo_tool_call_messages_...`);
+atendimento 100% Theo sem nenhum humano (`test_theo_only_attendance_...`, reproduz o
+padrão do `UNI2026810881`); contagens de mensagem não vazam entre categorias
+(`test_theo_messages_do_not_leak_...`); timeline classifica como bot, não "unknown"
+(`test_opa_attendance_timeline_classifies_theo_tool_calls_as_bot`). 168 testes do
+módulo passando, sem regressão.
+
+### 13.4 O que isso NÃO resolve
+
+O achado da seção 12.3 sobre TMA/TA continua de pé — o Theo entrar corretamente no TMR
+geral não muda o fato de o OPA calcular "tempo em atendimento" a partir de transições de
+status (AG/EA/PS) que a API não expõe. São investigações independentes que só se
+cruzaram porque apareceram no mesmo atendimento de exemplo.

@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session
 from app.services.opa_client import get_opa_client
 
 from .models import SupportOpaAttendance
-from .opa_ingestion import _load_attendant_types, _message_is_from_client, _message_timestamp
+from .opa_ingestion import (
+    _load_attendant_types,
+    _message_is_from_client,
+    _message_is_from_theo_bot,
+    _message_timestamp,
+)
 
 logger = logging.getLogger("support")
 
@@ -88,6 +93,13 @@ def _message_events(messages: list[dict[str, Any]], attendant_types: dict[str, s
         if _message_is_from_client(message):
             actor_type = "client"
             label = "Mensagem do cliente"
+        elif _message_is_from_theo_bot(message):
+            # Log interno do agente virtual (chamada de ferramenta/retorno) —
+            # sem `id_atend` porque não é atribuído a um cadastro de
+            # atendente, mas é participação real do bot. Sem esta checagem
+            # aparecia como "remetente não identificado" na tela.
+            actor_type = "bot"
+            label = "Mensagem do atendimento automatizado"
         else:
             attendant_id = message.get("id_atend")
             attendant_type = attendant_types.get(attendant_id) if attendant_id else None

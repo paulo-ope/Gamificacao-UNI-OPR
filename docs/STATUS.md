@@ -13,9 +13,318 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-02** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-03** — branch `claude/suporte-sync-backfill-madrugada`
 
 ## O que foi feito recentemente
+
+- **Mensagens do agente virtual Theo classificadas como "remetente não
+  identificado" (corrigido)**: investigando `UNI2026810881` (TMR humano
+  registrado em 13min), a timeline mostrava 14 eventos "remetente não
+  identificado" no meio da conversa. Inspeção do payload bruto: `tipo:
+  "assistant"`, com `role: "assistant"`/`role: "tool"` e `tool_calls` — é o
+  **log interno do agente virtual Theo**, sem `id_user` nem `id_atend` porque
+  não é atribuído a um cadastro de atendente. Confirmado como padrão (não
+  coincidência do caso): amostra de 40 atendimentos recentes de qualquer
+  atendente/departamento → 100 mensagens nessa condição, **100%**
+  `tipo=="assistant"`.
+  **Efeito antes da correção**: essas mensagens não batiam em nenhuma
+  categoria (client/bot/human) e eram completamente descartadas de toda
+  métrica — não fechavam intervalo no TMR geral, não contavam em
+  `bot_message_count`. O Theo desaparecia do TMR geral exatamente quando era
+  ele quem tinha respondido.
+  **Pedido explícito do usuário**: "preciso que ele entre na mesma metrica de
+  tmr geral, e o tmr humano seja so os identificados". Implementado como
+  helper único `_message_is_from_theo_bot()` em `opa_ingestion.py`
+  (`tipo=="assistant"` sem `id_user` nem `id_atend`), aplicado em 4 pontos —
+  `_all_response_metrics` (TMR geral: fecha intervalo pendente, como
+  qualquer bot), `_classify_bot_human` (conta como participação de bot),
+  `_message_attendant_summary` (soma em `bot_message_count`), e a timeline
+  (`opa_timeline_service.py`: rótulo "Mensagem do atendimento automatizado",
+  não mais "remetente não identificado"). **TMR humano
+  (`_human_response_metrics`) não foi tocado** — já excluía essas mensagens
+  corretamente, que é o comportamento pedido.
+  4 testes novos (TMR geral conta, TMR humano não; atendimento 100% Theo sem
+  humano nenhum; contagens não vazam entre categorias; timeline classifica
+  como bot). 168 testes do módulo passando, sem regressão. Imagem do backend
+  reconstruída; `support_opa_sync_enabled` pausado durante o rebuild e
+  reimportação de 03/09 (validação do caso real), **restaurado para `true`**
+  ao final.
+  Detalhamento completo em
+  [roteiro-comparacao-tmr-opa-suite.md](roteiro-comparacao-tmr-opa-suite.md),
+  seção 13.
+  Arquivos: `opa_ingestion.py`, `opa_timeline_service.py`,
+  `test_opa_ingestion.py`, `test_opa_attendance_table.py`.
+
+- **Visão Geral executiva + navegação do ecossistema em barra lateral única (tela em
+  tela, não módulo em módulo)**: entrada do sistema deixou de ser a grade de módulos.
+  `/` virou só login e encaminha quem tem `operations:read` para **`/visao-geral`**;
+  a grade antiga virou a tela `/modulos`. Quem NÃO tem `operations:read` (caso real
+  do colaborador, que só usa o Portal) continua vendo a grade em `/`, senão cairia
+  numa tela vazia.
+
+  **Casca única** (`components/workspace/app-shell.tsx`): barra lateral completa +
+  cabeçalho único, adotada pelas **7 páginas de módulo**. Cada módulo perdeu o
+  cabeçalho e o menu hambúrguer próprios; as telas internas dele viraram submenu da
+  barra, com link direto (`/operacao?tab=sla`). A autenticação saiu das páginas e
+  ficou na casca — era trecho copiado nas 7. Barra nasce completa; recolher para
+  trilha de ícones é escolha do usuário, guardada em `localStorage`.
+
+  **Catálogo de telas** (`lib/module-screens.ts`): rótulos, descrições e ícones vêm
+  das MESMAS listas que cada módulo já usava (`OPERATION_NAV_ITEMS`, `OPA_NAV_ITEMS`,
+  `ADMIN_NAV_ITEMS`...), importadas — nunca uma segunda cópia. O que o catálogo
+  acrescenta é a permissão por tela, para o menu não oferecer destino que o módulo
+  recusa. **Atenção de manutenção**: essas permissões espelham o `visibleTabs` de cada
+  página; aba nova com permissão própria precisa entrar nos dois lugares.
+
+  **Backend novo** (3 endpoints, 19 testes):
+  - `GET /operations/overview/regional-matrix` — quadro por filial. Cada coluna com
+    escopo de filtro DELIBERADAMENTE diferente: `opened` ignora modelo de equipe e
+    responsável (`_opening_filters`), `backlog` ignora também o período
+    (`_backlog_filters`), `completed`/`sla_rate` respeitam tudo. O total soma
+    contagens e recalcula o percentual (média de percentuais daria SLA que não
+    corresponde a nenhuma O.S.). Sem `operations:view_sla` vem com volumes e colunas
+    de prazo em branco, em vez de negar a tabela.
+  - `GET /dashboard/gamification-preview` — valor corrente da gamificação. **Não**
+    criou motor de prévia: `recalculate_current_period` já regrava o rascunho do mês
+    corrente a cada ciclo do IXC, então o endpoint só lê, com `calculated_at` e
+    `status` no payload para a tela poder dizer que a prévia está velha. Totais
+    reconciliados das linhas `collaborator_scores`, nunca do JSON gravado (achado C1).
+  - `GET`/`PUT /operations/overview/default-filter` — filtro pré-setado da tela,
+    apontando para uma **visão global** existente (`app_settings`, sem migration).
+    Visão pessoal é recusada com 422 e trocar o padrão exige
+    `operations:views:update_global`.
+
+  **Filtro na URL**: a Visão Geral publica período e dimensões em query string
+  (`hooks/use-overview-filters.ts`) — recarregar mantém o recorte e o link filtrado
+  é compartilhável. Período padrão: últimos 30 dias, cortados no início do ano
+  operacional (em janeiro, 30 dias cairia em dezembro e `validate_operations_period`
+  responderia 422).
+
+  **Três bugs que só apareceram validando no navegador**:
+  1. `router.replace` chamado dentro do updater do `setState` é descartado (React
+     executa o updater durante a renderização) — o filtro não chegava na URL e o
+     drill-through da tabela por filial não fazia nada. Virou efeito.
+  2. Ler `?tab=` de `window.location.search` na montagem funciona ao recarregar mas
+     NÃO em navegação pelo lado do cliente: a URL do navegador ainda não está
+     atualizada na primeira renderização da rota nova, e o módulo abria sempre na aba
+     padrão. Trocado por `useSearchParams` nas 5 páginas que faltavam (Suporte e
+     Administração já tinham a leitura), cada uma com invólucro `<Suspense>`.
+  3. Botão de expandir o submenu nascia fora da barra: o item de menu é `w-full` e
+     não sobrava espaço.
+  4. Trocar de tela ESTANDO dentro da Operação Analítica não fazia nada: mudar só a
+     query não remonta a página, e o efeito que aplicava `?tab=` dependia de
+     `filters`, que não muda nesse caso. Agora depende de `urlTab` também, com um
+     `lastAppliedUrlTab` para o efeito não desfazer navegação interna (drill-through
+     e o painel de Aberturas trocam de aba sem mexer na URL).
+
+- **NÃO deixar o local no overlay de desenvolvimento nesta máquina.** Ficou medido:
+  `docker compose -f docker-compose.yml -f docker-compose.dev.yml up` compila cada
+  rota sob demanda em **8 a 21 segundos** neste disco (fonte no OneDrive, com
+  polling), e ainda produz `500` com
+  `SyntaxError: Unexpected end of JSON input (page: '/suporte')` — o servidor de dev
+  lendo manifesto do `.next` pela metade. No build de produção as mesmas rotas
+  respondem em **15–63ms**. O overlay serve para desenvolver com hot-reload; para
+  usar o sistema, `docker compose build frontend backend && docker compose up -d`.
+
+- **SGP Suporte não trocava de aba pelo submenu da barra lateral** (2026-09-03,
+  "suporte?tab=attendants tem modulos que não está abrndo"). MESMA causa das outras 6
+  correções de `?tab=` já registradas acima - `activeView` só era seedado da URL na
+  MONTAGEM (`useState(initialTab)`), sem ressincronizar depois. O SGP escapou da
+  varredura anterior por já importar `useSearchParams` - o que não basta sozinho, é
+  preciso um efeito que reaja a ele. Corrigido com
+  `useEffect(() => setActiveView(initialTab), [initialTab])`, reaproveitando
+  `initialTab` (já resolve o alias "agents"→"attendants" e valida contra
+  `ACTIVE_OPA_TABS`) em vez de duplicar a lógica. **Alarme falso durante a
+  verificação**: o script de teste procurou um botão "Expandir telas de SGP Suporte"
+  e não achou - mas o módulo ativo abre o próprio submenu sozinho (por desenho), então
+  o botão já dizia "Recolher", não "Expandir". **Verificado de verdade**: Atendentes
+  → Dados → Atendentes → sair para Gestão Integrada → voltar a Suporte → Atendentes,
+  cada clique abrindo a tela certa.
+
+- **Filtros do SGP (Departamento/Canal/Motivo) viraram multi-seleção estilizada**
+  (2026-09-03, usuário viu o `<select>` nativo do navegador - "isso tá padrão?
+  consigo selecionar mais de um?"). Os dois pontos eram válidos:
+  - **Visual**: `SingleSelect` (um `<select>` HTML puro) destoava do resto da tela,
+    que usa o `MultiSelect` com busca/checkbox estilizado. Componente removido
+    (nenhum outro lugar do app usava).
+  - **Funcional**: a rota `/support/opa/overview` declara `channel`/`department_id`/
+    `reason_id` como `str | None`, mas por baixo
+    (`opa_filters.py::_selected_values`) já quebra a string por vírgula e monta um
+    `IN (...)` na consulta - **a lista já era aceita**, só nunca tinha sido ligada a
+    uma seleção múltipla em tela nenhuma (nem o próprio módulo SGP Suporte usa isso
+    hoje). Descoberto lendo a função de consulta, não só a assinatura da rota - a
+    assinatura sozinha levaria a repetir o erro.
+  - `hooks/use-overview-filters.ts`: os 3 campos do SGP passam a ser `string[]`
+    (igual aos filtros de O.S.), guardados na URL como parâmetros repetidos
+    (`?support_channel=A&support_channel=B`); só na hora de chamar
+    `/support/opa/overview` (`overview-screen.tsx`) viram string separada por
+    vírgula, no formato que o backend espera.
+  - **Verificado ao vivo**: selecionar 2 canais mostrou a chamada de rede como
+    `channel=Chat,Telefone` e o card "Atendimentos" somou os dois (50+50=100,
+    confirmando o `IN (...)` funcionando); chip fechado mostrou "Canal (SGP): Chat,
+    Telefone"; URL da página manteve os dois parâmetros separados (compartilhável).
+
+- **Barra de filtros da Visão Geral recolhível** (2026-09-03, pedido do usuário:
+  "moderno e recolhível"). `components/overview/overview-filter-bar.tsx` ganhou um
+  cabeçalho sempre visível (ícone + "Filtros" + período em texto) com um toggle; o
+  formulário completo (data, selects de O.S., bloco do SGP, rodapé com
+  Restaurar/Definir padrão) recolhe atrás dele. Fechada, mostra **chips** removíveis
+  com o resumo de cada filtro ativo (ex.: "Filial: UNI - VILHENA"), clicando o X do
+  chip limpa só aquele campo. Preferência aberta/fechada persiste por navegador
+  (`localStorage`, mesmo padrão já usado pela barra lateral) e nasce ABERTA no
+  primeiro uso. Transição via truque de CSS Grid (`grid-rows-[0fr]`/`[1fr]`), sem
+  medir altura em JS. **Verificado** no navegador: expandir/recolher, remover chip
+  individual, persistência, mobile sem transbordo - inclusive um alarme falso (uma
+  captura de tela pegou o quadro intermediário da transição de 200ms; confirmado
+  como artefato de tempo, não bug, com a mesma tela após esperar assentar).
+
+- **"Not Found" no painel de filtros da Administração (2026-09-03, reportado pelo
+  usuário com screenshot)**: o backend em PRODUÇÃO nunca tinha sido reconstruído desde
+  que os endpoints da Fase 3 (`/operations/overview/visible-filters`) foram escritos -
+  as reconstruções das rodadas anteriores fizeram só `docker compose build frontend`,
+  nunca `backend`. O container rodava código de antes da Fase 3, sem a rota, daí o
+  404 puro (não um JSON de erro do FastAPI) que apareceu como "Not Found" na tela.
+  Confirmado com `curl` direto no backend antes/depois: 404 → 401 (rota existe, só
+  exige login) após `docker compose build backend && up -d backend`. **Regra daí em
+  diante**: qualquer mudança de rota no backend exige reconstruir o backend também, não
+  só o frontend - os dois builds são independentes e um não substitui o outro.
+
+- **Correções na navegação (2026-09-03, relatadas pelo usuário após usar a barra por um
+  tempo, verificadas ao vivo por simulação de clique no navegador)**:
+  1. **A Administração não trocava de aba pelo submenu da barra lateral.** Ficou de fora
+     da correção de `?tab=` feita na Fase 2 da Visão Geral (achado #4 já registrado
+     acima) - continuava lendo `window.location.search` num `useEffect(..., [])` que só
+     roda uma vez. Clicar num submenu da Administração (ex.: "Perfis") trocava a URL mas
+     o conteúdo continuava mostrando a aba anterior, porque a navegação do Next.js não
+     remonta a página. Corrigido com o mesmo padrão `useSearchParams` + `<Suspense>` já
+     usado nos outros 6 módulos. Verificado clicando de verdade: Perfis → Módulos trocou
+     o conteúdo sem recarregar a página.
+  2. **Removida a tela "Módulos" (grade de cards) do grupo "Telas" da barra lateral**
+     (decisão do usuário: com o submenu de cada módulo já disponível na própria barra,
+     ela virou uma segunda forma de chegar ao mesmo lugar). Fica só "Visão Geral" no
+     grupo. A rota `/modulos` continua existindo (é para onde `/` manda quem não tem
+     `operations:read`) - só não tem mais entrada na barra. **NÃO confundir com** a aba
+     "Módulos" de DENTRO da Administração (`/admin?tab=modules`, visibilidade por
+     perfil) - essa continua existindo, foi pedido explicitamente preservado (pergunta
+     feita ao usuário para desambiguar as duas telas com o mesmo nome).
+  3. **Vão em branco na barra lateral, crescendo sem limite com a altura da página** -
+     medido em 934px numa Visão Geral de 1599px de altura. Causa raiz: `<aside>` era só
+     mais um item do `flex-row` da casca, e `align-items: stretch` (padrão) o esticava até
+     a altura da COLUNA DE CONTEÚDO (que cresce com o tanto de gráfico/cartão da tela) -
+     não até a altura da viewport. O `flex-1` do `<nav>` interno enchia esse excesso todo
+     de vazio entre o último módulo e o rodapé (nome/e-mail do usuário). Corrigido com
+     `lg:sticky lg:top-0 lg:h-screen` no `<aside>` (`components/workspace/app-shell.tsx`):
+     a barra agora fica presa à altura da viewport, independente de quão alta a tela de
+     conteúdo fique, e continua visível enquanto a página rola. **Medido**: vão caiu de
+     934px para 236px numa viewport de 900px (o vão residual agora é limitado pela
+     viewport, não pela página, e cresce/encolhe com a altura da tela do usuário, não
+     com a altura do conteúdo). Verificado também: barra permanece fixa ao rolar a
+     página, modo recolhido (trilha de ícones) continua ocupando a viewport inteira sem
+     esticar, mobile sem regressão (`aside` continua `display:none` abaixo do breakpoint
+     `lg`, gaveta `Sheet` inalterada).
+
+- **Fase 3 — Filtros da Visão Geral configuráveis pela Administração** (2026-09-03,
+  validada no navegador com dado sintético em banco isolado). Decisão do usuário: a
+  configuração fica na Administração, não na própria Visão Geral.
+  - **Catálogo único no backend** (`operations/router.py::OVERVIEW_FILTER_CATALOG`): 5
+    filtros de O.S. (grupo `operations`) + 3 do SGP - departamento, canal, motivo (grupo
+    `support`). Guardado em `app_settings` (`overview_visible_filters`), chave separada por
+    vírgula; PUT rejeita chave fora do catálogo com 422 — a tela só sabe desenhar o que o
+    catálogo lista, então não há como configurar algo que não funcione. Sem configuração,
+    volta aos 5 filtros de O.S. de sempre (`GET`/`PUT /operations/overview/visible-filters`,
+    mesma permissão do filtro padrão: `operations:views:update_global`). 5 testes.
+  - **Os dois grupos NUNCA se misturam na tela** — era o risco explícito do pedido
+    ("filial" de O.S. e "departamento" do OPA são universos diferentes; misturar geraria
+    números de recortes distintos lado a lado, sem erro nenhum). Os filtros do SGP entram
+    num bloco visualmente separado ("recortam só os blocos de atendimento"), aceitam UM
+    valor cada (é o que `/support/opa/overview` recebe: `department_id`/`channel`/
+    `reason_id` escalares, daí o `SingleSelect` novo em vez do multi-select), e mudar um
+    filtro do SGP **não** dispara os endpoints de O.S. (confirmado contando chamadas de
+    rede antes/depois: 2→2). `hooks/use-overview-filters.ts` ganhou `OverviewFilters` (O.S.
+    + SGP) e `operationFiltersOf()`, que extrai só a parte de O.S. para os endpoints que
+    não entendem o resto.
+  - **Painel na Administração** (`components/admin/overview-settings-panel.tsx`), encaixado
+    na aba Módulos: dois grupos de checkbox (um por catálogo), botão Salvar só habilitado
+    com mudança pendente, mostra (só leitura) qual visão global está pré-setada e linka
+    para defini-la na própria Visão Geral. Quem não tem a permissão vê os checkboxes
+    desabilitados, não a tela inteira bloqueada.
+  - **Verificado**: salvar no painel grava no backend (confirmado lendo o endpoint direto);
+    a Visão Geral reflete a configuração (selects do SGP aparecem só quando marcados);
+    selecionar um canal filtra o donut e o card do SGP sem recarregar os blocos de O.S.
+    Limite da validação: uma checagem de texto pelo título do painel deu falso negativo
+    (quebra de linha diferente do esperado no `innerText`) — os checkboxes com os rótulos
+    certos apareceram e o salvamento funcionou, então o painel estava lá; não foi
+    reconfirmado por screenshot.
+
+- **Fase 2 — Visão Geral "premium"** (2026-09-03, validada no navegador com dado sintético em
+  banco isolado). Decisões do usuário: donuts de Finalizadas por filial, por modelo de equipe
+  e Atendimentos por canal; comparação com a janela imediatamente anterior do mesmo tamanho.
+  - **Gráficos seguem um método, não gosto** (skill `dataviz`): paleta categórica única em
+    `lib/chart-palette.ts`, **validada por script** contra o fundo branco dos cards (PASS; pior
+    par adjacente sob protanopia ΔE 9,1). Slots 3–5 ficam abaixo de 3:1 de contraste → todo
+    donut mostra rótulo direto (%) + lista lateral com valor, que faz o papel de legenda e de
+    vista em tabela. Os azuis da marca são próximos demais entre si para identificar séries;
+    ficam na interface, não nos dados.
+  - **Donut só até 6 fatias**: `lib/share-breakdown.ts` dobra a cauda em "Outros" (5 nomeadas
+    + Outros) e atribui cor pela ENTIDADE em ordem alfabética, nunca pela posição — filtrar não
+    repinta quem sobrou. Com 14 filiais reais, o donut por filial responde *concentração*; o
+    quadro abaixo continua respondendo *quanto cada uma*. Tudo testado (`share-breakdown.test`).
+  - **Comparação de período** nos KPIs de O.S.: segunda chamada de `/operations/overview` com a
+    janela anterior (`lib/period.ts`, testado), cortada no início do ano operacional quando
+    preciso e ausente quando não há janela comparável. Backlog não compara (é retrato). Delta
+    no `SummaryMetric` (prop nova `delta`): cor = direção × se subir é bom.
+  - **Meta por filial** no quadro: `/operations/capacity-summary` já existia e estava sem uso
+    na tela; agora coluna "Meta da filial" com faixa (rótulo + fundo, nunca só cor) e
+    "realizado de limiar · faltam N". Filial sem faixa mostra "sem meta cadastrada".
+  - **Frescor do dado** (`/operations/data-freshness`) na linha de contexto sob os filtros;
+    prévia da gamificação deixou de aparecer duas vezes (saiu da faixa de KPIs, ficou o card);
+    bloco "Navegação do módulo" da Gamificação removido (redundante com a barra lateral) —
+    com ele foram os tooltips de ajuda por aba (`TAB_HELP`), que não tinham outro uso.
+  - **Código**: `hooks/use-block-query.ts` substituiu as 6 cópias de
+    `useState(dado)/useState(status)/useEffect(carregar)` na tela — garante que resposta
+    atrasada de filtro antigo não sobrescreve a nova e que recarga não pisca esqueleto.
+    Todo gráfico novo deve nascer com construtor de opção em `lib/*-chart-options.ts` e cor
+    vinda de `chart-palette.ts`.
+  - **Verificado**: KPIs com delta, 3 donuts com lista, coluna de meta nos 3 estados, clique
+    na lista aplica o filtro (URL e quadro reagem), mobile sem transbordo horizontal, console
+    limpo. Limite: o painel embutido colapsa a viewport de forma intermitente, então a
+    renderização do canvas dos donuts foi conferida por amostragem, não em toda medição.
+
+- **Fase 1 do plano de performance — Gamificação abrindo rápido** (medido no bundle de
+  produção e na cascata de requisições, 2026-09-03). O backend não era o gargalo
+  (`/dashboard/summary` no caminho de cache: 26 KB, 224 linhas). Três causas no frontend:
+  1. `dashboard-charts.tsx` era o **único** lugar do sistema importando o ECharts de
+     forma estática (chunk de 1.040 KB no carregamento inicial) — agora `dynamic()`
+     como os outros 8 componentes.
+  2. ExcelJS importado no topo de 3 hooks de exportação (`use-closure-actions`,
+     `use-calendar-export`, `use-sla-export`) e **duplicado** em dois chunks de 912 KB —
+     agora `import type` + `await import("exceljs")` só ao clicar em exportar. Total de
+     chunks: 6,9 → 6,0 MB; ~1,9 MB fora do carregamento inicial da Gamificação.
+  3. Cadeia serial `me`+`bootstrap` → `summary`: sem parâmetro, `/dashboard/summary`
+     resolve o MESMO `latest_run` que o `bootstrap`, então o summary agora parte na
+     montagem, junto com os dois (`prefetchedSummary` em `loadAll`, sem GET duplicado —
+     confirmado na cascata: summary e bootstrap no mesmo lote).
+  Os 5 gráficos do fechamento (seção "Análise") só renderizam ao rolar até eles
+  (`components/ui/defer-until-visible.tsx`), com dois caminhos: `IntersectionObserver`
+  e geometria (`lib/viewport.ts`, testada). O segundo existe por achado real: o navegador
+  embutido usado na validação não entrega callbacks de `IntersectionObserver` nem com um
+  observer criado à mão sobre elemento visível — sem a via geométrica, esqueleto para
+  sempre. **Limite da validação**: o adiamento dos gráficos foi provado por teste
+  unitário da regra e por typecheck, não visualmente — o painel embutido colapsa a
+  viewport para 0px de forma intermitente. Conferir abrindo `/gamificacao` → Fechamento
+  → Análise e rolando.
+
+- **Responsividade da navegação: cache curto das chamadas da casca**
+  (`lib/api.ts`, `SESSION_CACHED_PATHS`). Com a barra em todas as telas, cada troca
+  de tela remontava a casca e refazia `/auth/me` + `/workspace/modules` antes de
+  desenhar o menu — aparecia como "Carregando UNI Workspace..." piscando em cada
+  navegação. Agora são 30s de cache por sessão, invalidado em qualquer troca de token
+  (cobre também o login/logout legado da Gamificação, que chama `setAuthToken`
+  direto), e os dois hooks (`use-workspace-auth`, `use-visible-modules`) nascem
+  semeados do cache de forma síncrona. **Medido**: 3 navegações pela barra passaram de
+  3 para 1 requisição de cada endpoint (a única restante é o TTL vencendo). Contador
+  de notificações ficou de fora de propósito — precisa estar fresco.
+
 
 - **Bug de importação do SGP Suporte: 4 horas perdidas em todo último dia de
   cada importação (corrigido + reimportado)**: investigação da divergência de
@@ -2369,6 +2678,33 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Frentes em andamento / conhecidas
 
+- **Backlog tem DUAS convenções no backend e a divergência está visível — decisão
+  pendente do usuário**: `in_progress` de `/operations/overview` aplica TODOS os
+  filtros ao estoque (inclusive modelo de equipe), enquanto `openings_analytics` e o
+  novo `regional_matrix` usam `_backlog_filters`, que ignora modelo de equipe e
+  responsável. Com o mesmo filtro, o card da Visão Geral mostrava 23 e o total da
+  tabela logo abaixo, 45. A Visão Geral foi resolvida usando uma fonte só (a do
+  quadro por filial), mas a tela da Operação Analítica segue mostrando o outro
+  número. Decidir qual convenção vale antes de mexer.
+- **Gamificação tem tela de login própria, duplicada**: mesma sessão e mesma API do
+  resto (`api.login`/`setAuthToken`/`api.me`), mas implementação separada
+  (`currentUser`/`authChecked`, usados em ~15 pontos da página). A página foi
+  envolvida na casca sem desmontar esse miolo — na prática a casca já garante a
+  sessão antes, então aquela tela não aparece. Unificar é frente própria.
+- **Suspeita de custo no `/operations/overview`, NÃO medida**: ele traz 4 colunas de
+  timestamp de TODA O.S. finalizada no período para calcular médias em Python
+  (`timeline_rows`). Num período de 30 dias da empresa inteira são milhares de linhas
+  por request. É pré-existente e a Visão Geral também consome. Antes de otimizar,
+  medir contra o banco real — mover as médias para SQL preserva o resultado, mas não
+  vale mexer no que serve a dois módulos sem número na mão.
+- **Suite de testes do backend está quebrada NO AMBIENTE, não no código**: rodando
+  tudo dão ~101 falhas e ~203 erros com
+  `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in
+  that same thread`. Confirmado pré-existente com `git stash`:
+  `tests/test_admin_account_reset.py` falha 8/8 na árvore limpa também
+  (Python 3.14 + TestClient). Os 19 testes novos da Visão Geral passam. Vale abrir
+  como frente própria — enquanto isso, "suite verde" não é critério confiável aqui.
+
 - **SGP Suporte — visual ainda está cru e deve continuar evoluindo**: as 3 rodadas
   da Fase 4A melhoraram estrutura, composição e densidade, mas o resultado ainda não
   é o de um painel operacional maduro. **Toda evolução futura do módulo deve incluir
@@ -2401,6 +2737,12 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Próximos passos sugeridos
 
+- Decidir a convenção única de backlog (ver "Frentes em andamento") e alinhar
+  `/operations/overview` ou o `regional_matrix`, com teste que trave a escolha.
+- Definir a visão global que será o filtro padrão da Visão Geral (botão "Definir como
+  padrão" na própria tela, exige `operations:views:update_global`). Sem isso a tela
+  abre sem pré-set de modelo de equipe.
+- Medir `/operations/overview` contra o banco real antes de otimizar `timeline_rows`.
 - Comparar TMR humano e TMR geral (ambos disponíveis agora) contra o painel
   oficial do OPA pra descobrir qual fórmula ele usa — última decisão em
   aberto da auditoria de divergência.
