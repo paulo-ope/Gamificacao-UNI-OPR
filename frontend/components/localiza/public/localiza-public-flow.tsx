@@ -32,6 +32,12 @@ type Step = "loading" | "invalid" | "intro" | "locating" | "review" | "confirmin
 // Precisão boa o bastante pra parar de esperar - o GPS de celular costuma chegar nessa faixa
 // poucos segundos depois do primeiro fix (grosseiro) da rede.
 const GOOD_ACCURACY_METERS = 30;
+// Acima disto a posição não serve pra despachar equipe (é praticamente "o bairro", não a casa) -
+// a confirmação fica BLOQUEADA (exigência do usuário: "preciso da localização precisa pra
+// retirar/enviar a equipe"). A única saída é ativar a localização precisa e tentar de novo, ou
+// posicionar o marcador manualmente no ponto certo - aí a posição passa a ser escolha humana
+// explícita, não um chute do aparelho.
+const MAX_ACCEPTABLE_ACCURACY_METERS = 100;
 // Teto de espera do refinamento: passando disso, usa a melhor leitura obtida até aqui em vez de
 // deixar o cliente esperando indefinidamente.
 const MAX_REFINE_MS = 20_000;
@@ -59,6 +65,28 @@ function accuracyBanner(accuracyMeters: number): { className: string; text: stri
     className: "border-rose-200 bg-rose-50 text-rose-800",
     text: `Localização imprecisa (~${formatAccuracy(accuracyMeters)}) - o aparelho respondeu com a posição aproximada da rede, não com o GPS. Ative a localização precisa do celular e tente novamente, ou arraste o marcador até o ponto certo no mapa antes de confirmar.`,
   };
+}
+
+// Navegador EMBUTIDO de app (WhatsApp, Instagram, Facebook...) - o link chega pelo WhatsApp, então
+// é nele que o cliente abre por padrão, e esses navegadores internos costumam não acessar o GPS,
+// caindo na posição de rede (quilômetros). Detecção conservadora: na dúvida NÃO acusa, porque um
+// falso positivo mandaria o cliente pra um caminho que ele não precisa.
+function isInAppBrowser(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  return /(WhatsApp|Instagram|FBAN|FBAV|FB_IAB|Line\/|MicroMessenger)/i.test(ua);
+}
+
+function InAppBrowserWarning() {
+  return (
+    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+      <p className="font-medium">Você abriu pelo navegador do aplicativo.</p>
+      <p className="mt-1">
+        Aqui o GPS costuma não funcionar, e a localização sai muito imprecisa. Toque nos três pontinhos no canto da
+        tela e escolha <strong>&quot;Abrir no navegador&quot;</strong> (Chrome ou Safari) para conseguir a posição exata.
+      </p>
+    </div>
+  );
 }
 
 // Guia de "como ativar a localização" - só aparece quando o navegador nega a permissão
@@ -269,6 +297,9 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
   }
 
   const banner = gpsFix ? accuracyBanner(gpsFix.accuracy) : null;
+  // Ajuste manual do marcador libera a confirmação mesmo com GPS ruim: aí a posição é escolha
+  // explícita da pessoa (que sabe onde mora), não mais o chute do aparelho.
+  const blockedByAccuracy = Boolean(gpsFix && gpsFix.accuracy > MAX_ACCEPTABLE_ACCURACY_METERS && !adjustedManually);
 
   return (
     <main className="flex min-h-screen flex-col bg-slate-50">
@@ -308,6 +339,9 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
               Para localizarmos corretamente o endereço do atendimento, permita o acesso à sua localização. Sua
               localização será enviada somente após sua confirmação.
             </p>
+            {/* Avisa ANTES de tentar: no navegador embutido do app a tentativa quase sempre volta
+                imprecisa, e a pessoa perde a viagem duas vezes (tentar, falhar, trocar, repetir). */}
+            {isInAppBrowser() ? <InAppBrowserWarning /> : null}
             <Button className="mt-4 w-full" onClick={shareLocation} disabled={step === "locating"}>
               {step === "locating" ? (
                 <>
@@ -326,19 +360,9 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             {step === "locating" ? (
               <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
                 {refiningAccuracy !== null ? (
-                  <>
-                    <p>
-                      Melhorando a precisão... no momento: <strong>{formatAccuracy(refiningAccuracy)}</strong>
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-2 w-full"
-                      onClick={() => bestFixRef.current && acceptFix(bestFixRef.current)}
-                    >
-                      Usar esta localização mesmo assim
-                    </Button>
-                  </>
+                  <p>
+                    Melhorando a precisão... no momento: <strong>{formatAccuracy(refiningAccuracy)}</strong>
+                  </p>
                 ) : (
                   <p>Procurando sinal de GPS... mantenha a tela aberta por alguns segundos.</p>
                 )}
@@ -360,8 +384,14 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
 
             {banner ? <div className={`rounded-xl border px-3 py-2 text-xs ${banner.className}`}>{banner.text}</div> : null}
             {/* Com precisão ruim o guia é tão útil quanto na negação de permissão - normalmente é
-                a "localização precisa" do aparelho que está desligada. */}
-            {gpsFix.accuracy > 100 ? <LocationHelpGuide /> : null}
+                a "localização precisa" do aparelho que está desligada, ou o navegador embutido do
+                app de mensagem, que não acessa o GPS. */}
+            {blockedByAccuracy ? (
+              <>
+                {isInAppBrowser() ? <InAppBrowserWarning /> : null}
+                <LocationHelpGuide />
+              </>
+            ) : null}
 
             <div className="isolate h-72 overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
               <LocalizaPickerMapLeaflet
@@ -376,7 +406,14 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             {error ? <p className="text-sm text-rose-600">{error}</p> : null}
 
             <div className="grid gap-2">
-              <Button onClick={confirmLocation} disabled={step === "confirming"}>
+              {blockedByAccuracy ? (
+                <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                  Não dá para confirmar com esta precisão - a equipe não conseguiria achar o endereço. Ative a
+                  localização precisa e toque em &quot;Tentar localizar novamente&quot;, <strong>ou</strong> arraste o
+                  marcador no mapa até o ponto exato.
+                </p>
+              ) : null}
+              <Button onClick={confirmLocation} disabled={step === "confirming" || blockedByAccuracy}>
                 {step === "confirming" ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Enviando...
