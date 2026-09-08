@@ -89,6 +89,15 @@ MODULES: tuple[ModuleDefinition, ...] = (
         required_permission="intelligence:read",
         status="active",
     ),
+    ModuleDefinition(
+        key="localiza",
+        name="UNI Localiza",
+        description="Geração de link para o cliente compartilhar localização por GPS, vinculado à O.S.",
+        web_path="/localiza",
+        api_prefix="/api/localiza",
+        required_permission="localiza:read",
+        status="active",
+    ),
 )
 
 

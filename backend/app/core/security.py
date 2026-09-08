@@ -80,6 +80,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "operations:read",
         "operations:view_openings",
         "operations:views:read_global",
+        "localiza:read",
     },
     "operator": {
         "dashboard:read",
@@ -104,6 +105,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "scheduling:sync",
         "scheduling:manage_filters",
         "scheduling:views:read_global",
+        # UNI Localiza: o operador é o "atendente" que gera o link de localização para o cliente.
+        "localiza:read",
+        "localiza:manage",
         # Mesmo racional do gestor regional: o operador supervisiona equipe e precisa justificar os
         # casos dela. Revisar/encerrar continua exclusivo da matriz (`management:review`).
         "management:read",
@@ -158,6 +162,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "scheduling:manage_filters",
         "scheduling:views:read_global",
         "scheduling:views:manage_global",
+        "localiza:read",
+        "localiza:manage",
         "management:read",
         "management:manage_structure",
         "management:write_justification",
@@ -235,6 +241,8 @@ PERMISSION_LABELS: dict[str, str] = {
     "scheduling:manage_filters": "Agendamento: salvar/gerenciar filtros pessoais",
     "scheduling:views:read_global": "Agendamento: ver filtros globais de outros usuários",
     "scheduling:views:manage_global": "Agendamento: criar/editar/excluir filtros globais",
+    "localiza:read": "UNI Localiza: acessar módulo",
+    "localiza:manage": "UNI Localiza: gerar e invalidar links de localização",
     "management:read": "Gestão: acessar módulo",
     "management:manage_structure": "Gestão: administrar estrutura operacional",
     "management:write_justification": "Gestão: justificar pendências",

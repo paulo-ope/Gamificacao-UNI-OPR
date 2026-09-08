@@ -17,6 +17,8 @@ from app.modules.ai_governance.router import router as ai_governance_router
 from app.modules.intelligence.cockpit import ensure_default_dashboard_profile
 from app.modules.intelligence.router import router as intelligence_router
 from app.modules.intelligence.scheduler import run_intelligence_scheduler_loop
+from app.modules.localiza.public_router import router as localiza_public_router
+from app.modules.localiza.router import router as localiza_router
 from app.modules.management.router import router as management_router
 from app.modules.management.scheduler import run_management_case_scheduler_loop
 from app.modules.mcp_connector.router import router as mcp_connector_router
@@ -199,6 +201,8 @@ app.include_router(management_router, prefix=settings_obj.api_prefix)
 app.include_router(operations_router, prefix=settings_obj.api_prefix)
 app.include_router(scheduling_router, prefix=settings_obj.api_prefix)
 app.include_router(support_router, prefix=settings_obj.api_prefix)
+app.include_router(localiza_router, prefix=settings_obj.api_prefix)
+app.include_router(localiza_public_router, prefix=settings_obj.api_prefix)
 app.include_router(ai_router, prefix=settings_obj.api_prefix)
 app.include_router(ai_public_router, prefix=settings_obj.api_prefix)
 

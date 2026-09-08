@@ -5,6 +5,7 @@ import {
   Gauge,
   Headphones,
   LayoutGrid,
+  MapPin,
   Radar,
   ShieldCheck,
   Trophy,
@@ -24,6 +25,7 @@ const MODULE_ICONS: Record<string, LucideIcon> = {
   management: BriefcaseBusiness,
   admin: ShieldCheck,
   intelligence: Radar,
+  localiza: MapPin,
 };
 
 export function moduleIcon(key: string): LucideIcon {
