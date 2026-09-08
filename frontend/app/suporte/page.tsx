@@ -22,10 +22,8 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { NotificationBell } from "@/components/workspace/notification-bell";
-import { ModuleNavigationSidebar } from "@/components/workspace/module-navigation-sidebar";
-import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
-import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import { WorkspaceAppShell } from "@/components/workspace/app-shell";
+import type { AuthUser } from "@/lib/types";
 import { api } from "@/lib/api";
 import {
   ACTIVE_OPA_TABS,
@@ -245,16 +243,29 @@ function periodFromParams(params: URLSearchParams) {
 
 export default function SupportPage() {
   return (
-    <Suspense
-      fallback={<main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando SGP Suporte...</main>}
+    <WorkspaceAppShell
+      activePath="/suporte"
+      title="SGP Suporte"
+      subtitle="Atendimentos, tempos e motivos vindos do OPA Suite"
     >
-      <SupportPageContent />
-    </Suspense>
+      {(user) => (
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando SGP Suporte...
+            </p>
+          }
+        >
+          <SupportPageContent user={user} />
+        </Suspense>
+      )}
+    </WorkspaceAppShell>
   );
 }
 
-function SupportPageContent() {
-  const { user, checking, logout } = useWorkspaceAuth();
+// A casca (`WorkspaceAppShell`) resolve autenticação, cabeçalho, sino, sair e o menu lateral com as
+// telas deste módulo - aqui só chega o usuário pronto.
+function SupportPageContent({ user }: { user: AuthUser }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -275,6 +286,17 @@ function SupportPageContent() {
   const [overviewRankingLoading, setOverviewRankingLoading] = useState(false);
   const [drilldown, setDrilldown] = useState<OpaDrilldown | null>(null);
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
+
+  // `initialTab` (acima) só seeda `activeView` na MONTAGEM - navegação pelo lado do cliente para
+  // `/suporte?tab=X` vindo de um submenu da barra lateral, estando já em `/suporte`, não remonta a
+  // página, então `activeView` ficava travado na aba anterior mesmo com a URL correta (achado
+  // real, 2026-09-03, mesma causa já corrigida em Operação/Gamificação/Agendamento/Gestão/
+  // Intelligence/Administração - esta escapou por já importar `useSearchParams`, o que não é o
+  // bastante: falta ressincronizar o estado quando ele muda). Reaproveita `initialTab` (que já
+  // resolve o alias "agents" e valida contra `ACTIVE_OPA_TABS`) em vez de duplicar essa lógica.
+  useEffect(() => {
+    setActiveView(initialTab);
+  }, [initialTab]);
   const [attendancePage, setAttendancePage] = useState<SupportOpaAttendancePage | null>(null);
   const [attendanceFilters, setAttendanceFilters] = useState<SupportOpaAttendanceFilters>(initialFilters);
   const [attendantBreakdown, setAttendantBreakdown] = useState<SupportOpaBreakdowns | null>(null);
@@ -687,56 +709,20 @@ function SupportPageContent() {
     }
   }
 
-  if (checking && !user) {
-    return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando SGP Suporte...</main>;
-  }
-  if (!user) return <RedirectToWorkspaceHome />;
+
 
   if (!canRead) {
     return (
-      <main className="min-h-screen bg-slate-50 p-6">
-        <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
-          <h1 className="text-xl font-semibold">Acesso ao SGP necessário</h1>
-          <p className="mt-2 text-sm">Seu usuário não possui permissão support:read.</p>
-          <Link href="/" className="mt-4 inline-flex text-sm font-semibold text-amber-800">Voltar ao ecossistema</Link>
-        </div>
-      </main>
+      <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+        <h2 className="text-xl font-semibold">Acesso ao SGP necessário</h2>
+        <p className="mt-2 text-sm">Seu usuário não possui permissão support:read.</p>
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-[0_1px_0_0_rgba(37,99,235,0.35)] backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
-          <div className="flex items-center gap-3">
-            <ModuleNavigationSidebar
-              title="SGP Suporte"
-              description="Navegação modular do UNI Workspace"
-              items={OPA_NAV_ITEMS.filter((item) => ACTIVE_OPA_TABS.includes(item.value))}
-              activeItem={activeView}
-              onChange={navigateToTab}
-              footer="Novas áreas do SGP Suporte serão incluídas neste menu."
-            />
-            <Link
-              href="/"
-              aria-label="Voltar ao ecossistema"
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700"
-            >
-              <Home className="h-5 w-5" />
-            </Link>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-blue-600">UNI Workspace</p>
-              <h1 className="text-base font-semibold text-slate-950">SGP Suporte</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <NotificationBell />
-            <Button type="button" variant="ghost" onClick={logout}><LogOut className="h-4 w-4" /> Sair</Button>
-          </div>
-        </div>
-      </header>
-
-      <section className="flex flex-wrap items-center justify-between gap-2 px-4 pb-1 pt-4 lg:px-7">
+    <div className="min-w-0">
+      <section className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div className="flex min-w-0 items-baseline gap-2">
           <h2 className="text-lg font-semibold text-slate-950">Atendimentos do Suporte</h2>
           <p className="truncate text-xs text-slate-500">Dados sincronizados do OPA Suite</p>
@@ -948,7 +934,7 @@ function SupportPageContent() {
           }
         }}
       />
-    </main>
+    </div>
   );
 }
 

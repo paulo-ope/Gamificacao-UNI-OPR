@@ -26,6 +26,7 @@ from app.services import cpk_health, point_balance, scoring_detail
 from app.services.cpk_client import CpkApiError
 from app.services.calculation_closure import (
     build_rule_snapshot,
+    current_reference_period,
     ensure_period_not_closed,
     now_porto_velho,
     now_utc,
@@ -33,7 +34,10 @@ from app.services.calculation_closure import (
     serialize_run_status,
 )
 from app.services.leadership_bonus import calculate_and_store_leadership_bonus
-from app.services.regional import normalize_regional_grouped as normalize_regional
+from app.services.regional import (
+    effective_managed_regionals_grouped,
+    normalize_regional_grouped as normalize_regional,
+)
 
 logger = logging.getLogger("calculation")
 
@@ -402,6 +406,94 @@ def calculate_scores(
     run.result_summary = result_summary
     db.flush()
     return run
+
+
+GAMIFICATION_PREVIEW_MISSING_RUN = (
+    "A prévia do mês corrente ainda não foi calculada."
+)
+GAMIFICATION_PREVIEW_NO_REGIONAL = (
+    "Nenhuma filial foi vinculada ao seu usuário."
+)
+
+
+def gamification_preview(db: Session, user) -> dict:
+    """Valor da gamificação "de agora": a PRÉVIA do mês corrente, não o último fechamento pago.
+
+    Não recalcula nada. `recalculate_current_period` já regrava o rascunho do mês corrente a cada
+    ciclo do sincronizador do IXC (e a cada correção de Tipo Geral), então aqui é só leitura do
+    rascunho mais recente daquele período. Por isso o payload devolve `calculated_at` e `status`:
+    uma prévia velha (sincronização parada, ou mês já pago e portanto congelado) precisa aparecer
+    como velha na tela, nunca como número fresco.
+
+    Os totais saem reconciliados das linhas `collaborator_scores`, nunca do JSON gravado - foi
+    exatamente a divergência entre os dois que gerou o achado C1 (o card "Total a pagar"
+    contradizendo a lista de colaboradores da mesma resposta).
+
+    Escopo: gestor regional recebe só a soma das filiais dele, somando as linhas dos próprios
+    colaboradores em vez do total da empresa. A regional aqui é comparada AGRUPADA
+    (`normalize_regional` = `normalize_regional_grouped`), igual ao resto da gamificação.
+
+    Procura só o run global do mês (`regional IS NULL`), que é o que o recálculo automático
+    produz. Um fechamento avulso de uma única filial não é o total da empresa e não serve como
+    prévia geral - nesse caso a resposta vem indisponível, em vez de um número parcial disfarçado
+    de total.
+    """
+    reference_month, reference_year = current_reference_period()
+    point_value = get_point_value(db)
+    unavailable = {
+        "available": False,
+        "reference_month": reference_month,
+        "reference_year": reference_year,
+        "status": None,
+        "is_preview": False,
+        "estimated_payment": None,
+        "final_points": None,
+        "collaborators": None,
+        "point_value": point_value,
+        "calculated_at": None,
+        "scope_regionals": [],
+        "unavailable_reason": GAMIFICATION_PREVIEW_MISSING_RUN,
+    }
+
+    run = pick_run_by_status_priority(
+        db,
+        select(CalculationRun)
+        .where(CalculationRun.reference_month == reference_month)
+        .where(CalculationRun.reference_year == reference_year)
+        .where(CalculationRun.regional.is_(None))
+        .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator)),
+    )
+    if run is None:
+        return unavailable
+
+    scoped_regionals = effective_managed_regionals_grouped(user.managed_regional, user.managed_regionals)
+    scores = list(run.scores)
+    if scoped_regionals:
+        allowed = set(scoped_regionals)
+        scores = [
+            score
+            for score in scores
+            if _official_collaborator_regional(score.collaborator) in allowed
+        ]
+    elif getattr(user, "role", None) == "regional_manager_viewer":
+        # Mesma regra da Operação Analítica: gestor regional sem filial configurada não recebe
+        # escopo implícito de "empresa toda".
+        return {**unavailable, "unavailable_reason": GAMIFICATION_PREVIEW_NO_REGIONAL}
+
+    return {
+        "available": True,
+        "reference_month": run.reference_month,
+        "reference_year": run.reference_year,
+        "status": run.status,
+        "is_preview": run.status == "draft",
+        "estimated_payment": round(sum(float(score.estimated_payment) for score in scores), 2),
+        "final_points": round(sum(float(score.final_points) for score in scores), 2),
+        "collaborators": len(scores),
+        "point_value": float(run.point_value) or point_value,
+        "calculated_at": run.executed_at or run.created_at,
+        "scope_regionals": scoped_regionals,
+        "unavailable_reason": None,
+    }
 
 
 def latest_run(db: Session) -> CalculationRun | None:

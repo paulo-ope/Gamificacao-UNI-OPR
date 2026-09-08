@@ -1,6 +1,15 @@
 ﻿"use client";
 
-import ReactECharts from "echarts-for-react";
+import dynamic from "next/dynamic";
+
+// Carregado sob demanda, como todos os outros módulos já fazem: este era o único lugar do sistema
+// que importava o ECharts (~1 MB) de forma estática, e por isso a Gamificação baixava e
+// interpretava a biblioteca inteira antes de conseguir desenhar qualquer coisa (achado medido no
+// bundle de produção em 2026-09-03).
+const ReactECharts = dynamic(() => import("echarts-for-react"), {
+  ssr: false,
+  loading: () => <div className="h-[300px] animate-pulse rounded-xl bg-slate-100" aria-label="Carregando gráfico" />,
+});
 
 import { InfoHint } from "@/components/gamification/info-hint";
 import { formatAnnulledPoints, formatMoney, formatPoints } from "@/lib/format";

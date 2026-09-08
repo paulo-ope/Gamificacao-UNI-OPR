@@ -13,9 +13,204 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-03** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-08** — branch `claude/suporte-sync-backfill-madrugada`
 
 ## O que foi feito recentemente
+
+- **Tooltip do ECharts cortado perto da borda do card - varredura em todo o app, não só onde o
+  usuário viu** (2026-09-08, usuário mandou um print do donut "Finalizadas por filial" com o texto
+  do tooltip cortado: "Alguns bug de texto cortado, procure por todos os lugares que apresneta esse
+  mesmo erro e corrija"). Causa raiz: `SectionCard` (`components/ui/section-card.tsx`) e
+  `OperationsTrendChart` (`components/operations/operations-trend-chart.tsx`) tinham
+  `overflow-hidden` no Card sem necessidade real - nada neles sangra até a borda arredondada
+  (header/conteúdo sempre têm padding) - então o clipe só existia como efeito colateral, cortando o
+  tooltip do ECharts (que é um `<div>` posicionado dentro do próprio container do gráfico) sempre
+  que ele precisava desenhar perto da borda esquerda/direita/superior do card.
+  - **Corrigido removendo o `overflow-hidden`** dos dois componentes - como são compartilhados,
+    resolve de uma vez os donuts e os 3 gráficos de tendência da Visão Geral, os gráficos da
+    Operação Analítica que reaproveitam `OperationsTrendChart` (SLA operacional, Aberturas x
+    finalizações, Produção por equipe), e os widgets do cockpit da UNI Intelligence que usam
+    `SectionCard`.
+  - **Varredura em todo o app** (grep por `overflow-hidden` + `ReactECharts`/`SectionCard`/`Card`)
+    achou um caso onde o clipe é PROPOSITAL: `ChartPanel` do SGP Suporte
+    (`app/suporte/_components/opa-charts.tsx`) usa `overflow-hidden` pra clipar o cabeçalho colorido
+    do card nos cantos arredondados - remover ali quebraria esse visual. Corrigido lá com
+    `tooltip.appendToBody: true` no `TOOLTIP` compartilhado de `lib/support-chart-options.ts` -
+    opção oficial do ECharts pra exatamente esse problema (tira o DOM do tooltip de dentro do
+    container, anexa direto no `<body>`), sem mexer no CSS do card.
+  - Outros lugares com ECharts checados e confirmados SEM esse problema (sem `overflow-hidden` no
+    ancestral do gráfico): gamificação (`dashboard-charts.tsx`), agendamento
+    (`scheduling-trend-chart.tsx`, `scheduling-backlog-panel.tsx`,
+    `scheduling-day-breakdown-charts.tsx`, `scheduling-performance-panel.tsx`), e os gráficos de
+    `operations-openings-analytics.tsx` (o único `overflow-hidden` ali é num `MetricCard` sem
+    gráfico dentro, usado pra clipar uma faixa de cor decorativa - não relacionado).
+  - **Verificado ao vivo**: mouse bem na borda esquerda do donut "Finalizadas por filial" (mesmo
+    ponto do print do usuário) - tooltip aparece completo agora, sem cortar. Frontend de produção
+    desta máquina reconstruído e reiniciado.
+
+- **Aviso de saída do drill (Visão Geral) virou fixo (sticky), logo abaixo do cabeçalho** (2026-09-05,
+  usuário: "pense em um local obvio e evidente para deixar o botao de sair do drill"). Causa do
+  problema: o aviso vivia só no topo da página (logo abaixo da barra de filtros) - quem clicava pra
+  detalhar num gráfico ou na tabela mais embaixo (SLA, Backlog, "Quadro geral das filiais") tinha
+  que rolar de volta pro topo só pra achar o "Voltar". "Óbvio e evidente" virou, na prática, "sempre
+  à vista": `sticky top-[79px]` (79px = altura medida do cabeçalho fixo do ecossistema,
+  `app-shell.tsx`), acompanhando a rolagem, com `shadow-md` pra parecer flutuar sobre o conteúdo.
+  Cor trocada de azul (já usado no resto da barra de filtros) pra âmbar, e o botão "Voltar" virou
+  sólido em vez de contorno - mais destaque pra um estado que é temporário, não mais um filtro comum.
+  **Verificado ao vivo**: rolando a tela inteira (do topo até o rodapé) com o drill ativo, o aviso
+  continuou visível e clicável o tempo todo, em desktop (1600px) e mobile (375px, reflow em coluna
+  única sem quebrar layout). Frontend de produção desta máquina reconstruído e reiniciado.
+
+- **Visão Geral: donut de filial mostra TODAS (nunca dobra em "Outros"), cor própria por entidade
+  além do 8º slot, lista recolhível, e drill temporário generalizado pra todo clique da tela**
+  (2026-09-04/05, dois pedidos do usuário em sequência: "que os donnuts apareça todas filial" e,
+  depois de ver ao vivo, "cada filkial com uma cor e deixa RECOLHIDO A lista... depois eu clico em
+  ver mais que deve expandir"; e "vamos adicionar o drill temporario em todos os driwll da visão
+  macro").
+  - **Todas as filiais nomeadas**: `overview-screen.tsx` passa `maxSlices={completedByRegional.length}`
+    pro donut "Finalizadas por filial" - nunca dobra a cauda em "Outros", só nesse donut (os outros
+    dois - modelo de equipe, canal SGP - continuam no teto padrão de 8, que na prática nunca é
+    atingido por eles).
+  - **Cor própria além do 8º**: `assignSeriesColors` (`lib/share-breakdown.ts`) não cai mais no
+    cinza neutro passado o fim da paleta validada (`CATEGORICAL_SLOTS`, 8 cores) - volta pro início
+    da paleta num tom claro/escuro alternado (`shade()`, nova função). Tom extra não passou pela
+    validação formal de contraste/daltonismo (só a base passou), mas preserva o matiz da cor
+    validada, então a distinção por matiz continua.
+  - **Lista recolhível**: `OverviewShareDonut` mostra só as 6 primeiras linhas por padrão
+    (`COLLAPSED_ROWS`) com botão "Ver mais (+N)"/"Ver menos" - o ANEL sempre desenha todas as
+    fatias (nenhum dado escondido), só a lista lateral é que fica curta até pedir o resto, pro card
+    não crescer proporcional à contagem de filiais.
+  - **Drill temporário generalizado**: antes só existia no clique por dia (ver item mais abaixo);
+    agora `drillFilters()` (`overview-screen.tsx`) é o caminho único de TODO drill da tela - donut de
+    filial, donut de modelo de equipe, tabela por filial, e os 3 gráficos de tendência. Cliques em
+    sequência (filial → dia, por exemplo) se acumulam sem perder a memória do estado original -
+    `preDrillFilters` só é capturado na PRIMEIRA vez, e "Voltar" desfaz a sequência inteira de uma
+    vez, nunca passo a passo.
+  - **Bug real encontrado e corrigido durante a verificação ao vivo**: "Voltar" restaurava o
+    período mas deixava a filial clicada durante o drill presa no filtro. Causa: `update()` é um
+    PATCH (mescla sobre o estado atual) - a fotografia de "antes do drill" pode legitimamente não
+    ter a chave `regionals`/`team_models` (ausente, não lista vazia, quando a tela carrega sem
+    nenhum filtro selecionado), e um PATCH sem essa chave simplesmente preserva o valor atual em vez
+    de limpá-lo. Corrigido com uma função nova, `replace()` (`hooks/use-overview-filters.ts`), que
+    SUBSTITUI o recorte inteiro em vez de mesclar - usada só pelo "Voltar" do drill.
+  - **Verificado ao vivo numa base sintética**: clique numa filial (donut) → aviso aparece, filtro
+    aplicado; clique num dia (gráfico) em cima disso → os dois efeitos acumulam, aviso continua
+    apontando pro período ORIGINAL (não pro estado intermediário só-com-filial); "Voltar" restaura
+    filial E período de uma vez (antes do fix, filial ficava presa). Repetido a partir da tabela por
+    filial, mesmo resultado.
+  - Frontend de produção desta máquina reconstruído e reiniciado.
+
+- **Visão Geral: SLA ponderado em gráfico próprio, backlog separado do fluxo diário, e drill por
+  dia com "voltar" dedicado** (2026-09-04, usuário: "coloque linhas do sla ponderado no grafico,
+  coloque drill e pense em como ao usar o drill nao ficar fixo nos filtros").
+  - **SLA ponderado**: reaproveitado `buildSlaTrendOption` (`lib/operations-chart-options.ts`), o
+    MESMO construtor já usado no gráfico "SLA operacional" da Operação Analítica - sem lógica nova,
+    só uma segunda tela consumindo o que já existia. Linha contínua = SLA acumulado ponderado do
+    período; linha tracejada = SLA do dia; barras empilhadas no prazo/fora do prazo em eixo
+    secundário. Card só aparece com `operations:view_sla` (mesma regra do resto da tela).
+  - **Backlog voltou a ter gráfico próprio**, separado do "Fluxo diário": a rodada anterior (ver
+    item mais abaixo) tinha colocado backlog como 3ª linha, eixo secundário, no mesmo gráfico de
+    abertas/finalizadas - o usuário viu ao vivo e achou "carregado" (a escala do backlog ficou
+    parecida com a de abertas/finalizadas neste banco, cruzando por cima das barras em vez de ficar
+    em segundo plano). `buildOverviewFlowTrendOption` foi removida; "Fluxo diário" voltou a usar
+    `buildOpeningsTrendOption` (o MESMO construtor do módulo de Operação, sem uma cópia própria da
+    Visão Geral) e backlog ganhou `buildBacklogTrendOption` (`lib/overview-chart-options.ts`) -
+    gráfico simples, uma linha, área sombreada leve.
+  - **Drill por dia**: clicar numa barra/ponto de qualquer um dos 3 gráficos (Fluxo diário, SLA,
+    Backlog) recorta a Visão Geral inteira pra aquele dia (`date_from = date_to = dia clicado`),
+    mesmo mecanismo de filtro que os donuts já usavam (`onSelect` → `update`). `OperationsTrendChart`
+    ganhou um `onEvents` opcional (repassado direto pro `ReactECharts`) - não existia antes.
+  - **"Não ficar fixo nos filtros"** (risco que o próprio usuário pediu pra evitar): recortar por
+    DIA muda a escala da tela inteira de uma vez, e "Restaurar padrão" não seria o caminho de volta
+    certo (apagaria também filial/modelo/setor que o usuário tivesse escolhido antes do drill). A
+    tela guarda `drillBackRange` - o período de ANTES do primeiro drill, só uma vez (um segundo
+    clique não pisa nessa memória) - e mostra um aviso dedicado, distinto de "Restaurar padrão":
+    "Detalhando {dia} · Voltar para {período anterior}".
+  - **Verificado ao vivo numa base sintética isolada** (30 dias de O.S., SLA variando de propósito
+    ao longo do período): clique numa barra do Fluxo diário recortou a tela pro dia certo (KPIs,
+    tabela por filial, tudo recalculado), "Voltar" restaurou EXATAMENTE o período de antes; repetido
+    a partir do gráfico de SLA - o "Voltar" continuou apontando pro período original (não pro dia do
+    primeiro drill), confirmando que a memória não é pisada por cliques seguintes.
+  - Frontend de produção desta máquina reconstruído e reiniciado. Nenhuma mudança de backend nesta
+    rodada (reaproveita os mesmos endpoints já existentes).
+
+- **Linha de backlog do "Fluxo diário" quebrava no meio do gráfico** (2026-09-04, usuário viu o
+  gráfico ao vivo e reportou: "linha tracejada está falhada"). Causa raiz confirmada no banco real:
+  a fotografia diária tinha 2 dias sem nenhuma linha dentro do próprio período já coberto (19/08 e
+  23/08 - o job de captura não rodou naquela hora), e `connectNulls: false` interrompia a linha
+  exatamente ali, parecendo um bug de renderização em vez de "sem dado". Essa situação é diferente
+  do prefixo antes de `coverage_from` (10/08 em produção) - lá não existe NENHUM valor conhecido pra
+  mostrar; num buraco interno existe, só não foi remedido naquela hora. `queries.backlog_daily_trend`
+  passou a preencher buracos internos com o último valor conhecido (carry-forward, inclusive
+  buscando a fotografia anterior mesmo fora da janela pedida, se o primeiro dia pedido já for um
+  buraco) - só o prefixo antes de `coverage_from` continua ausente de verdade. 3 testes novos
+  (buraco interno carrega o valor anterior; semente de fora da janela; prefixo antes da cobertura
+  continua ausente). **Verificado contra o banco real** (leitura direta, função é 100% SELECT):
+  19/08 e 23/08 agora vêm com o valor do dia anterior, contagem de pontos bate exatamente
+  (26 = 30 dias pedidos − 4 antes da cobertura). Backend de produção desta máquina reconstruído e
+  reiniciado.
+
+- **Donuts da Visão Geral: "Outros" virava a MAIOR fatia** (2026-09-04, usuário: "esse negocio de
+  outros lai nos donnuts não se se ficou legal"). Medido contra dado real: com as ~15 filiais de
+  produção, o teto de 5 fatias nomeadas (`DEFAULT_MAX_SLICES`) deixava um "Outros" de **44%** no
+  donut "Finalizadas por filial" - maior que qualquer filial nomeada, escondendo mais do que
+  mostrava. Subiu para **8** (`frontend/lib/share-breakdown.ts`) - não é um número arbitrário, casa
+  com o tamanho da paleta categórica (`CATEGORICAL_SLOTS`, 8 cores); além de 8, a cor deixaria de
+  identificar a entidade de qualquer forma (cairia no mesmo cinza do "Outros", ver
+  `assignSeriesColors`). Verificado numa base sintética com 13 filiais (mesma forma de cauda longa
+  do dado real): "Outros" caiu para 20%, menor que várias filiais nomeadas.
+
+- **Histórico de backlog no gráfico "Fluxo diário" da Visão Geral** (2026-09-04, usuário: "preccico
+  que mostre o historico de backlog tbm"). Backlog é ESTOQUE, não fluxo - não dá pra só somar junto
+  com abertas/finalizadas. Reaproveitada a fotografia diária que já existia
+  (`OperationBacklogSnapshot`, capturada por `backlog_snapshot.py`, já usada pelo módulo `ai`) em vez
+  de recalcular ao vivo de `OperationOrder`.
+  - Backend: `queries.backlog_daily_trend` (nova) soma `backlog_count` por dia, respeitando o
+    escopo regional do usuário e os filtros `regionals`/`sectors` - ignora `team_models`/
+    `responsibles`/`os_types` (mesma convenção de `_backlog_filters`; a fotografia nem guarda as
+    duas últimas dimensões). Endpoint novo `GET /operations/overview/backlog-trend`
+    (`OperationBacklogTrend`), 5 testes em `test_operations_overview_backlog_trend.py`.
+  - Frontend: nova função dedicada `buildOverviewFlowTrendOption`
+    (`lib/overview-chart-options.ts`) - a Visão Geral passou a montar seu PRÓPRIO gráfico de fluxo
+    diário em vez de importar `buildOpeningsTrendOption` do módulo de Operação, pra essa mudança não
+    vazar pro gráfico do módulo. Backlog entra como uma 3ª linha, em eixo Y secundário (mesmo padrão
+    dual-axis já usado em `buildSlaTrendOption` pro par SLA×contagem) - a escala de estoque tende a
+    ser bem diferente da variação diária de abertas/finalizadas.
+  - **Sem retroatividade, de propósito**: a fotografia só existe a partir de quando o job entrou em
+    produção (10/08/2026 em produção real) - pontos sem fotografia ficam ausentes
+    (`connectNulls: false`), nunca viram zero, que afirmaria um backlog nunca medido. Tela mostra um
+    aviso textual quando o recorte pedido começa antes da cobertura existir.
+  - **Verificado numa base sintética isolada** (10 dias de fotografia, gap propositalmente antes
+    disso): a linha de backlog apareceu só a partir da data de cobertura, com o aviso de texto
+    citando a data certa, e o eixo secundário com a escala de estoque (centenas) separada da escala
+    de fluxo diário.
+  - Imagens de produção (frontend e backend) desta máquina reconstruídas e reiniciadas com as duas
+    mudanças.
+
+- **Donuts da Visão Geral cortavam/escondiam o rótulo de %** (2026-09-04,
+  usuário: "vejo que alguns numeros no grafico de pizza ainda está com
+  numeros escondidos"). Causa raiz medida via DOM: o gráfico
+  (`OverviewShareDonut`) vivia lado a lado com a lista, dentro de um grid de
+  3 colunas — o canvas resultante tinha só **~180px de largura** contra
+  **220px de altura**. O ECharts calcula o raio da rosca pela MENOR
+  dimensão do canvas (a altura, aqui), então a largura sobrando pro rótulo
+  de % fora do anel (com linha guia) ficava perto de zero — o texto era
+  cortado pela própria borda do canvas. Não era um problema de fatia pequena:
+  a fatia MAIOR (16,4%) já vinha cortada ("16,..."), e a fatia "Outros"
+  virava pontinhos ilegíveis.
+  **Corrigido** empilhando o gráfico (largura cheia do card) acima da lista,
+  em vez de lado a lado — `components/overview/overview-share-donut.tsx`.
+  Com a largura cheia (~400px+), sobra margem de sobra pra qualquer rótulo,
+  em qualquer tamanho de tela (era esse layout, sem quebra, que já valia
+  para telas < `sm`; agora vale sempre).
+  **Verificado numa base sintética isolada** (schema clonado via
+  `pg_dump --schema-only`, nunca dado real): 7 filiais com finalizadas
+  próximas (42/40/38/37/35/33/31 — o cenário que reproduz o corte), antes e
+  depois da correção, com o canvas ampliado via CSS pra inspeção pixel a
+  pixel. Antes: "16,4%" cortado, "Outros" ilegível. Depois: as 6 fatias
+  (16,4%/15,6%/14,8%/14,5%/13,7%/25%) legíveis por completo, em desktop
+  (1600px), no recorte apertado de 3 colunas, e em mobile. Frontend de
+  produção desta máquina reconstruído e reiniciado com a correção.
 
 - **Mensagens do agente virtual Theo classificadas como "remetente não
   identificado" (corrigido)**: investigando `UNI2026810881` (TMR humano

@@ -2,13 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { api, setAuthToken } from "@/lib/api";
+import { api, peekSessionCache, setAuthToken } from "@/lib/api";
 import type { AuthUser } from "@/lib/types";
 
 
 export function useWorkspaceAuth() {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [checking, setChecking] = useState(true);
+  // Começa com o usuário que a sessão já resolveu, quando houver. Com a barra lateral em todas as
+  // telas, este hook monta de novo em CADA navegação - começar sempre em `checking` fazia a casca
+  // piscar um "Carregando UNI Workspace..." de tela cheia antes de desenhar o menu. Numa carga
+  // limpa (e na renderização do servidor) o cache está vazio e o comportamento é o de antes.
+  const cachedUser = peekSessionCache<AuthUser>("/auth/me");
+  const [user, setUser] = useState<AuthUser | null>(cachedUser);
+  const [checking, setChecking] = useState(cachedUser === null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

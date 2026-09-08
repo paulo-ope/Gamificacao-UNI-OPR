@@ -19,7 +19,12 @@ type SectionCardProps = {
 // operations-trend-chart.tsx) - eyebrow azul, título forte, subtítulo discreto.
 export function SectionCard({ eyebrow, title, subtitle, badge, actions, children, className, contentClassName, style }: SectionCardProps) {
   return (
-    <Card className={cn("overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm", className)} style={style}>
+    // Sem `overflow-hidden`: cortava o tooltip do ECharts (trigger "item"/"axis") sempre que ele
+    // precisava desenhar perto da borda do card - achado real, 2026-09-05 (donut "Finalizadas por
+    // filial" com o texto do tooltip cortado ao passar o mouse numa fatia perto da borda). Nada
+    // aqui sangra até a borda arredondada (header/conteúdo sempre têm padding), então não havia
+    // nada de fato sendo "clipado" de propósito - só um efeito colateral do clipe.
+    <Card className={cn("rounded-2xl border-slate-200 bg-white shadow-sm", className)} style={style}>
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-0">
         <div className="min-w-0">
           <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">{eyebrow}</p>

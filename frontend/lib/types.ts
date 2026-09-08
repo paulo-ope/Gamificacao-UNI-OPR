@@ -367,6 +367,21 @@ export type SupportOpaChannelCount = {
   total: number;
 };
 
+export type GamificationPreview = {
+  available: boolean;
+  reference_month: number;
+  reference_year: number;
+  status: string | null;
+  is_preview: boolean;
+  estimated_payment: number | null;
+  final_points: number | null;
+  collaborators: number | null;
+  point_value: number;
+  calculated_at: string | null;
+  scope_regionals: string[];
+  unavailable_reason: string | null;
+};
+
 export type SupportOpaOverviewPeriod = {
   date_from: string;
   date_to: string;

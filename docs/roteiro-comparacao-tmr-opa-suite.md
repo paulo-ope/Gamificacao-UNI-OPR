@@ -615,3 +615,79 @@ O achado da seção 12.3 sobre TMA/TA continua de pé — o Theo entrar corretam
 geral não muda o fato de o OPA calcular "tempo em atendimento" a partir de transições de
 status (AG/EA/PS) que a API não expõe. São investigações independentes que só se
 cruzaram porque apareceram no mesmo atendimento de exemplo.
+
+## 14. Esclarecimento — TMR humano mede "tempo até o humano aparecer", não "velocidade do atendente"
+
+Surgiu investigando o mesmo `UNI2026810881` da seção 13 (Gabrieli Milani, 03/09/2026,
+TMR humano = 13min). **Não é bug, não muda código nenhum — só registrando o
+entendimento pra não se perder.**
+
+### 14.1 O que pareceu estranho, à primeira vista
+
+O timeline do atendimento não mostra "nenhum intervalo grande" a olho nu — a lista de
+eventos vem só com HH:MM (sem segundo), e os eventos ficam visualmente "grudados" um
+atrás do outro. Só reconstruindo com segundo exato é que aparece o intervalo real:
+
+```
+10:37:48  cliente fala                         }
+   ...    Theo responde ativamente             } fase 1: bot trabalhando, 6min10s
+10:43:58  última resposta do Theo               }
+   ...    SILÊNCIO TOTAL (nem bot nem cliente)  } fase 2: 53min45s — ninguém envolvido
+11:37:43  cliente volta a falar                  }
+   ...    Theo engajado de novo                 } fase 3: bot trabalhando, 2min12s
+11:39:55  primeira resposta HUMANA (mesmo segundo da última msg do Theo)
+```
+
+Total do intervalo contado: `11:39:55 − 10:37:48 = 62min07s`. Tempo em que o humano
+participou antes de 11:39:55: **0 segundos**. A Gabrieli respondeu no instante exato em
+que a conversa chegou até ela.
+
+### 14.2 Por que isso NÃO é um bug
+
+`_human_response_metrics` (`opa_ingestion.py`) calcula exatamente o que está descrito
+na própria docstring: **"média dos intervalos entre uma mensagem do cliente e a
+resposta do atendente HUMANO seguinte"**. Mensagem pendente do cliente nunca é fechada
+nem reiniciada por mensagem de bot (Theo incluso, ver seção 13) — só fecha quando um
+humano identificado responde.
+
+"Tempo até o humano aparecer" **é, literalmente**, a definição de "tempo até a
+primeira resposta humana". Os 62 minutos são um fato real e verdadeiro sobre a
+experiência do cliente nesse atendimento — não é erro de cálculo, não é conta errada.
+
+### 14.3 Onde está a confusão de verdade — nome vs. uso
+
+O problema não é o cálculo, é a leitura. `TMR humano` sugere "velocidade do atendente",
+mas na prática mede uma coisa diferente e mistura três fatores que não têm nada a ver
+com o desempenho individual do atendente:
+
+1. Tempo de bot/Theo trabalhando na conversa (não é espera, é atendimento — só que
+   automatizado)
+2. Tempo de silêncio do **próprio cliente** (ele que demorou a responder, não o
+   contrário)
+3. Só então, o tempo real do atendente humano depois que a conversa chega até ele
+
+No caso do `UNI2026810881`, os itens 1+2 somam os 62min inteiros; o item 3 é zero.
+Ler "TMR humano: 13min" como "a Gabrieli demorou 13min pra responder" é uma
+interpretação **errada do número**, mesmo o número em si estando **certo**.
+
+### 14.4 Duas perguntas diferentes, duas métricas possíveis
+
+- **"Quanto tempo o cliente esperou até um humano aparecer?"** → é o que `tmr_seconds`
+  já responde hoje, corretamente. Útil pra medir experiência do cliente / fila.
+- **"O atendente foi rápido depois que a conversa chegou até ele?"** → precisaria medir
+  a partir do handoff real (transferência bot→humano), não da primeira mensagem do
+  cliente. **Não temos esse timestamp** — é o mesmo buraco de dado da seção 12.3 (TMA):
+  a API do OPA não expõe transição de fila/status, só o estado atual.
+
+### 14.5 Se um dia quiser separar as duas (não implementado, não pedido)
+
+Uma aproximação possível, sem dado novo da API: usar a **última mensagem de bot antes
+da 1ª resposta humana** como âncora, em vez da 1ª mensagem do cliente. Nesse caso
+específico daria `11:39:55 − 11:39:54 = 1 segundo` — muito mais fiel ao que a Gabrieli
+realmente fez. Quando não há bot na conversa, a âncora continua sendo a mensagem do
+cliente (comportamento atual, sem mudança). Precisaria medir num recorte maior antes de
+decidir se vale a pena — não avaliado ainda, fica registrado só como ideia pra reabrir
+se a leitura de "TMR humano como desempenho do atendente" continuar causando confusão.
+
+**Decisão desta sessão**: manter `tmr_seconds` exatamente como está. Nenhum código
+alterado.

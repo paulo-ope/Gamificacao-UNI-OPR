@@ -1,23 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, LogOut, RefreshCw, Search, ShieldAlert } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, RefreshCw, Search, ShieldAlert } from "lucide-react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { ManagementCaseDiagnosticsPanel, ManagementCasesPanel } from "@/components/management/management-cases-panel";
-import { ManagementModuleSidebar, type ManagementTab } from "@/components/management/management-module-sidebar";
+import { MANAGEMENT_NAV_ITEMS, type ManagementTab } from "@/components/management/management-module-sidebar";
 import { ManagementReasonsPanel } from "@/components/management/management-reasons-panel";
 import { StructureAuditPanel } from "@/components/management/structure-audit-panel";
-import { NotificationBell } from "@/components/workspace/notification-bell";
-import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
+import { WorkspaceAppShell } from "@/components/workspace/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
-import type { ManagementDashboard, ManagementOperationalMember, ManagementOptions, ManagementShiftPatternSuggestion } from "@/lib/types";
+import type { AuthUser, ManagementDashboard, ManagementOperationalMember, ManagementOptions, ManagementShiftPatternSuggestion } from "@/lib/types";
 
 // Nome do modelo de equipe elegível pra escala alternada, espelhando
 // ALTERNATING_SHIFT_ELIGIBLE_TEAM_MODEL_NAMES do backend (management/models.py) - só serve pra
@@ -128,7 +127,31 @@ function metricCards(data: ManagementDashboard | null) {
 }
 
 export default function ManagementPage() {
-  const { user, checking, logout } = useWorkspaceAuth();
+  return (
+    <WorkspaceAppShell
+      activePath="/gestao"
+      title="Gestão Integrada"
+      subtitle="Estrutura operacional, casos de gestão e decisão da matriz"
+    >
+      {(user) => (
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando Gestão Integrada...
+            </p>
+          }
+        >
+          <ManagementPageContent user={user} />
+        </Suspense>
+      )}
+    </WorkspaceAppShell>
+  );
+}
+
+// A casca (`WorkspaceAppShell`) já resolve autenticação, cabeçalho, sino de notificação, sair e o
+// menu lateral com as telas deste módulo - por isso este componente recebe o usuário pronto e não
+// desenha mais nada disso.
+function ManagementPageContent({ user }: { user: AuthUser }) {
   const [data, setData] = useState<ManagementDashboard | null>(null);
   const [options, setOptions] = useState<ManagementOptions>({ supervisors: [], team_models: [] });
   const [loading, setLoading] = useState(false);
@@ -138,6 +161,16 @@ export default function ManagementPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filters, setFilters] = useState({ search: "", regional: "", status: "", supervisor_user_id: "", collaborator_regional: "" });
   const [tab, setTab] = useState<ManagementTab>("structure");
+
+  // Abre direto na tela pedida pela URL (`?tab=`), que é como o menu lateral do ecossistema
+  // linka as telas deste módulo. Mesma convenção que a Administração e o SGP Suporte já usavam.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const requested = searchParams.get("tab");
+    if (requested && MANAGEMENT_NAV_ITEMS.some((item) => item.value === requested)) {
+      setTab(requested as ManagementTab);
+    }
+  }, [searchParams]);
   // Ação em massa sobre colaboradores selecionados - pedido do usuário em 2026-08-21: antes só
   // dava pra aplicar escala 12x36 em lote; modelo de equipe e supervisor (ex.: um time inteiro em
   // horário comercial) precisavam ser configurados um por um. Um único seletor de ação (em vez de
@@ -296,51 +329,17 @@ export default function ManagementPage() {
     }
   }
 
-  if (checking && !user) {
-    return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando Gestão...</main>;
-  }
-  if (!user) return <RedirectToWorkspaceHome />;
-
   if (!canRead) {
     return (
-      <main className="min-h-screen bg-slate-50 p-6">
-        <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
-          <h1 className="text-xl font-semibold">Acesso de gestão necessário</h1>
-          <p className="mt-2 text-sm">Seu usuário não possui permissão management:read.</p>
-          <Link href="/" className="mt-4 inline-flex text-sm font-semibold text-amber-800">Voltar ao ecossistema</Link>
-        </div>
-      </main>
+      <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+        <h2 className="text-xl font-semibold">Acesso de gestão necessário</h2>
+        <p className="mt-2 text-sm">Seu usuário não possui permissão management:read.</p>
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4">
-          <div className="flex items-center gap-3">
-            <ManagementModuleSidebar
-              activeTab={tab}
-              canAdminReasons={canAdminReasons}
-              canAudit={canAudit}
-              openCasesCount={data?.summary.open_cases ?? 0}
-              onChange={setTab}
-            />
-            <Link href="/" className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-blue-600">UNI Workspace</p>
-              <h1 className="text-base font-semibold text-slate-950">Gestão Integrada</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <NotificationBell />
-            <Button type="button" variant="ghost" onClick={logout}><LogOut className="h-4 w-4" /> Sair</Button>
-          </div>
-        </div>
-      </header>
-
-      <section className="mx-auto grid max-w-7xl gap-5 px-5 py-6">
+    <div className="grid gap-5">
         <div className="flex flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:flex-row lg:items-center">
           <div>
             <div className="flex items-center gap-2 text-blue-700">
@@ -538,8 +537,7 @@ export default function ManagementPage() {
         </div>
           </div>
         ) : null}
-      </section>
-    </main>
+    </div>
   );
 }
 

@@ -283,6 +283,48 @@ class OperationSavedFilterOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OperationOverviewDefaultFilter(BaseModel):
+    """Filtro pré-setado da Visão Geral executiva.
+
+    Aponta para uma visão GLOBAL já salva (`operations_saved_filters`, `visibility="global"`) em
+    vez de duplicar um catálogo de configuração de filtro: quem administra o ecossistema edita a
+    visão global de sempre e a Visão Geral acompanha. `available=False` significa "nenhum padrão
+    definido" - a tela abre sem filtro de dimensão, não em erro."""
+
+    available: bool
+    saved_filter_id: int | None = None
+    name: str | None = None
+    filters: OperationSavedFilterValues | None = None
+    can_manage: bool = False
+
+
+class OperationOverviewFilterOption(BaseModel):
+    key: str
+    label: str
+    # "operations" = filtro de O.S. (afeta KPIs, quadro, donuts de O.S.); "support" = filtro de
+    # atendimento do SGP (afeta SÓ os blocos do SGP). Grupos separados de propósito: misturar os
+    # dois universos produziria números de recortes diferentes lado a lado, sem erro nenhum.
+    group: Literal["operations", "support"]
+
+
+class OperationOverviewVisibleFilters(BaseModel):
+    """Quais filtros a Visão Geral exibe. Configurado na Administração (decisão do usuário em
+    2026-09-03), guardado em `app_settings`, lido por qualquer usuário do módulo."""
+
+    filters: list[str]
+    available: list[OperationOverviewFilterOption]
+    can_manage: bool = False
+
+
+class OperationOverviewVisibleFiltersUpdate(BaseModel):
+    filters: list[str] = Field(default_factory=list, max_length=20)
+
+
+class OperationOverviewDefaultFilterUpdate(BaseModel):
+    # `None` limpa o padrão.
+    saved_filter_id: int | None = None
+
+
 class OperationOverview(BaseModel):
     opened: int
     opened_associated: int
@@ -360,6 +402,44 @@ class OperationSubjectVolumeAlerts(BaseModel):
     recent_days: int
     responsibles_ignored: bool
     items: list[OperationSubjectVolumeAlert]
+
+
+class OperationRegionalMatrixItem(BaseModel):
+    regional: str
+    opened: int
+    backlog: int
+    overdue_backlog: int
+    completed: int
+    completed_on_time: int | None = None
+    completed_out_of_time: int | None = None
+    sla_rate: float | None = None
+
+
+class OperationRegionalMatrix(BaseModel):
+    date_from: date
+    date_to: date
+    # Escopo de filtro de cada coluna - a tela usa isso pra rotular o quadro, ver
+    # `queries.regional_matrix`.
+    opened_ignores_team_scope: bool
+    backlog_ignores_team_scope: bool
+    backlog_ignores_period: bool
+    sla_available: bool
+    items: list[OperationRegionalMatrixItem]
+    total: OperationRegionalMatrixItem
+
+
+class OperationBacklogTrendPoint(BaseModel):
+    snapshot_date: date
+    backlog: int
+
+
+class OperationBacklogTrend(BaseModel):
+    date_from: date
+    date_to: date
+    # Data mais antiga com fotografia disponível (de qualquer período, não só o pedido) - a tela
+    # usa isso pra avisar quando o início do recorte pedido é anterior ao início da coleta.
+    coverage_from: date | None
+    points: list[OperationBacklogTrendPoint]
 
 
 class OperationControlTowerSummary(BaseModel):

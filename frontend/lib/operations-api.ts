@@ -90,6 +90,21 @@ export type OperationTrendSeries = {
   points: OperationTrendPoint[];
 };
 
+export type OperationBacklogTrendPoint = {
+  snapshot_date: string;
+  backlog: number;
+};
+
+/** Histórico diário do backlog (estoque), lido da fotografia diária - ver `backlog_daily_trend`.
+ * `points` só tem os dias com fotografia real (nunca preenche com zero); `coverage_from` diz a
+ * partir de quando a coleta existe, pra tela avisar quando o recorte pedido começa antes disso. */
+export type OperationBacklogTrend = {
+  date_from: string;
+  date_to: string;
+  coverage_from: string | null;
+  points: OperationBacklogTrendPoint[];
+};
+
 export type OperationSubjectVolumeAlert = {
   subject: string;
   current_backlog: number;
@@ -792,6 +807,60 @@ export type OperationBranchCapacitySummary = {
   items: OperationBranchCapacitySummaryItem[];
 };
 
+export type OperationRegionalMatrixItem = {
+  regional: string;
+  opened: number;
+  backlog: number;
+  overdue_backlog: number;
+  completed: number;
+  completed_on_time: number | null;
+  completed_out_of_time: number | null;
+  sla_rate: number | null;
+};
+
+// Cada coluna do quadro obedece a um escopo de filtro diferente de propósito - as flags abaixo
+// existem pra tela rotular isso. Ver `queries.regional_matrix` no backend.
+export type OperationRegionalMatrix = {
+  date_from: string;
+  date_to: string;
+  opened_ignores_team_scope: boolean;
+  backlog_ignores_team_scope: boolean;
+  backlog_ignores_period: boolean;
+  sla_available: boolean;
+  items: OperationRegionalMatrixItem[];
+  total: OperationRegionalMatrixItem;
+};
+
+export type OperationOverviewDefaultFilter = {
+  available: boolean;
+  saved_filter_id: number | null;
+  name: string | null;
+  filters: OperationSavedFilterValues | null;
+  can_manage: boolean;
+};
+
+export type OperationOverviewFilterKey =
+  | "team_models"
+  | "regionals"
+  | "sectors"
+  | "os_types"
+  | "responsibles"
+  | "support_department"
+  | "support_channel"
+  | "support_reason";
+
+export type OperationOverviewFilterOption = {
+  key: OperationOverviewFilterKey;
+  label: string;
+  group: "operations" | "support";
+};
+
+export type OperationOverviewVisibleFilters = {
+  filters: OperationOverviewFilterKey[];
+  available: OperationOverviewFilterOption[];
+  can_manage: boolean;
+};
+
 export type OperationOfflineLoginClusters = {
   radius_meters: number;
   min_cluster_size: number;
@@ -910,6 +979,28 @@ export const operationsApi = {
     request<OperationTrendSeries>(
       `/operations/overview/trends?${query(filters, { granularity })}`,
     ),
+  overviewBacklogTrend: (filters: OperationFilterState) =>
+    request<OperationBacklogTrend>(
+      `/operations/overview/backlog-trend?${query(filters)}`,
+    ),
+  overviewRegionalMatrix: (filters: OperationFilterState) =>
+    request<OperationRegionalMatrix>(
+      `/operations/overview/regional-matrix?${query(filters)}`,
+    ),
+  overviewDefaultFilter: () =>
+    request<OperationOverviewDefaultFilter>("/operations/overview/default-filter"),
+  updateOverviewDefaultFilter: (savedFilterId: number | null) =>
+    request<OperationOverviewDefaultFilter>("/operations/overview/default-filter", {
+      method: "PUT",
+      body: JSON.stringify({ saved_filter_id: savedFilterId }),
+    }),
+  overviewVisibleFilters: () =>
+    request<OperationOverviewVisibleFilters>("/operations/overview/visible-filters"),
+  updateOverviewVisibleFilters: (filters: OperationOverviewFilterKey[]) =>
+    request<OperationOverviewVisibleFilters>("/operations/overview/visible-filters", {
+      method: "PUT",
+      body: JSON.stringify({ filters }),
+    }),
   overviewVolumeAlerts: (filters: OperationFilterState) =>
     request<OperationSubjectVolumeAlerts>(
       `/operations/overview/volume-alerts?${query(filters)}`,

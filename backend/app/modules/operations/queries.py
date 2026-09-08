@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import User
 from app.services.regional import effective_managed_regionals
 
-from .models import OperationBranchCapacity, OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
+from .models import OperationBacklogSnapshot, OperationBranchCapacity, OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE, OPERATIONS_TIMEZONE_NAME, local_period_utc_bounds, operations_period_bounds
 from .scope import ALL_SECTOR_NAMES
 
@@ -660,6 +660,218 @@ def overview(db: Session, date_from: date, date_to: date, user: User, **filters)
         "average_closing_hours": round(float(row[4]), 2) if row[4] is not None else None,
         "average_wait_to_displacement_minutes": round(sum(wait_minutes) / len(wait_minutes), 2) if wait_minutes else None,
         "average_cycle_minutes": round(sum(cycle_minutes) / len(cycle_minutes), 2) if cycle_minutes else None,
+    }
+
+
+def _regional_matrix_item(
+    label: str,
+    *,
+    opened: int,
+    backlog: tuple[int, int],
+    completed: tuple[int, int, int],
+    include_sla: bool,
+) -> dict:
+    backlog_total, overdue_backlog = backlog
+    completed_total, on_time, out_of_time = completed
+    measurable = on_time + out_of_time
+    return {
+        "regional": label,
+        "opened": opened,
+        "backlog": backlog_total,
+        "overdue_backlog": overdue_backlog,
+        "completed": completed_total,
+        "completed_on_time": on_time if include_sla else None,
+        "completed_out_of_time": out_of_time if include_sla else None,
+        "sla_rate": (round((on_time / measurable) * 100, 1) if measurable else None) if include_sla else None,
+    }
+
+
+def regional_matrix(
+    db: Session,
+    date_from: date,
+    date_to: date,
+    user: User,
+    *,
+    include_sla: bool = True,
+    **filters,
+) -> dict:
+    """Uma linha por filial com as quatro medidas da Visão Geral executiva.
+
+    Cada coluna carrega DELIBERADAMENTE um escopo de filtro diferente, seguindo a convenção que
+    já vale no resto do módulo (`overview`, `openings_analytics`, `overview_trend_daily`):
+
+    - `opened`: demanda que entrou no período. Ignora `responsibles`/`team_models`
+      (`_opening_filters`) - quando a O.S. abre ela ainda não tem executor, então filtrar por
+      executor esconderia demanda real.
+    - `backlog`/`overdue_backlog`: estoque de O.S. ainda abertas AGORA. Ignora o período (é
+      retrato, não fluxo) e os mesmos filtros de execução (`_backlog_filters`).
+    - `completed`/`sla_rate`: produção e prazo. Respeitam TODOS os filtros, inclusive modelo de
+      equipe e responsável - aqui a pergunta é sobre quem executou.
+
+    Por isso o payload devolve as flags `opened_ignores_team_scope`/`backlog_ignores_team_scope`/
+    `backlog_ignores_period`: a tela precisa rotular cada coluna, senão alguém soma "abertas" com
+    "finalizadas" e conclui que a conta não fecha. O escopo regional do usuário continua vindo de
+    `_dimension_conditions`, ou seja, um gestor regional recebe a mesma tabela já recortada nas
+    filiais dele - o filtro nunca amplia acesso.
+
+    `include_sla=False` mantém as colunas de volume e devolve as de prazo em branco, para quem
+    abre a Visão Geral sem `operations:view_sla`.
+    """
+    start, end = local_period_utc_bounds(date_from, date_to)
+    regional_label = func.coalesce(OperationOrder.regional, "Não identificada")
+
+    opened_rows = db.execute(
+        select(regional_label, func.count(OperationOrder.id))
+        .where(
+            *_dimension_conditions(db, user, _opening_filters(filters)),
+            OperationOrder.opened_at.between(start, end),
+        )
+        .group_by(regional_label)
+    ).all()
+    backlog_rows = db.execute(
+        select(
+            regional_label,
+            func.count(OperationOrder.id),
+            func.sum(case((OperationOrder.sla_status == "out_of_time", 1), else_=0)),
+        )
+        .where(
+            *_dimension_conditions(db, user, _backlog_filters(filters)),
+            OperationOrder.is_closed.is_(False),
+        )
+        .group_by(regional_label)
+    ).all()
+    completed_rows = db.execute(
+        select(
+            regional_label,
+            func.count(OperationOrder.id),
+            func.sum(case((OperationOrder.sla_status == "on_time", 1), else_=0)),
+            func.sum(case((OperationOrder.sla_status == "out_of_time", 1), else_=0)),
+        )
+        .where(
+            *_dimension_conditions(db, user, filters),
+            OperationOrder.closed_at.between(start, end),
+        )
+        .group_by(regional_label)
+    ).all()
+
+    opened_by_regional = {str(label): int(quantity or 0) for label, quantity in opened_rows}
+    backlog_by_regional = {
+        str(label): (int(total or 0), int(overdue or 0)) for label, total, overdue in backlog_rows
+    }
+    completed_by_regional = {
+        str(label): (int(total or 0), int(on_time or 0), int(out_of_time or 0))
+        for label, total, on_time, out_of_time in completed_rows
+    }
+
+    # Ordem alfabética de propósito: a tabela existe pra alguém procurar a própria filial nela.
+    # Reordenar por volume é escolha da tela, que já tem colunas ordenáveis.
+    labels = sorted(set(opened_by_regional) | set(backlog_by_regional) | set(completed_by_regional))
+    items = [
+        _regional_matrix_item(
+            label,
+            opened=opened_by_regional.get(label, 0),
+            backlog=backlog_by_regional.get(label, (0, 0)),
+            completed=completed_by_regional.get(label, (0, 0, 0)),
+            include_sla=include_sla,
+        )
+        for label in labels
+    ]
+    # O total soma as CONTAGENS e recalcula o percentual - média dos percentuais das filiais daria
+    # um SLA que não corresponde a nenhuma O.S. real.
+    total = _regional_matrix_item(
+        "Total",
+        opened=sum(opened_by_regional.values()),
+        backlog=(
+            sum(total for total, _ in backlog_by_regional.values()),
+            sum(overdue for _, overdue in backlog_by_regional.values()),
+        ),
+        completed=(
+            sum(total for total, _, _ in completed_by_regional.values()),
+            sum(on_time for _, on_time, _ in completed_by_regional.values()),
+            sum(out_of_time for _, _, out_of_time in completed_by_regional.values()),
+        ),
+        include_sla=include_sla,
+    )
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "opened_ignores_team_scope": True,
+        "backlog_ignores_team_scope": True,
+        "backlog_ignores_period": True,
+        "sla_available": include_sla,
+        "items": items,
+        "total": total,
+    }
+
+
+def backlog_daily_trend(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
+    """Histórico diário do backlog (estoque de O.S. em aberto), lido da fotografia diária
+    (`operations/backlog_snapshot.py`), não de `OperationOrder` - o snapshot já existe pra isso e
+    evita recalcular "quantas O.S. estavam abertas em cada dia passado" ao vivo.
+
+    Mesma convenção de `_backlog_filters`: ignora `team_models`/`responsibles`/`os_types` (o
+    snapshot nem guarda essas duas últimas dimensões) - só `regionals`/`sectors` recortam, além do
+    escopo regional do próprio usuário. `date_from`/`date_to` aqui são o período pedido pela tela,
+    não o do filtro de O.S. - só delimitam quais fotografias entram na resposta.
+
+    Limitação real, não é bug: a fotografia só existe a partir do dia em que o job entrou em
+    produção (`coverage_from`) - pedir um período anterior a isso simplesmente não traz pontos
+    daqueles dias, e quem consome decide como desenhar o buraco (não preenchemos com zero, que
+    afirmaria um backlog que nunca foi medido).
+
+    Dentro do período já coberto, porém, um dia sem fotografia (job que não rodou naquela hora -
+    achado real, produção tinha 2 dias faltando num intervalo de 26) NÃO é a mesma situação: o
+    backlog não some nem zera só porque não foi recontado, e desenhar a linha interrompida ali
+    parecia bug, não "sem dado" (usuário: "linha tracejada está falhada"). Por isso o buraco
+    interno é preenchido com o último valor conhecido (carry-forward) - só o prefixo ANTES de
+    `coverage_from` (onde não existe nenhum valor conhecido pra carregar) fica de fato ausente."""
+    conditions_base = [OperationBacklogSnapshot.snapshot_date <= date_to]
+    allowed_regionals = effective_managed_regionals(user.managed_regional, user.managed_regionals)
+    if allowed_regionals:
+        conditions_base.append(OperationBacklogSnapshot.regional.in_(allowed_regionals))
+    elif user.role == "regional_manager_viewer":
+        conditions_base.append(OperationBacklogSnapshot.id == -1)
+    if regionals := filters.get("regionals"):
+        conditions_base.append(OperationBacklogSnapshot.regional.in_(regionals))
+    if sectors := filters.get("sectors"):
+        conditions_base.append(OperationBacklogSnapshot.sector.in_(sectors))
+
+    rows = db.execute(
+        select(OperationBacklogSnapshot.snapshot_date, func.sum(OperationBacklogSnapshot.backlog_count))
+        .where(*conditions_base, OperationBacklogSnapshot.snapshot_date >= date_from)
+        .group_by(OperationBacklogSnapshot.snapshot_date)
+        .order_by(OperationBacklogSnapshot.snapshot_date)
+    ).all()
+    by_date = {snapshot_date: int(total or 0) for snapshot_date, total in rows}
+    coverage_from = db.scalar(select(func.min(OperationBacklogSnapshot.snapshot_date)))
+
+    # Semente do carry-forward quando o próprio primeiro dia pedido já é um buraco - sem isso o
+    # preenchimento só começaria no primeiro dia com fotografia real dentro da janela. Precisa ser
+    # a SOMA do dia anterior mais recente (não uma linha qualquer) - o mesmo agrupamento da consulta
+    # principal, só que por um único dia.
+    prior_row = db.execute(
+        select(OperationBacklogSnapshot.snapshot_date, func.sum(OperationBacklogSnapshot.backlog_count))
+        .where(*conditions_base, OperationBacklogSnapshot.snapshot_date < date_from)
+        .group_by(OperationBacklogSnapshot.snapshot_date)
+        .order_by(OperationBacklogSnapshot.snapshot_date.desc())
+        .limit(1)
+    ).first()
+    last_value = int(prior_row[1]) if prior_row else None
+    points = []
+    start = max(date_from, coverage_from) if coverage_from else date_to + timedelta(days=1)
+    current = start
+    while current <= date_to:
+        if current in by_date:
+            last_value = by_date[current]
+        if last_value is not None:
+            points.append({"snapshot_date": current, "backlog": last_value})
+        current += timedelta(days=1)
+
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "coverage_from": coverage_from,
+        "points": points,
     }
 
 

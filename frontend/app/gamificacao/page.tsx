@@ -18,7 +18,8 @@ import {
   Wallet
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { AuditPanel } from "@/components/gamification/audit-panel";
 import { AuditTrailPanel } from "@/components/shared/audit-trail-panel";
@@ -27,10 +28,10 @@ import { ClosureTab } from "@/components/gamification/closure-tab";
 import { CollaboratorRegistryPanel } from "@/components/gamification/collaborator-registry-panel";
 import { CollaboratorOrdersSheet } from "@/components/gamification/collaborator-orders-sheet";
 import { AppDrawer } from "@/components/gamification/config-ui";
-import { InfoHint } from "@/components/gamification/info-hint";
 import { LogicConfigurationPanel } from "@/components/gamification/logic-configuration-panel";
 import { LeadershipBonusPanel } from "@/components/gamification/leadership-bonus-panel";
-import { ModuleNavigationSidebar, type ModuleNavigationItem } from "@/components/workspace/module-navigation-sidebar";
+import { GAMIFICATION_NAV_ITEMS } from "@/components/gamification/gamification-nav-items";
+import { WorkspaceAppShell } from "@/components/workspace/app-shell";
 import { PointBalancePanel } from "@/components/gamification/point-balance-panel";
 import { RankingTab } from "@/components/gamification/ranking-tab";
 import { UnmappedDiagnosesPanel } from "@/components/gamification/unmapped-diagnoses-panel";
@@ -75,38 +76,6 @@ import type {
 
 type AnalysisPeriod = { reference_month?: number; reference_year?: number; regional?: string | null };
 
-const TAB_HELP: Record<string, string> = {
-  closure: "Exibe o resumo financeiro e operacional do período, com valores, pontuação e conferências para pagamento.",
-  ranking: "Mostra a comparação de desempenho entre equipes, regionais ou colaboradores no período analisado.",
-  pending: "Lista itens que precisam de revisão, correção ou validação antes do fechamento.",
-  config: "Reúne parâmetros operacionais, regras e definições que influenciam os cálculos e a exibição dos dados.",
-  audit: "Permite consultar registros detalhados, validar regras aplicadas e conferir inconsistências.",
-  balance: "Lista débitos de garantia detectados após o pagamento do período original, pendentes de abatimento no próximo fechamento do colaborador.",
-  history: "Mostra o acompanhamento de períodos anteriores e a evolução dos resultados.",
-  import: "Permite definir ou consultar o mês de referência usado nas análises da competência."
-};
-
-const TAB_BADGE: Record<string, string> = {
-  closure: "Visão executiva",
-  ranking: "Ranking operacional",
-  pending: "Pendências de regra",
-  config: "Governança",
-  audit: "Rastreabilidade",
-  balance: "Saldo de garantias",
-  history: "Histórico",
-  import: "Período analisado"
-};
-
-const GAMIFICATION_NAV_ITEMS: Array<ModuleNavigationItem<string>> = [
-  { value: "closure", label: "Fechamento", description: "Resumo financeiro do período", icon: ClipboardList },
-  { value: "ranking", label: "Ranking", description: "Comparação de desempenho", icon: Trophy },
-  { value: "pending", label: "Pendências", description: "Itens que exigem revisão", icon: AlertTriangle },
-  { value: "config", label: "Configuração", description: "Regras e parâmetros", icon: Settings2 },
-  { value: "audit", label: "Auditoria", description: "Registros e rastreabilidade", icon: ShieldAlert },
-  { value: "balance", label: "Saldo de pontos", description: "Débitos de garantia pendentes", icon: Wallet },
-  { value: "history", label: "Histórico", description: "Períodos anteriores", icon: History },
-  { value: "import", label: "Período", description: "Mês de referência da análise", icon: CalendarDays }
-];
 
 function leadershipAuditSourceLabel(value: string | undefined) {
   if (value === "leader") return "Líder";
@@ -128,6 +97,26 @@ function replaceById<T extends { id: number }>(items: T[], id: number, nextItem:
 }
 
 export default function GamificacaoPage() {
+  return (
+    <WorkspaceAppShell
+      activePath="/gamificacao"
+      title="Gamificação Operacional"
+      subtitle="Remuneração variável, fechamento e auditoria de produtividade"
+    >
+      <Suspense
+        fallback={
+          <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+            Carregando Gamificação...
+          </p>
+        }
+      >
+        <GamificacaoPageContent />
+      </Suspense>
+    </WorkspaceAppShell>
+  );
+}
+
+function GamificacaoPageContent() {
   const { confirm, ConfirmDialog } = useConfirm();
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -165,6 +154,14 @@ export default function GamificacaoPage() {
   const [selectedLeadershipResult, setSelectedLeadershipResult] = useState<LeadershipBonusResult | null>(null);
   const [ordersOpen, setOrdersOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("closure");
+
+  // Abre direto na tela pedida pela URL (`?tab=`), que é como o menu lateral do ecossistema
+  // linka as telas deste módulo. Mesma convenção que a Administração e o SGP Suporte já usavam.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && GAMIFICATION_NAV_ITEMS.some((item) => item.value === tab)) setActiveTab(tab);
+  }, [searchParams]);
   const [configTab, setConfigTab] = useState("rules");
   const [auditTab, setAuditTab] = useState("scoring");
   const [rankingTab, setRankingTab] = useState("collaborators");
@@ -444,7 +441,10 @@ export default function GamificacaoPage() {
     summary?.run?.regional
   ]);
 
-  const loadAll = useCallback(async (period: AnalysisPeriod = analysisPeriod, options: { refreshRuleBasics?: boolean } = {}) => {
+  const loadAll = useCallback(async (
+    period: AnalysisPeriod = analysisPeriod,
+    options: { refreshRuleBasics?: boolean; prefetchedSummary?: ReturnType<typeof api.summary> } = {},
+  ) => {
     if (!currentUser) return;
     const refreshRuleBasics = options.refreshRuleBasics ?? true;
     const loadKey = `${period.reference_month ?? ""}:${period.reference_year ?? ""}:${period.regional ?? ""}:${refreshRuleBasics}`;
@@ -454,7 +454,9 @@ export default function GamificacaoPage() {
     setSummaryLoading(true);
     resetLazyData();
     try {
-      const summaryData = await api.summary(period);
+      // `prefetchedSummary` é o pedido disparado na montagem, em paralelo com `me`/`bootstrap` -
+      // usar a mesma promessa evita um segundo GET idêntico logo em seguida.
+      const summaryData = await (options.prefetchedSummary ?? api.summary(period));
       setSummary(summaryData);
       setPointValue(String(summaryData.point_value ?? ""));
       if (refreshRuleBasics) {
@@ -473,9 +475,18 @@ export default function GamificacaoPage() {
     }
   }, [analysisPeriod, currentUser, resetLazyData]);
 
+  // Summary do último fechamento pedido JÁ na montagem, em paralelo com `me` + `bootstrap`.
+  // Sem parâmetro, `/dashboard/summary` resolve o mesmo `latest_run` que o `bootstrap`, então
+  // esperar o bootstrap terminar para só então pedir o summary era uma ida-e-volta inteira de
+  // espera gratuita - e o summary é o único pedido pesado da tela (achado da Fase 1, 2026-09-03).
+  const prefetchedSummaryRef = useRef<ReturnType<typeof api.summary> | null>(null);
+
   useEffect(() => {
     if (authBootstrapRef.current) return;
     authBootstrapRef.current = true;
+    prefetchedSummaryRef.current = api.summary({});
+    // Erro aqui é tratado por quem consumir a promessa (`loadAll`); só evita "unhandled rejection".
+    prefetchedSummaryRef.current.catch(() => undefined);
     Promise.all([api.me(), api.dashboardBootstrap().catch(() => null)])
       .then(([user, bootstrapData]) => {
         setCurrentUser(user);
@@ -517,7 +528,9 @@ export default function GamificacaoPage() {
     if (initialLoadRef.current) return;
     initialLoadRef.current = true;
     setLoading(true);
-    loadAll()
+    const prefetchedSummary = prefetchedSummaryRef.current ?? undefined;
+    prefetchedSummaryRef.current = null;
+    loadAll(undefined, { prefetchedSummary })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, [authChecked, currentUser, loadAll]);
@@ -1072,58 +1085,23 @@ export default function GamificacaoPage() {
   if (can("orders:import") || can("scoring:write")) visibleTabs.add("pending");
   if (can("scoring:write")) visibleTabs.add("config");
   const isPaidPeriod = summary?.run?.status === "paid";
-  const activeNavItem = GAMIFICATION_NAV_ITEMS.find((item) => item.value === activeTab) ?? GAMIFICATION_NAV_ITEMS[0];
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_24%),radial-gradient(circle_at_top_right,rgba(37,99,235,0.08),transparent_20%),linear-gradient(180deg,#f8fbff_0%,#f8fafc_42%,#f8fafc_100%)]">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
-          <div className="flex items-center gap-3">
-            <ModuleNavigationSidebar
-              title="Gamificação"
-              description="Navegação modular do UNI Workspace"
-              items={GAMIFICATION_NAV_ITEMS.filter((item) => visibleTabs.has(item.value))}
-              activeItem={activeTab}
-              onChange={setActiveTab}
-              footer="Novas áreas de gamificação devem ser adicionadas a este menu sem alterar a navegação principal."
-            />
-            <Link
-              href="/"
-              aria-label="Voltar ao ecossistema"
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700"
-            >
-              <Home className="h-5 w-5" />
-            </Link>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-600">UNI Workspace</p>
-              <h1 className="text-base font-semibold text-slate-950">Gamificação Operacional</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {can("calculation:run") ? (
-              <Button
-                type="button"
-                onClick={recalculate}
-                disabled={busy || loading}
-                title={isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
-                className="h-10 rounded-xl"
-              >
-                <RefreshCw className={busy || loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-                {isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
-              </Button>
-            ) : null}
-            {currentUser ? (
-              <div className="hidden text-right sm:block">
-                <div className="text-sm font-semibold text-slate-950">{currentUser.name}</div>
-                <div className="text-[11px] uppercase tracking-wide text-slate-500">{currentUser.role}</div>
-              </div>
-            ) : null}
-            <Button type="button" variant="ghost" size="sm" onClick={logout}>
-              <LogOut className="h-4 w-4" /> Sair
-            </Button>
-          </div>
+    <div className="min-w-0">
+      {can("calculation:run") ? (
+        <div className="mb-3 flex justify-end">
+          <Button
+            type="button"
+            onClick={recalculate}
+            disabled={busy || loading}
+            title={isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
+            className="h-10 rounded-xl"
+          >
+            <RefreshCw className={busy || loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+            {isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
+          </Button>
         </div>
-      </header>
+      ) : null}
 
       <StatusToast
         error={error}
@@ -1133,7 +1111,7 @@ export default function GamificacaoPage() {
         onDismissError={() => setError(null)}
         onDismissMessage={() => setMessage(null)}
       />
-      <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4 px-2 py-3 sm:px-4">
+      <div className="flex w-full flex-col gap-4">
 
         {loading && !bootstrap ? (
           <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -1172,25 +1150,6 @@ export default function GamificacaoPage() {
           </section>
         ) : (
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-1 flex-col gap-3">
-            <section className="rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm backdrop-blur">
-              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Navegação do módulo</div>
-                  <div className="mt-1 flex items-center gap-2 text-sm text-slate-600">
-                    <span>{activeNavItem.label}</span>
-                    <InfoHint
-                      ariaLabel={`Ajuda sobre a aba ${activeNavItem.label}`}
-                      description={TAB_HELP[activeTab] ?? TAB_HELP.closure}
-                      side="bottom"
-                    />
-                  </div>
-                </div>
-                <Badge className="w-fit border-slate-200 bg-slate-50 text-slate-700">
-                  {TAB_BADGE[activeTab] ?? TAB_BADGE.closure}
-                </Badge>
-              </div>
-            </section>
-
             <TabsContent value="closure" className="mt-0 flex-1 pr-1">
               {activeTab === "closure" ? (
                 !summary ? (
@@ -2113,7 +2072,7 @@ export default function GamificacaoPage() {
         ) : null}
       </AppDrawer>
       {ConfirmDialog}
-    </main>
+    </div>
   );
 }
 

@@ -30,6 +30,12 @@ const TOOLTIP = {
   borderWidth: 0,
   textStyle: { color: "#f8fafc", fontSize: 11 },
   padding: [8, 10],
+  // `ChartPanel` (opa-charts.tsx) precisa de `overflow-hidden` no card pra clipar o cabeçalho
+  // colorido nos cantos arredondados - diferente de outros cards do sistema, aqui o clipe É
+  // proposital. `appendToBody` tira o tooltip de dentro desse container (ele é anexado direto ao
+  // `<body>`) - mesmo bug de texto cortado perto da borda (achado real, 2026-09-05), resolvido sem
+  // mexer no clipe que o cabeçalho precisa.
+  appendToBody: true,
 };
 
 const AXIS_LABEL = { color: "#64748b", fontSize: 10 };

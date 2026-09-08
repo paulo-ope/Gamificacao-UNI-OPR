@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { commonDateRangePresets, DateRangePicker } from "@/components/ui/date-range-picker";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
-import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import { WorkspaceAppShell } from "@/components/workspace/app-shell";
+import type { AuthUser } from "@/lib/types";
 import {
   schedulingApi,
   type SchedulingBacklogItem,
@@ -29,8 +30,7 @@ import { SchedulingDayBreakdownCharts } from "@/components/scheduling/scheduling
 import { SchedulingDayDrawer } from "@/components/scheduling/scheduling-day-drawer";
 import { SchedulingFiltersBar } from "@/components/scheduling/scheduling-filters-bar";
 import { currentMonthKey, defaultPeriod, isoDate, monthBounds, shiftMonth, type MonthKey } from "@/components/scheduling/scheduling-format";
-import { SchedulingHeader } from "@/components/scheduling/scheduling-header";
-import type { SchedulingTab } from "@/components/scheduling/scheduling-module-sidebar";
+import { SCHEDULING_NAV_ITEMS, type SchedulingTab } from "@/components/scheduling/scheduling-module-sidebar";
 import { SchedulingMonthCalendar } from "@/components/scheduling/scheduling-month-calendar";
 import { OperatorEventsDrillPanel } from "@/components/scheduling/scheduling-operator-events-panel";
 import { OrderDrillPanel } from "@/components/scheduling/scheduling-order-drill-panel";
@@ -78,7 +78,30 @@ function toFilterState(bounds: { date_from: string; date_to: string }, secondary
 }
 
 export default function AgendamentoPage() {
-  const { user, checking, logout } = useWorkspaceAuth();
+  return (
+    <WorkspaceAppShell
+      activePath="/agendamento"
+      title="Agendamento"
+      subtitle="Tempo de resposta, produtividade e fila do setor de agendamento"
+    >
+      {(user) => (
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando Agendamento...
+            </p>
+          }
+        >
+          <AgendamentoPageContent user={user} />
+        </Suspense>
+      )}
+    </WorkspaceAppShell>
+  );
+}
+
+// A casca (`WorkspaceAppShell`) resolve autenticação, cabeçalho, sino, sair e o menu lateral com
+// as telas deste módulo - aqui só chega o usuário pronto.
+function AgendamentoPageContent({ user }: { user: AuthUser }) {
   const canRead = Boolean(user?.permissions.includes("scheduling:read"));
   const canSync = Boolean(user?.permissions.includes("scheduling:sync"));
   const canManage = Boolean(user?.permissions.includes("scheduling:manage"));
@@ -86,6 +109,14 @@ export default function AgendamentoPage() {
   const canManageGlobalViews = Boolean(user?.permissions.includes("scheduling:views:manage_global"));
 
   const [activeTab, setActiveTab] = useState<SchedulingTab>("painel");
+
+  // Abre direto na tela pedida pela URL (`?tab=`), que é como o menu lateral do ecossistema
+  // linka as telas deste módulo. Mesma convenção que a Administração e o SGP Suporte já usavam.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && SCHEDULING_NAV_ITEMS.some((item) => item.value === tab)) setActiveTab(tab as SchedulingTab);
+  }, [searchParams]);
   const [month, setMonth] = useState<MonthKey>(currentMonthKey);
   const [period, setPeriod] = useState<{ date_from: string; date_to: string }>(defaultPeriod);
   const [filters, setFilters] = useState<SecondaryFilters>(DEFAULT_SECONDARY_FILTERS);
@@ -327,27 +358,20 @@ export default function AgendamentoPage() {
   const todaySummary = todayDashboard?.summary;
   const todayPoint = todayDashboard?.daily_series[0] ?? null;
 
-  if (checking && !user)
-    return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando UNI Workspace...</main>;
-  if (!user) return <RedirectToWorkspaceHome />;
   if (!canRead) {
     return (
-      <main className="flex min-h-screen items-center justify-center px-4">
-        <div className="max-w-md rounded-2xl border bg-white p-8 text-center">
-          <h1 className="text-xl font-semibold">Acesso não autorizado</h1>
-          <p className="mt-2 text-sm text-slate-500">Seu perfil não possui a permissão scheduling:read.</p>
-        </div>
-      </main>
+      <div className="mx-auto max-w-md rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-900">
+        <h2 className="text-xl font-semibold">Acesso não autorizado</h2>
+        <p className="mt-2 text-sm">Seu perfil não possui a permissão scheduling:read.</p>
+      </div>
     );
   }
 
   const tabInfo = TAB_TITLES[activeTab];
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <SchedulingHeader activeTab={activeTab} onChangeTab={setActiveTab} onLogout={logout} />
-
-      <section className="flex flex-wrap items-center justify-between gap-2 px-4 pb-1 pt-4 lg:px-7">
+    <div className="min-w-0">
+      <section className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div className="flex min-w-0 items-baseline gap-2">
           <h2 className="text-lg font-semibold text-slate-950">{tabInfo.title}</h2>
           <p className="truncate text-xs text-slate-500">{tabInfo.subtitle}</p>
@@ -537,6 +561,6 @@ export default function AgendamentoPage() {
           onClose={() => setTechnicianEventsDrill(null)}
         />
       ) : null}
-    </main>
+    </div>
   );
 }

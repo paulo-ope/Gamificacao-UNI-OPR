@@ -16,7 +16,8 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,8 +31,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { NotificationBell } from "@/components/workspace/notification-bell";
-import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
-import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
+import { WorkspaceAppShell } from "@/components/workspace/app-shell";
+import type { AuthUser } from "@/lib/types";
 import { configuredCockpitWidgetSize } from "@/lib/intelligence-cockpit-layout";
 import {
   ALERT_STATUS_LABELS,
@@ -131,9 +132,44 @@ function FilterValuesEditor({
   return <Input defaultValue={csv(values)} placeholder="valor1, valor2" onBlur={(event) => onChange(parseCsv(event.target.value))} />;
 }
 
+// Espelha os valores do `<Tabs>` abaixo e a lista de telas em `lib/module-screens.ts` - este
+// módulo é o único sem menu lateral próprio de onde a lista pudesse ser importada.
+const INTELLIGENCE_TAB_VALUES = ["cockpit", "alertas", "publicacoes", "profiles", "monitores", "regras"];
+
 export default function IntelligencePage() {
-  const { user, checking, logout } = useWorkspaceAuth();
+  return (
+    <WorkspaceAppShell
+      activePath="/intelligence"
+      title="UNI Intelligence"
+      subtitle="Cockpit operacional, alertas, monitores e publicações"
+    >
+      {(user) => (
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando UNI Intelligence...
+            </p>
+          }
+        >
+          <IntelligencePageContent user={user} />
+        </Suspense>
+      )}
+    </WorkspaceAppShell>
+  );
+}
+
+// A casca (`WorkspaceAppShell`) resolve autenticação, cabeçalho, sino, sair e o menu lateral com as
+// telas deste módulo - aqui só chega o usuário pronto.
+function IntelligencePageContent({ user }: { user: AuthUser }) {
   const [tab, setTab] = useState("cockpit");
+
+  // Abre direto na tela pedida pela URL (`?tab=`), que é como o menu lateral do ecossistema
+  // linka as telas deste módulo. Mesma convenção que a Administração e o SGP Suporte já usavam.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const requested = searchParams.get("tab");
+    if (requested && INTELLIGENCE_TAB_VALUES.includes(requested)) setTab(requested);
+  }, [searchParams]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -141,46 +177,20 @@ export default function IntelligencePage() {
   const canManage = Boolean(user?.permissions.includes("intelligence:manage"));
   const canPublish = Boolean(user?.permissions.includes("intelligence:publish"));
 
-  if (checking && !user) {
-    return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando UNI Intelligence...</main>;
-  }
-  if (!user) return <RedirectToWorkspaceHome />;
-
   if (!canRead) {
     return (
-      <main className="min-h-screen bg-slate-50 p-6">
-        <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
-          <h1 className="text-xl font-semibold">Acesso ao UNI Intelligence necessário</h1>
-          <p className="mt-2 text-sm">Seu usuário não possui permissão intelligence:read.</p>
-          <Link href="/" className="mt-4 inline-flex text-sm font-semibold text-amber-800">Voltar ao ecossistema</Link>
-        </div>
-      </main>
+      <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+        <h2 className="text-xl font-semibold">Acesso ao UNI Intelligence necessário</h2>
+        <p className="mt-2 text-sm">Seu usuário não possui permissão intelligence:read.</p>
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
-          <div className="flex items-center gap-3">
-            <Link href="/" aria-label="Voltar ao ecossistema" className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-              <Home className="h-5 w-5" />
-            </Link>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-blue-600">UNI Workspace</p>
-              <h1 className="text-base font-semibold text-slate-950">UNI Intelligence</h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            <NotificationBell />
-            <Button type="button" variant="ghost" onClick={logout}><LogOut className="h-4 w-4" /> Sair</Button>
-          </div>
-        </div>
-      </header>
-
+    <div className="min-w-0">
       <StatusToast error={error} message={message} onDismissError={() => setError(null)} onDismissMessage={() => setMessage(null)} />
 
-      <section className="px-4 py-6 lg:px-7">
+      <section>
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="h-auto flex-wrap">
             <TabsTrigger value="cockpit"><Radar className="mr-1.5 h-4 w-4" /> Cockpit</TabsTrigger>
@@ -207,7 +217,7 @@ export default function IntelligencePage() {
           ) : null}
         </Tabs>
       </section>
-    </main>
+    </div>
   );
 }
 
