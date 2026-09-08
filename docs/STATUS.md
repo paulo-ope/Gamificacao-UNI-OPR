@@ -17,6 +17,60 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **UNI Localiza — módulo novo: link de geolocalização para o cliente compartilhar posição por GPS**
+  (2026-09-08, MVP completo + 4 rodadas de ajuste a partir de teste ao vivo do usuário). Atendente
+  gera um link único (`/localiza`), envia pelo WhatsApp, cliente abre no celular sem login
+  (`/l/{token}`), autoriza a localização, ajusta o marcador num mapa e confirma - o atendente vê o
+  resultado e a divergência contra a coordenada cadastrada.
+  - **Backend**: módulo isolado `backend/app/modules/localiza/` (`models.py`, `schemas.py`,
+    `service.py`, `router.py`, `public_router.py`, `ixc_lookup.py`). Tabela `location_requests`
+    (migrations `20260908_0085`/`0086`). Token de 256 bits, hash SHA-256 indexado (não pbkdf2 como
+    convites - volume esperado é maior, precisa de busca O(1)), uso único, expiração configurável
+    (`LOCALIZA_LINK_TTL_HOURS`, padrão 72h), rate limit em memória nas rotas públicas. Permissões
+    `localiza:read`/`localiza:manage` (operator/admin). Haversine + classificação de divergência
+    (compatível/pequena/relevante/forte) centralizada em `service.py`. 25 testes (`test_localiza.py`,
+    `test_localiza_ixc_lookup.py`), todos passando.
+  - **Código da O.S. é opcional** (pedido do usuário: o link costuma ser enviado ANTES de existir
+    O.S. no IXC) - exige só QUALQUER identificador (O.S., protocolo OPA, ou dado do cliente).
+    Protocolo OPA vira campo próprio; código da O.S. pode ser anexado depois
+    (`POST /localiza/{id}/attach-order`), sem precisar gerar novo link.
+  - **Busca ao vivo no IXC por login ou CPF** (`GET /localiza/ixc/search`): autopreenche nome,
+    identificador e coordenada cadastrada a partir de `radusuarios`/`cliente` (campos confirmados
+    contra a API real: `cnpj_cpf` com máscara, `latitude`/`longitude` em ambas as tabelas). CPF
+    nunca aparece completo na resposta. Fluxo de criação foi redesenhado a pedido do usuário pra
+    "só precisar do CPF": busca fica em destaque, os demais campos (O.S., protocolo, ajuste manual)
+    ficam escondidos atrás de "Mais opções", só aparecem se o cliente não for achado no IXC.
+  - **Página pública** (`/l/{token}`): Leaflet puro (sem `react-leaflet`, mesmo padrão anti-Strict-Mode
+    do resto do app), pino desenhado em SVG (não o ícone padrão do Leaflet - achado real: o ícone
+    default depende de imagens que o bundler do Next.js não resolve, aparecia quebrado). Círculo de
+    incerteza do GPS no mapa (raio = precisão reportada, cor por qualidade), com zoom ajustado
+    automaticamente pra caber o círculo quando a precisão é ruim (achado real: com ~4km de imprecisão
+    a bolha ficava invisível no zoom fixo). Aviso em texto quando a precisão é baixa, e um guia
+    "Como ativar a localização" (Android/iPhone) quando o navegador nega a permissão.
+  - **Painel interno de consulta**: link só é mostrado uma vez, no momento em que é gerado (nunca
+    reaparece depois - por segurança, o token só existe em claro nesta resposta); atualiza sozinho
+    por polling a cada 4s enquanto pendente, sem precisar recarregar a página quando o cliente
+    confirma. Botão de copiar (link pronto do Google Maps, pra colar no WhatsApp) tanto na listagem
+    quanto no painel de detalhe, com indicador "Copiado!" em texto.
+  - **`FRONTEND_URL` precisa ser HTTPS real na VM** (`.env.example` atualizado com o aviso) - é a
+    partir dela que o link público é montado, e a Geolocation API do navegador exige HTTPS (exceto
+    em `localhost`, que só serve pra desenvolvimento). Links já gerados com `localhost` não são
+    recalculados - só afeta links novos.
+  - **Verificado ao vivo**: fluxo completo (gerar → abrir no celular com geolocalização mockada →
+    confirmar → painel atualiza sozinho) testado várias vezes contra o ambiente real (containers
+    reconstruídos oficialmente via `docker compose build`), incluindo a busca real no IXC (login
+    `72928`/CPF `70240110250`, dado de teste do próprio usuário). Dado de teste sempre inserido e
+    removido só na tabela nova `location_requests` (+ usuário de teste descartável), nunca tocando
+    dado real. **Achado incidental**: o usuário testou a feature em paralelo, no mesmo banco - os
+    registros reais dele (`JUANDER BONATO SCARDINE`, `PAULO HENRIQUE ALVES PEIXOTO SOARES`) não
+    foram tocados.
+  - **Bug de UI encontrado e corrigido**: erro de validação do Pydantic (422, lista de objetos)
+    aparecia como JSON cru na tela em `lib/localiza-api.ts` - `extractApiErrorMessage` só tratava
+    `detail` como string. O mesmo bug existe em `lib/api.ts` (usado pelo resto do app) - **não
+    corrigido ainda**, ver tarefa sugerida.
+  - Frontend e backend desta máquina reconstruídos oficialmente (`docker compose build`) a cada
+    rodada de ajuste; migrations aplicadas automaticamente no start do backend.
+
 - **Visão Geral: linha de período anterior nos 3 gráficos de tendência + switch pra ligar/desligar**
   (2026-09-08, usuário: "quero em todos os graficos e eu possa selecionar se quero essa linha de
   compração ou nào"). Generaliza o item anterior (só o Fluxo diário tinha a linha).

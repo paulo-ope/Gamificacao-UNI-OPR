@@ -42,6 +42,8 @@ export type Permission =
   | "scheduling:views:manage_global"
   | "support:read"
   | "support:sync_opa"
+  | "localiza:read"
+  | "localiza:manage"
   | "management:read"
   | "management:manage_structure"
   | "management:write_justification"

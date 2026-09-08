@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # issuer precisa ser estável e conhecida ANTES da primeira requisição chegar). Vazio = conector
     # MCP remoto desligado (só dá erro se alguém tentar usá-lo, não impede o resto do app de subir).
     public_base_url: str = ""
+    # UNI Localiza: validade do link público de localização enviado ao cliente. Mesma ordem de
+    # grandeza do convite de portal (`INVITE_EXPIRES_HOURS`, 72h) - prazo curto o bastante para não
+    # acumular links esquecidos, longo o bastante para o cliente abrir fora do horário comercial.
+    localiza_link_ttl_hours: int = 72
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

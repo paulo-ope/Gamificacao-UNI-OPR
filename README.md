@@ -60,9 +60,47 @@ docker compose exec backend alembic upgrade head
 - Ecossistema: [http://localhost:3000](http://localhost:3000)
 - Gamificacao: [http://localhost:3000/gamificacao](http://localhost:3000/gamificacao)
 - Operacao Analitica: [http://localhost:3000/operacao](http://localhost:3000/operacao)
+- UNI Localiza: [http://localhost:3000/localiza](http://localhost:3000/localiza)
 - Backend health: [http://localhost:8000/api/health](http://localhost:8000/api/health)
 - Swagger/OpenAPI: [http://localhost:8000/docs](http://localhost:8000/docs)
 - PostgreSQL: `localhost:5434`
+
+## UNI Localiza
+
+Modulo para o atendente gerar um link unico de localizacao, enviar ao cliente (ex.: WhatsApp) e
+receber a posicao confirmada por GPS, vinculada a um atendimento/O.S.
+
+**Codigo da O.S. e opcional na criacao**: o link costuma ser enviado ANTES de existir O.S. no IXC
+(o atendente ainda esta coletando a posicao pra abrir o atendimento). A solicitacao exige pelo
+menos um identificador (codigo da O.S., protocolo OPA, ou dado do cliente) - nunca todos
+obrigatorios. Quando a O.S. e criada depois, o atendente anexa o codigo pela propria tela
+(`POST /localiza/{id}/attach-order`), sem precisar gerar um novo link.
+
+**Fluxo**: atendente gera o link (`/localiza`, requer `localiza:manage`) -> cliente abre
+`/l/{token}` no celular, sem login -> autoriza a localizacao (clique explicito, nunca automatico)
+-> revisa/ajusta o marcador no mapa -> confirma -> o atendente consulta o resultado em `/localiza`
+(requer `localiza:read`), com a distancia ate a coordenada cadastrada (formula de Haversine) e a
+classificacao de divergencia.
+
+**Endpoints** (prefixo `/api`):
+
+- `POST /localiza` - cria a solicitacao, devolve o token em claro (unica vez) e o link publico.
+- `GET /localiza` / `GET /localiza/{id}` - consulta interna (autenticado).
+- `POST /localiza/{id}/invalidate` - invalida um link pendente.
+- `POST /localiza/{id}/regenerate` - invalida o atual e gera um novo, mesmos dados de O.S./cliente.
+- `POST /localiza/{id}/attach-order` - preenche o codigo da O.S. de uma solicitacao existente.
+- `GET /public/location/{token}` / `POST /public/location/{token}/confirm` - rotas publicas (sem
+  autenticacao), usadas pela pagina `/l/{token}`.
+
+**Variaveis de ambiente** (`backend/.env`, todas com valor padrao razoavel):
+
+- `LOCALIZA_LINK_TTL_HOURS` (padrao `72`) - validade do link publico.
+- `FRONTEND_URL` (ja existente) - usada para montar o link publico completo (`{FRONTEND_URL}/l/{token}`).
+
+**Seguranca**: token de 256 bits (`secrets.token_urlsafe`), armazenado só como hash SHA-256
+indexado (nunca em claro), uso único, expiração automática, rate limiting em memória por IP nas
+rotas públicas, e nenhuma coordenada cadastrada ou dado sensível do cliente é exposta na resposta
+pública.
 
 ## Operacao Analitica
 

@@ -3,7 +3,7 @@ import type { Permission } from "@/lib/types";
 export type WorkspaceModuleStatus = "active" | "planned" | "disabled";
 
 export type WorkspaceModule = {
-  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin" | "intelligence";
+  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin" | "intelligence" | "localiza";
   name: string;
   description: string;
   webPath: string;
@@ -79,6 +79,15 @@ export const workspaceModules: readonly WorkspaceModule[] = [
     webPath: "/intelligence",
     apiPrefix: "/api/intelligence",
     requiredPermission: "intelligence:read",
+    status: "active"
+  },
+  {
+    key: "localiza",
+    name: "UNI Localiza",
+    description: "Link para o cliente compartilhar localização por GPS, vinculado à O.S.",
+    webPath: "/localiza",
+    apiPrefix: "/api/localiza",
+    requiredPermission: "localiza:read",
     status: "active"
   }
 ];
