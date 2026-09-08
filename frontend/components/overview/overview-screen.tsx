@@ -3,6 +3,7 @@
 import { Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AppSwitch } from "@/components/gamification/config-ui";
 import { OverviewFilterBar } from "@/components/overview/overview-filter-bar";
 import { Button } from "@/components/ui/button";
 import { OverviewGamificationCard } from "@/components/overview/overview-gamification-card";
@@ -24,8 +25,11 @@ import {
 import { usePrompt } from "@/hooks/use-prompt";
 import { api } from "@/lib/api";
 import { formatDateTime, formatIsoDate } from "@/lib/format";
-import { buildOpeningsTrendOption, buildSlaTrendOption } from "@/lib/operations-chart-options";
-import { buildBacklogTrendOption } from "@/lib/overview-chart-options";
+import {
+  buildBacklogTrendOption,
+  buildOverviewOpeningsTrendOption,
+  buildOverviewSlaTrendOption,
+} from "@/lib/overview-chart-options";
 import {
   operationsApi,
   type OperationFilterState,
@@ -42,6 +46,8 @@ function errorMessage(reason: unknown, fallback: string) {
 
 // Enquanto a configuração de filtros visíveis não chega, a barra mostra o que sempre mostrou.
 const FALLBACK_VISIBLE: OperationOverviewFilterKey[] = [...OVERVIEW_LIST_KEYS];
+
+const SHOW_PREVIOUS_PERIOD_STORAGE_KEY = "uni_overview_show_previous_period";
 
 /**
  * Visão Geral executiva: macrovisão da operação em uma tela, sem entrar em módulo.
@@ -68,6 +74,32 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ error: string | null; message: string | null }>({ error: null, message: null });
   const { promptText, PromptDialog } = usePrompt();
+
+  /**
+   * Liga/desliga a linha de período anterior nos 3 gráficos de tendência de uma vez só - pedido
+   * explícito do usuário (2026-09-08: "quero em todos os gráficos e eu possa selecionar se quero
+   * essa linha de comparação ou não"). Um switch só, não um por gráfico: é a mesma pergunta
+   * ("quero comparar com o período anterior agora?") em todos eles. Nasce ligado (era o padrão
+   * antes de virar opcional) e lembra a escolha por navegador, mesmo padrão de
+   * `EXPANDED_STORAGE_KEY` em `overview-filter-bar.tsx`.
+   */
+  const [showPreviousPeriod, setShowPreviousPeriod] = useState(true);
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SHOW_PREVIOUS_PERIOD_STORAGE_KEY);
+      if (stored !== null) setShowPreviousPeriod(stored === "true");
+    } catch {
+      // Sem preferência acessível: segue ligado.
+    }
+  }, []);
+  function toggleShowPreviousPeriod(next: boolean) {
+    setShowPreviousPeriod(next);
+    try {
+      window.localStorage.setItem(SHOW_PREVIOUS_PERIOD_STORAGE_KEY, String(next));
+    } catch {
+      // Preferência é conveniência: não impedir a interação se o armazenamento falhar.
+    }
+  }
 
   const canSeeSla = user.permissions.includes("operations:view_sla");
   const canSeeSupport = user.permissions.includes("support:read");
@@ -127,6 +159,11 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     enabled: ready,
     fallbackError: "Não foi possível carregar a série diária.",
   });
+  // Mesma janela que já alimenta o card de comparação do topo (`previousOverview`) - aqui vira
+  // uma linha no gráfico, não só um número agregado.
+  const previousTrends = useBlockQuery(() => operationsApi.overviewTrends(previousFilters!, "day"), [filterKey], {
+    enabled: ready && previousFilters !== null,
+  });
   const matrix = useBlockQuery(() => operationsApi.overviewRegionalMatrix(opFilters!), [filterKey], {
     enabled: ready,
     fallbackError: "Não foi possível carregar o quadro por filial.",
@@ -134,6 +171,9 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const backlogTrend = useBlockQuery(() => operationsApi.overviewBacklogTrend(opFilters!), [filterKey], {
     enabled: ready,
     fallbackError: "Não foi possível carregar o histórico de backlog.",
+  });
+  const previousBacklogTrend = useBlockQuery(() => operationsApi.overviewBacklogTrend(previousFilters!), [filterKey], {
+    enabled: ready && previousFilters !== null,
   });
   const capacity = useBlockQuery(() => operationsApi.capacitySummary(opFilters!), [filterKey], { enabled: ready });
   const workSchedule = useBlockQuery(() => operationsApi.overviewWorkSchedule(opFilters!), [filterKey], {
@@ -219,14 +259,19 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     }
   }, [filters, promptText]);
 
-  const openingsOption = useMemo(() => (trends.data ? buildOpeningsTrendOption(trends.data) : null), [trends.data]);
+  const previousTrendForCharts = showPreviousPeriod ? previousTrends.data : null;
+  const previousBacklogForChart = showPreviousPeriod ? previousBacklogTrend.data : null;
+  const openingsOption = useMemo(
+    () => (trends.data ? buildOverviewOpeningsTrendOption(trends.data, previousTrendForCharts) : null),
+    [trends.data, previousTrendForCharts],
+  );
   const slaOption = useMemo(
-    () => (canSeeSla && trends.data ? buildSlaTrendOption(trends.data) : null),
-    [canSeeSla, trends.data],
+    () => (canSeeSla && trends.data ? buildOverviewSlaTrendOption(trends.data, previousTrendForCharts) : null),
+    [canSeeSla, trends.data, previousTrendForCharts],
   );
   const backlogOption = useMemo(
-    () => (backlogTrend.data?.points.length ? buildBacklogTrendOption(backlogTrend.data) : null),
-    [backlogTrend.data],
+    () => (backlogTrend.data?.points.length ? buildBacklogTrendOption(backlogTrend.data, previousBacklogForChart) : null),
+    [backlogTrend.data, previousBacklogForChart],
   );
   // Aviso só quando o recorte pedido começa antes da coleta existir - não é erro, é a fotografia
   // diária não tendo retroatividade (ver `backlog_daily_trend`).
@@ -337,12 +382,21 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           Período <span className="font-semibold text-slate-700">{periodLabel}</span>
           {previous ? <> · comparado com {previousLabel}</> : <> · sem janela anterior comparável</>}
         </span>
-        {freshness.data?.last_successful_import_at ? (
-          <span>
-            Dados do IXC sincronizados às{" "}
-            <span className="font-semibold text-slate-700">{formatDateTime(freshness.data.last_successful_import_at)}</span>
-          </span>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-3">
+          {previous ? (
+            <AppSwitch
+              checked={showPreviousPeriod}
+              onCheckedChange={toggleShowPreviousPeriod}
+              label="Comparar com período anterior"
+            />
+          ) : null}
+          {freshness.data?.last_successful_import_at ? (
+            <span>
+              Dados do IXC sincronizados às{" "}
+              <span className="font-semibold text-slate-700">{formatDateTime(freshness.data.last_successful_import_at)}</span>
+            </span>
+          ) : null}
+        </div>
       </div>
 
       {/*
@@ -390,7 +444,11 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         <OperationsTrendChart
           eyebrow="Fluxo diário"
           title="Aberturas e finalizações por dia"
-          description="Barras são O.S. abertas (demanda, sem recorte de equipe); a linha verde são as finalizações, que respeitam todos os filtros. Clique num dia pra detalhar só ele."
+          description={
+            "Barras são O.S. abertas (demanda, sem recorte de equipe); a linha verde são as finalizações, que respeitam todos os filtros" +
+            (previousTrendForCharts ? "; a linha cinza tracejada é a mesma finalização, no período anterior" : "") +
+            ". Clique num dia pra detalhar só ele."
+          }
           badge={periodLabel}
           option={openingsOption}
           onEvents={trendDrillEvents}
@@ -405,7 +463,11 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
             <OperationsTrendChart
               eyebrow="SLA operacional"
               title="SLA ponderado por dia"
-              description="Linha contínua: SLA acumulado ponderado do período. Linha tracejada: SLA do dia. Clique num dia pra detalhar só ele."
+              description={
+                "Linha contínua: SLA acumulado ponderado do período. Linha tracejada: SLA do dia" +
+                (previousTrendForCharts ? "; linha cinza tracejada: SLA acumulado do período anterior" : "") +
+                ". Clique num dia pra detalhar só ele."
+              }
               badge="Meta 80%"
               option={slaOption}
               onEvents={trendDrillEvents}
@@ -419,7 +481,9 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
             eyebrow="Backlog"
             title="Histórico de backlog"
             description={
-              "Estoque de O.S. em aberto por dia (não soma com abertas/finalizadas - é retrato, não fluxo). Clique num dia pra detalhar só ele." +
+              "Estoque de O.S. em aberto por dia (não soma com abertas/finalizadas - é retrato, não fluxo)" +
+              (previousBacklogForChart ? "; linha cinza tracejada: backlog do período anterior" : "") +
+              ". Clique num dia pra detalhar só ele." +
               (backlogCoverageNote ? ` ${backlogCoverageNote}` : "")
             }
             option={backlogOption}

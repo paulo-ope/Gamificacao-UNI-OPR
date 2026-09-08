@@ -97,8 +97,16 @@ export function OverviewRegionalTable({
       state={{ ...state, empty: !state?.loading && !state?.error && !items.length }}
       contentClassName="px-0 pt-0"
     >
+      {/*
+        `min-w`: o `<Table>` compartilhado usa `w-full` na tag `<table>`, que trava a largura em
+        100% do contêiner - numa tela estreita isso espreme as 6 colunas + botão de detalhar em
+        vez de a tabela vazar e rolar. `min-width` maior que `w-full` faz a tabela nunca ficar
+        menor que o necessário pra ler as colunas, e o `overflow-x-auto` (do próprio `<Table>` e
+        deste div) passa a rolar de verdade - achado real, 2026-09-08, "FINALIZA..." cortado sem
+        jeito de ver o resto em 375px.
+      */}
       <div className="overflow-x-auto">
-        <Table>
+        <Table className="min-w-[720px]">
           <TableHeader>
             <TableRow>
               {COLUMNS.map((column) => (

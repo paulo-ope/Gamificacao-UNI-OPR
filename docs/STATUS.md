@@ -17,6 +17,64 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **Visão Geral: linha de período anterior nos 3 gráficos de tendência + switch pra ligar/desligar**
+  (2026-09-08, usuário: "quero em todos os graficos e eu possa selecionar se quero essa linha de
+  compração ou nào"). Generaliza o item anterior (só o Fluxo diário tinha a linha).
+  - **SLA e Backlog ganharam a linha de período anterior** que só o Fluxo diário tinha: "SLA
+    acumulado (período anterior)" (`buildOverviewSlaTrendOption`, nova função própria da Visão
+    Geral - mesma razão de sempre, não alterar `buildSlaTrendOption` do módulo de Operação) e
+    "Backlog (período anterior)" (`buildBacklogTrendOption`, já era própria da Visão Geral).
+  - **Alinhamento diferente entre os dois**: Fluxo diário e SLA vêm de `OperationTrendSeries`,
+    sempre denso (um ponto por dia da janela) - alinha por ÍNDICE, dia 1 com dia 1. Backlog é
+    naturalmente esparso (só tem fotografia a partir de `coverage_from`) - alinhar por índice bruto
+    casaria dias errados quando os dois lados têm buracos em posições diferentes, então usa
+    DESLOCAMENTO DE DIA dentro de cada janela (dia 5 da janela atual com dia 5 da anterior),
+    calculado a partir do `date_from` de cada uma.
+  - **Switch único** "Comparar com período anterior" (`AppSwitch`, reaproveitado de
+    `components/gamification/config-ui.tsx` - já é importado fora da gamificação em outro lugar do
+    app) perto do resumo "Período X · comparado com Y", só aparece quando existe janela anterior
+    comparável. Liga/desliga as 3 linhas de uma vez (mesma pergunta em todos os gráficos), nasce
+    ligado, lembra a escolha por navegador (`localStorage`, mesmo padrão do
+    `EXPANDED_STORAGE_KEY` da barra de filtros).
+  - **Verificado ao vivo** numa base sintética com 70 dias de fotografia de backlog (cobertura
+    real nas duas janelas, atual e anterior): as 3 linhas aparecem com o switch ligado; desligar
+    esconde as 3 ao mesmo tempo (incluindo a legenda do Backlog, que só aparece com mais de 1
+    série); recarregar a página mantém a escolha.
+  - Frontend de produção desta máquina reconstruído e reiniciado. Nenhuma mudança de backend.
+
+- **Visão Geral: linha de período anterior no Fluxo diário, KPIs e tabela por filial responsivos
+  no celular** (2026-09-08, usuário: "preciso melhorar os graficos deixar mais responsivel, trazer
+  algumas metricas melhores" → esclarecido: responsivo = celular/tablet; métrica = "linha
+  comparando com um período anterior").
+  - **Linha "Finalizadas (período anterior)"** no gráfico "Fluxo diário": reaproveita a mesma
+    janela que já alimenta o card de comparação do topo (`previousFilters`/`previousWindow`), só
+    que como linha (formato da curva), não só número agregado. Alinhamento por ÍNDICE (dia 1 com
+    dia 1), não por data - os dois períodos têm datas diferentes por definição; se o período
+    anterior for cortado no início do ano operacional e ficar mais curto, os dias que faltam no
+    fim ficam sem ponto (`connectNulls: false`), nunca inventados. Função própria da Visão Geral
+    (`buildOverviewOpeningsTrendOption`, `lib/overview-chart-options.ts`) - não mudou a função
+    compartilhada com a Operação Analítica.
+  - **Cards de KPI: 1 coluna no celular** (`overview-kpi-strip.tsx`). Eram 2 colunas até `sm`, e
+    com `SummaryMetric` usando `truncate` (uma linha só) em rótulo/valor/dica, o card ficava
+    estreito demais em 375px: "ABERTAS NO PE...", "Demanda que entr..." ilegíveis. Corrigido
+    ajustando só o grid da Visão Geral (`grid-cols-1 sm:grid-cols-2 ...`), sem tocar no
+    `SummaryMetric` (compartilhado com outros módulos).
+  - **Bug real encontrado: tabela por filial não rolava no celular, só espremia as colunas**. Causa
+    raiz no componente compartilhado `Table` (`components/ui/table.tsx`): a tag `<table>` usa
+    `w-full`, que trava a largura em 100% do contêiner - numa tela estreita isso força as 6
+    colunas + botão de detalhar a espremer (texto de cabeçalho cortado, "UNI - MACHADINHO DOESTE"
+    quebrando em 3 linhas) em vez de a tabela vazar e rolar horizontalmente, apesar do wrapper já
+    ter `overflow-x-auto`. Corrigido só na tabela da Visão Geral, com `min-w-[720px]` passado via
+    `className` (não mexeu no componente `Table` compartilhado, que outras telas podem depender do
+    comportamento atual).
+  - **Verificado ao vivo em 375px** (base sintética isolada, nunca no banco de produção): os 3
+    gráficos de tendência (Fluxo diário/SLA/Backlog) já se ajustavam bem sem mudança nenhuma
+    (ECharts encolhe a densidade de rótulos sozinho); os cards de KPI passaram a mostrar rótulo,
+    valor, delta e dica por completo, sem cortar; a tabela por filial confirmada rolando de
+    verdade (`scrollWidth` 720 > `clientWidth` 341, testado arrastando e conferindo que
+    Finalizadas/SLA/Meta aparecem).
+  - Frontend de produção desta máquina reconstruído e reiniciado. Nenhuma mudança de backend.
+
 - **Tooltip do ECharts cortado perto da borda do card - varredura em todo o app, não só onde o
   usuário viu** (2026-09-08, usuário mandou um print do donut "Finalizadas por filial" com o texto
   do tooltip cortado: "Alguns bug de texto cortado, procure por todos os lugares que apresneta esse

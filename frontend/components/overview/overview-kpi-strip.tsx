@@ -58,7 +58,11 @@ export function OverviewKpiStrip({
     previous ? { value: percentChange(current, prev), goodWhenUp, againstLabel: previousLabel } : undefined;
 
   return (
-    <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 xl:grid-cols-5">
+    // 1 coluna no celular: com 2 colunas o card ficava estreito demais pro rótulo/dica (que usam
+    // `truncate`, uma linha só) - achado real, 2026-09-08, "ABERTAS NO PE..." e "Demanda que
+    // entr..." ilegíveis em 375px. A largura cheia do card já resolve a maioria dos casos sem
+    // precisar tocar em `SummaryMetric` (componente compartilhado com outros módulos).
+    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
       <SummaryMetric
         label="Abertas no período"
         value={formatInteger(opened)}
