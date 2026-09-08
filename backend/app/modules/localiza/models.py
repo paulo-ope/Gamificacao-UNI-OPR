@@ -38,6 +38,13 @@ class LocationRequest(Base):
     opa_protocol: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
     customer_id: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
     customer_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    # Preenchidos só quando a solicitação nasce de uma escolha na busca ao vivo do IXC
+    # (`ixc_lookup.py`) - guardam os IDs REAIS (não só o texto de exibição em `customer_id`), pra
+    # correlacionar com o IXC depois e pra pesquisar no mapa de referência por login/cliente
+    # (pedido do usuário: "quero que fique salvo os dados que já vem hoje, login e id de login").
+    ixc_cliente_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    ixc_login_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    ixc_login: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
 
     # pending | confirmed | invalidated. "expired" nunca é gravado aqui - é sempre CALCULADO a
     # partir de expires_at (mesmo padrão de `portal_invites._display_status`), para uma leitura

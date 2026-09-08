@@ -160,6 +160,14 @@ export function LocalizaDetailPanel({
                     <dt className="text-slate-500">Código da O.S.</dt>
                     <dd className="font-medium text-slate-950">{current.order_code || "Ainda não informado"}</dd>
                   </div>
+                  {current.ixc_login ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <dt className="text-slate-500">Login (IXC)</dt>
+                      <dd className="font-medium text-slate-950">
+                        {current.ixc_login} {current.ixc_login_id ? `· #${current.ixc_login_id}` : ""}
+                      </dd>
+                    </div>
+                  ) : null}
                 </dl>
                 {!current.order_code && current.status !== "invalidated" ? (
                   <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">

@@ -126,6 +126,9 @@ def serialize_detail(item: LocationRequest, *, now: datetime) -> dict[str, Any]:
         "opa_protocol": item.opa_protocol,
         "customer_id": item.customer_id,
         "customer_name": item.customer_name,
+        "ixc_cliente_id": item.ixc_cliente_id,
+        "ixc_login_id": item.ixc_login_id,
+        "ixc_login": item.ixc_login,
         "status": _effective_status(item, now=now),
         "registered_latitude": item.registered_latitude,
         "registered_longitude": item.registered_longitude,
@@ -172,6 +175,7 @@ def list_location_requests(
             | (LocationRequest.customer_id.ilike(pattern))
             | (LocationRequest.customer_name.ilike(pattern))
             | (LocationRequest.public_id.ilike(pattern))
+            | (LocationRequest.ixc_login.ilike(pattern))
         )
     # Mesmo padrão de `scheduling/metrics.py` - filtro por data é sempre no fuso da operação
     # (America/Porto_Velho), dia inclusivo dos dois lados, nunca UTC cru (norma permanente de
@@ -214,6 +218,9 @@ def create_location_request(
     customer_name: str | None,
     registered_latitude: float | None,
     registered_longitude: float | None,
+    ixc_cliente_id: int | None = None,
+    ixc_login_id: int | None = None,
+    ixc_login: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     # Nenhum campo é obrigatório sozinho - o link costuma ser enviado ANTES de existir O.S. no
     # IXC (o atendente ainda está coletando a posição para abrir o atendimento). Mas SEM nenhum
@@ -223,6 +230,7 @@ def create_location_request(
     opa_protocol = (opa_protocol or "").strip() or None
     customer_id = (customer_id or "").strip() or None
     customer_name = (customer_name or "").strip() or None
+    ixc_login = (ixc_login or "").strip() or None
     if not any((order_code, opa_protocol, customer_id, customer_name)):
         raise HTTPException(
             status_code=422,
@@ -239,6 +247,9 @@ def create_location_request(
         opa_protocol=opa_protocol,
         customer_id=customer_id,
         customer_name=customer_name,
+        ixc_cliente_id=ixc_cliente_id,
+        ixc_login_id=ixc_login_id,
+        ixc_login=ixc_login,
         status="pending",
         registered_latitude=registered_latitude,
         registered_longitude=registered_longitude,
@@ -303,6 +314,9 @@ def regenerate_location_request(db: Session, user: User, item: LocationRequest) 
         customer_name=item.customer_name,
         registered_latitude=item.registered_latitude,
         registered_longitude=item.registered_longitude,
+        ixc_cliente_id=item.ixc_cliente_id,
+        ixc_login_id=item.ixc_login_id,
+        ixc_login=item.ixc_login,
     )
 
 

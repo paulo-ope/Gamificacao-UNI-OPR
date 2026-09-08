@@ -12,6 +12,9 @@ export type LocationRequest = {
   opa_protocol: string | null;
   customer_id: string | null;
   customer_name: string | null;
+  ixc_cliente_id: number | null;
+  ixc_login_id: number | null;
+  ixc_login: string | null;
   status: LocationRequestStatus;
   registered_latitude: number | null;
   registered_longitude: number | null;
@@ -43,6 +46,10 @@ export type LocationRequestCreatePayload = {
   customer_name?: string | null;
   registered_latitude?: number | null;
   registered_longitude?: number | null;
+  // Preenchidos automaticamente quando o cliente é escolhido pela busca no IXC (nunca digitados).
+  ixc_cliente_id?: number | null;
+  ixc_login_id?: number | null;
+  ixc_login?: string | null;
 };
 
 export type PublicLocationStatus = {
