@@ -15,16 +15,22 @@ export function OperationsTrendChart({
   title,
   description,
   badge,
-  option
+  option,
+  onEvents
 }: {
   eyebrow: string;
   title: string;
   description: string;
   badge?: string;
   option: EChartsOption;
+  /** Ex.: `{ click: (params) => ... }` - drill-through por ponto/barra clicado. */
+  onEvents?: Record<string, (params: unknown) => void>;
 }) {
   return (
-    <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
+    // Sem `overflow-hidden`: cortava o tooltip do ECharts perto da borda do card (mesmo achado de
+    // `section-card.tsx`, 2026-09-05) - nada aqui sangra até a borda arredondada, então não fazia
+    // clipe nenhum de propósito.
+    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
       <CardHeader className="flex-row items-start justify-between gap-3 pb-0">
         <div className="min-w-0">
           <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-blue-600">{eyebrow}</p>
@@ -34,7 +40,14 @@ export function OperationsTrendChart({
         {badge ? <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[9px] font-semibold text-slate-500">{badge}</span> : null}
       </CardHeader>
       <CardContent className="px-2 pb-2 pt-1 sm:px-4">
-        <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 300, width: "100%" }} />
+        <ReactECharts
+          option={option}
+          notMerge
+          lazyUpdate
+          opts={{ renderer: "canvas" }}
+          style={{ height: 300, width: "100%" }}
+          onEvents={onEvents}
+        />
       </CardContent>
     </Card>
   );

@@ -1,15 +1,16 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { Database, Home, Loader2, LogOut, Search, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Database, Loader2, Search, X } from "lucide-react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { OperationsFilterPanel } from "@/components/operations/operations-filter-panel";
 import { OperationsCollaboratorSlaTable } from "@/components/operations/operations-collaborator-sla-table";
 import { OperationsControlTower } from "@/components/operations/operations-control-tower";
 import { OperationsMonthlyCalendar } from "@/components/operations/operations-monthly-calendar";
 import {
-  OperationsModuleSidebar,
+  OPERATION_NAV_ITEMS,
   type OperationTab,
 } from "@/components/operations/operations-module-sidebar";
 import { OperationsNetworkMap } from "@/components/operations/operations-network-map";
@@ -20,7 +21,8 @@ import { OperationsSlaHierarchyTable } from "@/components/operations/operations-
 import { OperationsTeamConfiguration } from "@/components/operations/operations-team-configuration";
 import { OperationsWarrantyAnalytics } from "@/components/operations/operations-warranty-analytics";
 import { OperationsWorkScheduleOverview } from "@/components/operations/operations-work-schedule-overview";
-import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
+import { WorkspaceAppShell } from "@/components/workspace/app-shell";
+import type { AuthUser } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Button } from "@/components/ui/button";
@@ -35,7 +37,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import {
   operationsApi,
   type OperationBreakdownItem,
@@ -557,7 +558,30 @@ function ProgressDrillPanel({
 }
 
 export default function OperacaoPage() {
-  const { user, checking, logout } = useWorkspaceAuth();
+  return (
+    <WorkspaceAppShell
+      activePath="/operacao"
+      title="Operação Analítica"
+      subtitle="Análise de O.S., SLA, backlog, garantia e produtividade"
+    >
+      {(user) => (
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando Operação Analítica...
+            </p>
+          }
+        >
+          <OperacaoPageContent user={user} />
+        </Suspense>
+      )}
+    </WorkspaceAppShell>
+  );
+}
+
+// A casca (`WorkspaceAppShell`) resolve autenticação, cabeçalho, sino, sair e o menu lateral com as
+// telas deste módulo - aqui só chega o usuário pronto.
+function OperacaoPageContent({ user }: { user: AuthUser }) {
   const [period, setPeriod] = useState<OperationPeriod | null>(null);
   const [filters, setFilters] = useState<OperationFilterState | null>(null);
   const [filterOptions, setFilterOptions] =
@@ -657,6 +681,19 @@ export default function OperacaoPage() {
     value: string;
   } | null>(null);
   const [activeTab, setActiveTab] = useState<OperationTab>("overview");
+  // Tela pedida pela URL (`?tab=`), como o menu lateral do ecossistema linka. Vem de
+  // `useSearchParams` e não de `window.location`: em navegação pelo lado do cliente a URL do
+  // navegador ainda não está atualizada na primeira renderização da rota nova (achado real - o
+  // link do menu abria o módulo sempre na aba padrão). É aplicada só depois que os filtros
+  // carregam, via `navigateToTab`, que é quem checa permissão da aba, recorta o escopo da aba
+  // "Andamento" e dispara a carga certa.
+  const searchParams = useSearchParams();
+  const rawUrlTab = searchParams.get("tab");
+  const urlTab =
+    rawUrlTab && OPERATION_NAV_ITEMS.some((item) => item.value === rawUrlTab)
+      ? (rawUrlTab as OperationTab)
+      : null;
+  const lastAppliedUrlTab = useRef<OperationTab | null>(null);
   const [detailsScope, setDetailsScope] = useState<"period" | "openings">(
     "period",
   );
@@ -923,6 +960,24 @@ export default function OperacaoPage() {
     // pelo efeito específico abaixo para não reinicializar os filtros.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, canRead]);
+
+  useEffect(() => {
+    if (!filters || !urlTab) return;
+    // Aplica cada aba NOVA da URL uma vez. Depender de `urlTab` (e não só de `filters`) é o que
+    // faz trocar de tela funcionar quando já se está dentro do módulo: mudar apenas a query não
+    // remonta a página, e o efeito antigo, preso a `filters`, nunca rodava de novo - clicar em
+    // outra tela no menu lateral não fazia nada (achado real na validação).
+    //
+    // O `lastAppliedUrlTab` existe para o efeito NÃO desfazer navegação interna: o drill-through
+    // e o painel de Aberturas trocam de aba por conta própria, sem mexer na URL. Comparar só
+    // `urlTab !== activeTab` puxaria o usuário de volta para a aba da URL toda vez.
+    if (lastAppliedUrlTab.current === urlTab) return;
+    lastAppliedUrlTab.current = urlTab;
+    if (urlTab !== activeTab) navigateToTab(urlTab);
+    // `navigateToTab` é recriada a cada render (usa `filters`/`visibleTabs`); depender dela aqui
+    // faria o efeito rodar de novo a cada mudança de filtro.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, urlTab]);
 
   const filterCount = useMemo(
     () =>
@@ -1497,74 +1552,17 @@ export default function OperacaoPage() {
     void loadDashboard(next, 1, tab);
   }
 
-  if (checking && !user)
-    return (
-      <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">
-        Carregando UNI Workspace...
-      </main>
-    );
-  if (!user) return <RedirectToWorkspaceHome />;
   if (!canRead) {
     return (
-      <main className="flex min-h-screen items-center justify-center px-4">
-        <div className="max-w-md rounded-2xl border bg-white p-8 text-center">
-          <h1 className="text-xl font-semibold">Acesso não autorizado</h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Seu perfil não possui a permissão operations:read.
-          </p>
-          <Link
-            href="/"
-            className="mt-5 inline-block text-sm font-semibold text-blue-700"
-          >
-            Voltar ao ecossistema
-          </Link>
-        </div>
-      </main>
+      <div className="mx-auto max-w-md rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-900">
+        <h2 className="text-xl font-semibold">Acesso não autorizado</h2>
+        <p className="mt-2 text-sm">Seu perfil não possui a permissão operations:read.</p>
+      </div>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
-          <div className="flex items-center gap-3">
-            <OperationsModuleSidebar
-              activeTab={activeTab}
-              detailsCount={orders.total}
-              canManage={canManage}
-              visibleTabs={visibleTabs}
-              onChange={navigateToTab}
-            />
-            <Link
-              href="/"
-              aria-label="Voltar ao ecossistema"
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700"
-            >
-              <Home className="h-5 w-5" />
-            </Link>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-600">
-                UNI Workspace
-              </p>
-              <h1 className="text-base font-semibold text-slate-950">
-                Operação Analítica
-              </h1>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/gamificacao"
-              className="hidden rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 sm:block"
-            >
-              Gamificação
-            </Link>
-            <Button type="button" variant="ghost" size="sm" onClick={logout}>
-              <LogOut className="h-4 w-4" /> Sair
-            </Button>
-          </div>
-        </div>
-      </header>
-
+    <div className="min-w-0">
       <OperationsFilterPanel
         filters={filters}
         options={filterOptions}
@@ -2251,6 +2249,6 @@ export default function OperacaoPage() {
           if (!open) setSelectedOrder(null);
         }}
       />
-    </main>
+    </div>
   );
 }

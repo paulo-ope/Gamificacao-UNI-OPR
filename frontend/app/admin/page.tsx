@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Home, Loader2, LogOut } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
-import { RedirectToWorkspaceHome } from "@/components/workspace/redirect-to-home";
+import { WorkspaceAppShell } from "@/components/workspace/app-shell";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { ModuleNavigationSidebar } from "@/components/workspace/module-navigation-sidebar";
 import { AiGovernancePanel } from "@/components/admin/ai-governance-panel";
 import { AccessRequestsPanel } from "@/components/admin/access-requests-panel";
 import { AdminOverviewPanel } from "@/components/admin/admin-overview-panel";
@@ -17,6 +17,7 @@ import { IntegrationsPanel } from "@/components/admin/integrations-panel";
 import { InternalAccountsPanel } from "@/components/admin/internal-accounts-panel";
 import { InvitesPanel } from "@/components/admin/invites-panel";
 import { ModulesPanel } from "@/components/admin/modules-panel";
+import { OverviewSettingsPanel } from "@/components/admin/overview-settings-panel";
 import { PeopleStructurePanel } from "@/components/admin/people-structure-panel";
 import { PersonEditorDrawer } from "@/components/admin/person-editor-drawer";
 import { PortalAccountsPanel } from "@/components/admin/portal-accounts-panel";
@@ -35,14 +36,36 @@ import {
 } from "@/components/admin/admin-shared";
 import { useConfirm } from "@/hooks/use-confirm";
 import { usePrompt } from "@/hooks/use-prompt";
-import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import { api } from "@/lib/api";
 import { workspaceModules } from "@/lib/module-registry";
 import { operationsApi, type OperationIxcSyncSettings } from "@/lib/operations-api";
 import type { AccessProfile, AdminPeopleStructure, AdminPersonStructure, AdminWorkspaceModule, AuthUser, EcosystemPermission, Permission, PortalAccessRequest, PortalInvite, PortalInviteCreateResult } from "@/lib/types";
 
 export default function AdminPage() {
-  const { user, checking, logout } = useWorkspaceAuth();
+  return (
+    <WorkspaceAppShell
+      activePath="/admin"
+      title="Administração do Ecossistema"
+      subtitle="Usuários, perfis de acesso, permissões e escopos"
+    >
+      {(user) => (
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando Administração...
+            </p>
+          }
+        >
+          <AdminPageContent user={user} />
+        </Suspense>
+      )}
+    </WorkspaceAppShell>
+  );
+}
+
+// A casca (`WorkspaceAppShell`) resolve autenticação, cabeçalho, sino, sair e o menu lateral com as
+// telas deste módulo - aqui só chega o usuário pronto.
+function AdminPageContent({ user }: { user: AuthUser }) {
   // Substituem `window.confirm`/`window.prompt` (achado real, 2026-08-29: `window.prompt` lançava
   // exceção não tratada e `window.confirm` podia ser silenciosamente ignorado em determinados
   // ambientes de navegador, deixando revogar convite/rejeitar solicitação sem efeito nenhum,
@@ -174,35 +197,25 @@ export default function AdminPage() {
     if (user && canAdmin) void loadAdminData();
   }, [user, canAdmin]);
 
+  // Tela pedida pela URL (`?tab=`), como o menu lateral do ecossistema linka. Vem de
+  // `useSearchParams` e não de `window.location`: em navegação pelo lado do cliente a URL do
+  // navegador ainda não está atualizada na primeira renderização da rota nova, e o efeito com
+  // `[]` como dependência nunca reexecuta - clicar num submenu da Administração na barra lateral
+  // trocava a URL mas a aba aberta continuava a mesma (achado real, 2026-09-03).
+  const searchParams = useSearchParams();
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    const person = params.get("person");
+    const tab = searchParams.get("tab");
+    const person = searchParams.get("person");
     if (tab && ADMIN_NAV_ITEMS.some((item) => item.value === tab)) setActiveTab(tab as AdminTab);
     if (person) setPersonSearch(person);
-  }, []);
-
-  if (checking && !user) {
-    return (
-      <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">
-        Carregando Administração...
-      </main>
-    );
-  }
-  if (!user) return <RedirectToWorkspaceHome />;
+  }, [searchParams]);
 
   if (!canAdmin) {
     return (
-      <main className="min-h-screen bg-slate-50 p-6">
-        <div className="mx-auto max-w-3xl rounded-3xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
-          <h1 className="text-xl font-semibold">Acesso administrativo necessário</h1>
-          <p className="mt-2 text-sm">Seu usuário não possui permissão para administrar o ecossistema.</p>
-          <Link href="/" className="mt-4 inline-flex text-sm font-semibold text-amber-800">
-            Voltar ao ecossistema
-          </Link>
-        </div>
-      </main>
+      <div className="mx-auto max-w-3xl rounded-3xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+        <h2 className="text-xl font-semibold">Acesso administrativo necessário</h2>
+        <p className="mt-2 text-sm">Seu usuário não possui permissão para administrar o ecossistema.</p>
+      </div>
     );
   }
 
@@ -570,41 +583,12 @@ export default function AdminPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-7">
-          <div className="flex items-center gap-3">
-            <ModuleNavigationSidebar
-              title="Administração"
-              description="Navegação modular do UNI Workspace"
-              items={ADMIN_NAV_ITEMS}
-              activeItem={activeTab}
-              onChange={setActiveTab}
-              footer="Novas áreas administrativas devem ser adicionadas a este menu sem alterar a navegação principal."
-            />
-            <Link
-              href="/"
-              aria-label="Voltar ao ecossistema"
-              className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700"
-            >
-              <Home className="h-5 w-5" />
-            </Link>
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-600">UNI Workspace</p>
-              <h1 className="text-base font-semibold text-slate-950">Administração do Ecossistema</h1>
-            </div>
-          </div>
-          <Button type="button" variant="ghost" size="sm" onClick={logout}>
-            <LogOut className="h-4 w-4" /> Sair
-          </Button>
-        </div>
-      </header>
-
+    <div className="min-w-0">
       {/* `grid-cols-1` é essencial aqui: sem uma coluna explícita (`minmax(0,1fr)`), o track
           implícito do grid herda o min-content do descendente mais largo (ex.: a tabela de
           usuários) e força a página inteira a ~800px, invisível em qualquer tela menor porque
           html/body usam overflow-x hidden (não gera scroll, só corta o conteúdo). */}
-      <section className="mx-auto grid grid-cols-1 max-w-7xl gap-5 px-5 py-6">
+      <section className="grid grid-cols-1 gap-5">
         {loading ? (
           <div className="rounded-3xl border border-slate-200 bg-white p-8 text-sm text-slate-500">
             <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
@@ -758,6 +742,11 @@ export default function AdminPage() {
               onAddModuleUserOverride={addModuleUserOverride}
               onRemoveModuleUserOverride={removeModuleUserOverride}
             />
+            {/* Configuração da Visão Geral fica junto da visibilidade de módulos: os dois decidem o que
+                cada pessoa encontra ao entrar no ecossistema. */}
+            <div className="mt-5">
+              <OverviewSettingsPanel onError={setError} onMessage={setMessage} />
+            </div>
           </TabsContent>
 
           <TabsContent value="integrations" className="mt-4">
@@ -828,6 +817,6 @@ export default function AdminPage() {
           onDelete={deleteProfileAction}
         />
       ) : null}
-    </main>
+    </div>
   );
 }

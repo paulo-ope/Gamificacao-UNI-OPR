@@ -1,4 +1,7 @@
-import ExcelJS from "exceljs";
+// `import type`: os tipos (Fill, Worksheet, Workbook) somem na compilação. O ExcelJS de verdade
+// (~900 KB) só é baixado quando alguém clica em exportar - antes ele vinha no bundle inicial da
+// tela, e ainda duplicado entre módulos (achado medido no bundle de produção em 2026-09-03).
+import type ExcelJS from "exceljs";
 import { useCallback } from "react";
 
 import {
@@ -116,7 +119,8 @@ export function useSlaExport() {
       data: OperationSlaHierarchy,
       filters: OperationFilterState,
     ) => {
-      const workbook = new ExcelJS.Workbook();
+      const { default: Excel } = await import("exceljs");
+      const workbook = new Excel.Workbook();
       workbook.creator = "UNI Workspace";
       workbook.created = new Date();
 

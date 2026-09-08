@@ -7,7 +7,7 @@ import type {
   OperationWorkScheduleOverview,
 } from "@/lib/operations-api";
 
-function dateLabel(value: string, options: Intl.DateTimeFormatOptions) {
+export function dateLabel(value: string, options: Intl.DateTimeFormatOptions) {
   return new Intl.DateTimeFormat("pt-BR", {
     ...options,
     timeZone: "UTC",

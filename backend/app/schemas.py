@@ -1050,6 +1050,25 @@ class DashboardFilteredBreakdownOut(BaseModel):
     top_unmapped_subjects: list[dict[str, float | int | str]] = []
 
 
+class GamificationPreviewOut(BaseModel):
+    """Prévia do mês corrente para a Visão Geral executiva - ver
+    `services.calculation.gamification_preview`. `status`/`calculated_at` existem pra tela poder
+    dizer que a prévia está velha em vez de mostrar um número como se fosse de agora."""
+
+    available: bool
+    reference_month: int
+    reference_year: int
+    status: str | None = None
+    is_preview: bool = False
+    estimated_payment: float | None = None
+    final_points: float | None = None
+    collaborators: int | None = None
+    point_value: float = 0
+    calculated_at: datetime | None = None
+    scope_regionals: list[str] = []
+    unavailable_reason: str | None = None
+
+
 class DashboardBootstrapOut(BaseModel):
     reference_month: int | None = None
     reference_year: int | None = None

@@ -25,6 +25,7 @@ import type {
   DashboardFilteredBreakdown,
   DiagnosisPenaltyRule,
   GamificationConfig,
+  GamificationPreview,
   HealthRule,
   ImportedDiagnosis,
   ImportPreview,
@@ -110,6 +111,33 @@ const TOKEN_KEY = "gamification_auth_token";
 export const PORTAL_ORDERS_MAX = 500;
 const inFlightGetRequests = new Map<string, Promise<unknown>>();
 
+/**
+ * Cache curto para as chamadas que a casca de navegação repete em TODA tela.
+ *
+ * Com a barra lateral em todas as telas, cada troca de tela remonta a casca e refazia
+ * `/auth/me` + `/workspace/modules` antes de conseguir desenhar o menu - o que aparecia como um
+ * "Carregando UNI Workspace..." piscando em cada navegação. São respostas que praticamente não
+ * mudam durante o uso, então 30 segundos de cache eliminam o ida-e-volta sem esconder mudança de
+ * permissão por muito tempo. Toda troca de token limpa o cache (ver `setAuthToken`), o que cobre
+ * também o login/logout legado da Gamificação, que chama `setAuthToken` direto.
+ *
+ * Não entra aqui nada que precise estar sempre fresco - contador de notificações, por exemplo.
+ */
+const SESSION_CACHE_TTL_MS = 30_000;
+const SESSION_CACHED_PATHS = new Set<string>(["/auth/me", "/workspace/modules"]);
+const sessionCache = new Map<string, { value: unknown; at: number }>();
+
+function sessionCacheKey(path: string) {
+  return `${authToken ?? ""}:${path}`;
+}
+
+/** Leitura SINCRONA do cache, para a tela nascer já com o dado em vez de começar carregando. */
+export function peekSessionCache<T>(path: string): T | null {
+  const entry = sessionCache.get(sessionCacheKey(path));
+  if (!entry || Date.now() - entry.at > SESSION_CACHE_TTL_MS) return null;
+  return entry.value as T;
+}
+
 function readStoredToken() {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
@@ -119,6 +147,8 @@ let authToken: string | null = readStoredToken();
 
 export function setAuthToken(token: string | null) {
   authToken = token;
+  // Sessão trocou: nada do que estava em cache vale mais.
+  sessionCache.clear();
   if (typeof window === "undefined") return;
   if (token) {
     window.localStorage.setItem(TOKEN_KEY, token);
@@ -133,12 +163,25 @@ function authHeaders(): HeadersInit {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
+  const cacheable = method === "GET" && SESSION_CACHED_PATHS.has(path);
+  if (cacheable) {
+    const cached = peekSessionCache<T>(path);
+    if (cached !== null) return cached;
+  }
+
   const dedupeKey = method === "GET" ? `${authToken ?? ""}:${path}` : null;
   if (dedupeKey && inFlightGetRequests.has(dedupeKey)) {
     return inFlightGetRequests.get(dedupeKey) as Promise<T>;
   }
 
   const promise = requestRaw<T>(path, init);
+  if (cacheable) {
+    void promise
+      .then((value) => {
+        sessionCache.set(sessionCacheKey(path), { value, at: Date.now() });
+      })
+      .catch(() => undefined);
+  }
   if (dedupeKey) {
     inFlightGetRequests.set(dedupeKey, promise);
     promise.finally(() => {
@@ -483,6 +526,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ enabled })
     }),
+  gamificationPreview: () => request<GamificationPreview>("/dashboard/gamification-preview"),
   supportOpaMetrics: (period: { date_from: string; date_to: string }) => {
     const params = new URLSearchParams();
     params.set("date_from", period.date_from);

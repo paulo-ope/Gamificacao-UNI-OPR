@@ -8,12 +8,18 @@ from app.core.performance import performance_step
 from app.core.security import require_permission
 from app.db.session import get_db
 from app.models import CalculationRun, CollaboratorScore, LeadershipBonusResult, LeadershipProfile, ServiceOrder
-from app.schemas import DashboardBootstrapOut, DashboardFilteredBreakdownOut, DashboardSummary
+from app.schemas import (
+    DashboardBootstrapOut,
+    DashboardFilteredBreakdownOut,
+    DashboardSummary,
+    GamificationPreviewOut,
+)
 from app.services.calculation import (
     _apply_cpk_adjustment,
     _period_orders,
     calculate_penalty_distribution,
     collaborator_financial_context,
+    gamification_preview,
     get_point_value,
     latest_run,
     serialize_run,
@@ -260,6 +266,20 @@ def dashboard_bootstrap(
         "has_calculation_run": True,
         "calculation_run_id": run.id,
     }
+
+
+@router.get("/gamification-preview", response_model=GamificationPreviewOut)
+def dashboard_gamification_preview(
+    db: Session = Depends(get_db),
+    user=Depends(require_permission("dashboard:read")),
+):
+    """Leitura leve do valor corrente da gamificação, para a Visão Geral executiva.
+
+    Separado de `/dashboard/summary` de propósito: aquele monta a tela inteira do módulo (ranking,
+    breakdowns, distribuição de penalidade) e recalcula quando o cache está frio. Aqui a Visão Geral
+    precisa de um número e do quando-foi-calculado, sem carregar o resto.
+    """
+    return gamification_preview(db, user)
 
 
 @router.get("/summary", response_model=DashboardSummary)

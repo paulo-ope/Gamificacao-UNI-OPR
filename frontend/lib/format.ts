@@ -69,3 +69,13 @@ export function formatDateTime(value: string | null | undefined) {
     timeZone: OPERATION_TIME_ZONE
   }).format(new Date(value));
 }
+
+// Data pura (`YYYY-MM-DD`, como vem dos filtros de período) em pt-BR. Diferente de
+// `formatDateTime`, que recebe um instante ISO com fuso: aqui não existe hora, então converter
+// para Date sem cuidado adiantaria ou atrasaria um dia dependendo do fuso do navegador.
+export function formatIsoDate(value: string | null | undefined) {
+  if (!value) return "-";
+  const [year, month, day] = value.split("-");
+  if (!year || !month || !day) return value;
+  return `${day}/${month}/${year}`;
+}

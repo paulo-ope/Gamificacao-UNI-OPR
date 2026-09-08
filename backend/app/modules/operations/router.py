@@ -57,6 +57,7 @@ from .models import OperationIxcCollaborator, OperationOrder, OperationResponsib
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
 from .schemas import (
+    OperationBacklogTrend,
     OperationBranchCapacityOut,
     OperationBranchCapacitySummary,
     OperationBranchCapacityUpdate,
@@ -85,6 +86,11 @@ from .schemas import (
     OperationOverview,
     OperationWorkScheduleOverview,
     OperationPeriod,
+    OperationOverviewDefaultFilter,
+    OperationOverviewDefaultFilterUpdate,
+    OperationOverviewVisibleFilters,
+    OperationOverviewVisibleFiltersUpdate,
+    OperationRegionalMatrix,
     OperationSavedFilterCreate,
     OperationSavedFilterOut,
     OperationSavedFilterUpdate,
@@ -767,6 +773,174 @@ def overview(
     )
 
 
+OVERVIEW_DEFAULT_FILTER_SETTING = "overview_default_saved_filter_id"
+
+
+def _overview_default_filter_response(db: Session, user: User) -> dict:
+    can_manage = "operations:views:update_global" in permissions_for_user(user)
+    raw = (get_setting(db, OVERVIEW_DEFAULT_FILTER_SETTING, "") or "").strip()
+    if not raw.isdigit():
+        return {"available": False, "saved_filter_id": None, "name": None, "filters": None, "can_manage": can_manage}
+    item = db.scalar(
+        select(OperationSavedFilter).where(
+            OperationSavedFilter.id == int(raw),
+            OperationSavedFilter.visibility == "global",
+        )
+    )
+    if item is None:
+        # A visão global apontada foi apagada: responde "sem padrão" em vez de 404 - a Visão Geral
+        # tem que abrir de qualquer forma.
+        return {"available": False, "saved_filter_id": None, "name": None, "filters": None, "can_manage": can_manage}
+    return {
+        "available": True,
+        "saved_filter_id": item.id,
+        "name": item.name,
+        "filters": item.filters,
+        "can_manage": can_manage,
+    }
+
+
+@router.get("/overview/default-filter", response_model=OperationOverviewDefaultFilter)
+def overview_default_filter(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Qual visão global a Visão Geral executiva aplica ao abrir. Leitura liberada para qualquer
+    usuário do módulo: sem isso a tela não consegue abrir já pré-setada para quem só consulta."""
+    return _overview_default_filter_response(db, user)
+
+
+@router.put("/overview/default-filter", response_model=OperationOverviewDefaultFilter)
+def update_overview_default_filter(
+    payload: OperationOverviewDefaultFilterUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Define (ou limpa, com `saved_filter_id: null`) o padrão da Visão Geral.
+
+    Exige a mesma permissão de editar visão global (`operations:views:update_global`): o padrão
+    vale para todo mundo, então não pode ser trocado por quem só gerencia filtros pessoais. Só
+    aceita visão GLOBAL - uma visão pessoal como padrão do ecossistema deixaria os outros
+    usuários presos a um filtro que eles não veem nem editam.
+    """
+    _ensure_global_saved_filter_permission(user, "update")
+    if payload.saved_filter_id is None:
+        upsert_setting(
+            db,
+            OVERVIEW_DEFAULT_FILTER_SETTING,
+            "",
+            "Visão global aplicada por padrão na Visão Geral executiva.",
+        )
+        db.commit()
+        return _overview_default_filter_response(db, user)
+
+    item = db.scalar(select(OperationSavedFilter).where(OperationSavedFilter.id == payload.saved_filter_id))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Filtro salvo não encontrado.")
+    if item.visibility != "global":
+        raise HTTPException(
+            status_code=422,
+            detail="Somente uma visão global pode ser o filtro padrão da Visão Geral.",
+        )
+    upsert_setting(
+        db,
+        OVERVIEW_DEFAULT_FILTER_SETTING,
+        str(item.id),
+        "Visão global aplicada por padrão na Visão Geral executiva.",
+    )
+    db.commit()
+    return _overview_default_filter_response(db, user)
+
+
+OVERVIEW_VISIBLE_FILTERS_SETTING = "overview_visible_filters"
+
+# Catálogo dos filtros que a Visão Geral pode exibir. É a fonte única: a Administração lista
+# daqui, a tela desenha daqui, e o PUT só aceita chaves daqui. Ordem = ordem de exibição.
+OVERVIEW_FILTER_CATALOG: tuple[dict[str, str], ...] = (
+    {"key": "team_models", "label": "Modelo de equipe", "group": "operations"},
+    {"key": "regionals", "label": "Filial", "group": "operations"},
+    {"key": "sectors", "label": "Setor", "group": "operations"},
+    {"key": "os_types", "label": "Tipo de O.S.", "group": "operations"},
+    {"key": "responsibles", "label": "Colaborador", "group": "operations"},
+    {"key": "support_department", "label": "Departamento (SGP)", "group": "support"},
+    {"key": "support_channel", "label": "Canal (SGP)", "group": "support"},
+    {"key": "support_reason", "label": "Motivo (SGP)", "group": "support"},
+)
+OVERVIEW_FILTER_KEYS = tuple(item["key"] for item in OVERVIEW_FILTER_CATALOG)
+# Sem configuração, a tela mostra o que sempre mostrou: os cinco filtros de O.S.
+OVERVIEW_DEFAULT_VISIBLE_FILTERS = tuple(
+    item["key"] for item in OVERVIEW_FILTER_CATALOG if item["group"] == "operations"
+)
+
+
+def _overview_visible_filters_response(db: Session, user: User) -> dict:
+    raw = (get_setting(db, OVERVIEW_VISIBLE_FILTERS_SETTING, "") or "").strip()
+    stored = [key.strip() for key in raw.split(",") if key.strip()] if raw else []
+    # Chave desconhecida gravada (catálogo mudou) é ignorada, não derruba a tela.
+    visible = [key for key in OVERVIEW_FILTER_KEYS if key in stored] if stored else list(OVERVIEW_DEFAULT_VISIBLE_FILTERS)
+    return {
+        "filters": visible,
+        "available": list(OVERVIEW_FILTER_CATALOG),
+        "can_manage": "operations:views:update_global" in permissions_for_user(user),
+    }
+
+
+@router.get("/overview/visible-filters", response_model=OperationOverviewVisibleFilters)
+def overview_visible_filters(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return _overview_visible_filters_response(db, user)
+
+
+@router.put("/overview/visible-filters", response_model=OperationOverviewVisibleFilters)
+def update_overview_visible_filters(
+    payload: OperationOverviewVisibleFiltersUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Define quais filtros a Visão Geral exibe, para todo mundo - mesma permissão do filtro
+    padrão (`operations:views:update_global`). Lista vazia volta ao padrão. Chave fora do catálogo
+    é 422: o catálogo é a única fonte do que a tela sabe desenhar."""
+    _ensure_global_saved_filter_permission(user, "update")
+    unknown = sorted({key for key in payload.filters if key not in OVERVIEW_FILTER_KEYS})
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Filtro(s) desconhecido(s) para a Visão Geral: {', '.join(unknown)}.")
+    ordered = [key for key in OVERVIEW_FILTER_KEYS if key in set(payload.filters)]
+    upsert_setting(
+        db,
+        OVERVIEW_VISIBLE_FILTERS_SETTING,
+        ",".join(ordered),
+        "Filtros exibidos na Visão Geral executiva (chaves do catálogo, separadas por vírgula).",
+    )
+    db.commit()
+    return _overview_visible_filters_response(db, user)
+
+
+@router.get("/overview/regional-matrix", response_model=OperationRegionalMatrix)
+def overview_regional_matrix(
+    date_from: date,
+    date_to: date,
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validated_period(date_from, date_to)
+    # A coluna de SLA é a única do quadro que exige permissão própria (`operations:view_sla`,
+    # igual às rotas /sla*). Em vez de negar a tabela inteira, quem não tem a permissão recebe as
+    # colunas de volume e as de prazo em branco: a Visão Geral é uma tela compartilhada entre
+    # perfis diferentes, e cada bloco dela se degrada sozinho.
+    include_sla = "operations:view_sla" in permissions_for_user(user)
+    return queries.regional_matrix(
+        db,
+        date_from,
+        date_to,
+        user,
+        include_sla=include_sla,
+        **selected_filters,
+    )
+
+
 @router.get("/capacity-summary", response_model=OperationBranchCapacitySummary)
 def capacity_summary(
     date_from: date,
@@ -841,6 +1015,18 @@ def overview_trends(
         granularity=granularity,
         **selected_filters,
     )
+
+
+@router.get("/overview/backlog-trend", response_model=OperationBacklogTrend)
+def overview_backlog_trend(
+    date_from: date,
+    date_to: date,
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validated_period(date_from, date_to)
+    return queries.backlog_daily_trend(db, date_from, date_to, user, **selected_filters)
 
 
 @router.get("/overview/volume-alerts", response_model=OperationSubjectVolumeAlerts)

@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppMultiSelect } from "@/components/gamification/config-ui";
 import { DashboardCharts } from "@/components/gamification/dashboard-charts";
+import { DeferUntilVisible } from "@/components/ui/defer-until-visible";
 import { FinancialTable } from "@/components/gamification/financial-table";
 import { InfoHint } from "@/components/gamification/info-hint";
 import type { ChartContext, ClosureBalanceImpact, ClosureFinancials, ClosureStatus } from "@/hooks/use-closure-data";
@@ -554,7 +555,10 @@ export function ClosureTab({
               </div>
 
               <div className="mt-4">
-                <DashboardCharts ranking={filteredRanking} penalties={chartPenalties} health={chartHealth} />
+                {/* Os 5 gráficos ficam abaixo da dobra: só carregam (e só puxam o ECharts) ao rolar até aqui. */}
+                <DeferUntilVisible>
+                  <DashboardCharts ranking={filteredRanking} penalties={chartPenalties} health={chartHealth} />
+                </DeferUntilVisible>
               </div>
             </div>
           ) : null}

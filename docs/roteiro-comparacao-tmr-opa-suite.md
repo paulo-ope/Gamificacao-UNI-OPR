@@ -452,3 +452,242 @@ pra inferir indiretamente via `observacoes`/`motivos` (seção 10.3, ~1% de cobe
 **Não altera nenhum cálculo existente** — `tmr_seconds`, `tmr_all_responses_seconds`,
 `handled_by_bot`, `reached_human`, `bot_to_human_handoff` continuam calculados
 exatamente como antes; os campos novos são só um resumo adicional, aditivo.
+
+## 12. Execução — Recorte 2 (Jennyfer Tavares, 23/08–31/08/2026): bug de importação encontrado
+
+Primeira comparação feita com **exportação real do cockpit** (CSV com os 260 protocolos),
+e não só com números agregados de tela. Isso permitiu o diff protocolo a protocolo que a
+seção 10.1 não tinha como fazer.
+
+**Números do cockpit**: 260 atendimentos · avaliação 4,49 · TMA 00:19:18 · TMR 00:00:17.
+
+### 12.1 Regra de atribuição: CONFIRMADA idêntica
+
+O cabeçalho do CSV resolveu a dúvida da seção 10.1: a coluna é **"Último atendente"**.
+Corresponde exatamente ao nosso `attendant_id`. Dos 260 do cockpit, **todos os que
+existiam no SGP (216) já estavam atribuídos a ela — zero divergência de atribuição**.
+`first_human_attendant_id` (269) e `distinct_human_attendant_ids` (271) são conceitos
+diferentes e **não** são o que o cockpit usa.
+
+Isso encerra a hipótese de "divergência por equivalência de filtro incerta" que a seção
+10.1 levantou: não era atribuição.
+
+### 12.2 Causa raiz: guard de período comparava data UTC contra data local
+
+Os 44 atendimentos faltantes formavam faixa contígua (`UNI2026799223`→`UNI2026799513`),
+todos abertos entre 31/08 20:00 e 01/09 00:00 local, e **nenhum deles estava sequer na
+tabela `support_opa_attendances_raw`** — nunca foram gravados.
+
+`opa_ingestion.py`, guarda de período pós-normalização:
+
+```python
+# ANTES (errado)
+if payload["opened_at"].date() < run.date_from or payload["opened_at"].date() > run.date_to:
+    raise ValueError("Atendimento fora do período solicitado; ...")
+```
+
+`opened_at` é gravado em UTC, então `.date()` devolve a data **UTC**. Já `run.date_from`/
+`date_to` são datas **locais** (America/Porto_Velho, UTC-4) — o mesmo dia que a API do OPA
+usa ao receber `dataInicialAbertura`. Um atendimento aberto às 21h local de 31/08 é
+01/09 01:00 em UTC → `.date()` = 01/09 → maior que `date_to` = 31/08 → **rejeitado**,
+apesar de a API tê-lo devolvido corretamente.
+
+**Prova aritmética**: a run de 31/08 registrava `fetched_count=2660`, `rejected_count=182`,
+e a base tinha exatamente 2.478 (`2478 + 182 = 2660`). Depois da correção, a mesma run
+devolveu `criados 182, rejeitados 0`.
+
+Como o guard só corta o **último dia do intervalo**, o padrão observado se explica sozinho:
+backfills mensais perdiam apenas a cauda do último dia; runs diárias perdem 4h **todo dia**.
+Dias afetados em 94 analisados: **30/06, 31/07, 31/08, 01/09** (últimos dias de cada
+backfill mensal + runs diárias). Nenhum outro.
+
+**Correção**: converter para o fuso local antes de comparar
+(`payload["opened_at"].astimezone(SUPPORT_TIMEZONE).date()`), com dois testes de regressão
+(aceita 23:30 local do dia importado; continua rejeitando outro dia).
+
+**Reimportação**: 587 atendimentos recuperados (30/06 +143, 31/07 +89, 31/08 +182,
+01/09 +136, 02/09 +37), todos com `rejeitados 0`.
+
+**Resultado**: dos 260 do cockpit, o SGP passou a ter **260/260**. Total, regra de
+atribuição e avaliação (**4,49 exato**) agora batem.
+
+### 12.3 TMA: é tempo efetivo, não bruto — com medição
+
+O endpoint de **detalhe** do OPA devolve as mesmas 18 chaves da listagem
+(`_id, canal, canal_cliente, canal_id, date, descricao, evaluations, fim, id_atendente,
+id_cliente, id_user, motivos, observacoes, origem, protocolo, setor, status, tags`) —
+**não existe campo de TMA na API do OPA**. Eles calculam internamente.
+
+Testado com mensagens reais (amostra de 20 atendimentos da Jennyfer):
+
+| Fórmula | Média |
+|---|---|
+| **Alvo do cockpit** | **00:19:18** |
+| Bruto (`fim` − `date`) | 00:42:48 |
+| Janela de mensagens (última − primeira) | 00:42:48 |
+| **Ativo, descontando ocioso > 10 min** | **00:20:50** |
+| Ativo, descontando ocioso > 5 min | 00:13:45 |
+
+O TMA do OPA é **tempo efetivo com desconto de ociosidade**, limiar entre 5 e 10 min.
+Nossa métrica (`tma_seconds` = `fim` − `date`) é estruturalmente outra coisa.
+
+O mesmo mecanismo explica o TMR: os 44 recuperados (fim de expediente) têm TMR médio
+00:03:40 contra 00:00:15 dos demais, mas **mediana praticamente igual (12s vs 10s)** — a
+responsividade real é a mesma, o que difere são as lacunas de relógio (madrugada) que o
+OPA desconta e nós contamos.
+
+**Ressalva de método**: o limiar de ociosidade é um parâmetro ajustado para casar com o
+agregado numa amostra de 20. Isso confirma a **classe** da métrica (descarta ociosidade),
+não a fórmula exata. Fechar com certeza exige a definição oficial do OPA.
+
+**Encaminhamento recomendado**:
+1. **Renomear (imediato, risco zero)** — nossa métrica é *duração total
+   (abertura→encerramento)*, a do OPA é *tempo trabalhado*. Hoje a tela sugere que são a
+   mesma coisa. Norma de qualidade de dados: definição explícita.
+2. **Calcular tempo efetivo** — as mensagens já são buscadas na importação para o TMR,
+   então dá para computar no mesmo passo, sem chamada nova à API. Exibir **ao lado** do
+   bruto, nunca no lugar. Exige migration e calibração do limiar.
+3. **Perguntar ao OPA a definição exata** — único caminho definitivo; fazer em paralelo.
+
+## 13. Correção — mensagens do agente virtual Theo entravam como "remetente não identificado"
+
+Encontrado investigando `UNI2026810881` (TMR humano registrado em 13min, atendente
+Gabrieli Milani, 03/09/2026). A timeline mostrava 14 eventos "Mensagem (remetente não
+identificado)" concentrados na janela de maior espera do atendimento.
+
+### 13.1 Diagnóstico
+
+As 14 mensagens não têm `id_user` nem `id_atend` — não são do cliente nem de um
+atendente cadastrado. Inspecionando o payload bruto: `tipo: "assistant"`, conteúdo com
+`role: "assistant"` / `role: "tool"` e `tool_calls` — é o **log interno do agente
+virtual Theo** (chamadas de ferramenta e retornos), não uma mensagem de conversa comum.
+
+**Confirmado como padrão, não coincidência**: amostra de 40 atendimentos recentes
+(qualquer atendente/departamento) → 100 mensagens sem `id_user`/`id_atend`, **100%**
+`tipo=="assistant"`. Nenhum outro tipo aparece nessa condição.
+
+**Efeito colateral antes da correção**: como essas mensagens não batiam em nenhuma
+categoria (client/bot/human), elas eram **completamente descartadas** de toda métrica —
+não fechavam intervalo no TMR geral, não contavam em `bot_message_count`, e apareciam
+na timeline como "remetente não identificado". O Theo desaparecia do TMR geral quando
+ele mesmo era quem tinha respondido.
+
+### 13.2 Correção (pedido explícito do usuário)
+
+> "preciso que ele entre na mesma metrica de tmr geral, e o tmr humano seja so os
+> identificados"
+
+Novo helper único, `_message_is_from_theo_bot()` em `opa_ingestion.py` — fonte de
+verdade compartilhada entre ingestão e timeline (a timeline importa direto do módulo de
+ingestão, mesma convenção já usada por `_load_attendant_types`/`_message_is_from_client`):
+
+```python
+def _message_is_from_theo_bot(message: dict[str, Any]) -> bool:
+    return message.get("tipo") == "assistant" and not message.get("id_user") and not message.get("id_atend")
+```
+
+Aplicado em 4 pontos, todos tratando o Theo como **bot**:
+- `_all_response_metrics` (TMR geral): fecha intervalo pendente do cliente, igual a
+  qualquer resposta de bot.
+- `_classify_bot_human`: conta como participação de bot (`handled_by_bot`,
+  `bot_to_human_handoff`).
+- `_message_attendant_summary`: soma em `bot_message_count`.
+- Timeline (`opa_timeline_service.py`): rótulo "Mensagem do atendimento automatizado",
+  `actor_type="bot"` — não mais "remetente não identificado".
+
+**`_human_response_metrics` (TMR humano) não foi tocado** — já excluía essas mensagens
+corretamente (não são client nem estão em `human_attendant_ids`), que é exatamente o
+comportamento pedido ("TMR humano seja só os identificados"). O Theo nunca fecha nem
+reinicia o intervalo pendente do cliente nessa métrica.
+
+### 13.3 Testes
+
+4 novos: TMR geral conta o Theo mas TMR humano não (`test_theo_tool_call_messages_...`);
+atendimento 100% Theo sem nenhum humano (`test_theo_only_attendance_...`, reproduz o
+padrão do `UNI2026810881`); contagens de mensagem não vazam entre categorias
+(`test_theo_messages_do_not_leak_...`); timeline classifica como bot, não "unknown"
+(`test_opa_attendance_timeline_classifies_theo_tool_calls_as_bot`). 168 testes do
+módulo passando, sem regressão.
+
+### 13.4 O que isso NÃO resolve
+
+O achado da seção 12.3 sobre TMA/TA continua de pé — o Theo entrar corretamente no TMR
+geral não muda o fato de o OPA calcular "tempo em atendimento" a partir de transições de
+status (AG/EA/PS) que a API não expõe. São investigações independentes que só se
+cruzaram porque apareceram no mesmo atendimento de exemplo.
+
+## 14. Esclarecimento — TMR humano mede "tempo até o humano aparecer", não "velocidade do atendente"
+
+Surgiu investigando o mesmo `UNI2026810881` da seção 13 (Gabrieli Milani, 03/09/2026,
+TMR humano = 13min). **Não é bug, não muda código nenhum — só registrando o
+entendimento pra não se perder.**
+
+### 14.1 O que pareceu estranho, à primeira vista
+
+O timeline do atendimento não mostra "nenhum intervalo grande" a olho nu — a lista de
+eventos vem só com HH:MM (sem segundo), e os eventos ficam visualmente "grudados" um
+atrás do outro. Só reconstruindo com segundo exato é que aparece o intervalo real:
+
+```
+10:37:48  cliente fala                         }
+   ...    Theo responde ativamente             } fase 1: bot trabalhando, 6min10s
+10:43:58  última resposta do Theo               }
+   ...    SILÊNCIO TOTAL (nem bot nem cliente)  } fase 2: 53min45s — ninguém envolvido
+11:37:43  cliente volta a falar                  }
+   ...    Theo engajado de novo                 } fase 3: bot trabalhando, 2min12s
+11:39:55  primeira resposta HUMANA (mesmo segundo da última msg do Theo)
+```
+
+Total do intervalo contado: `11:39:55 − 10:37:48 = 62min07s`. Tempo em que o humano
+participou antes de 11:39:55: **0 segundos**. A Gabrieli respondeu no instante exato em
+que a conversa chegou até ela.
+
+### 14.2 Por que isso NÃO é um bug
+
+`_human_response_metrics` (`opa_ingestion.py`) calcula exatamente o que está descrito
+na própria docstring: **"média dos intervalos entre uma mensagem do cliente e a
+resposta do atendente HUMANO seguinte"**. Mensagem pendente do cliente nunca é fechada
+nem reiniciada por mensagem de bot (Theo incluso, ver seção 13) — só fecha quando um
+humano identificado responde.
+
+"Tempo até o humano aparecer" **é, literalmente**, a definição de "tempo até a
+primeira resposta humana". Os 62 minutos são um fato real e verdadeiro sobre a
+experiência do cliente nesse atendimento — não é erro de cálculo, não é conta errada.
+
+### 14.3 Onde está a confusão de verdade — nome vs. uso
+
+O problema não é o cálculo, é a leitura. `TMR humano` sugere "velocidade do atendente",
+mas na prática mede uma coisa diferente e mistura três fatores que não têm nada a ver
+com o desempenho individual do atendente:
+
+1. Tempo de bot/Theo trabalhando na conversa (não é espera, é atendimento — só que
+   automatizado)
+2. Tempo de silêncio do **próprio cliente** (ele que demorou a responder, não o
+   contrário)
+3. Só então, o tempo real do atendente humano depois que a conversa chega até ele
+
+No caso do `UNI2026810881`, os itens 1+2 somam os 62min inteiros; o item 3 é zero.
+Ler "TMR humano: 13min" como "a Gabrieli demorou 13min pra responder" é uma
+interpretação **errada do número**, mesmo o número em si estando **certo**.
+
+### 14.4 Duas perguntas diferentes, duas métricas possíveis
+
+- **"Quanto tempo o cliente esperou até um humano aparecer?"** → é o que `tmr_seconds`
+  já responde hoje, corretamente. Útil pra medir experiência do cliente / fila.
+- **"O atendente foi rápido depois que a conversa chegou até ele?"** → precisaria medir
+  a partir do handoff real (transferência bot→humano), não da primeira mensagem do
+  cliente. **Não temos esse timestamp** — é o mesmo buraco de dado da seção 12.3 (TMA):
+  a API do OPA não expõe transição de fila/status, só o estado atual.
+
+### 14.5 Se um dia quiser separar as duas (não implementado, não pedido)
+
+Uma aproximação possível, sem dado novo da API: usar a **última mensagem de bot antes
+da 1ª resposta humana** como âncora, em vez da 1ª mensagem do cliente. Nesse caso
+específico daria `11:39:55 − 11:39:54 = 1 segundo` — muito mais fiel ao que a Gabrieli
+realmente fez. Quando não há bot na conversa, a âncora continua sendo a mensagem do
+cliente (comportamento atual, sem mudança). Precisaria medir num recorte maior antes de
+decidir se vale a pena — não avaliado ainda, fica registrado só como ideia pra reabrir
+se a leitura de "TMR humano como desempenho do atendente" continuar causando confusão.
+
+**Decisão desta sessão**: manter `tmr_seconds` exatamente como está. Nenhum código
+alterado.

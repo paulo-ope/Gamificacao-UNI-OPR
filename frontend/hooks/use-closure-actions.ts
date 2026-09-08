@@ -1,4 +1,7 @@
-import ExcelJS from "exceljs";
+// `import type`: os tipos (Fill, Worksheet, Workbook) somem na compilação. O ExcelJS de verdade
+// (~900 KB) só é baixado quando alguém clica em exportar - antes ele vinha no bundle inicial da
+// tela, e ainda duplicado entre módulos (achado medido no bundle de produção em 2026-09-03).
+import type ExcelJS from "exceljs";
 import { useCallback } from "react";
 
 import { formatMoney, formatNumber, formatPoints, leadershipAverageSourceLabel, leadershipRoleLabel } from "@/lib/gamificacao-helpers";
@@ -183,7 +186,9 @@ export function useClosureActions({
     pendingRows.forEach((item) => regionals.add(normalizeRegional(item.suggested_regional || item.regional)));
     const sortedRegionals = Array.from(regionals).sort((a, b) => regionalName(a).localeCompare(regionalName(b), "pt-BR"));
 
-    const workbook = new ExcelJS.Workbook();
+    const { default: Excel } = await import("exceljs");
+
+    const workbook = new Excel.Workbook();
     workbook.creator = "UNI Workspace";
     const nextSheetName = sheetNameFactory();
     // Um lider que cobre varias regionais (ex.: gerente de pasta, ou supervisor multi-filial)

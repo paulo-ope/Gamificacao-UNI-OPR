@@ -50,6 +50,18 @@ def _local(value: datetime) -> datetime:
     return value.astimezone(PORTO_VELHO_TZ).replace(tzinfo=None)
 
 
+def _day_key(value: datetime) -> str:
+    """Chave de dia (`YYYY-MM-DD`) em horário de Porto Velho - usada para agrupar as séries diárias
+    (`daily_series`). Converte explicitamente valores com tzinfo (produção - o Postgres devolve
+    tzinfo=UTC); valores sem tzinfo (testes com SQLite, que não preserva tzinfo em `DateTime`) já
+    representam o horário local gravado pelo sync, então são usados como estão - `.astimezone()`
+    num datetime naive assumiria o fuso do SISTEMA, não Porto Velho (mesma armadilha do `_local()`
+    acima, documentada ali)."""
+    if value.tzinfo is not None:
+        value = value.astimezone(PORTO_VELHO_TZ)
+    return value.strftime("%Y-%m-%d")
+
+
 DEFAULT_SETTINGS = {
     "scheduling_sla_target_pct": "80",
     "scheduling_sla_minutes": "60",
@@ -220,6 +232,24 @@ def _classify_reschedule_origin(operator_id: int | None, team_ids: set[int]) -> 
     membro da equipe do setor conta como Backoffice; qualquer outro caso (operador fora da equipe,
     ou evento só com técnico de campo) conta como Campo."""
     return "backoffice" if operator_id is not None and operator_id in team_ids else "campo"
+
+
+def _classify_reschedule_bucket(
+    operator_id: int | None, technician_id: int | None, team_ids: set[int], field_technician_ids: set[int],
+) -> str:
+    """3 categorias reais (pedido do usuário 2026-08-31: "campo hoje é todo mundo que não é
+    equipe, eu quero campo = técnico de verdade") - distinto de `_classify_reschedule_origin`
+    acima (que fica em 2 categorias, backoffice/campo, e alimenta uma feature diferente e já
+    existente: o filtro por O.S. em `order_details`). Aqui:
+    - "equipe": operador é membro cadastrado da equipe de agendamento;
+    - "campo": não é equipe, e o técnico do evento é um técnico de campo cadastrado
+      (`_field_technician_ixc_ids` - mesmo cadastro de `reschedules_by_technician`);
+    - "desconhecido": nem operador de equipe, nem técnico de campo identificável."""
+    if operator_id is not None and operator_id in team_ids:
+        return "equipe"
+    if technician_id is not None and technician_id in field_technician_ids:
+        return "campo"
+    return "desconhecido"
 
 
 def _reschedule_origins_by_order(db: Session, os_ids: set[int], team_ids: set[int]) -> dict[int, list[str]]:
@@ -418,20 +448,45 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
         events_stmt = events_stmt.where(SchedulingOrder.assunto_id.in_(filters.assunto_ids))
     if filters.operator_ids:
         events_stmt = events_stmt.where(SchedulingEvent.operator_id.in_(filters.operator_ids))
+    if filters.technician_ids:
+        events_stmt = events_stmt.where(SchedulingEvent.technician_id.in_(filters.technician_ids))
 
     daily_counts: dict[str, int] = {}
+    # Quebra por dia do card "Reagendamentos" (pedido do usuário 2026-08-31): agendamento (tipo 5)
+    # separado de reagendamento (tipo 10), e reagendamento em 3 categorias reais - equipe / campo
+    # (técnico de campo cadastrado) / desconhecido, ver `_classify_reschedule_bucket` - aplicada
+    # por EVENTO em vez de por O.S. porque aqui o recorte é o dia do evento, não o dia de abertura.
+    field_technician_ids = _field_technician_ixc_ids(db)
+    daily_first_schedule_counts: dict[str, int] = {}
+    daily_reschedule_counts: dict[str, int] = {}
+    daily_team_reschedule_counts: dict[str, int] = {}
+    daily_field_reschedule_counts: dict[str, int] = {}
+    daily_unknown_reschedule_counts: dict[str, int] = {}
+    daily_rescheduled_os_ids: dict[str, set[int]] = {}
     operator_events: dict[int, int] = {}
     operator_distinct: dict[int, set[int]] = {}
     for event, _order in db.execute(events_stmt):
-        day_key = event.event_at.strftime("%Y-%m-%d")
+        day_key = _day_key(event.event_at)
         daily_counts[day_key] = daily_counts.get(day_key, 0) + 1
+        if event.event_type == "5":
+            daily_first_schedule_counts[day_key] = daily_first_schedule_counts.get(day_key, 0) + 1
+        elif event.event_type == "10":
+            daily_reschedule_counts[day_key] = daily_reschedule_counts.get(day_key, 0) + 1
+            daily_rescheduled_os_ids.setdefault(day_key, set()).add(event.ixc_os_id)
+            bucket = _classify_reschedule_bucket(event.operator_id, event.technician_id, team_ids, field_technician_ids)
+            if bucket == "equipe":
+                daily_team_reschedule_counts[day_key] = daily_team_reschedule_counts.get(day_key, 0) + 1
+            elif bucket == "campo":
+                daily_field_reschedule_counts[day_key] = daily_field_reschedule_counts.get(day_key, 0) + 1
+            else:
+                daily_unknown_reschedule_counts[day_key] = daily_unknown_reschedule_counts.get(day_key, 0) + 1
         if event.operator_id:
             operator_events[event.operator_id] = operator_events.get(event.operator_id, 0) + 1
             operator_distinct.setdefault(event.operator_id, set()).add(event.ixc_os_id)
 
     opened_daily: dict[str, int] = {}
     for order in orders:
-        day_key = order.opened_at.strftime("%Y-%m-%d")
+        day_key = _day_key(order.opened_at)
         opened_daily[day_key] = opened_daily.get(day_key, 0) + 1
 
     active_period_days = max(1, sum(
@@ -481,6 +536,12 @@ def build_dashboard(db: Session, filters: SchedulingFilters, *, count_mode: str 
             "date": key,
             "opened": opened_daily.get(key, 0),
             "schedule_events": daily_counts.get(key, 0),
+            "first_schedule_events": daily_first_schedule_counts.get(key, 0),
+            "reschedule_events": daily_reschedule_counts.get(key, 0),
+            "team_reschedule_events": daily_team_reschedule_counts.get(key, 0),
+            "field_reschedule_events": daily_field_reschedule_counts.get(key, 0),
+            "unknown_reschedule_events": daily_unknown_reschedule_counts.get(key, 0),
+            "rescheduled_orders_distinct": len(daily_rescheduled_os_ids.get(key, set())),
         })
         day_cursor += timedelta(days=1)
 
@@ -578,6 +639,39 @@ def backlog_items(db: Session, filters: SchedulingFilters, *, limit: int = 100) 
             "status": order.status,
         })
     return items
+
+
+def backlog_breakdown(db: Session, filters: SchedulingFilters) -> dict:
+    """Onde a fila sem agendamento está concentrada (pedido do usuário 2026-08-31: "essa fila de
+    trabalho faz sentido desse formato... o que que faz mais sentido?") - como essas O.S. ainda não
+    têm técnico/operador atribuído, a dimensão "quem" não existe ainda; filial/assunto é a
+    quebra que sobra pra dizer ONDE agir. Agregado no banco (sem paginação/limit), diferente de
+    `backlog_items` (que trunca em `limit`, hoje só usado pra listar as mais antigas) - evita a
+    mesma armadilha de truncamento já corrigida em `reschedule_day_breakdown`."""
+    stmt = _cohort_query(filters).where(
+        SchedulingOrder.first_scheduled_at.is_(None),
+        SchedulingOrder.closed_at.is_(None),
+    )
+    by_filial_count: dict[str, int] = {}
+    by_assunto_count: dict[str, int] = {}
+    by_assunto_names: dict[str, str] = {}
+    for order in db.execute(stmt).scalars():
+        if (order.status or "").upper() in ("F", "C"):
+            continue
+        by_filial_count[order.filial_id] = by_filial_count.get(order.filial_id, 0) + 1
+        assunto_key = order.assunto_id or "sem-assunto"
+        by_assunto_count[assunto_key] = by_assunto_count.get(assunto_key, 0) + 1
+        by_assunto_names[assunto_key] = order.assunto_name or "Não informado"
+
+    def _top(counts: dict, label_for) -> list[dict]:
+        rows = [{"key": str(key), "label": label_for(key), "count": count} for key, count in counts.items()]
+        rows.sort(key=lambda item: item["count"], reverse=True)
+        return rows[:8]
+
+    return {
+        "by_filial": _top(by_filial_count, lambda key: REGIONAL_CODE_MAP.get(key, f"Filial {key}")),
+        "by_assunto": _top(by_assunto_count, lambda key: by_assunto_names.get(key, key)),
+    }
 
 
 ORDER_SORT_KEYS = {
@@ -758,6 +852,8 @@ def operator_events(
             "technician_name": technician_names.get(event.technician_id) if event.technician_id else None,
             "filial": REGIONAL_CODE_MAP.get(order.filial_id, f"Filial {order.filial_id}"),
             "assunto": order.assunto_name or "Não informado",
+            "mensagem": event.mensagem,
+            "historico": event.historico,
         }
         for event, order in page_rows
     ]
@@ -814,10 +910,135 @@ def technician_events(
             "operator_name": operator_names.get(event.operator_id) if event.operator_id else None,
             "filial": REGIONAL_CODE_MAP.get(order.filial_id, f"Filial {order.filial_id}"),
             "assunto": order.assunto_name or "Não informado",
+            "mensagem": event.mensagem,
+            "historico": event.historico,
         }
         for event, order in page_rows
     ]
     return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+def reschedule_day_detail(
+    db: Session,
+    filters: SchedulingFilters,
+    *,
+    day: date,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    """Drilldown do card "Reagendamentos por dia" (daily_series, pedido do usuário 2026-08-31):
+    todo evento de Reagendar (tipo "10") ocorrido NAQUELE DIA específico (não no período inteiro do
+    filtro), com os mesmos filtros de filial/setor/assunto/operador/técnico já aplicados na tela -
+    o técnico filtra pelo `technician_id` do próprio EVENTO (mesmo critério de `technician_events`),
+    não pelo técnico designado na O.S., porque o recorte aqui também é por evento."""
+    stmt = (
+        select(SchedulingEvent, SchedulingOrder)
+        .join(SchedulingOrder, SchedulingOrder.ixc_os_id == SchedulingEvent.ixc_os_id)
+        .where(
+            SchedulingEvent.event_type == "10",
+            SchedulingEvent.event_at >= datetime.combine(day, dtime.min, tzinfo=PORTO_VELHO_TZ),
+            SchedulingEvent.event_at <= datetime.combine(day, dtime.max, tzinfo=PORTO_VELHO_TZ),
+        )
+    )
+    if filters.filial_ids:
+        stmt = stmt.where(SchedulingOrder.filial_id.in_(filters.filial_ids))
+    if filters.setor_ids:
+        stmt = stmt.where(SchedulingOrder.setor_id.in_(filters.setor_ids))
+    if filters.assunto_ids:
+        stmt = stmt.where(SchedulingOrder.assunto_id.in_(filters.assunto_ids))
+    if filters.operator_ids:
+        stmt = stmt.where(SchedulingEvent.operator_id.in_(filters.operator_ids))
+    if filters.technician_ids:
+        stmt = stmt.where(SchedulingEvent.technician_id.in_(filters.technician_ids))
+
+    rows = list(db.execute(stmt))
+    rows.sort(key=lambda pair: pair[0].event_at, reverse=True)
+    total = len(rows)
+    page_rows = rows[(page - 1) * page_size: (page - 1) * page_size + page_size]
+
+    operator_ids = {event.operator_id for event, _ in page_rows if event.operator_id}
+    technician_ids = {event.technician_id for event, _ in page_rows if event.technician_id}
+    operator_names = _resolve_operator_names(db, operator_ids)
+    technician_names = _resolve_technician_names(db, technician_ids)
+    team_ids = _team_operator_ids(db)
+    field_technician_ids = _field_technician_ixc_ids(db)
+
+    items = [
+        {
+            "ixc_os_id": order.ixc_os_id,
+            "event_at": event.event_at,
+            "operator_name": operator_names.get(event.operator_id) if event.operator_id else None,
+            "origin": _classify_reschedule_bucket(event.operator_id, event.technician_id, team_ids, field_technician_ids),
+            "technician_name": technician_names.get(event.technician_id) if event.technician_id else None,
+            "filial": REGIONAL_CODE_MAP.get(order.filial_id, f"Filial {order.filial_id}"),
+            "assunto": order.assunto_name or "Não informado",
+            "mensagem": event.mensagem,
+            "historico": event.historico,
+        }
+        for event, order in page_rows
+    ]
+    return {"date": day, "items": items, "total": total, "page": page, "page_size": page_size}
+
+
+def reschedule_day_breakdown(db: Session, filters: SchedulingFilters, *, day: date) -> dict:
+    """Ranking rápido de "quem cobrar hoje" (painel principal do cockpit, pedido do usuário
+    2026-08-31): quebra os reagendamentos de UM DIA por técnico, operador e filial, agregado no
+    banco (não paginado) - evita o erro real de tentar somar páginas de `reschedule_day_detail`,
+    que trunca em `page_size<=200` e mentiria em dias com mais reagendamentos que isso. Escopado
+    por `event_at` (quando o reagendamento ACONTECEU), igual `reschedule_day_detail` - diferente
+    de `reschedules_by_technician`/`reschedules_by_operator`, que agrupam por O.S. ABERTA no
+    período (semântica errada para "hoje": a maioria das O.S. reagendadas hoje foi aberta em
+    outro dia)."""
+    stmt = (
+        select(SchedulingEvent, SchedulingOrder)
+        .join(SchedulingOrder, SchedulingOrder.ixc_os_id == SchedulingEvent.ixc_os_id)
+        .where(
+            SchedulingEvent.event_type == "10",
+            SchedulingEvent.event_at >= datetime.combine(day, dtime.min, tzinfo=PORTO_VELHO_TZ),
+            SchedulingEvent.event_at <= datetime.combine(day, dtime.max, tzinfo=PORTO_VELHO_TZ),
+        )
+    )
+    if filters.filial_ids:
+        stmt = stmt.where(SchedulingOrder.filial_id.in_(filters.filial_ids))
+    if filters.setor_ids:
+        stmt = stmt.where(SchedulingOrder.setor_id.in_(filters.setor_ids))
+    if filters.assunto_ids:
+        stmt = stmt.where(SchedulingOrder.assunto_id.in_(filters.assunto_ids))
+    if filters.operator_ids:
+        stmt = stmt.where(SchedulingEvent.operator_id.in_(filters.operator_ids))
+    if filters.technician_ids:
+        stmt = stmt.where(SchedulingEvent.technician_id.in_(filters.technician_ids))
+
+    field_technician_ids = _field_technician_ixc_ids(db)
+
+    by_technician_count: dict[int, int] = {}
+    by_operator_count: dict[int, int] = {}
+    by_filial_count: dict[str, int] = {}
+    for event, order in db.execute(stmt):
+        # Só técnico de campo cadastrado de verdade (mesmo filtro de `reschedules_by_technician`)
+        # - sem isso, gente do backoffice/agendamento cujo id acabou gravado como `technician_id`
+        # em alguma O.S. aparecia neste ranking (achado real 2026-08-31: Yasmim, do backoffice,
+        # aparecendo em "Técnicos - mais reagendamento hoje").
+        if event.technician_id is not None and event.technician_id in field_technician_ids:
+            by_technician_count[event.technician_id] = by_technician_count.get(event.technician_id, 0) + 1
+        if event.operator_id is not None:
+            by_operator_count[event.operator_id] = by_operator_count.get(event.operator_id, 0) + 1
+        by_filial_count[order.filial_id] = by_filial_count.get(order.filial_id, 0) + 1
+
+    technician_names = _resolve_technician_names(db, set(by_technician_count))
+    operator_names = _resolve_operator_names(db, set(by_operator_count))
+
+    def _top(counts: dict, label_for) -> list[dict]:
+        rows = [{"key": str(key), "label": label_for(key), "count": count} for key, count in counts.items()]
+        rows.sort(key=lambda item: item["count"], reverse=True)
+        return rows[:8]
+
+    return {
+        "date": day,
+        "by_technician": _top(by_technician_count, lambda key: technician_names.get(key, f"Técnico #{key}")),
+        "by_operator": _top(by_operator_count, lambda key: operator_names.get(key, f"Operador IXC {key}")),
+        "by_filial": _top(by_filial_count, lambda key: REGIONAL_CODE_MAP.get(key, f"Filial {key}")),
+    }
 
 
 def filter_options(db: Session) -> dict:

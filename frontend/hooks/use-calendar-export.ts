@@ -1,4 +1,7 @@
-import ExcelJS from "exceljs";
+// `import type`: os tipos (Fill, Worksheet, Workbook) somem na compilação. O ExcelJS de verdade
+// (~900 KB) só é baixado quando alguém clica em exportar - antes ele vinha no bundle inicial da
+// tela, e ainda duplicado entre módulos (achado medido no bundle de produção em 2026-09-03).
+import type ExcelJS from "exceljs";
 import { useCallback } from "react";
 
 import type { OperationCalendar, OperationCalendarCollaborator, OperationCalendarTeamModel } from "@/lib/operations-api";
@@ -152,7 +155,8 @@ function buildRegionalSheet(workbook: ExcelJS.Workbook, nextSheetName: (label: s
 export function useCalendarExport() {
   return useCallback(async (data: OperationCalendar) => {
     if (!data.regionals.length) return;
-    const workbook = new ExcelJS.Workbook();
+    const { default: Excel } = await import("exceljs");
+    const workbook = new Excel.Workbook();
     workbook.creator = "UNI Workspace";
     workbook.created = new Date();
 

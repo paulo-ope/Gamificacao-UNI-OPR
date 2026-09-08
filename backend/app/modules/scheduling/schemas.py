@@ -44,6 +44,12 @@ class SchedulingDailyPoint(BaseModel):
     date: str
     opened: int
     schedule_events: int
+    first_schedule_events: int = 0
+    reschedule_events: int = 0
+    team_reschedule_events: int = 0
+    field_reschedule_events: int = 0
+    unknown_reschedule_events: int = 0
+    rescheduled_orders_distinct: int = 0
 
 
 class SchedulingOperatorRow(BaseModel):
@@ -201,6 +207,8 @@ class SchedulingOperatorEventItem(BaseModel):
     technician_name: str | None = None
     filial: str
     assunto: str
+    mensagem: str | None = None
+    historico: str | None = None
 
 
 class SchedulingOperatorEventPage(BaseModel):
@@ -220,6 +228,8 @@ class SchedulingTechnicianEventItem(BaseModel):
     operator_name: str | None = None
     filial: str
     assunto: str
+    mensagem: str | None = None
+    historico: str | None = None
 
 
 class SchedulingTechnicianEventPage(BaseModel):
@@ -249,6 +259,44 @@ class SchedulingOrderTimeline(BaseModel):
     assunto: str
     status: str | None = None
     events: list[SchedulingTimelineEvent]
+
+
+class SchedulingRescheduleDayItem(BaseModel):
+    ixc_os_id: int
+    event_at: datetime
+    operator_name: str | None = None
+    origin: str
+    technician_name: str | None = None
+    filial: str
+    assunto: str
+    mensagem: str | None = None
+    historico: str | None = None
+
+
+class SchedulingRescheduleDayPage(BaseModel):
+    date: date
+    items: list[SchedulingRescheduleDayItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class SchedulingRescheduleBreakdownItem(BaseModel):
+    key: str
+    label: str
+    count: int
+
+
+class SchedulingRescheduleDayBreakdown(BaseModel):
+    date: date
+    by_technician: list[SchedulingRescheduleBreakdownItem]
+    by_operator: list[SchedulingRescheduleBreakdownItem]
+    by_filial: list[SchedulingRescheduleBreakdownItem]
+
+
+class SchedulingBacklogBreakdown(BaseModel):
+    by_filial: list[SchedulingRescheduleBreakdownItem]
+    by_assunto: list[SchedulingRescheduleBreakdownItem]
 
 
 class SchedulingSavedFilterValues(BaseModel):
@@ -289,3 +337,19 @@ class SchedulingSyncStatus(BaseModel):
     last_job: SchedulingSyncJobOut | None = None
     orders_count: int = Field(default=0)
     events_count: int = Field(default=0)
+
+
+class SchedulingSyncHealth(BaseModel):
+    """Saúde do loop automático (`modules/scheduling/scheduler.py`) - mesmo contrato de
+    `/ixc-sync-status` e `/opa-sync-status`, para a tela mostrar "sincronizado há X min" sem
+    depender de alguém clicar em sincronizar manualmente."""
+
+    configured: bool
+    enabled: bool
+    interval_minutes: int
+    last_success_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    next_allowed_at: datetime | None = None
+    last_error: str | None = None
+    last_error_at: datetime | None = None
+    consecutive_failures: int = 0

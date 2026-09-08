@@ -1,48 +1,50 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, BriefcaseBusiness, CalendarClock, Headphones, LogOut, Radar, ShieldCheck, Trophy } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { LogOut } from "lucide-react";
+import { useEffect } from "react";
 
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
+import { WorkspaceModuleGrid } from "@/components/workspace/module-grid";
 import { Button } from "@/components/ui/button";
+import { useVisibleModules } from "@/hooks/use-visible-modules";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
-import { api } from "@/lib/api";
-import { workspaceModules } from "@/lib/module-registry";
-import type { WorkspaceVisibleModule } from "@/lib/types";
 
-
-const icons = { gamification: Trophy, operations: BarChart3, scheduling: CalendarClock, support: Headphones, management: BriefcaseBusiness, admin: ShieldCheck, intelligence: Radar };
-
+/**
+ * Ponto de entrada do ecossistema (`/`): login e, depois de autenticar, encaminhamento.
+ *
+ * A entrada do sistema passou a ser a Visão Geral (decisão do usuário em 2026-09-03) - quem tem
+ * `operations:read` cai direto nela, com os módulos no menu lateral. Quem NÃO tem (o caso real de
+ * um colaborador, que só usa o Portal) continua vendo a grade de módulos aqui, senão o redirect
+ * levaria essa pessoa para uma tela em branco.
+ */
 export function WorkspaceHome() {
+  const router = useRouter();
   const { user, checking, error, login, logout } = useWorkspaceAuth();
-  const [visibleModules, setVisibleModules] = useState<WorkspaceVisibleModule[] | null>(null);
+  const modules = useVisibleModules(user);
+  const goesToOverview = Boolean(user?.permissions.includes("operations:read"));
 
   useEffect(() => {
-    if (!user) return;
-    api.workspaceModules()
-      .then(setVisibleModules)
-      .catch(() => setVisibleModules(null));
-  }, [user]);
+    if (goesToOverview) router.replace("/visao-geral");
+  }, [goesToOverview, router]);
 
   if (checking && !user) {
-    return <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">Carregando UNI Workspace...</main>;
+    return (
+      <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">
+        Carregando UNI Workspace...
+      </main>
+    );
   }
   if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} showPortalLink />;
-
-  const fallbackModules = workspaceModules
-    .filter((module) => module.status === "active" && user.permissions.includes(module.requiredPermission))
-    .map((module) => ({
-      key: module.key,
-      name: module.name,
-      description: module.description,
-      web_path: module.webPath,
-      api_prefix: module.apiPrefix,
-      required_permission: module.requiredPermission,
-      status: module.status,
-    }));
-  const modules = visibleModules ?? fallbackModules;
+  if (goesToOverview) {
+    return (
+      <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">
+        Abrindo a Visão Geral...
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -57,28 +59,27 @@ export function WorkspaceHome() {
           </div>
           <div className="flex items-center gap-1">
             <NotificationBell />
-            <Button type="button" variant="ghost" onClick={logout}><LogOut className="h-4 w-4" /> Sair</Button>
+            <Button type="button" variant="ghost" onClick={logout}>
+              <LogOut className="h-4 w-4" /> Sair
+            </Button>
           </div>
         </div>
       </header>
       <section className="mx-auto max-w-7xl px-5 py-12">
         <p className="text-sm text-slate-500">Olá, {user.name}.</p>
         <h2 className="mt-1 text-3xl font-semibold text-slate-950">Escolha um módulo</h2>
-        <div className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {modules.map((module) => {
-            const Icon = icons[module.key];
-            return (
-              <Link key={module.key} href={module.web_path} className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
-                  <Icon className="h-6 w-6" />
-                </div>
-                <h3 className="mt-5 text-lg font-semibold text-slate-950">{module.name}</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-500">{module.description}</p>
-                <p className="mt-6 text-sm font-semibold text-blue-700 group-hover:text-blue-800">Abrir módulo →</p>
-              </Link>
-            );
-          })}
+        <div className="mt-8">
+          <WorkspaceModuleGrid modules={modules} />
         </div>
+        {user.permissions.includes("portal:read_self") ? (
+          <p className="mt-8 text-sm text-slate-500">
+            Você também tem acesso ao{" "}
+            <Link href="/portal" className="font-semibold text-uni-royal hover:underline">
+              Portal do Colaborador
+            </Link>
+            .
+          </p>
+        ) : null}
       </section>
     </main>
   );

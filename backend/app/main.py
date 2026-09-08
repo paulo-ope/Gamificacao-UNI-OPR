@@ -26,6 +26,7 @@ from app.modules.operations.login_status_snapshot import run_login_status_snapsh
 from app.modules.operations.onu_signal_snapshot import run_onu_signal_snapshot_loop
 from app.modules.operations.router import router as operations_router
 from app.modules.scheduling.router import router as scheduling_router
+from app.modules.scheduling.scheduler import run_scheduling_sync_loop
 from app.modules.support.router import router as support_router
 from app.modules.workspace.router import router as workspace_router
 from app.services.ixc_scheduler import run_ixc_sync_loop
@@ -70,6 +71,17 @@ async def lifespan(app: FastAPI):
     if settings_.opa_api_base_url and settings_.opa_api_token:
         opa_sync_task = asyncio.create_task(
             run_opa_sync_loop(settings_.opa_sync_interval_minutes, initial_enabled=settings_.opa_sync_enabled)
+        )
+
+    # Sincronização automática do módulo de Agendamento (eventos de agenda/reagendamento do IXC) -
+    # mesma condição de configuração do `ixc_sync_task` (usa o mesmo cliente IXC). Sempre incremental
+    # via marca d'água - nunca faz backfill grande sozinho (ver modules/scheduling/scheduler.py).
+    scheduling_sync_task = None
+    if settings_.ixc_api_base_url and settings_.ixc_api_token:
+        scheduling_sync_task = asyncio.create_task(
+            run_scheduling_sync_loop(
+                settings_.scheduling_sync_interval_minutes, initial_enabled=settings_.scheduling_sync_enabled
+            )
         )
 
     # Sem dependência de configuração externa (ao contrário do IXC) - sempre roda, é só uma
@@ -121,6 +133,11 @@ async def lifespan(app: FastAPI):
         opa_sync_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await opa_sync_task
+
+    if scheduling_sync_task:
+        scheduling_sync_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scheduling_sync_task
 
     backlog_snapshot_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
