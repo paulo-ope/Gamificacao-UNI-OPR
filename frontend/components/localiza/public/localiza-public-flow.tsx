@@ -89,12 +89,23 @@ function InAppBrowserWarning() {
   );
 }
 
-// Guia de "como ativar a localização" - só aparece quando o navegador nega a permissão
-// (PERMISSION_DENIED), que é justamente quando o cliente está com a localização desligada e
-// precisa de instrução, não só de um aviso genérico (pedido explícito do usuário).
-function LocationHelpGuide() {
-  const [tab, setTab] = useState<"android" | "iphone">("android");
-  const [open, setOpen] = useState(false);
+function detectPlatform(): "android" | "iphone" {
+  if (typeof navigator === "undefined") return "android";
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent || "") ? "iphone" : "android";
+}
+
+// Guia de "como ativar a localização" - aparece quando a permissão é negada ou quando a precisão
+// vem ruim demais pra despachar equipe.
+//
+// Não existe API pra "elevar" permissão: nenhum site pode ligar o GPS, trocar a localização
+// aproximada por precisa, nem forçar um novo pedido depois de negado (trava do sistema
+// operacional). O que dá pra fazer é encurtar o caminho - por isso o guia (a) detecta o aparelho
+// e mostra só os passos daquele sistema, (b) começa ABERTO quando já se sabe que é necessário, e
+// (c) mostra primeiro o atalho DENTRO do navegador, que resolve sem abrir o app de Ajustes
+// (pedido do usuário em 2026-09-08: "muitos têm que acessar as config").
+function LocationHelpGuide({ defaultOpen = false }: { defaultOpen?: boolean }) {
+  const [tab, setTab] = useState<"android" | "iphone">(detectPlatform);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
       <button
@@ -126,22 +137,49 @@ function LocationHelpGuide() {
             </button>
           </div>
           {tab === "android" ? (
-            <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-slate-600">
-              <li>Abra as Configurações do celular e toque em Localização - ative a opção.</li>
-              <li>
-                Ainda em Localização, entre em Permissões {'>'} o seu navegador e ative também
-                <strong> &quot;Usar localização precisa&quot;</strong> - sem ela o Android envia só a posição aproximada
-                (vários quilômetros), por mais que se espere.
-              </li>
-              <li>No navegador, toque no cadeado ao lado do endereço, depois em Permissões e permita Localização.</li>
-              <li>Volte aqui e toque em "Tentar novamente".</li>
-            </ol>
+            <>
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Sem sair desta tela</p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>Toque no <strong>cadeado</strong> (ou no ícone ao lado do endereço, no topo).</li>
+                <li>Toque em <strong>Permissões</strong> {'>'} <strong>Localização</strong> e escolha Permitir.</li>
+                <li>Volte aqui e toque em &quot;Tentar localizar novamente&quot;.</li>
+              </ol>
+              <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Se continuar impreciso (quilômetros)
+              </p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>Configurações do celular {'>'} <strong>Localização</strong> - ative.</li>
+                <li>
+                  Ainda em Localização: <strong>Permissões</strong> {'>'} seu navegador {'>'} ative
+                  <strong> &quot;Usar localização precisa&quot;</strong>. Sem ela o Android manda só a posição
+                  aproximada, por mais que se espere.
+                </li>
+              </ol>
+            </>
           ) : (
-            <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-slate-600">
-              <li>Abra Ajustes {'>'} Privacidade e Segurança {'>'} Serviços de Localização - ative a opção.</li>
-              <li>Role até o Safari (ou o navegador usado) e escolha "Perguntar" ou "Permitir".</li>
-              <li>Volte aqui e toque em "Tentar novamente".</li>
-            </ol>
+            <>
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Sem sair desta tela</p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>
+                  Toque em <strong>&quot;aA&quot;</strong> (à esquerda do endereço, no topo da tela).
+                </li>
+                <li>
+                  Toque em <strong>Ajustes do Site</strong> {'>'} <strong>Localização</strong> e escolha
+                  <strong> Permitir</strong> (ou Perguntar).
+                </li>
+                <li>Volte aqui e toque em &quot;Tentar localizar novamente&quot;.</li>
+              </ol>
+              <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Se continuar impreciso (quilômetros)
+              </p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>Ajustes {'>'} Privacidade e Segurança {'>'} <strong>Serviços de Localização</strong> - ative.</li>
+                <li>
+                  Na mesma tela, role até o <strong>Safari</strong>, escolha &quot;Ao Usar o App&quot; e ative
+                  <strong> &quot;Localização Precisa&quot;</strong>.
+                </li>
+              </ol>
+            </>
           )}
         </div>
       ) : null}
@@ -370,7 +408,7 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             ) : null}
 
             {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
-            {permissionDenied ? <LocationHelpGuide /> : null}
+            {permissionDenied ? <LocationHelpGuide defaultOpen /> : null}
           </div>
         ) : null}
 
@@ -389,7 +427,7 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             {blockedByAccuracy ? (
               <>
                 {isInAppBrowser() ? <InAppBrowserWarning /> : null}
-                <LocationHelpGuide />
+                <LocationHelpGuide defaultOpen />
               </>
             ) : null}
 
