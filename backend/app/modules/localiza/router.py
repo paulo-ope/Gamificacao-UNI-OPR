@@ -76,6 +76,9 @@ def create_location_request_route(
         customer_name=payload.customer_name,
         registered_latitude=payload.registered_latitude,
         registered_longitude=payload.registered_longitude,
+        ixc_cliente_id=payload.ixc_cliente_id,
+        ixc_login_id=payload.ixc_login_id,
+        ixc_login=payload.ixc_login,
     )
     return {**item, "token": raw_token, "public_link": service.public_link(raw_token)}
 

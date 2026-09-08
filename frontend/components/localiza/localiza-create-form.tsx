@@ -53,7 +53,12 @@ export function LocalizaCreateForm({ onCreated }: { onCreated: (item: LocationRe
         customer_id: form.customer_id.trim() || null,
         customer_name: form.customer_name.trim() || null,
         registered_latitude: hasLat ? Number(form.registered_latitude) : null,
-        registered_longitude: hasLon ? Number(form.registered_longitude) : null
+        registered_longitude: hasLon ? Number(form.registered_longitude) : null,
+        // Vem de `selectedMatch` (nunca digitado à mão) - guarda o vínculo real com o IXC além do
+        // texto de exibição em `customer_id` (pedido do usuário).
+        ixc_cliente_id: selectedMatch?.cliente_id ?? null,
+        ixc_login_id: selectedMatch?.login_id ?? null,
+        ixc_login: selectedMatch?.login ?? null
       });
       setForm(EMPTY_FORM);
       setSelectedMatch(null);

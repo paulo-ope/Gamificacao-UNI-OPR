@@ -20,6 +20,11 @@ class LocationRequestCreate(BaseModel):
     customer_name: str | None = Field(default=None, max_length=180)
     registered_latitude: float | None = Field(default=None, ge=-90, le=90)
     registered_longitude: float | None = Field(default=None, ge=-180, le=180)
+    # Preenchidos pelo frontend quando o cliente foi escolhido pela busca ao vivo no IXC (nunca
+    # digitados à mão) - guardam o vínculo real com o cadastro, além do texto de exibição acima.
+    ixc_cliente_id: int | None = Field(default=None)
+    ixc_login_id: int | None = Field(default=None)
+    ixc_login: str | None = Field(default=None, max_length=120)
 
 
 class LocationRequestAttachOrder(BaseModel):
@@ -33,6 +38,9 @@ class LocationRequestOut(BaseModel):
     opa_protocol: str | None
     customer_id: str | None
     customer_name: str | None
+    ixc_cliente_id: int | None
+    ixc_login_id: int | None
+    ixc_login: str | None
     status: LocationRequestStatus
     registered_latitude: float | None
     registered_longitude: float | None

@@ -408,3 +408,41 @@ def test_mine_only_filter_shows_only_own_requests(db_session, admin_user):
         all_codes = {row["order_code"] for row in everyone.json()}
         assert {"OS-MINE-ADMIN", "OS-MINE-OTHER"} <= all_codes
     app.dependency_overrides.clear()
+
+
+def test_ixc_identity_fields_are_persisted_and_carried_over_on_regenerate(db_session, admin_user):
+    with _admin_client(db_session, admin_user) as client:
+        created = _create(
+            client,
+            order_code="OS-IXC-IDENTITY",
+            ixc_cliente_id=112781,
+            ixc_login_id=72928,
+            ixc_login="paulo.soares_1",
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["ixc_cliente_id"] == 112781
+        assert body["ixc_login_id"] == 72928
+        assert body["ixc_login"] == "paulo.soares_1"
+        item_id = body["id"]
+
+        regenerated = client.post(f"/api/localiza/{item_id}/regenerate")
+        assert regenerated.status_code == 201
+        assert regenerated.json()["ixc_login_id"] == 72928
+        assert regenerated.json()["ixc_login"] == "paulo.soares_1"
+    app.dependency_overrides.clear()
+
+    # `order_code` se repete no original (agora invalidado) e no regenerado - pega o mais recente.
+    stored = db_session.query(LocationRequest).filter(LocationRequest.order_code == "OS-IXC-IDENTITY").order_by(LocationRequest.id.desc()).first()
+    assert stored.ixc_cliente_id == 112781
+    assert stored.ixc_login_id == 72928
+    assert stored.ixc_login == "paulo.soares_1"
+
+
+def test_search_matches_ixc_login(db_session, admin_user):
+    with _admin_client(db_session, admin_user) as client:
+        _create(client, order_code="OS-SEARCH-LOGIN", ixc_login="joaosilva_2", opa_protocol=None, customer_name=None)
+        response = client.get("/api/localiza", params={"search": "joaosilva"})
+        codes = {row["order_code"] for row in response.json()}
+        assert "OS-SEARCH-LOGIN" in codes
+    app.dependency_overrides.clear()
