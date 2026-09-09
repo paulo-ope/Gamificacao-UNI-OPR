@@ -8,8 +8,36 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class EcosystemPermissionOut(BaseModel):
     key: str
     label: str
+    #: Rótulo do grupo na tela: nome do módulo, ou área transversal ("Portal do Colaborador").
     module: str
+    #: Chave do módulo do registry. None em permissão transversal, que não pertence a um módulo.
+    module_key: str | None = None
     sensitive: bool = False
+    #: true = criada na aba Permissões (excluível); false = declarada em código (só revogável).
+    custom: bool = False
+    description: str | None = None
+    #: Uso atual, para a tela mostrar quem é afetado antes de revogar ou excluir.
+    profile_count: int = 0
+    user_count: int = 0
+    profile_names: list[str] = Field(default_factory=list)
+
+
+class CustomPermissionCreate(BaseModel):
+    key: str = Field(min_length=3, max_length=120)
+    label: str = Field(min_length=3, max_length=160)
+    module_key: str | None = Field(default=None, max_length=80)
+    description: str | None = Field(default=None, max_length=1000)
+    sensitive: bool = False
+
+
+class CustomPermissionUpdate(BaseModel):
+    """A chave nunca muda (ver `permissions_service.update_custom_permission`)."""
+
+    label: str | None = Field(default=None, min_length=3, max_length=160)
+    module_key: str | None = Field(default=None, max_length=80)
+    description: str | None = Field(default=None, max_length=1000)
+    sensitive: bool | None = None
+    active: bool | None = None
 
 
 class AccessProfileBase(BaseModel):
@@ -71,6 +99,9 @@ class AccessProfileOut(BaseModel):
     user_count: int = 0
     created_at: datetime
     updated_at: datetime
+    #: Motivo pelo qual este perfil não pode ser excluído agora (None = pode). A tela mostra o
+    #: texto em vez de esconder o botão, para o admin saber o que destravar.
+    delete_blocked_reason: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -163,8 +194,30 @@ class AdminWorkspaceModuleOut(BaseModel):
     api_prefix: str
     required_permission: str
     status: str
+    #: Valores do código (`app/modules/registry.py`), antes de qualquer ajuste do admin - a tela
+    #: usa para mostrar "restaurar padrão" com o texto que voltaria.
+    default_name: str = ""
+    default_description: str = ""
+    default_status: str = ""
+    customized: bool = False
+    sort_order: int = 0
     profiles: list[AdminModuleProfileVisibilityOut]
     user_overrides: list[AdminModuleUserVisibilityOut] = Field(default_factory=list)
+
+
+class AdminModuleSettingsUpdate(BaseModel):
+    """Ajuste de apresentação/disponibilidade do módulo. Campo enviado em branco (ou null) volta ao
+    padrão do registry - é assim que a tela oferece "restaurar padrão" sem endpoint extra.
+
+    Rota web, prefixo de API e permissão mínima não entram aqui de propósito (ver
+    `modules_service`): mudar a permissão mínima pela tela deixaria o módulo visível para quem as
+    rotas dele vão recusar com 403.
+    """
+
+    name: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    status: str | None = Field(default=None, max_length=20)
+    sort_order: int | None = Field(default=None, ge=0, le=999)
 
 
 class AdminModuleVisibilityUpdate(BaseModel):

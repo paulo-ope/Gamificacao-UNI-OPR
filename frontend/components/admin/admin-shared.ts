@@ -1,12 +1,10 @@
-import { Boxes, History, Inbox, LayoutDashboard, Mail, PlugZap, ShieldCheck, UserCog, UserRound, Users } from "lucide-react";
+import { Boxes, History, Inbox, KeyRound, LayoutDashboard, Mail, PlugZap, ShieldCheck, UserCog, UserRound, Users } from "lucide-react";
 
 import type { ModuleNavigationItem } from "@/components/workspace/module-navigation-sidebar";
-import type { AccessProfile, AdminWorkspaceModule, AuthUser, EcosystemPermission, Permission } from "@/lib/types";
+import type { AccessProfile, AdminWorkspaceModule, AuthUser, EcosystemPermission, PermissionKey } from "@/lib/types";
 
-// `workspaceModules` (lib/module-registry.ts) inclui chaves de módulo (ex.: "intelligence") fora
-// da união estreita de `WorkspaceVisibleModule["key"]` usada por `AdminWorkspaceModule` - o
-// fallback de `visibleModuleRows` em admin/page.tsx mistura os dois formatos quando `adminModules`
-// ainda não carregou. `key: string` aqui é só pra refletir isso; nada usa a união estreita.
+// `key: string` (e não a união de `WorkspaceModuleKey`) porque a chave vem do backend: um módulo
+// novo registrado lá não deve quebrar a compilação daqui antes de alguém atualizar a união.
 export type VisibleModuleRow = Omit<AdminWorkspaceModule, "key"> & { key: string };
 
 export type AdminTab =
@@ -17,6 +15,7 @@ export type AdminTab =
   | "access_requests"
   | "structure"
   | "profiles"
+  | "permissions"
   | "modules"
   | "integrations"
   | "ai_governance"
@@ -32,19 +31,51 @@ export const ADMIN_NAV_ITEMS: Array<ModuleNavigationItem<AdminTab>> = [
   { value: "access_requests", label: "Solicitações", description: "Pedidos de acesso ao Portal", icon: Inbox },
   { value: "structure", label: "Pessoas", description: "Estrutura e liderança", icon: UserCog },
   { value: "profiles", label: "Perfis", description: "Permissões por função", icon: ShieldCheck },
-  { value: "modules", label: "Módulos", description: "Visibilidade por perfil", icon: Boxes },
+  { value: "permissions", label: "Permissões", description: "Catálogo, uso e permissões próprias", icon: KeyRound },
+  { value: "modules", label: "Módulos", description: "Nome, status, ordem e visibilidade", icon: Boxes },
   { value: "integrations", label: "Integrações", description: "IXC, APIs e IA", icon: PlugZap },
   { value: "audit", label: "Auditoria", description: "Ações sensíveis", icon: History },
 ];
 
-export const PARAMETER_MODULE_LINKS = [
-  { module: "Gamificação Operacional", owner: "Pontuação, penalidades, fechamento e pagamento", permissionArea: "Gamificação", path: "/gamificacao" },
-  { module: "Operação Analítica", owner: "Modelos de equipe, assuntos, SLA e filtros globais", permissionArea: "Operação", path: "/operacao" },
-  { module: "Agendamento", owner: "Metas diárias, expediente, sincronização e equipe", permissionArea: "Agendamento", path: "/agendamento" },
-  { module: "SGP Suporte", owner: "Atendimentos, dimensões e sincronização com o OPA Suite", permissionArea: "Suporte", path: "/suporte" },
-  { module: "Gestão Integrada", owner: "Estrutura, motivos, prazos, justificativas e revisão", permissionArea: "Gestão", path: "/gestao" },
-  { module: "UNI Intelligence", owner: "Monitores, alertas, conteúdo e publicação no cockpit", permissionArea: "Inteligência", path: "/intelligence" },
-] as const;
+/**
+ * O que cada módulo parametriza no PRÓPRIO contexto (a Administração cuida de acesso; regra de
+ * negócio de cada domínio fica no domínio).
+ *
+ * Só o texto vive aqui, indexado pela chave do módulo. Nome, rota e existência vêm da lista de
+ * módulos que a tela já carrega - achado real (2026-09-09): esta era uma lista fixa de 6 módulos
+ * escritos à mão e o UNI Localiza, criado depois, não aparecia na "Central de parametrizações".
+ * Módulo sem texto aqui entra com a própria descrição, nunca fica de fora.
+ */
+export const MODULE_PARAMETER_OWNERS: Record<string, string> = {
+  gamification: "Pontuação, penalidades, fechamento e pagamento",
+  operations: "Modelos de equipe, assuntos, SLA e filtros globais",
+  scheduling: "Metas diárias, expediente, sincronização e equipe",
+  support: "Atendimentos, dimensões e sincronização com o OPA Suite",
+  management: "Estrutura, motivos, prazos, justificativas e revisão",
+  intelligence: "Monitores, alertas, conteúdo e publicação no cockpit",
+  localiza: "Validade do link público de localização enviado ao cliente",
+  admin: "Usuários, perfis, permissões, módulos e integrações",
+};
+
+export type ParameterModuleLink = {
+  key: string;
+  module: string;
+  owner: string;
+  path: string;
+  status: string;
+};
+
+export function parameterModuleLinks(modules: VisibleModuleRow[]): ParameterModuleLink[] {
+  return modules
+    .filter((module) => module.status === "active")
+    .map((module) => ({
+      key: module.key,
+      module: module.name,
+      owner: MODULE_PARAMETER_OWNERS[module.key] || module.description,
+      path: module.web_path,
+      status: module.status,
+    }));
+}
 
 export const LEGACY_ROLE_BY_PROFILE: Record<string, AuthUser["role"]> = {
   "Admin Ecossistema": "admin",
@@ -126,7 +157,7 @@ export type ProfileDraft = {
   name: string;
   description: string;
   active: boolean;
-  permission_keys: Permission[];
+  permission_keys: PermissionKey[];
 };
 
 export type PersonStructureDraft = {

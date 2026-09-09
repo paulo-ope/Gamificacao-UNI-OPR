@@ -178,6 +178,33 @@ class AccessProfilePermission(Base):
     profile: Mapped[AccessProfile] = relationship(back_populates="permissions")
 
 
+class AccessProfilePermissionSeed(Base):
+    """Registro de que uma permissão de perfil de sistema JÁ FOI semeada uma vez.
+
+    Achado real (2026-09-09): `ensure_access_profiles` roda a cada start do backend e fazia
+    `permissions - existing` -> `db.add(...)`, ou seja, só adicionava. Uma permissão removida na
+    tela de Perfis de Acesso (ex.: tirar `management:review` do "Admin Ecossistema") voltava
+    sozinha no próximo restart do container, sem aviso e sem registro de auditoria - na prática,
+    permissão de perfil de sistema não era removível.
+
+    Esta tabela separa "o admin removeu de propósito" de "esta instalação nunca viu esta
+    permissão": a semeadura passa a acontecer UMA vez por (perfil de sistema, permissão). Assim a
+    remoção fica de pé, e uma permissão nova que entre em `ROLE_PERMISSIONS` no futuro (módulo
+    novo) continua chegando aos perfis existentes na primeira subida depois do deploy.
+
+    A chave é `legacy_role` e não `profile_id` de propósito: sobrevive à exclusão do perfil, então
+    perfil de sistema excluído pela tela também não é recriado no próximo start.
+    """
+
+    __tablename__ = "access_profile_permission_seeds"
+    __table_args__ = (UniqueConstraint("legacy_role", "permission", name="uq_access_profile_permission_seed"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    legacy_role: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    permission: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    seeded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
 class UserAccessProfile(Base):
     __tablename__ = "user_access_profiles"
     __table_args__ = (UniqueConstraint("user_id", "profile_id", name="uq_user_access_profile"),)
@@ -186,6 +213,60 @@ class UserAccessProfile(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class CustomPermission(Base):
+    """Permissão criada pela própria tela de Administração (aba Permissões), não declarada em código.
+
+    O catálogo efetivo é a UNIÃO de `PERMISSION_LABELS` (app/core/security.py, permissões do
+    sistema - as que as rotas do backend exigem) com as linhas desta tabela. A separação é o que
+    permite excluir permissão pela tela sem risco: chave de código não é excluível (apagar o
+    rótulo deixaria a rota inalcançável, sem aviso); chave criada aqui é.
+
+    Uma permissão própria é um marcador de acesso concedível/revogável - ela aparece em
+    `user.permissions` e pode ser lida por integração ou tela, mas não protege rota nenhuma do
+    backend por si só, porque rota é código. Ver aba Permissões, que diz isso na tela.
+    """
+
+    __tablename__ = "custom_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Chave do módulo do registry a que a permissão pertence (só para agrupar na tela). Null =
+    # "Outras permissões".
+    module_key: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    # Mesmo significado de `SENSITIVE_PERMISSIONS`: fica fora do "Selecionar módulo" em lote.
+    sensitive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class WorkspaceModuleSetting(Base):
+    """Ajuste do admin sobre um módulo declarado em código (`app/modules/registry.py`).
+
+    Sobrepõe só o que é apresentação e disponibilidade - nome, descrição, status e ordem. Rota web,
+    prefixo de API e permissão mínima continuam vindo do código de propósito: mudar a permissão
+    mínima pela tela deixaria o módulo visível para quem as rotas dele vão recusar com 403 (as
+    rotas validam as próprias permissões, escritas em código), o que é pior que não poder editar.
+
+    Campo nulo = "usa o valor do registry". Excluir a linha volta o módulo ao padrão.
+    """
+
+    __tablename__ = "workspace_module_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    module_key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    sort_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
 
 class WorkspaceModuleVisibility(Base):

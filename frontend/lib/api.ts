@@ -2,6 +2,7 @@ import type {
   AppSetting,
   AccessProfile,
   AdminWorkspaceModule,
+  AdminWorkspaceModuleSettingsPatch,
   AdminForcePasswordResetResult,
   AdminPeopleStructure,
   AdminPersonStructure,
@@ -53,6 +54,7 @@ import type {
   Notification,
   EcosystemPermission,
   Permission,
+  PermissionKey,
   PenaltyRule,
   PointBalanceEntry,
   PortalOrder,
@@ -131,6 +133,22 @@ function sessionCacheKey(path: string) {
   return `${authToken ?? ""}:${path}`;
 }
 
+/**
+ * Descarta uma entrada do cache de sessão (ou o cache inteiro, sem argumento).
+ *
+ * Existe para a mudança que a PRÓPRIA tela acabou de fazer aparecer na hora, sem esperar os 30
+ * segundos. Achado real (2026-09-09): renomear um módulo na Administração atualizava a tabela na
+ * hora, mas a barra lateral continuava com o nome antigo até o cache expirar - o que se lê na tela
+ * como "salvei e não mudou nada".
+ */
+export function invalidateSessionCache(path?: string) {
+  if (!path) {
+    sessionCache.clear();
+    return;
+  }
+  sessionCache.delete(sessionCacheKey(path));
+}
+
 /** Leitura SINCRONA do cache, para a tela nascer já com o dado em vez de começar carregando. */
 export function peekSessionCache<T>(path: string): T | null {
   const entry = sessionCache.get(sessionCacheKey(path));
@@ -206,6 +224,13 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
   }
 
+  // 204 (e 205/304) não têm corpo - `response.json()` estouraria com "Unexpected end of JSON
+  // input" numa resposta de sucesso. Aparece em exclusão que não devolve o recurso (ver
+  // `deleteEcosystemPermission`).
+  if (response.status === 204 || response.status === 205 || response.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
+
   return response.json() as Promise<T>;
 }
 
@@ -217,8 +242,15 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
 function extractApiErrorMessage(body: string, fallback: string): string {
   if (!body) return fallback;
   try {
-    const parsed = JSON.parse(body) as { detail?: string; message?: string };
+    const parsed = JSON.parse(body) as { detail?: string | Array<{ msg?: string }>; message?: string };
     if (typeof parsed.detail === "string" && parsed.detail) return parsed.detail;
+    // Erro de validação do Pydantic (422) vem como uma LISTA de objetos `{msg, loc, ...}`, não uma
+    // string - sem isto o JSON cru aparecia na tela. Mesmo tratamento que `lib/localiza-api.ts` já
+    // tinha (achado real registrado em docs/STATUS.md como pendência deste arquivo).
+    if (Array.isArray(parsed.detail) && parsed.detail.length > 0) {
+      const messages = parsed.detail.map((item) => item?.msg).filter((msg): msg is string => Boolean(msg));
+      if (messages.length > 0) return messages.join(" ");
+    }
     if (typeof parsed.message === "string" && parsed.message) return parsed.message;
   } catch {
     // corpo nao e JSON valido - cai no fallback abaixo (texto cru)
@@ -336,21 +368,47 @@ export const api = {
     request<PortalAccessRequest>(`/access-requests/${id}/reject`, { method: "POST", body: JSON.stringify(payload) }),
   operationRegionals: () => request<string[]>("/admin/operation-regionals"),
   ecosystemPermissions: () => request<EcosystemPermission[]>("/admin/permissions"),
+  createEcosystemPermission: (payload: {
+    key: string;
+    label: string;
+    module_key?: string | null;
+    description?: string | null;
+    sensitive?: boolean;
+  }) =>
+    request<EcosystemPermission>("/admin/permissions", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateEcosystemPermission: (
+    key: string,
+    payload: { label?: string; module_key?: string | null; description?: string | null; sensitive?: boolean; active?: boolean }
+  ) =>
+    request<EcosystemPermission>(`/admin/permissions/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  deleteEcosystemPermission: (key: string) =>
+    request<void>(`/admin/permissions/${encodeURIComponent(key)}`, {
+      method: "DELETE"
+    }),
   accessProfiles: () => request<AccessProfile[]>("/admin/access-profiles"),
-  createAccessProfile: (payload: { name: string; description?: string | null; active: boolean; permission_keys: Permission[] }) =>
+  createAccessProfile: (payload: { name: string; description?: string | null; active: boolean; permission_keys: PermissionKey[] }) =>
     request<AccessProfile>("/admin/access-profiles", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  updateAccessProfile: (id: number, payload: { name?: string; description?: string | null; active?: boolean; permission_keys?: Permission[] }) =>
+  updateAccessProfile: (id: number, payload: { name?: string; description?: string | null; active?: boolean; permission_keys?: PermissionKey[] }) =>
     request<AccessProfile>(`/admin/access-profiles/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
-  deleteAccessProfile: (id: number) =>
-    request<AccessProfile>(`/admin/access-profiles/${id}`, {
-      method: "DELETE"
-    }),
+  /** `reassignProfileId` é exigido pelo backend quando o perfil tem usuários vinculados: eles são
+   *  movidos para o perfil informado na mesma transação (ver `delete_access_profile`). */
+  deleteAccessProfile: (id: number, reassignProfileId?: number | null) =>
+    request<AccessProfile>(
+      `/admin/access-profiles/${id}${reassignProfileId ? `?reassign_profile_id=${reassignProfileId}` : ""}`,
+      { method: "DELETE" }
+    ),
   workspaceModules: () => request<WorkspaceVisibleModule[]>("/workspace/modules"),
   adminModules: () => request<AdminWorkspaceModule[]>("/admin/modules"),
   updateAdminModuleVisibility: (moduleKey: string, payload: { profile_id: number; visible: boolean; reason?: string | null }) =>
@@ -366,6 +424,12 @@ export const api = {
   deleteAdminModuleUserVisibility: (moduleKey: string, userId: number) =>
     request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/user-visibility/${userId}`, {
       method: "DELETE"
+    }),
+  /** Nome, descrição, status e ordem do módulo. Campo enviado em branco volta ao padrão do código. */
+  updateAdminModuleSettings: (moduleKey: string, payload: AdminWorkspaceModuleSettingsPatch) =>
+    request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/settings`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
     }),
   adminPeopleStructure: () => request<AdminPeopleStructure>("/admin/people-structure"),
   updateAdminPersonStructure: (

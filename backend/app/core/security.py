@@ -17,7 +17,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import AccessProfile, AccessProfilePermission, User, UserAccessProfile
+from app.models import (
+    AccessProfile,
+    AccessProfilePermission,
+    AccessProfilePermissionSeed,
+    User,
+    UserAccessProfile,
+)
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "collaborator": {
@@ -178,6 +184,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "admin:roles:read",
         "admin:roles:write",
         "admin:permissions:read",
+        "admin:permissions:write",
         "admin:modules:read",
         "admin:modules:write",
         "admin:audit:read",
@@ -257,6 +264,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "admin:roles:read": "Administração: listar perfis",
     "admin:roles:write": "Administração: criar/editar perfis",
     "admin:permissions:read": "Administração: listar permissões",
+    "admin:permissions:write": "Administração: criar/editar/excluir permissões próprias",
     "admin:modules:read": "Administração: listar módulos",
     "admin:modules:write": "Administração: alterar visibilidade de módulos",
     "admin:audit:read": "Administração: ver auditoria",
@@ -442,10 +450,28 @@ def require_portal_access(permission: str):
 
 
 def ensure_access_profiles(db: Session) -> None:
+    """Cria os perfis de sistema e semeia as permissões deles UMA vez por (perfil, permissão).
+
+    O "uma vez" é o ponto (ver `AccessProfilePermissionSeed` em models.py): antes, esta função
+    rodava a cada start do backend fazendo `permissions - existing` e devolvia sozinha qualquer
+    permissão que o admin tivesse removido na tela de Perfis de Acesso. Agora ela só concede o que
+    esta instalação nunca semeou - remoção feita na tela fica de pé, e permissão nova que entre em
+    `ROLE_PERMISSIONS` (módulo novo) ainda chega aos perfis existentes na primeira subida.
+    """
+    seeded_by_role: dict[str, set[str]] = {}
+    for item in db.scalars(select(AccessProfilePermissionSeed)):
+        seeded_by_role.setdefault(item.legacy_role, set()).add(item.permission)
+
     for legacy_role, permissions in ROLE_PERMISSIONS.items():
         name, description = PROFILE_LABELS[legacy_role]
+        already_seeded = seeded_by_role.get(legacy_role, set())
         profile = db.scalar(select(AccessProfile).where(AccessProfile.legacy_role == legacy_role))
         if not profile:
+            # Perfil de sistema com histórico de semeadura e sem linha no banco = excluído de
+            # propósito pela tela de Perfis de Acesso. Recriar aqui desfaria a exclusão no restart,
+            # exatamente o problema que esta função tinha com permissão.
+            if already_seeded:
+                continue
             profile = AccessProfile(
                 name=name,
                 description=description,
@@ -456,8 +482,10 @@ def ensure_access_profiles(db: Session) -> None:
             db.add(profile)
             db.flush()
         existing = {item.permission for item in profile.permissions}
-        for permission in permissions - existing:
-            db.add(AccessProfilePermission(profile_id=profile.id, permission=permission))
+        for permission in sorted(permissions - already_seeded):
+            if permission not in existing:
+                db.add(AccessProfilePermission(profile_id=profile.id, permission=permission))
+            db.add(AccessProfilePermissionSeed(legacy_role=legacy_role, permission=permission))
 
     db.flush()
     for user in db.scalars(select(User)).all():

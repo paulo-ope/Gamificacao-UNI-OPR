@@ -17,6 +17,110 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **Administração avançada e parametrizável: catálogo de permissões, exclusão que fica de pé e
+  módulo editável pela tela** (2026-09-09, usuário: "Preciso validar a aba adm para o modulo novo
+  que não está em alguns lugares, preciso melhorar o modulo adm podendo excluir permissão... deixar
+  esse modulo avançado e 100% parametrizavel" → escolheu, no diagnóstico: corrigir o restart que
+  devolve permissão, criar/excluir permissões próprias, excluir perfil, Localiza nos lugares que
+  faltavam, módulos editáveis e uma aba de Permissões nova).
+
+  - **O bug central era o restart do backend, não a tela.** `ensure_access_profiles`
+    (`core/security.py`) roda a cada start e fazia `permissions - existing` -> `db.add(...)`: só
+    somava. Qualquer permissão removida na tela de Perfis voltava sozinha na próxima subida do
+    container, sem aviso e sem auditoria - na prática, permissão de perfil de sistema NÃO era
+    removível, e nada na tela dizia isso. Agora a semeadura acontece **uma vez por (perfil de
+    sistema, permissão)**, registrada em `access_profile_permission_seeds` (migration
+    `20260909_0088`, aditiva). A contrapartida foi preservada de propósito: permissão nova que entre
+    em `ROLE_PERMISSIONS` (módulo novo) ainda chega aos perfis existentes na primeira subida - foi
+    exatamente assim que `admin:permissions:write` (criada nesta rodada) entrou sozinha no "Admin
+    Ecossistema" do banco real, confirmado por leitura direta.
+    **Backfill consciente**: a migration registra o que os perfis de sistema TÊM hoje; se alguém
+    removeu algo antes deste deploy, volta uma última vez e a partir dali a remoção fica de pé.
+
+  - **Excluir perfil de acesso deixou de ser beco sem saída** (`admin/router.py`).
+    Perfil de sistema virou excluível - o bloqueio antigo existia porque a semeadura o recriava no
+    restart, então "excluir" era ilusão. Perfil vinculado a usuários respondia 409 sem oferecer
+    saída nenhuma pela tela; agora a exclusão aceita `reassign_profile_id` e MOVE as pessoas na
+    mesma transação. A reatribuição é **exigida**, não opcional: usuário sem nenhum perfil cai no
+    conjunto do papel legado (`permissions_for_user`), o que poderia AMPLIAR o acesso em silêncio.
+    Trava nova contra lockout: o último perfil ativo que concede `admin:users:write` não pode ser
+    excluído **nem inativado** (os dois caminhos levam ao mesmo estrago). A tela mostra o motivo em
+    texto em vez de esconder o botão - "não consigo excluir e não sei por quê" era o pedido.
+    **Bug de UI corrigido junto**: `deleteProfileAction` não tinha `try/catch`, então o 409 do
+    backend estourava sem nada aparecer e o clique parecia simplesmente não ter efeito.
+
+  - **Catálogo de permissões = código + próprias** (`admin/permissions_service.py`, novo).
+    Permissão **do sistema** vem de `PERMISSION_LABELS` e é o que as rotas exigem: revogável de
+    qualquer perfil, nunca excluível do catálogo (apagar o rótulo não apagaria a exigência da rota,
+    só deixaria a rota inalcançável sem aviso). Permissão **própria** vive em `custom_permissions` e
+    é excluível enquanto nenhum perfil a usar. Chave normalizada e validada no formato
+    `modulo:acao`, nunca renomeável (perfis a referenciam por texto). **Limite dito na própria
+    tela**: permissão própria é marcador de acesso concedível/revogável, não passa a proteger rota
+    do backend por si só, porque rota é código.
+
+  - **Aba Permissões nova** (`components/admin/permissions-panel.tsx`): catálogo agrupado por
+    módulo com **uso de cada permissão** (quantos perfis, quantas pessoas - pessoa conta uma vez só,
+    a pergunta é "quem perde o acesso se eu revogar"), filtro por origem, busca, e o ciclo de vida
+    das próprias. Exige `admin:permissions:read`; criar/editar/excluir exige
+    `admin:permissions:write` (permissão nova, marcada como sensível junto com
+    `admin:modules:write`: quem redesenha o controle de acesso não entra de carona num "Selecionar
+    módulo").
+
+  - **Módulo do ecossistema parametrizável** (`admin/modules_service.py`, novo +
+    `workspace_module_settings`): nome, descrição, status e ordem passam a ser editáveis pela tela,
+    sobrepondo `modules/registry.py`; campo em branco volta ao padrão. **Rota web, prefixo de API e
+    permissão mínima continuam só em código, de propósito** - as rotas validam as próprias
+    permissões, então trocar a permissão mínima pela tela deixaria o módulo visível para quem vai
+    levar 403 em tudo lá dentro, o que é pior que não poder editar. `/admin/modules` e
+    `/workspace/modules` passaram a ler a MESMA fonte, então não existe módulo "desativado na
+    Administração e visível na barra lateral".
+
+  - **UNI Localiza: os 5 lugares onde o módulo novo não estava.** (1) O agrupamento de permissão por
+    módulo era lista escrita à mão no router e o Localiza - criado depois dela - caía em "Outras
+    permissões", **o único módulo ativo nessa condição**; agora é DERIVADO do registry (prefixo da
+    permissão mínima), com teste-trava garantindo que nenhuma permissão de código caia no grupo
+    genérico. (2) A "Central de parametrizações" era uma lista fixa de 6 módulos; virou derivada da
+    lista que a tela já carrega. (3) `WorkspaceVisibleModule["key"]` estava travado em 6 chaves
+    (faltavam `intelligence` e `localiza`) e a união `Permission` não tinha
+    `portal:update_self_profile` nem `ai:query` - alinhadas ao backend via `WorkspaceModuleKey` e
+    `PermissionKey`. (4) Era o único módulo ativo **sem telas** em `lib/module-screens.ts`, então o
+    menu lateral não oferecia nenhum destino dentro dele; ganhou `LOCALIZA_NAV_ITEMS` (lista única,
+    usada pela página e pelo menu). (5) A página ignorava `?tab=`, então o link do submenu não
+    abriria a aba certa - passou a ler, no mesmo padrão da Administração.
+
+  - **Dois achados durante a verificação ao vivo, corrigidos**: renomear módulo atualizava a tabela
+    na hora mas a barra lateral ficava até 30s com o nome antigo (cache de sessão de
+    `/workspace/modules`), o que se lê como "salvei e não mudou nada" - resolvido com
+    `invalidateSessionCache` + evento que a casca escuta (`notifyWorkspaceModulesChanged`). E o
+    painel novo **vazava a página de lado em 375px** (`body.scrollWidth` 918 contra 375 de tela):
+    item de grid nasce com `min-width: auto` e não encolhe abaixo do conteúdo, então a tabela de
+    860px esticava o card em vez de rolar dentro dele - resolvido com `min-w-0` na cadeia.
+
+  - **`lib/api.ts`: pendência anterior fechada.** O 422 do Pydantic (lista de objetos) aparecia como
+    JSON cru na tela - mesmo bug que já tinha sido corrigido em `lib/localiza-api.ts` e ficara
+    registrado aqui como pendência. Junto, respostas 204 (exclusão sem corpo) não estouram mais em
+    `response.json()`.
+
+  - **Verificado ao vivo no ambiente real desta máquina** (containers reconstruídos oficialmente via
+    `docker compose build`, migration aplicada no start): permissões do Localiza agrupadas sob "UNI
+    Localiza" com uso real; permissão própria criada, atribuída a perfil e excluída pela tela;
+    chave inválida mostrando mensagem legível em vez de JSON cru; módulo renomeado refletindo na
+    barra lateral, desativado saindo da navegação na hora e restaurado ao padrão; "Admin
+    Ecossistema" com exclusão bloqueada **e o motivo escrito na tela**; "Leitor Operacional" com o
+    seletor "Mover N pessoas para"; deep link `?tab=mapa` abrindo a aba certa; 375px sem vazamento
+    horizontal e com a tabela rolando dentro do card.
+    **Dado de teste sempre descartável e removido ao final** (usuário de QA + permissão de QA);
+    `custom_permissions` e `workspace_module_settings` voltaram a 0 linhas, nenhum perfil ou conta
+    real foi alterado. 30 testes novos de backend e 11 de frontend; suíte completa com conjunto de
+    falhas **idêntico ao baseline** (as pré-existentes do runner ad-hoc), 909 passando contra 882.
+    O drawer de parametrização de módulo não foi exercitado em 375px de forma interativa (o painel
+    do navegador ficou oculto e os cliques passaram a expirar) - segue o mesmo padrão de sheet
+    mobile dos outros drawers do projeto.
+
+  - **Pendência registrada**: permissão POR USUÁRIO (conceder/negar direto na pessoa, sem criar um
+    perfil só pra ela) foi oferecida no diagnóstico e o usuário não escolheu nesta rodada. Hoje o
+    caminho é perfil + exceção de visibilidade de módulo.
+
 - **Visão Geral: 3 "ganhos rápidos" de uma análise premium pedida pelo usuário** (2026-09-08/09,
   "Faça uma análise de como deixar mais premium" → usuário escolheu começar pelos ganhos rápidos).
   - **Fluxo diário desinchado**: a linha "Saldo" (abertas − finalizadas) saiu do desenho do
