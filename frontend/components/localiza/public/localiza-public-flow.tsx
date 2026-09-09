@@ -89,12 +89,43 @@ function InAppBrowserWarning() {
   );
 }
 
-// Guia de "como ativar a localização" - só aparece quando o navegador nega a permissão
-// (PERMISSION_DENIED), que é justamente quando o cliente está com a localização desligada e
-// precisa de instrução, não só de um aviso genérico (pedido explícito do usuário).
-function LocationHelpGuide() {
-  const [tab, setTab] = useState<"android" | "iphone">("android");
-  const [open, setOpen] = useState(false);
+function detectPlatform(): "android" | "iphone" {
+  if (typeof navigator === "undefined") return "android";
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent || "") ? "iphone" : "android";
+}
+
+// Computador não tem GPS: mesmo com a permissão liberada, a posição vem de Wi-Fi/IP (centenas de
+// metros a quilômetros). Não é problema de permissão e nenhuma configuração resolve - por isso o
+// aviso é outro (usar o celular), não o guia de permissão.
+function isDesktop(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+}
+
+function DesktopWarning() {
+  return (
+    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+      <p className="font-medium">Você está num computador.</p>
+      <p className="mt-1">
+        Computadores não têm GPS - a posição sai por Wi-Fi/internet, com vários quilômetros de erro. Para a equipe
+        achar o endereço certo, <strong>abra este mesmo link pelo celular</strong>.
+      </p>
+    </div>
+  );
+}
+
+// Guia de "como ativar a localização" - aparece quando a permissão é negada ou quando a precisão
+// vem ruim demais pra despachar equipe.
+//
+// Não existe API pra "elevar" permissão: nenhum site pode ligar o GPS, trocar a localização
+// aproximada por precisa, nem forçar um novo pedido depois de negado (trava do sistema
+// operacional). O que dá pra fazer é encurtar o caminho - por isso o guia (a) detecta o aparelho
+// e mostra só os passos daquele sistema, (b) começa ABERTO quando já se sabe que é necessário, e
+// (c) mostra primeiro o atalho DENTRO do navegador, que resolve sem abrir o app de Ajustes
+// (pedido do usuário em 2026-09-08: "muitos têm que acessar as config").
+function LocationHelpGuide({ defaultOpen = false }: { defaultOpen?: boolean }) {
+  const [tab, setTab] = useState<"android" | "iphone">(detectPlatform);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
       <button
@@ -126,22 +157,49 @@ function LocationHelpGuide() {
             </button>
           </div>
           {tab === "android" ? (
-            <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-slate-600">
-              <li>Abra as Configurações do celular e toque em Localização - ative a opção.</li>
-              <li>
-                Ainda em Localização, entre em Permissões {'>'} o seu navegador e ative também
-                <strong> &quot;Usar localização precisa&quot;</strong> - sem ela o Android envia só a posição aproximada
-                (vários quilômetros), por mais que se espere.
-              </li>
-              <li>No navegador, toque no cadeado ao lado do endereço, depois em Permissões e permita Localização.</li>
-              <li>Volte aqui e toque em "Tentar novamente".</li>
-            </ol>
+            <>
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Sem sair desta tela</p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>Toque no <strong>cadeado</strong> (ou no ícone ao lado do endereço, no topo).</li>
+                <li>Toque em <strong>Permissões</strong> {'>'} <strong>Localização</strong> e escolha Permitir.</li>
+                <li>Volte aqui e toque em &quot;Tentar localizar novamente&quot;.</li>
+              </ol>
+              <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Se continuar impreciso (quilômetros)
+              </p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>Configurações do celular {'>'} <strong>Localização</strong> - ative.</li>
+                <li>
+                  Ainda em Localização: <strong>Permissões</strong> {'>'} seu navegador {'>'} ative
+                  <strong> &quot;Usar localização precisa&quot;</strong>. Sem ela o Android manda só a posição
+                  aproximada, por mais que se espere.
+                </li>
+              </ol>
+            </>
           ) : (
-            <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-slate-600">
-              <li>Abra Ajustes {'>'} Privacidade e Segurança {'>'} Serviços de Localização - ative a opção.</li>
-              <li>Role até o Safari (ou o navegador usado) e escolha "Perguntar" ou "Permitir".</li>
-              <li>Volte aqui e toque em "Tentar novamente".</li>
-            </ol>
+            <>
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Sem sair desta tela</p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>
+                  Toque em <strong>&quot;aA&quot;</strong> (à esquerda do endereço, no topo da tela).
+                </li>
+                <li>
+                  Toque em <strong>Ajustes do Site</strong> {'>'} <strong>Localização</strong> e escolha
+                  <strong> Permitir</strong> (ou Perguntar).
+                </li>
+                <li>Volte aqui e toque em &quot;Tentar localizar novamente&quot;.</li>
+              </ol>
+              <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Se continuar impreciso (quilômetros)
+              </p>
+              <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs text-slate-600">
+                <li>Ajustes {'>'} Privacidade e Segurança {'>'} <strong>Serviços de Localização</strong> - ative.</li>
+                <li>
+                  Na mesma tela, role até o <strong>Safari</strong>, escolha &quot;Ao Usar o App&quot; e ative
+                  <strong> &quot;Localização Precisa&quot;</strong>.
+                </li>
+              </ol>
+            </>
           )}
         </div>
       ) : null}
@@ -164,6 +222,35 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
   const watchIdRef = useRef<number | null>(null);
   const refineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bestFixRef = useRef<GpsFix | null>(null);
+  // Estado da permissão informado pelo próprio navegador (Chrome no Android e no PC; o Safari não
+  // expõe geolocalização aqui, e aí fica "unknown" e o fluxo segue normal). Serve pra dois ganhos
+  // reais: avisar que está BLOQUEADO antes de a pessoa tentar e falhar, e perceber sozinho quando
+  // ela ajustou nas configurações e voltou - sem depender de ela adivinhar que precisa tentar de
+  // novo. Não existe forma de ELEVAR a permissão por código: só de saber em que pé ela está.
+  const [permissionState, setPermissionState] = useState<"granted" | "denied" | "prompt" | "unknown">("unknown");
+
+  useEffect(() => {
+    let cancelled = false;
+    let status: PermissionStatus | null = null;
+    async function checkPermission() {
+      try {
+        if (typeof navigator === "undefined" || !navigator.permissions?.query) return;
+        status = await navigator.permissions.query({ name: "geolocation" as PermissionName });
+        if (cancelled || !status) return;
+        setPermissionState(status.state);
+        status.onchange = () => {
+          if (!cancelled && status) setPermissionState(status.state);
+        };
+      } catch {
+        // Navegador sem suporte (Safari) - segue sem antecipar o estado, nada quebra.
+      }
+    }
+    void checkPermission();
+    return () => {
+      cancelled = true;
+      if (status) status.onchange = null;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -342,6 +429,25 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             {/* Avisa ANTES de tentar: no navegador embutido do app a tentativa quase sempre volta
                 imprecisa, e a pessoa perde a viagem duas vezes (tentar, falhar, trocar, repetir). */}
             {isInAppBrowser() ? <InAppBrowserWarning /> : null}
+            {!isInAppBrowser() && isDesktop() ? <DesktopWarning /> : null}
+
+            {/* O navegador já disse que está bloqueado: não faz sentido a pessoa tocar no botão e
+                receber um erro - mostra o caminho direto. */}
+            {permissionState === "denied" && !permissionDenied ? (
+              <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                A localização está <strong>bloqueada</strong> para este site no seu navegador. Libere pelo caminho
+                abaixo e o botão volta a funcionar.
+              </div>
+            ) : null}
+            {permissionState === "denied" ? <LocationHelpGuide defaultOpen /> : null}
+
+            {/* Reagiu sozinho: a pessoa liberou nas configurações e voltou - confirma que já pode
+                seguir, em vez de deixar ela na dúvida se precisa fazer mais alguma coisa. */}
+            {permissionState === "granted" && (permissionDenied || error) ? (
+              <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                Permissão liberada. Toque em <strong>&quot;Compartilhar minha localização&quot;</strong> para continuar.
+              </div>
+            ) : null}
             <Button className="mt-4 w-full" onClick={shareLocation} disabled={step === "locating"}>
               {step === "locating" ? (
                 <>
@@ -370,7 +476,7 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             ) : null}
 
             {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
-            {permissionDenied ? <LocationHelpGuide /> : null}
+            {permissionDenied ? <LocationHelpGuide defaultOpen /> : null}
           </div>
         ) : null}
 
@@ -389,7 +495,7 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             {blockedByAccuracy ? (
               <>
                 {isInAppBrowser() ? <InAppBrowserWarning /> : null}
-                <LocationHelpGuide />
+                <LocationHelpGuide defaultOpen />
               </>
             ) : null}
 
