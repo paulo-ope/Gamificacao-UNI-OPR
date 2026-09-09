@@ -66,6 +66,13 @@ export function OverviewRegionalTable({
     () => new Map((capacity ?? []).map((item) => [item.regional, item] as const)),
     [capacity],
   );
+  // Achado real da análise "premium" (2026-09-08): em produção NENHUMA filial tem meta
+  // cadastrada (`operations_branch_capacity` com 0 linhas) - a coluna inteira só mostrava "sem
+  // meta cadastrada" repetido, sem informar nada. Some a coluna até a primeira meta existir, em
+  // vez de exibir uma coluna cinza sem função; volta sozinha assim que alguém cadastrar a
+  // primeira faixa (não depende de mexer aqui de novo).
+  const hasAnyCapacity = Boolean(capacity && capacity.length > 0);
+  const visibleColumns = hasAnyCapacity ? COLUMNS : COLUMNS.filter((column) => column.key !== "capacity");
   const [sort, setSort] = useState<{ key: SortKey; direction: "asc" | "desc" }>({
     key: "opened",
     direction: "desc",
@@ -109,7 +116,7 @@ export function OverviewRegionalTable({
         <Table className="min-w-[720px]">
           <TableHeader>
             <TableRow>
-              {COLUMNS.map((column) => (
+              {visibleColumns.map((column) => (
                 <TableHead
                   key={column.key}
                   className={cn("align-bottom", column.align === "right" && "text-right")}
@@ -154,9 +161,11 @@ export function OverviewRegionalTable({
                 >
                   {formatPercent(item.sla_rate)}
                 </TableCell>
-                <TableCell>
-                  <CapacityBadge item={capacityByRegional.get(item.regional)} />
-                </TableCell>
+                {hasAnyCapacity ? (
+                  <TableCell>
+                    <CapacityBadge item={capacityByRegional.get(item.regional)} />
+                  </TableCell>
+                ) : null}
                 {onDrillRegional ? (
                   <TableCell className="text-right">
                     <Button
@@ -180,7 +189,7 @@ export function OverviewRegionalTable({
                 <TableCell className="text-right tabular-nums">{formatInteger(data.total.backlog)}</TableCell>
                 <TableCell className="text-right tabular-nums">{formatInteger(data.total.completed)}</TableCell>
                 <TableCell className="text-right tabular-nums">{formatPercent(data.total.sla_rate)}</TableCell>
-                <TableCell />
+                {hasAnyCapacity ? <TableCell /> : null}
                 {onDrillRegional ? <TableCell /> : null}
               </TableRow>
             ) : null}

@@ -13,9 +13,33 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-08** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-09** — branch `claude/suporte-sync-backfill-madrugada`
 
 ## O que foi feito recentemente
+
+- **Visão Geral: 3 "ganhos rápidos" de uma análise premium pedida pelo usuário** (2026-09-08/09,
+  "Faça uma análise de como deixar mais premium" → usuário escolheu começar pelos ganhos rápidos).
+  - **Fluxo diário desinchado**: a linha "Saldo" (abertas − finalizadas) saiu do desenho do
+    gráfico - com a linha de período anterior (item anterior desta sessão) o gráfico acumulava até
+    4 linhas, duas tracejadas em cores próximas, competindo com as barras. O dado não sumiu: virou
+    texto no tooltip (`formatter` custom em `buildOverviewOpeningsTrendOption`,
+    `lib/overview-chart-options.ts`), junto com "Associadas ao responsável" (que também saiu do
+    canvas, só quando o filtro de responsável está ativo).
+  - **Cards de KPI sinalizam alerta pelo card inteiro, não só pelo texto**: quando o tom é
+    vermelho/âmbar (SLA abaixo da meta, saldo negativo, backlog com atraso), a borda e o fundo do
+    card ganham a mesma cor - achado real validando: com os 5 cards no mesmo branco neutro, nada
+    puxava o olho pro que estava ruim primeiro. Implementado só em `overview-kpi-strip.tsx`
+    (`alertCardClass`, via `className` do `SummaryMetric`), sem tocar no componente compartilhado.
+  - **Achado real, não só estético: "Meta da filial" está vazia pra TODAS as filiais em produção**
+    - `operations_branch_capacity` tem **0 linhas** no banco real (confirmado por leitura direta).
+    A coluna inteira só mostrava "sem meta cadastrada" repetido, sem informar nada. Ela agora some
+    da tabela (`overview-regional-table.tsx`, `hasAnyCapacity`) até a primeira meta ser cadastrada
+    - volta sozinha, sem precisar mexer em código de novo. **Fica registrado como pendência real**:
+    vale decidir se compensa cadastrar metas de capacidade pras filiais, ou se a funcionalidade
+    deve ser descontinuada.
+  - Verificado ao vivo numa base sintética (tooltip mostrando Abertas/Finalizadas/Saldo/período
+    anterior por completo; cards SLA e Entrada×Vazão com fundo âmbar/vermelho; coluna Meta ausente
+    da tabela). Frontend de produção desta máquina reconstruído e reiniciado.
 
 - **UNI Localiza — módulo novo: link de geolocalização para o cliente compartilhar posição por GPS**
   (2026-09-08, MVP completo + 4 rodadas de ajuste a partir de teste ao vivo do usuário). Atendente

@@ -447,7 +447,7 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           description={
             "Barras são O.S. abertas (demanda, sem recorte de equipe); a linha verde são as finalizações, que respeitam todos os filtros" +
             (previousTrendForCharts ? "; a linha cinza tracejada é a mesma finalização, no período anterior" : "") +
-            ". Clique num dia pra detalhar só ele."
+            ". Saldo do dia no tooltip. Clique num dia pra detalhar só ele."
           }
           badge={periodLabel}
           option={openingsOption}

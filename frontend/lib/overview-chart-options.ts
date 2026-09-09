@@ -10,10 +10,17 @@ const shareFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 })
 
 /**
  * Fluxo diário da Visão Geral: mesmo desenho de `buildOpeningsTrendOption` (módulo de Operação) -
- * abertas (barra), finalizadas (linha) e saldo (linha tracejada) - com UMA linha a mais quando
- * há período anterior disponível: finalizadas do período anterior, pra comparar o FORMATO da
- * curva, não só o total agregado (que os cards do topo já mostram). Pedido do usuário,
- * 2026-09-08: "trazer... linha comparando com um período anterior".
+ * abertas (barra) e finalizadas (linha) - com UMA linha a mais quando há período anterior
+ * disponível: finalizadas do período anterior, pra comparar o FORMATO da curva, não só o total
+ * agregado (que os cards do topo já mostram). Pedido do usuário, 2026-09-08: "trazer... linha
+ * comparando com um período anterior".
+ *
+ * "Saldo" (abertas − finalizadas) e "Associadas ao responsável" (que a versão do módulo de
+ * Operação desenha como linha) saíram do CANVAS aqui - achado da análise "premium" pedida pelo
+ * usuário, 2026-09-08: com a linha de período anterior somada às duas, o gráfico acumulava 3-4
+ * linhas (duas tracejadas, cores próximas) competindo com as barras. Continuam disponíveis, só
+ * que como TEXTO no tooltip (`formatter` abaixo) - a informação não sumiu, só o traço a mais no
+ * desenho.
  *
  * Alinhamento por ÍNDICE (dia 1 do atual com dia 1 do anterior), não por data - os dois períodos
  * têm datas diferentes por definição. Só desalinha quando o período anterior é cortado no início
@@ -51,15 +58,6 @@ export function buildOverviewOpeningsTrendOption(
       lineStyle: { color: "#16a34a", width: 2.5 },
       itemStyle: { color: "#16a34a" },
     },
-    {
-      name: "Saldo",
-      type: "line",
-      data: trend.points.map((point) => point.opened_operation - point.completed),
-      smooth: 0.2,
-      symbolSize: 5,
-      lineStyle: { color: "#f59e0b", type: "dashed", width: 2 },
-      itemStyle: { color: "#f59e0b" },
-    },
   ];
   if (previousCompleted) {
     series.push({
@@ -74,17 +72,6 @@ export function buildOverviewOpeningsTrendOption(
       emphasis: { focus: "series" },
     });
   }
-  if (trend.responsible_filter_active) {
-    series.push({
-      name: "Associadas ao responsável",
-      type: "line",
-      data: trend.points.map((point) => point.opened_associated),
-      smooth: 0.2,
-      symbolSize: 5,
-      lineStyle: { color: "#f97316", type: "dotted", width: 2 },
-      itemStyle: { color: "#f97316" },
-    });
-  }
 
   return {
     animationDuration: 350,
@@ -94,6 +81,27 @@ export function buildOverviewOpeningsTrendOption(
       backgroundColor: "#0f172a",
       borderWidth: 0,
       textStyle: { color: "#f8fafc", fontSize: 11 },
+      formatter: (params: unknown) => {
+        const items = Array.isArray(params) ? params : [params];
+        const index = Number((items[0] as { dataIndex?: number } | undefined)?.dataIndex ?? 0);
+        const point = trend.points[index];
+        if (!point) return "";
+        const balance = point.opened_operation - point.completed;
+        const lines = [
+          `<strong>${labels[index]}</strong>`,
+          `Abertas: ${numberFormat.format(point.opened_operation)}`,
+          `Finalizadas: ${numberFormat.format(point.completed)}`,
+          `Saldo: ${balance > 0 ? "+" : ""}${numberFormat.format(balance)}`,
+        ];
+        if (previousCompleted) {
+          const prev = previousCompleted[index];
+          lines.push(`Finalizadas (período anterior): ${prev === null || prev === undefined ? "-" : numberFormat.format(prev)}`);
+        }
+        if (trend.responsible_filter_active) {
+          lines.push(`Associadas ao responsável: ${numberFormat.format(point.opened_associated)}`);
+        }
+        return lines.join("<br/>");
+      },
     },
     legend: {
       top: 8,

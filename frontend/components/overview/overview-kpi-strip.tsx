@@ -18,6 +18,18 @@ function pressureTone(opened: number, completed: number): Tone {
 }
 
 /**
+ * Card inteiro (borda + fundo) sinaliza alerta, não só o texto do valor - achado da análise
+ * "premium" pedida pelo usuário (2026-09-08): com os 5 cards no mesmo branco neutro, nada chamava
+ * o olho pro que estava ruim primeiro. Só pros tons de alerta de verdade (vermelho/âmbar); nunca
+ * pros tons neutros/informativos (azul, esmeralda de "tudo bem", cinza), que continuam brancos.
+ */
+function alertCardClass(tone: Tone): string | undefined {
+  if (tone === "red") return "border-red-200 bg-red-50/60";
+  if (tone === "amber") return "border-amber-200 bg-amber-50/60";
+  return undefined;
+}
+
+/**
  * Faixa de indicadores macro do período.
  *
  * Todo número aqui já vem calculado do backend - a tela só formata. O rótulo auxiliar de cada
@@ -84,6 +96,7 @@ export function OverviewKpiStrip({
         value={balance > 0 ? `+${formatInteger(balance)}` : formatInteger(balance)}
         icon={Scale}
         tone={pressureTone(opened, completed)}
+        className={alertCardClass(pressureTone(opened, completed))}
         hint={balance > 0 ? "Entrou mais do que saiu" : "Saiu mais do que entrou"}
       />
       <SummaryMetric
@@ -91,6 +104,7 @@ export function OverviewKpiStrip({
         value={formatInteger(backlog?.backlog ?? null)}
         icon={ListChecks}
         tone={backlog?.overdue_backlog ? "amber" : "slate"}
+        className={alertCardClass(backlog?.overdue_backlog ? "amber" : "slate")}
         hint={
           backlog?.overdue_backlog
             ? `${formatInteger(backlog.overdue_backlog)} fora do prazo · qualquer equipe`
@@ -103,6 +117,7 @@ export function OverviewKpiStrip({
           value={formatPercent(overview?.sla_rate ?? null)}
           icon={Gauge}
           tone={slaSystemTone(overview?.sla_rate ?? null)}
+          className={alertCardClass(slaSystemTone(overview?.sla_rate ?? null))}
           delta={delta(overview?.sla_rate, previous?.sla_rate, true)}
           hint="Finalizadas no prazo, com filtros"
         />
