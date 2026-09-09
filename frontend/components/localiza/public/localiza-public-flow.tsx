@@ -94,6 +94,26 @@ function detectPlatform(): "android" | "iphone" {
   return /iPhone|iPad|iPod/i.test(navigator.userAgent || "") ? "iphone" : "android";
 }
 
+// Computador não tem GPS: mesmo com a permissão liberada, a posição vem de Wi-Fi/IP (centenas de
+// metros a quilômetros). Não é problema de permissão e nenhuma configuração resolve - por isso o
+// aviso é outro (usar o celular), não o guia de permissão.
+function isDesktop(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+}
+
+function DesktopWarning() {
+  return (
+    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+      <p className="font-medium">Você está num computador.</p>
+      <p className="mt-1">
+        Computadores não têm GPS - a posição sai por Wi-Fi/internet, com vários quilômetros de erro. Para a equipe
+        achar o endereço certo, <strong>abra este mesmo link pelo celular</strong>.
+      </p>
+    </div>
+  );
+}
+
 // Guia de "como ativar a localização" - aparece quando a permissão é negada ou quando a precisão
 // vem ruim demais pra despachar equipe.
 //
@@ -202,6 +222,35 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
   const watchIdRef = useRef<number | null>(null);
   const refineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bestFixRef = useRef<GpsFix | null>(null);
+  // Estado da permissão informado pelo próprio navegador (Chrome no Android e no PC; o Safari não
+  // expõe geolocalização aqui, e aí fica "unknown" e o fluxo segue normal). Serve pra dois ganhos
+  // reais: avisar que está BLOQUEADO antes de a pessoa tentar e falhar, e perceber sozinho quando
+  // ela ajustou nas configurações e voltou - sem depender de ela adivinhar que precisa tentar de
+  // novo. Não existe forma de ELEVAR a permissão por código: só de saber em que pé ela está.
+  const [permissionState, setPermissionState] = useState<"granted" | "denied" | "prompt" | "unknown">("unknown");
+
+  useEffect(() => {
+    let cancelled = false;
+    let status: PermissionStatus | null = null;
+    async function checkPermission() {
+      try {
+        if (typeof navigator === "undefined" || !navigator.permissions?.query) return;
+        status = await navigator.permissions.query({ name: "geolocation" as PermissionName });
+        if (cancelled || !status) return;
+        setPermissionState(status.state);
+        status.onchange = () => {
+          if (!cancelled && status) setPermissionState(status.state);
+        };
+      } catch {
+        // Navegador sem suporte (Safari) - segue sem antecipar o estado, nada quebra.
+      }
+    }
+    void checkPermission();
+    return () => {
+      cancelled = true;
+      if (status) status.onchange = null;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -380,6 +429,25 @@ export function LocalizaPublicFlow({ token }: { token: string }) {
             {/* Avisa ANTES de tentar: no navegador embutido do app a tentativa quase sempre volta
                 imprecisa, e a pessoa perde a viagem duas vezes (tentar, falhar, trocar, repetir). */}
             {isInAppBrowser() ? <InAppBrowserWarning /> : null}
+            {!isInAppBrowser() && isDesktop() ? <DesktopWarning /> : null}
+
+            {/* O navegador já disse que está bloqueado: não faz sentido a pessoa tocar no botão e
+                receber um erro - mostra o caminho direto. */}
+            {permissionState === "denied" && !permissionDenied ? (
+              <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                A localização está <strong>bloqueada</strong> para este site no seu navegador. Libere pelo caminho
+                abaixo e o botão volta a funcionar.
+              </div>
+            ) : null}
+            {permissionState === "denied" ? <LocationHelpGuide defaultOpen /> : null}
+
+            {/* Reagiu sozinho: a pessoa liberou nas configurações e voltou - confirma que já pode
+                seguir, em vez de deixar ela na dúvida se precisa fazer mais alguma coisa. */}
+            {permissionState === "granted" && (permissionDenied || error) ? (
+              <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                Permissão liberada. Toque em <strong>&quot;Compartilhar minha localização&quot;</strong> para continuar.
+              </div>
+            ) : null}
             <Button className="mt-4 w-full" onClick={shareLocation} disabled={step === "locating"}>
               {step === "locating" ? (
                 <>
