@@ -26,6 +26,10 @@ const LIST_LIMIT = 500;
 // pra recolher a barra lateral/filtros em outras telas do ecossistema.
 const SCOPE_STORAGE_KEY = "localiza_list_scope";
 
+// Ciclo de atualização da lista. Mais espaçado que o do painel de detalhe (4s): aqui é uma visão
+// de acompanhamento, não a tela focada em um atendimento específico.
+const LIST_POLL_INTERVAL_MS = 10_000;
+
 export default function LocalizaPage() {
   return (
     <WorkspaceAppShell activePath="/localiza" title="UNI Localiza" subtitle="Link para o cliente compartilhar localização por GPS">
@@ -101,6 +105,34 @@ function LocalizaPageContent({ user }: { user: AuthUser }) {
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, dateFrom, dateTo, status, scope]);
+
+  // Atualização automática da LISTA enquanto houver solicitação pendente - sem isso o atendente
+  // fechava o painel de detalhe e a tela nunca mais mudava sozinha, obrigando a recarregar a
+  // página pra ver que o cliente já tinha confirmado (achado real, reportado pelo usuário).
+  // O painel de detalhe tem o seu próprio ciclo, mais curto, por ser uma tela focada num item só.
+  //
+  // Só na aba "Solicitações": na aba "Mapa", recarregar a lista redesenharia os marcadores e
+  // reenquadraria o mapa a cada ciclo, atrapalhando quem está navegando nele.
+  const hasPending = items.some((item) => item.status === "pending");
+  useEffect(() => {
+    if (!canRead || !hasPending || activeTab !== "solicitacoes") return;
+    const interval = setInterval(() => {
+      // Aba em segundo plano não precisa de atualização - evita chamada inútil no servidor.
+      if (document.visibilityState !== "visible") return;
+      void load({ search, dateFrom, dateTo, status, scope });
+    }, LIST_POLL_INTERVAL_MS);
+    // Voltar pra aba atualiza NA HORA, sem esperar o próximo ciclo: o caminho normal é o atendente
+    // sair pra mandar o link pelo WhatsApp e voltar querendo saber se o cliente já confirmou.
+    function refreshOnFocus() {
+      if (document.visibilityState === "visible") void load({ search, dateFrom, dateTo, status, scope });
+    }
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canRead, hasPending, activeTab, search, dateFrom, dateTo, status, scope]);
 
   function handleDateChange(key: "date_from" | "date_to", value: string) {
     if (key === "date_from") setDateFrom(value);
