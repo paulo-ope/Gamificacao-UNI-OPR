@@ -16,6 +16,11 @@ from app.models import (
     WorkspaceModuleSetting,
     WorkspaceModuleVisibility,
 )
+from app.modules.admin.user_permissions_service import (
+    overview as user_permission_overview,
+    remove_override as remove_user_permission_override,
+    set_override as set_user_permission_override,
+)
 from app.modules.operations.models import OperationOrder
 from app.services.documents import mask_document as _mask_document, normalize_document as _normalize_document
 from app.services.regional import normalize_regional
@@ -52,6 +57,9 @@ from app.modules.admin.schemas import (
     CustomPermissionCreate,
     CustomPermissionUpdate,
     EcosystemPermissionOut,
+    UserPermissionOverrideOut,
+    UserPermissionOverrideUpsert,
+    UserPermissionOverviewOut,
 )
 from app.services.audit_log import record_audit_log, snapshot
 
@@ -260,27 +268,29 @@ def _build_single_module_out(db: Session, module: EffectiveModule) -> AdminWorks
     return _admin_module_out(module, profiles, visibility_by_profile, users_by_id, visibility_by_user)
 
 
+def _permission_catalog_entry_out(entry) -> EcosystemPermissionOut:
+    return EcosystemPermissionOut(
+        key=entry.key,
+        label=entry.label,
+        module=entry.module,
+        module_key=entry.module_key,
+        sensitive=entry.sensitive,
+        custom=entry.custom,
+        description=entry.description,
+        profile_count=entry.profile_count,
+        user_count=entry.user_count,
+        profile_names=entry.profile_names,
+        override_count=entry.override_count,
+    )
+
+
 @router.get("/permissions", response_model=list[EcosystemPermissionOut])
 def list_permissions(
     db: Session = Depends(get_db),
     _: User = Depends(require_permission("admin:permissions:read")),
 ):
     """Catálogo completo: permissões de código + próprias, com o uso atual de cada uma."""
-    return [
-        EcosystemPermissionOut(
-            key=entry.key,
-            label=entry.label,
-            module=entry.module,
-            module_key=entry.module_key,
-            sensitive=entry.sensitive,
-            custom=entry.custom,
-            description=entry.description,
-            profile_count=entry.profile_count,
-            user_count=entry.user_count,
-            profile_names=entry.profile_names,
-        )
-        for entry in permission_catalog(db)
-    ]
+    return [_permission_catalog_entry_out(entry) for entry in permission_catalog(db)]
 
 
 @router.post("/permissions", response_model=EcosystemPermissionOut, status_code=201)
@@ -374,18 +384,7 @@ def _custom_permission_out(db: Session, permission_key: str) -> EcosystemPermiss
     entry = next((item for item in permission_catalog(db) if item.key == permission_key), None)
     if not entry:
         raise HTTPException(status_code=404, detail="Permissão não encontrada.")
-    return EcosystemPermissionOut(
-        key=entry.key,
-        label=entry.label,
-        module=entry.module,
-        module_key=entry.module_key,
-        sensitive=entry.sensitive,
-        custom=entry.custom,
-        description=entry.description,
-        profile_count=entry.profile_count,
-        user_count=entry.user_count,
-        profile_names=entry.profile_names,
-    )
+    return _permission_catalog_entry_out(entry)
 
 
 @router.get("/modules", response_model=list[AdminWorkspaceModuleOut])
@@ -753,3 +752,113 @@ def delete_access_profile(
     db.delete(profile)
     db.commit()
     return response
+
+
+def _require_target_user(db: Session, user_id: int) -> User:
+    target = db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    return target
+
+
+def _user_permission_overview_out(db: Session, target: User) -> UserPermissionOverviewOut:
+    data = user_permission_overview(db, target)
+    return UserPermissionOverviewOut(
+        user_id=target.id,
+        profile_permissions=data.profile_permissions,
+        overrides=[
+            UserPermissionOverrideOut(
+                permission=item.permission,
+                label=item.label,
+                module=item.module,
+                effect=item.effect,
+                reason=item.reason,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+            for item in data.overrides
+        ],
+        effective_permissions=data.effective_permissions,
+    )
+
+
+@router.get("/users/{user_id}/permissions", response_model=UserPermissionOverviewOut)
+def get_user_permissions(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("admin:users:read")),
+):
+    """O que o perfil da pessoa dá, as exceções individuais e o resultado efetivo - a mesma conta
+    que `permissions_for_user` faz em toda checagem de permissão do sistema."""
+    target = _require_target_user(db, user_id)
+    return _user_permission_overview_out(db, target)
+
+
+@router.put("/users/{user_id}/permissions/{permission_key}", response_model=UserPermissionOverviewOut)
+def upsert_user_permission_override(
+    user_id: int,
+    permission_key: str,
+    payload: UserPermissionOverrideUpsert,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_permission("admin:users:write")),
+):
+    """Concede ou nega UMA permissão específica desta pessoa, sem mexer no perfil dela.
+
+    Idempotente por chave: chamar de novo com efeito diferente TROCA a exceção (não empilha), e é
+    assim que a tela alterna "Conceder"/"Negar" com um clique cada.
+    """
+    target = _require_target_user(db, user_id)
+    before = user_permission_overview(db, target)
+    try:
+        set_user_permission_override(db, target, permission_key, payload.effect, payload.reason, created_by=actor.id)
+    except PermissionValidationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    db.refresh(target)
+    after = user_permission_overview(db, target)
+    record_audit_log(
+        db,
+        actor,
+        "set_permission_override",
+        "user_permission_overrides",
+        target.id,
+        {"effective_permissions": before.effective_permissions},
+        {
+            "permission": permission_key,
+            "effect": payload.effect,
+            "reason": payload.reason,
+            "effective_permissions": after.effective_permissions,
+        },
+    )
+    db.commit()
+    db.refresh(target)
+    return _user_permission_overview_out(db, target)
+
+
+@router.delete("/users/{user_id}/permissions/{permission_key}", response_model=UserPermissionOverviewOut)
+def delete_user_permission_override(
+    user_id: int,
+    permission_key: str,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_permission("admin:users:write")),
+):
+    """Remove a exceção: a pessoa volta a ter exatamente o que o perfil dela concede."""
+    target = _require_target_user(db, user_id)
+    before = user_permission_overview(db, target)
+    try:
+        remove_user_permission_override(db, target, permission_key)
+    except PermissionValidationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    db.refresh(target)
+    after = user_permission_overview(db, target)
+    record_audit_log(
+        db,
+        actor,
+        "remove_permission_override",
+        "user_permission_overrides",
+        target.id,
+        {"permission": permission_key, "effective_permissions": before.effective_permissions},
+        {"effective_permissions": after.effective_permissions},
+    )
+    db.commit()
+    db.refresh(target)
+    return _user_permission_overview_out(db, target)

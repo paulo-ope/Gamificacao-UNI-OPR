@@ -26,6 +26,7 @@ import { PortalAccountsPanel } from "@/components/admin/portal-accounts-panel";
 import { ProfileEditorDrawer } from "@/components/admin/profile-editor-drawer";
 import { ProfilesPanel } from "@/components/admin/profiles-panel";
 import { UserEditorDrawer } from "@/components/admin/user-editor-drawer";
+import { UserPermissionOverridesDrawer } from "@/components/admin/user-permission-overrides-drawer";
 import {
   ADMIN_NAV_ITEMS,
   blankUserDraft,
@@ -100,6 +101,7 @@ function AdminPageContent({ user }: { user: AuthUser }) {
   const [decidingAccessRequestId, setDecidingAccessRequestId] = useState<number | null>(null);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
   const [moduleSettingsDraft, setModuleSettingsDraft] = useState<VisibleModuleRow | null>(null);
+  const [permissionOverridesUser, setPermissionOverridesUser] = useState<{ id: number; name: string } | null>(null);
   const [personDraft, setPersonDraft] = useState<PersonStructureDraft | null>(null);
   const [personSearch, setPersonSearch] = useState("");
   const [personStatusFilter, setPersonStatusFilter] = useState("all");
@@ -917,6 +919,22 @@ function AdminPageContent({ user }: { user: AuthUser }) {
           onChange={updateUserDraft}
           onCancel={() => setUserDraft(null)}
           onSave={saveUserDraft}
+          onOpenPermissionOverrides={
+            userDraft.id === "new"
+              ? undefined
+              : () => setPermissionOverridesUser({ id: userDraft.id as number, name: userDraft.name })
+          }
+        />
+      ) : null}
+
+      {permissionOverridesUser ? (
+        <UserPermissionOverridesDrawer
+          userId={permissionOverridesUser.id}
+          userName={permissionOverridesUser.name}
+          catalog={permissions}
+          canWrite={canWriteUsers}
+          onClose={() => setPermissionOverridesUser(null)}
+          onChanged={() => void loadAdminData()}
         />
       ) : null}
 

@@ -17,6 +17,58 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **Permissão por usuário: conceder ou negar uma permissão específica de uma pessoa, sem criar
+  perfil só para ela** (2026-09-09, pedido do usuário logo depois da rodada anterior de
+  Administração - "agora adiciona permissão por usuário", item que tinha ficado registrado como
+  pendência).
+
+  - **`UserPermissionOverride`** (models.py + migration `20260909_0089`, aditiva): uma linha por
+    (usuário, permissão), com `effect` `grant` ou `deny` e motivo opcional. `permissions_for_user`
+    (core/security.py) - fonte única usada em login, toda rota (`require_permission`), MCP e
+    notificações - passou a calcular: **base** (perfil ativo do usuário, ou o papel legado quando
+    ele não tem nenhum perfil) **+ concessões individuais − negações individuais**. Negação
+    individual sempre VENCE o que o perfil dá; concessão individual só soma. A exceção se propaga
+    para o sistema inteiro sem precisar tocar em nenhuma checagem existente, porque todas passam
+    pela mesma função.
+  - **Mesma trava de lockout da rodada anterior, agora por pessoa em vez de por perfil**
+    (`user_permissions_service.py`, `_would_orphan_admin_gatekeeper`): negar (ou remover a única
+    concessão individual que dá) `admin:users:write` da última pessoa ATIVA que o teria de verdade
+    é bloqueado com o motivo explicado na tela - o mesmo princípio da trava de exclusão/inativação
+    de perfil, olhando "pessoas" em vez de "perfis" porque são dois jeitos independentes de chegar
+    no mesmo problema (ecossistema sem ninguém que administre acesso).
+  - **3 endpoints** em `/admin/users/{id}/permissions[/{permission_key}]` (GET overview, PUT
+    concede/nega - troca o efeito em vez de empilhar, DELETE volta ao que o perfil dá), com
+    auditoria completa (before/after) e exigindo `admin:users:read`/`admin:users:write`, os mesmos
+    já usados pelo resto do módulo.
+  - **Catálogo de permissões ganhou `override_count`** (pessoas com exceção individual, separado
+    de `user_count` que já existia via perfil) - avisa antes de mexer num perfil ou excluir uma
+    permissão própria que tenha gente com exceção pendurada nela. `delete_custom_permission`
+    passou a bloquear a exclusão também quando há override, não só quando há perfil usando.
+  - **Frontend**: botão "Permissões individuais" no editor de usuário (só para usuário já
+    existente) abre um drawer novo (`user-permission-overrides-drawer.tsx`) com o catálogo
+    agrupado por módulo, mostrando "Tem acesso"/"Sem acesso" efetivo e se o perfil concede,
+    botões Conceder/Negar/Remover exceção, e motivo opcional editável inline (salva ao sair do
+    campo).
+  - **16 testes novos** (`test_user_permission_overrides.py`): concessão que o papel não dá,
+    negação que vence o perfil, trocar de efeito substitui em vez de empilhar, remover reverte,
+    chave inválida, gates de permissão de leitura/escrita, os dois lados do lockout (bloqueado sem
+    outro admin ativo, permitido com outro existindo, bloqueado ao remover a única concessão),
+    `override_count` no catálogo, permissão própria não pode ser excluída com override pendente.
+    Suíte completa depois da mudança: **925 passando, o mesmo conjunto de 133 falhas
+    pré-existentes do baseline** (nenhuma regressão, apesar de `permissions_for_user` ser usada em
+    praticamente toda checagem de permissão do sistema).
+  - **Verificado ao vivo no ambiente real** (migration aplicada no start, `docker compose build`):
+    negar `operations:read` de um usuário viewer via clique na UI mostrou "Sem acesso" mesmo com
+    "perfil concede" ao lado; removida a exceção, voltou a "Tem acesso"; motivo digitado via `curl`
+    apareceu certo no campo da tela; `override_count` refletiu a exceção no catálogo; auditoria
+    gravou before/after completo (`effective_permissions` antes e depois); 375px sem vazamento
+    horizontal. **Achado durante a verificação, não corrigido de propósito**: um admin pode negar a
+    própria `admin:users:write` e ficar sem conseguir desfazer sozinho quando existem outros admins
+    (a trava impede o ecossistema inteiro ficar sem administrador, não impede autolockout
+    individual) - mesmo risco que já existia ao remover o próprio perfil, não é uma fragilidade
+    nova desta feature. Dado de teste (2 usuários descartáveis + overrides + registros de
+    auditoria) criado e removido por completo ao final; nenhuma conta real foi tocada.
+
 - **Administração avançada e parametrizável: catálogo de permissões, exclusão que fica de pé e
   módulo editável pela tela** (2026-09-09, usuário: "Preciso validar a aba adm para o modulo novo
   que não está em alguns lugares, preciso melhorar o modulo adm podendo excluir permissão... deixar

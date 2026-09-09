@@ -121,6 +121,11 @@ class User(Base):
         back_populates="users",
     )
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user")
+    permission_overrides: Mapped[list["UserPermissionOverride"]] = relationship(
+        foreign_keys="UserPermissionOverride.user_id",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class Notification(Base):
@@ -213,6 +218,42 @@ class UserAccessProfile(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("access_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class UserPermissionOverride(Base):
+    """Permissão concedida ou negada diretamente numa pessoa, por cima do que o perfil dela dá.
+
+    Aplicada em `permissions_for_user` (core/security.py): a BASE é o perfil ativo do usuário (ou o
+    papel legado, quando ele não tem nenhum perfil) - os overrides daqui somam (`effect="grant"`)
+    ou subtraem (`effect="deny"`) por cima dessa base, e negação sempre vence concessão do perfil.
+
+    Existe para o caso em que dar (ou tirar) UMA permissão específica de uma pessoa não justifica
+    criar um perfil só para ela, nem mexer no perfil dela (que pode ser compartilhado com outras
+    pessoas) - pedido do usuário em 2026-09-09, depois de perceber que só dava pra conceder acesso
+    em bloco (por perfil).
+
+    `permission` não tem FK para `custom_permissions.key` de propósito: pode apontar tanto para uma
+    permissão do sistema (`PERMISSION_LABELS`) quanto para uma própria - a validação de que a chave
+    existe é feita na escrita (`user_permissions_service.set_override`), não no banco.
+    """
+
+    __tablename__ = "user_permission_overrides"
+    __table_args__ = (
+        UniqueConstraint("user_id", "permission", name="uq_user_permission_override"),
+        CheckConstraint("effect IN ('grant', 'deny')", name="ck_user_permission_override_effect"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    effect: Mapped[str] = mapped_column(String(10), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    user: Mapped["User"] = relationship(foreign_keys=[user_id], back_populates="permission_overrides")
+    created_by_user: Mapped[User | None] = relationship(foreign_keys=[created_by])
 
 
 class CustomPermission(Base):

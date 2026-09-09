@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +21,9 @@ class EcosystemPermissionOut(BaseModel):
     profile_count: int = 0
     user_count: int = 0
     profile_names: list[str] = Field(default_factory=list)
+    #: Pessoas com exceção individual (concessão ou negação) para esta permissão - ver aba
+    #: Permissões individuais no editor de usuário. Fora de `user_count` de propósito.
+    override_count: int = 0
 
 
 class CustomPermissionCreate(BaseModel):
@@ -256,3 +260,37 @@ class WorkspaceVisibleModuleOut(BaseModel):
     api_prefix: str
     required_permission: str
     status: str
+
+
+class UserPermissionOverrideOut(BaseModel):
+    permission: str
+    label: str
+    module: str
+    effect: Literal["grant", "deny"]
+    reason: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserPermissionOverviewOut(BaseModel):
+    user_id: int
+    #: O que o perfil da pessoa concede (ou o papel legado, se ela não tiver perfil) - ANTES das
+    #: exceções individuais.
+    profile_permissions: list[str]
+    overrides: list[UserPermissionOverrideOut] = Field(default_factory=list)
+    #: Resultado final (perfil + exceções já aplicadas) - o mesmo cálculo que `permissions_for_user`
+    #: usa em toda checagem de permissão do sistema.
+    effective_permissions: list[str]
+
+
+class UserPermissionOverrideUpsert(BaseModel):
+    effect: Literal["grant", "deny"]
+    reason: str | None = Field(default=None, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        text = value.strip()
+        return text or None

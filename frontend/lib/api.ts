@@ -3,6 +3,9 @@ import type {
   AccessProfile,
   AdminWorkspaceModule,
   AdminWorkspaceModuleSettingsPatch,
+  UserPermissionOverride,
+  UserPermissionOverrideEffect,
+  UserPermissionOverview,
   AdminForcePasswordResetResult,
   AdminPeopleStructure,
   AdminPersonStructure,
@@ -409,6 +412,26 @@ export const api = {
       `/admin/access-profiles/${id}${reassignProfileId ? `?reassign_profile_id=${reassignProfileId}` : ""}`,
       { method: "DELETE" }
     ),
+  // Permissão concedida ou negada diretamente numa pessoa, sem passar por perfil (ver aba
+  // "Permissões individuais" no editor de usuário).
+  getUserPermissionOverview: (userId: number) =>
+    request<UserPermissionOverview>(`/admin/users/${userId}/permissions`),
+  /** Chamar de novo com efeito diferente TROCA a exceção (não empilha) - é assim que a tela
+   *  alterna "Conceder"/"Negar" com um clique cada. */
+  setUserPermissionOverride: (
+    userId: number,
+    permission: string,
+    payload: { effect: UserPermissionOverrideEffect; reason?: string | null }
+  ) =>
+    request<UserPermissionOverview>(`/admin/users/${userId}/permissions/${encodeURIComponent(permission)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  /** Remove a exceção: a pessoa volta a ter exatamente o que o perfil dela concede. */
+  deleteUserPermissionOverride: (userId: number, permission: string) =>
+    request<UserPermissionOverview>(`/admin/users/${userId}/permissions/${encodeURIComponent(permission)}`, {
+      method: "DELETE"
+    }),
   workspaceModules: () => request<WorkspaceVisibleModule[]>("/workspace/modules"),
   adminModules: () => request<AdminWorkspaceModule[]>("/admin/modules"),
   updateAdminModuleVisibility: (moduleKey: string, payload: { profile_id: number; visible: boolean; reason?: string | null }) =>

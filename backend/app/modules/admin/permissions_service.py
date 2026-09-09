@@ -27,6 +27,7 @@ from app.models import (
     CustomPermission,
     User,
     UserAccessProfile,
+    UserPermissionOverride,
 )
 from app.modules.registry import get_module, list_modules
 
@@ -105,6 +106,10 @@ class PermissionCatalogEntry:
     profile_count: int = 0
     user_count: int = 0
     profile_names: list[str] = field(default_factory=list)
+    #: Pessoas com exceção individual (concessão ou negação) para esta permissão - ver
+    #: `_override_counts`. Não está incluído em `user_count` de propósito: são duas perguntas
+    #: diferentes ("quem tem pelo perfil" vs. "quem tem uma exceção pessoal").
+    override_count: int = 0
 
 
 def module_by_permission_prefix() -> dict[str, tuple[str, str]]:
@@ -171,10 +176,12 @@ def validate_permission_keys(db: Session, permission_keys: list[str]) -> list[st
 
 
 def _usage_index(db: Session) -> tuple[dict[str, list[str]], dict[str, set[int]]]:
-    """(perfis por permissão, usuários por permissão).
+    """(perfis por permissão, usuários por permissão via PERFIL).
 
     Usuário entra uma vez só por permissão, mesmo que dois perfis dele a concedam - a pergunta que
     a tela responde é "quantas pessoas perdem este acesso se eu revogar", não "quantos vínculos".
+    Não inclui exceção individual de propósito (ver `_override_counts`): esta função mede o que o
+    PERFIL concede, que é justamente o que muda se o admin editar um perfil.
     """
     profiles_by_permission: dict[str, list[str]] = {}
     users_by_permission: dict[str, set[int]] = {}
@@ -200,12 +207,28 @@ def _usage_index(db: Session) -> tuple[dict[str, list[str]], dict[str, set[int]]
     return profiles_by_permission, users_by_permission
 
 
+def _override_counts(db: Session) -> dict[str, int]:
+    """Quantas pessoas ATIVAS têm uma exceção individual (concessão ou negação) para cada
+    permissão - separado da contagem por perfil de propósito (ver `_usage_index`): é o aviso de
+    "cuidado, isto tem exceção" antes de mexer no perfil ou excluir a permissão."""
+    return dict(
+        db.execute(
+            select(UserPermissionOverride.permission, func.count(UserPermissionOverride.id))
+            .join(User, User.id == UserPermissionOverride.user_id)
+            .where(User.active.is_(True))
+            .group_by(UserPermissionOverride.permission)
+        ).all()
+    )
+
+
 def permission_catalog(db: Session, *, with_usage: bool = True) -> list[PermissionCatalogEntry]:
     """Catálogo completo (código + próprias), ordenado por grupo e depois por chave."""
     profiles_by_permission: dict[str, list[str]] = {}
     users_by_permission: dict[str, set[int]] = {}
+    override_counts: dict[str, int] = {}
     if with_usage:
         profiles_by_permission, users_by_permission = _usage_index(db)
+        override_counts = _override_counts(db)
 
     entries: list[PermissionCatalogEntry] = []
     for key, label in PERMISSION_LABELS.items():
@@ -221,6 +244,7 @@ def permission_catalog(db: Session, *, with_usage: bool = True) -> list[Permissi
                 profile_count=len(profiles_by_permission.get(key, [])),
                 user_count=len(users_by_permission.get(key, set())),
                 profile_names=profiles_by_permission.get(key, []),
+                override_count=override_counts.get(key, 0),
             )
         )
 
@@ -238,6 +262,7 @@ def permission_catalog(db: Session, *, with_usage: bool = True) -> list[Permissi
                 profile_count=len(profiles_by_permission.get(item.key, [])),
                 user_count=len(users_by_permission.get(item.key, set())),
                 profile_names=profiles_by_permission.get(item.key, []),
+                override_count=override_counts.get(item.key, 0),
             )
         )
 
@@ -338,6 +363,22 @@ def delete_custom_permission(db: Session, permission: CustomPermission) -> None:
     if profiles:
         raise PermissionValidationError(
             "Esta permissão ainda está em uso por: " + ", ".join(profiles) + ". Remova dos perfis antes de excluir.",
+            status_code=409,
+        )
+    # Mesma checagem, para a exceção individual (ver `UserPermissionOverride`) - sem isto, excluir
+    # uma permissão própria deixaria um override órfão apontando pra uma chave que não existe mais
+    # no catálogo, sem nenhum aviso.
+    people_with_override = db.scalars(
+        select(User.name)
+        .join(UserPermissionOverride, UserPermissionOverride.user_id == User.id)
+        .where(UserPermissionOverride.permission == permission.key)
+        .order_by(User.name.asc())
+    ).all()
+    if people_with_override:
+        raise PermissionValidationError(
+            "Esta permissão ainda está concedida ou negada individualmente para: "
+            + ", ".join(people_with_override)
+            + ". Remova essas exceções antes de excluir.",
             status_code=409,
         )
     db.delete(permission)

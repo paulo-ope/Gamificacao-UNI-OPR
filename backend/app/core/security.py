@@ -294,7 +294,11 @@ def permissions_for_role(role: str) -> set[str]:
     return ROLE_PERMISSIONS.get(role, set())
 
 
-def permissions_for_user(user: User) -> set[str]:
+def base_permissions_for_user(user: User) -> set[str]:
+    """A permissão que vem do perfil (ou do papel legado, na ausência de perfil) - ANTES de
+    aplicar as exceções individuais (ver `permissions_for_user`). Extraída à parte porque
+    `app/modules/admin/user_permissions_service.py` precisa da mesma base para mostrar "o que o
+    perfil concede" separado de "o que a pessoa tem de exceção" na tela."""
     profile_permissions = {
         permission.permission
         for profile in getattr(user, "access_profiles", []) or []
@@ -302,6 +306,26 @@ def permissions_for_user(user: User) -> set[str]:
         for permission in profile.permissions
     }
     return profile_permissions or permissions_for_role(user.role)
+
+
+def permissions_for_user(user: User) -> set[str]:
+    """Permissão efetiva de um usuário: perfil (ou papel legado) + exceções individuais por cima.
+
+    Pedido do usuário (2026-09-09): dar ou tirar UMA permissão específica de uma pessoa sem
+    precisar criar um perfil só para ela nem mexer no perfil dela (que pode ser compartilhado com
+    outras pessoas) - ver `UserPermissionOverride` em models.py. Negação individual sempre VENCE
+    concessão do perfil, de propósito: é o único jeito de tirar uma permissão de alguém sem
+    depender do perfil. Concessão individual só SOMA.
+
+    Fonte única: toda checagem de permissão do sistema passa por esta função (`require_permission`,
+    resposta de login, MCP, notificações...) - a exceção se propaga para o sistema inteiro sem
+    precisar tocar em cada checagem.
+    """
+    base = base_permissions_for_user(user)
+    overrides = getattr(user, "permission_overrides", []) or []
+    granted = {item.permission for item in overrides if item.effect == "grant"}
+    denied = {item.permission for item in overrides if item.effect == "deny"}
+    return (base | granted) - denied
 
 
 def is_admin_user(user: User | None) -> bool:

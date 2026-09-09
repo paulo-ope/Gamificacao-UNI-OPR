@@ -103,7 +103,10 @@ export type AuthUser = {
   active: boolean;
   created_at: string;
   updated_at: string;
-  permissions: Permission[];
+  /** Perfil (ou papel legado) + exceções individuais já aplicadas - o mesmo cálculo de
+   *  `permissions_for_user` no backend. Pode incluir permissão própria (criada na aba
+   *  Permissões), por isso `PermissionKey` e não a união estreita `Permission`. */
+  permissions: PermissionKey[];
   access_profile_ids: number[];
   access_profile_names: string[];
   collaborator_id: number | null;
@@ -210,6 +213,33 @@ export type EcosystemPermission = {
   profile_count: number;
   user_count: number;
   profile_names: string[];
+  /** Pessoas com exceção individual (concessão ou negação) para esta permissão - fora de
+   *  `user_count` de propósito (perfil e exceção pessoal respondem perguntas diferentes). */
+  override_count: number;
+};
+
+export type UserPermissionOverrideEffect = "grant" | "deny";
+
+/** Exceção individual: concede ou nega UMA permissão específica de uma pessoa, por cima do que o
+ *  perfil dela dá - sem precisar criar um perfil só para ela. Ver aba "Permissões individuais" no
+ *  editor de usuário. */
+export type UserPermissionOverride = {
+  permission: PermissionKey;
+  label: string;
+  module: string;
+  effect: UserPermissionOverrideEffect;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserPermissionOverview = {
+  user_id: number;
+  /** O que o perfil da pessoa concede (ou o papel legado, sem perfil) - ANTES das exceções. */
+  profile_permissions: PermissionKey[];
+  overrides: UserPermissionOverride[];
+  /** Resultado final (perfil + exceções já aplicadas) - o mesmo que `AuthUser.permissions`. */
+  effective_permissions: PermissionKey[];
 };
 
 export type EcosystemPermissionDraft = {
