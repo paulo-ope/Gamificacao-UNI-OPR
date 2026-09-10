@@ -13,9 +13,150 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-09** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-10** — branch `claude/suporte-sync-backfill-madrugada`
 
 ## O que foi feito recentemente
+
+- **Gestão: buscar colaborador com justificativa pendente e ler as justificativas (API + MCP)**
+  (2026-09-10, usuário: "criar endpoints para os MCP e API conseguirem buscar colaborador com
+  justificativa pendentes de forma mais fácil, valide todas rotas que tem e o que podemos expor
+  para melhorar isso, e ela ler essas justificativas tbm por regional colaborador data").
+  - **O que faltava (auditoria das 3 superfícies):** não havia filtro por colaborador (só `search`,
+    um ILIKE em OR sobre responsável **ou** regional **ou** métrica - buscar "ANA" trazia
+    "Mariana"), não havia filtro por data nenhum (só `reference_year`/`reference_month`, apesar de
+    `reference_date` existir e ser indexada), não havia o conceito "justificativa pendente" (quem
+    chamava tinha que conhecer a máquina de estados), `diagnostics.by_responsible` dava só
+    contadores (sem regional, supervisor, idade ou texto), e `opr_management_cases` truncava em 500
+    sem dizer. Pela chave de API só existia o diagnóstico agregado - listar caso ou ler
+    justificativa era impossível.
+  - **Fonte única:** todos os filtros novos entraram em `ManagementCaseFilters` /
+    `case_filter_conditions` (`management/cases.py`): `responsible_name` (exato),
+    `collaborator_id`, `reference_date_from`/`reference_date_to`, `reason_id`,
+    `pending_justification`, `awaiting_review`, `has_justification`, `min_days_pending`. As seis
+    chamadas que já montavam esse dataclass herdaram tudo de graça. Na tela, as 4 assinaturas
+    repetidas viraram uma dependência única (`case_filters_query`) - antes um filtro novo entrava
+    na listagem e faltava no export, que deixava de bater com a tabela.
+  - **Combinação impossível erra, não devolve vazio:** seguindo o aviso que já existia para
+    `status` + `only_open`, agora `pending_justification` + `awaiting_review`,
+    `pending_justification` + `has_justification=true`, faixa de data invertida e `reference_year`
+    fora da faixa levantam 422 com mensagem acionável. Uma chamada que "tem sucesso" com 0
+    resultados é lida por IA como "não há pendência", que é o oposto da verdade.
+  - **Rotas novas da tela:** `GET /management/cases/pending-by-collaborator` (uma linha por
+    colaborador **x regional** - a mesma pessoa pode ter caso em duas, e somar esconderia onde a
+    pendência está; traz supervisor, modelo de equipe, `oldest_pending_date`, `max_days_pending`,
+    `open_case_ids`, ordenado pela fila de cobrança) e `GET /management/cases/justifications`
+    (texto, motivo, plano de ação, decisão da matriz, paginado, com `include_comments`). Declaradas
+    **antes** de `/cases/{case_id}` no router de propósito.
+  - **Chave de API:** `POST /ai/management/pending-by-collaborator`, `/ai/management/justifications`
+    e `/ai/management/cases`. **Sem escopo de supervisor de propósito** - a identidade da chave é
+    `role="ai_service"`, cujas permissões são só `{"ai:query"}`, sem `managed_regionals`: aplicar
+    `case_scope_conditions` nela viraria `supervisor_user_id == <usuário de serviço>`, ou seja ZERO
+    caso sempre (foi por isso que o `/ai/management/cases-diagnostics` de 2026-08-20 já era visão
+    de matriz). O controle nessa superfície é o escopo do token + a chave de governança; para
+    recortar existem `regional` e `supervisor_user_id`. No MCP, onde o chamador é um usuário OAuth
+    real, o escopo por supervisor/regional **continua aplicado**.
+  - **`ai.management_justifications` nasce DESLIGADA** na governança de IA: `justification_text`,
+    `action_plan` e os comentários são texto livre escrito por um supervisor sobre uma pessoa
+    específica. Ligar isso pra uma chave de máquina é decisão de administrador, não efeito
+    colateral do deploy. As outras duas nascem ligadas (dado estruturado, mesmo que a tela mostra).
+    `ai.management_cases` **já existia** no catálogo desde antes (criada com a tool, mas nunca
+    consultada pelo gate) - agora passou a valer de verdade.
+  - **MCP:** `opr_management_cases` ganhou os filtros novos e **paginação real** (`total` + `page`,
+    no lugar do `limit 500` silencioso); duas tools novas, `opr_management_pending_justifications`
+    e `opr_management_justifications`. Portadas também pro servidor stdio
+    (`mcp-server/opr_analitica_mcp.py`), que são chamadas HTTP finas - lá ainda faltam as 4 de
+    reagendamento/cockpit, e o README dele foi corrigido (listava 10 tools quando havia 23).
+  - **Correção de segurança achada no caminho:** `opr_management_cases_diagnostics` exigia só token
+    OAuth válido - **nem `management:read`, nem o gate de governança**. O escopo regional ainda
+    limitava o retorno, mas quem não tem acesso à Gestão na tela conseguia ler pelo MCP, e o admin
+    não tinha como desligar a capacidade. Agora as 4 tools de gestão passam por
+    `_management_user()` + gate.
+  - **Sem migration** - nenhuma coluna nova; os índices existentes (`regional`,
+    `responsible_name`, `reference_date`, `status`) já cobrem os filtros.
+  - **Nota de teste:** os `ERROR at teardown` nesta suíte são ruído pré-existente do ambiente
+    Windows (job de snapshot/monitor usando o `SessionLocal` global numa thread do TestClient),
+    reproduzem em arquivos não tocados e não indicam falha de asserção. Ao mexer em governança
+    dentro de teste, chame `bump_policy_version` - `resolve_effective_policy` tem cache chaveado
+    por `user.id ^ versão`, e como cada teste roda num `:memory:` novo os ids se repetem e a
+    política de outro teste vaza.
+
+- **Visão Geral: total de finalizadas no tooltip do SLA + drill do modelo de equipe até os técnicos**
+  (2026-09-10, usuário: "Trazer no gráfico de SLA a Quantidade de O.S total do dia" e "Trazer um
+  driwll no gráfico de qual modelo de equipe mais produziu com os técnicos").
+  - **Total no tooltip do SLA** (`buildOverviewSlaTrendOption`): o tooltip abre com "Finalizadas no
+    dia (total)" e só depois quebra em No prazo / Fora do prazo. Escolha do usuário foi
+    explicitamente **só no tooltip**, sem desenhar nada novo - o gráfico já tem 3 linhas e 2 barras,
+    mesmo princípio do "Fluxo diário desinchado" da rodada anterior. Existe também uma linha
+    condicional "Sem prazo medível" (a diferença entre o total e as barras, que empilham apenas no
+    prazo + fora do prazo), pra o total nunca parecer erro de conta.
+  - **Achado real, medido**: `completed_unmeasurable` é **sempre 0 neste banco** - 92.527 O.S.
+    fechadas entre dez/2024 e ago/2026, nenhuma sem `sla_status` mensurável (leitura direta). Ou
+    seja, hoje o total sempre bate com a soma das duas barras e a linha condicional nunca renderiza;
+    ela fica como guarda pro dia em que algum tipo de O.S. entrar sem prazo cadastrado. **Essa
+    ramificação não foi exercitada contra dado real** justamente porque o estado não ocorre aqui.
+  - **Drill até o técnico**: clicar num modelo de equipe continua aplicando o drill temporário de
+    sempre (`team_models`), e agora o card troca de nível - passa a mostrar "Quem produziu neste
+    modelo", finalizadas por técnico. Clicar num técnico recorta a tela inteira por ele (3º nível), e
+    o "Voltar" que já existia desfaz a sequência toda de uma vez.
+  - **Por que trocar de nível em vez de abrir um painel novo**: com um único modelo selecionado, o
+    donut de modelo virava uma fatia só de 100% - não informava mais nada. O segundo nível ocupa
+    exatamente esse estado morto, sem inventar interação nova.
+  - **Rota própria e enxuta em vez de reaproveitar a de SLA por colaborador** (decisão MEDIDA, não
+    preferência): a primeira versão usava `GET /operations/sla/collaborators`, que serve a Operação
+    Analítica. Medido no banco real (um modelo, 30 dias): **144 ms e ~19 KB** (15 campos por pessoa -
+    tempos de execução mín/méd/máx, aderência a agendamento e contagem por tipo de O.S. numa SEGUNDA
+    consulta) contra **58 ms e ~1,7 KB** de uma consulta enxuta, pro mesmo donut, que usa dois campos.
+    Criada `queries.overview_collaborator_production` +
+    `GET /operations/overview/collaborator-production`; a rota compartilhada de SLA ficou intacta
+    (segue em uso em `app/operacao/page.tsx`).
+    Dois ganhos além da latência: o `GROUP BY` passou a ser só por responsável (a rota de SLA agrupa
+    por responsável **e filial**, então quem atende duas filiais vinha em duas linhas e precisava ser
+    somado de novo na tela - agora não precisa), e a rota nova exige apenas `operations:read`, então
+    **o nível de técnico deixou de depender de `operations:view_sla`** - produção por técnico não é
+    dado de prazo, e nome + contagem já eram alcançáveis nesta mesma tela por quem escolhe um
+    colaborador no filtro. 4 testes novos travam exatamente isso
+    (`test_operations_overview_collaborator_production.py`), incluindo o teste de que a rota responde
+    200 com só `operations:read` e que a resposta não tem campo de prazo nenhum.
+  - **Verificado ao vivo no ambiente real desta máquina** (usuário de teste descartável, removido ao
+    final; frontend reconstruído oficialmente): tooltip do SLA em 21/08 mostrando "total 6 = 5 no
+    prazo + 1 fora"; drill em TECNICO 12/36H com o donut de técnicos fechando em **687**, o MESMO
+    número do KPI "Finalizadas" e do donut de filial (três fontes independentes reconciliando); os 4
+    primeiros técnicos (38/36/35/35) conferidos **contra o banco por consulta própria**, mesma ordem
+    e mesmos nomes; 3º nível recortando a tela por um técnico (que aparece em 2 filiais, 37+1=38);
+    "Voltar" desfazendo modelo + técnico num clique. Refeito na rota enxuta depois da otimização.
+
+- **Visão Geral: o filtro padrão parou de vazar pra Operação Analítica e passou a guardar também os
+  filtros do SGP** (2026-09-09, usuário viu o print da barra de filtros em produção sem os campos do
+  SGP e perguntou "Cade o filtro do opa que napo veio?" - resposta: feature deployada mas desligada
+  por padrão nesta instalação, ver Administração → Módulos. No mesmo fio, dois bugs reais: "Os
+  filtros quero que ele fique salvo somente na aba visão geral, naoq uero que ele vá para operação
+  analitica e pq quando eu salvo o filtro do opa ele nao salva?").
+  - **Causa raiz dos dois**: "Definir como padrão" da Visão Geral reaproveitava o mesmo mecanismo de
+    visão global (`OperationSavedFilter`, `visibility="global"`) que a Operação Analítica usa pra
+    "Visões salvas" - por isso o padrão aparecia nas duas telas, e por isso não tinha onde guardar
+    `support_department`/`support_channel`/`support_reason` (o schema por trás, `OperationSavedFilterValues`,
+    é só o catálogo de filtro de O.S.).
+  - **Redesenhado como um blob PRÓPRIO da Visão Geral** guardado em `app_settings`
+    (`overview_default_filter`, JSON com `filters` + `support_filters`), sem nenhuma referência a
+    `OperationSavedFilter` - `GET`/`PUT /operations/overview/default-filter` (`router.py`),
+    `OperationOverviewDefaultFilter`/`Update` reescritos (`schemas.py`, + `OverviewSupportFilterValues`
+    novo). "Definir como padrão" na tela deixou de abrir um diálogo pedindo nome (não é mais um item
+    numa lista de visões) - salva o recorte atual direto. `use-overview-filters.ts::initialize` passou
+    a aplicar os dois grupos de filtro no boot da tela (só aplicava os de O.S. antes - a causa direta
+    do "não salva" era essa mesma função nunca ter recebido `support_filters`).
+  - **Achado ao vivo, corrigido**: `app_settings.value` é `VARCHAR(255)` - o blob JSON (O.S. + SGP)
+    estourava isso fácil e a primeira tentativa de salvar quebrou com 500 (`StringDataRightTruncation`).
+    Migration `20260909_0090` alarga a coluna pra `TEXT`; é um key-value genérico reaproveitado por
+    outros recursos, nenhum depende do teto de 255.
+  - **Verificado ao vivo no ambiente real desta máquina** (usuário de teste descartável, papel admin,
+    removido ao final + migration aplicada + containers reconstruídos oficialmente): filial + um
+    filtro do SGP juntos em "Definir como padrão" → recarregar a tela reaplicou os dois; aberto
+    "Visões salvas" da Operação Analítica logo em seguida, só as 3 visões globais reais apareceram
+    (Geral/Garantias/Tecnicos Geral), nenhum vestígio do padrão da Visão Geral. Configuração de teste
+    (`overview_default_filter`) e usuário de teste removidos por completo ao final; nenhuma conta ou
+    visão real foi tocada. Suíte completa depois da mudança: 924 passando (1 a menos que o baseline
+    anterior porque 2 testes do desenho antigo, específicos de visão global, saíram e 1 novo entrou),
+    mesmas 133 falhas pré-existentes do baseline.
 
 - **Permissão por usuário: conceder ou negar uma permissão específica de uma pessoa, sem criar
   perfil só para ela** (2026-09-09, pedido do usuário logo depois da rodada anterior de

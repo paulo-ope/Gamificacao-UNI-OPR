@@ -512,22 +512,73 @@ class AiOnuSignalHistoryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class AiManagementCaseDiagnosticsRequest(BaseModel):
-    """Diagnóstico agregado de casos de Gestão Integrada (produtividade abaixo da meta) - "quem
-    mais não bate meta, por regional/colaborador/motivo" - pedido do usuário em 2026-08-20 pra
-    facilitar essa análise pela IA sem precisar abrir a tela. Mesmos filtros da tela de Gestão."""
+class AiManagementCaseFiltersRequest(BaseModel):
+    """Recorte compartilhado de casos de Gestão Integrada nas rotas de IA - mesmos campos que a
+    dependência `case_filters_query` da tela expõe, para os dois nunca divergirem.
+
+    O bloco `responsible_name`/`reference_date_*`/`pending_justification` entrou em 2026-09-10
+    (pedido do usuário: "buscar colaborador com justificativa pendente de forma mais fácil ... por
+    regional, colaborador, data"). Antes só havia `search` (parcial em 3 colunas ao mesmo tempo) e
+    `reference_year`/`reference_month`.
+    """
 
     status: str | None = None
     severity: str | None = None
     regional: str | None = None
+    supervisor_user_id: int | None = None
     case_type: str | None = None
     reference_year: int | None = None
     reference_month: int | None = Field(default=None, ge=1, le=12)
     only_overdue: bool = False
     only_open: bool = False
-    search: str | None = None
+    search: str | None = Field(
+        default=None,
+        description="Busca PARCIAL em responsável, regional OU métrica ao mesmo tempo. Para casar a pessoa exata, use responsible_name.",
+    )
+    responsible_name: str | None = Field(
+        default=None, description="Nome EXATO do colaborador (ignora maiúscula/minúscula)."
+    )
+    collaborator_id: int | None = None
+    reference_date_from: date | None = Field(default=None, description="Competência do caso a partir de (inclusiva).")
+    reference_date_to: date | None = Field(default=None, description="Competência do caso até (inclusiva).")
+    reason_id: int | None = None
+    pending_justification: bool = Field(
+        default=False, description="Só o que o supervisor ainda não justificou (status pending)."
+    )
+    awaiting_review: bool = Field(
+        default=False, description="Só o que já foi justificado e espera a matriz (status justified)."
+    )
+    has_justification: bool | None = None
+    min_days_pending: int | None = Field(default=None, ge=0)
 
     model_config = ConfigDict(extra="forbid")
+
+
+class AiManagementCaseDiagnosticsRequest(AiManagementCaseFiltersRequest):
+    """Diagnóstico agregado de casos de Gestão Integrada (produtividade abaixo da meta) - "quem
+    mais não bate meta, por regional/colaborador/motivo" - pedido do usuário em 2026-08-20 pra
+    facilitar essa análise pela IA sem precisar abrir a tela. Mesmos filtros da tela de Gestão."""
+
+
+class AiManagementPendingByCollaboratorRequest(AiManagementCaseFiltersRequest):
+    """"Quem está devendo justificativa", uma linha por colaborador x regional."""
+
+    limit: int = Field(default=200, ge=1, le=1000)
+
+
+class AiManagementJustificationsRequest(AiManagementCaseFiltersRequest):
+    """Leitura das justificativas escritas pelos supervisores, por regional/colaborador/data."""
+
+    include_comments: bool = False
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=200)
+
+
+class AiManagementCasesRequest(AiManagementCaseFiltersRequest):
+    """Listagem paginada dos casos em si (payload completo do caso, não só a justificativa)."""
+
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=200)
 
 
 class AiLoginStatusRequest(BaseModel):

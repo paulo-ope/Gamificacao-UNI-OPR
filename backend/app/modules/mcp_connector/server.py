@@ -1,7 +1,11 @@
-"""Servidor MCP remoto (Streamable HTTP) da Operação Analítica - mesmas 10 ferramentas de
-`mcp-server/opr_analitica_mcp.py` (o servidor local via stdio para Claude Code/Desktop), mas
+"""Servidor MCP remoto (Streamable HTTP) da Operação Analítica - superfície principal, superconjunto
+do servidor local via stdio (`mcp-server/opr_analitica_mcp.py`, para Claude Code/Desktop), mas
 chamando as funções de consulta do módulo `ai` DIRETO (mesmo processo, mesma sessão de banco),
 sem dar a volta por HTTP - já estamos dentro do próprio backend.
+
+As duas listas de tool NÃO são iguais e nem se sincronizam sozinhas: tool nova entra aqui primeiro
+e o stdio fica atrás até alguém portar (hoje faltam lá as 4 de reagendamento/cockpit). Ao acrescentar
+uma tool, decida explicitamente se ela também vai pro stdio - e diga isso no `docs/STATUS.md`.
 
 A autenticação (quem está chamando) vem do OAuth (ver provider.py), não de uma chave de API fixa:
 cada chamada de tool resolve o usuário autenticado a partir do access token via
@@ -22,7 +26,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.core.security import permissions_for_user
@@ -151,6 +155,66 @@ def _enforce(callable_, *args, **kwargs):
         return callable_(*args, **kwargs)
     except HTTPException as exc:
         raise ValueError(str(exc.detail)) from exc
+
+
+def _management_user():
+    """Usuário autenticado da chamada, já checado contra `management:read`.
+
+    Sem isso, uma tool de gestão só exigia token OAuth válido: o escopo por regional ainda limitava
+    o que voltava, mas a permissão DO MÓDULO não era verificada - quem não tem acesso à Gestão
+    Integrada na tela conseguia ler pelo MCP (achado real em `opr_management_cases_diagnostics`,
+    corrigido junto com as tools novas de 2026-09-10)."""
+    user = _current_user()
+    if "management:read" not in permissions_for_user(user):
+        raise RuntimeError("Este usuário não tem permissão para consultar a Gestão Integrada (management:read).")
+    return user
+
+
+def _management_case_filters(
+    *,
+    status: str | None,
+    severity: str | None,
+    regional: str | None,
+    supervisor_user_id: int | None,
+    case_type: str | None,
+    reference_year: int | None,
+    reference_month: int | None,
+    only_overdue: bool,
+    only_open: bool,
+    search: str | None,
+    responsible_name: str | None,
+    collaborator_id: int | None,
+    reference_date_from: str | None,
+    reference_date_to: str | None,
+    reason_id: int | None,
+    pending_justification: bool,
+    awaiting_review: bool,
+    has_justification: bool | None,
+    min_days_pending: int | None,
+):
+    """Recorte compartilhado pelas 4 tools de gestão - mesmo dataclass que a tela e a chave de API
+    usam, pra um filtro novo nunca existir em uma superfície e faltar na outra."""
+    return management_cases_engine.ManagementCaseFilters(
+        status=status,
+        severity=severity,
+        regional=regional,
+        supervisor_user_id=supervisor_user_id,
+        case_type=case_type,
+        reference_year=reference_year,
+        reference_month=reference_month,
+        only_overdue=only_overdue,
+        search=search,
+        statuses=list(MANAGEMENT_OPEN_CASE_STATUSES) if only_open else [],
+        responsible_name=responsible_name,
+        collaborator_id=collaborator_id,
+        reference_date_from=_parse_date(reference_date_from) if reference_date_from else None,
+        reference_date_to=_parse_date(reference_date_to) if reference_date_to else None,
+        reason_id=reason_id,
+        pending_justification=pending_justification,
+        awaiting_review=awaiting_review,
+        has_justification=has_justification,
+        min_days_pending=min_days_pending,
+    )
 
 
 def _current_user():
@@ -656,11 +720,24 @@ def build_mcp_server() -> FastMCP:
         only_overdue: bool = False,
         only_open: bool = False,
         search: str | None = None,
+        supervisor_user_id: int | None = None,
+        responsible_name: str | None = None,
+        collaborator_id: int | None = None,
+        reference_date_from: str | None = None,
+        reference_date_to: str | None = None,
+        reason_id: int | None = None,
+        pending_justification: bool = False,
+        awaiting_review: bool = False,
+        has_justification: bool | None = None,
+        min_days_pending: int | None = None,
     ) -> str:
         """Diagnóstico agregado dos casos de gestão integrada (produtividade abaixo da meta) -
         "quem mais não bate meta, por regional/colaborador/motivo". Mesmo recorte filtrado que a
         tela de Gestão usa; a visibilidade segue a mesma regra da tela (quem não é matriz só vê o
         que já enxergaria lá - os próprios casos ou os das regionais que gerencia).
+
+        Para a fila de cobrança ("quem preciso cobrar hoje", com idade da pendência e ids dos
+        casos), prefira `opr_management_pending_justifications`.
 
         Args:
             status: pending, justified, in_progress, resolved ou rejected.
@@ -670,25 +747,47 @@ def build_mcp_server() -> FastMCP:
             reference_year, reference_month: competência específica.
             only_overdue: só casos em aberto e com prazo vencido.
             only_open: só casos ainda não encerrados (exclui resolved/rejected).
-            search: busca livre por colaborador/regional/métrica.
+            search: busca PARCIAL em colaborador OU regional OU métrica ao mesmo tempo - para
+                casar a pessoa exata use `responsible_name`.
+            supervisor_user_id: casos de um supervisor específico.
+            responsible_name: nome EXATO do colaborador (ignora maiúscula/minúscula).
+            collaborator_id: id do colaborador cadastrado.
+            reference_date_from, reference_date_to: faixa de competência do caso (AAAA-MM-DD,
+                inclusiva nas duas pontas) - use pra recortar por dia ou semana.
+            reason_id: motivo escolhido na justificativa.
+            pending_justification: só o que o supervisor ainda NÃO justificou (status pending).
+            awaiting_review: só o que já foi justificado e espera a matriz (status justified).
+            has_justification: true = só com texto de justificativa; false = só sem.
+            min_days_pending: só casos abertos há pelo menos N dias corridos.
 
         Returns:
             JSON com total_cases e três listas (by_regional, by_responsible, by_reason), cada
             item {"key", "label", "total", "open_cases", "overdue_cases"}, ordenadas do maior
             total pro menor (até 15 por dimensão).
         """
-        user = _current_user()
+        user = _management_user()
         with SessionLocal() as db:
-            filters = management_cases_engine.ManagementCaseFilters(
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.management_cases_diagnostics", "mcp")
+            filters = _management_case_filters(
                 status=status,
                 severity=severity,
                 regional=regional,
+                supervisor_user_id=supervisor_user_id,
                 case_type=case_type,
                 reference_year=reference_year,
                 reference_month=reference_month,
                 only_overdue=only_overdue,
+                only_open=only_open,
                 search=search,
-                statuses=list(MANAGEMENT_OPEN_CASE_STATUSES) if only_open else [],
+                responsible_name=responsible_name,
+                collaborator_id=collaborator_id,
+                reference_date_from=reference_date_from,
+                reference_date_to=reference_date_to,
+                reason_id=reason_id,
+                pending_justification=pending_justification,
+                awaiting_review=awaiting_review,
+                has_justification=has_justification,
+                min_days_pending=min_days_pending,
             )
             conditions = [
                 *management_cases_engine.case_scope_conditions(user),
@@ -1320,12 +1419,28 @@ def build_mcp_server() -> FastMCP:
         only_overdue: bool = False,
         only_open: bool = False,
         search: str | None = None,
+        supervisor_user_id: int | None = None,
+        responsible_name: str | None = None,
+        collaborator_id: int | None = None,
+        reference_date_from: str | None = None,
+        reference_date_to: str | None = None,
+        reason_id: int | None = None,
+        pending_justification: bool = False,
+        awaiting_review: bool = False,
+        has_justification: bool | None = None,
+        min_days_pending: int | None = None,
+        page: int = 1,
+        page_size: int = 50,
     ) -> str:
         """Casos de gestão (desvios cobrados formalmente da matriz - produtividade abaixo da meta,
         dia vermelho do calendário, etc.), com justificativa do supervisor e decisão da matriz.
 
         Mesmo escopo de visibilidade da tela: quem não tem `management:review` só vê os casos das
         regionais que gerencia (ou dos quais é supervisor direto) - nunca a operação inteira.
+
+        Para "quem está devendo justificativa" agrupado por pessoa, use
+        `opr_management_pending_justifications`; para ler só os textos das justificativas, use
+        `opr_management_justifications`.
 
         Args:
             status: pending, justified, in_progress, resolved ou rejected.
@@ -1335,43 +1450,269 @@ def build_mcp_server() -> FastMCP:
             reference_year, reference_month: competência do caso.
             only_overdue: só casos abertos com prazo vencido.
             only_open: só casos ainda não encerrados (pending/justified/in_progress).
-            search: busca em responsável, regional ou métrica.
+            search: busca PARCIAL em responsável OU regional OU métrica ao mesmo tempo - para
+                casar a pessoa exata use `responsible_name`.
+            supervisor_user_id: casos de um supervisor específico.
+            responsible_name: nome EXATO do colaborador (ignora maiúscula/minúscula).
+            collaborator_id: id do colaborador cadastrado.
+            reference_date_from, reference_date_to: faixa de competência (AAAA-MM-DD, inclusiva).
+            reason_id: motivo escolhido na justificativa.
+            pending_justification: só o que ainda não foi justificado (status pending).
+            awaiting_review: só o que já foi justificado e espera a matriz (status justified).
+            has_justification: true = só com texto de justificativa; false = só sem.
+            min_days_pending: só casos abertos há pelo menos N dias corridos.
+            page, page_size: paginação (page_size máximo 200).
 
         Returns:
-            JSON {"summary": {...contadores...}, "items": [{status, severity, responsible_name,
-            regional, metric_name, expected_value, actual_value, deviation_value, is_overdue,
-            justification_text, action_plan, reviewed_by, ...}, ...]}.
+            JSON {"total", "page", "page_size", "summary": {...contadores do recorte INTEIRO...},
+            "items": [{status, severity, responsible_name, regional, metric_name, expected_value,
+            actual_value, deviation_value, is_overdue, justification_text, action_plan,
+            reviewed_by, ...}, ...]}. `total` é o recorte completo, `items` só a página pedida -
+            compare os dois antes de concluir "são só estes casos".
         """
         from app.modules.management import cases as management_cases
-        from app.modules.management.models import OPEN_CASE_STATUSES, ManagementCase
+        from app.modules.management.models import ManagementCase
 
-        user = _current_user()
-        if "management:read" not in permissions_for_user(user):
-            raise RuntimeError("Este usuário não tem permissão para consultar a Gestão Integrada (management:read).")
-        filters = management_cases.ManagementCaseFilters(
+        user = _management_user()
+        if page < 1:
+            raise ValueError("page deve ser >= 1.")
+        if not 1 <= page_size <= 200:
+            raise ValueError("page_size deve estar entre 1 e 200.")
+        filters = _management_case_filters(
             status=status,
             severity=severity,
             regional=regional,
+            supervisor_user_id=supervisor_user_id,
             case_type=case_type,
             reference_year=reference_year,
             reference_month=reference_month,
             only_overdue=only_overdue,
+            only_open=only_open,
             search=search,
-            statuses=list(OPEN_CASE_STATUSES) if only_open else [],
+            responsible_name=responsible_name,
+            collaborator_id=collaborator_id,
+            reference_date_from=reference_date_from,
+            reference_date_to=reference_date_to,
+            reason_id=reason_id,
+            pending_justification=pending_justification,
+            awaiting_review=awaiting_review,
+            has_justification=has_justification,
+            min_days_pending=min_days_pending,
         )
         with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.management_cases", "mcp")
             conditions = [*management_cases.case_scope_conditions(user), *management_cases.case_filter_conditions(filters)]
+            total = db.scalar(select(func.count(ManagementCase.id)).where(*conditions)) or 0
             rows = db.scalars(
                 select(ManagementCase)
                 .where(*conditions)
-                .order_by(ManagementCase.created_at.desc())
-                .limit(500)
+                .order_by(ManagementCase.reference_date.desc().nulls_last(), ManagementCase.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
             ).all()
             return _dump(
                 {
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
                     "summary": management_cases.summarize_cases(db, conditions),
                     "items": [management_cases.case_out(item).model_dump() for item in rows],
                 }
+            )
+
+    @mcp.tool(
+        name="opr_management_pending_justifications",
+        annotations={"title": "Pendências de justificativa por colaborador", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_management_pending_justifications(
+        regional: str | None = None,
+        responsible_name: str | None = None,
+        collaborator_id: int | None = None,
+        supervisor_user_id: int | None = None,
+        reference_date_from: str | None = None,
+        reference_date_to: str | None = None,
+        status: str | None = None,
+        severity: str | None = None,
+        case_type: str | None = None,
+        reference_year: int | None = None,
+        reference_month: int | None = None,
+        only_overdue: bool = False,
+        only_open: bool = True,
+        pending_justification: bool = False,
+        awaiting_review: bool = False,
+        min_days_pending: int | None = None,
+        search: str | None = None,
+        limit: int = 200,
+    ) -> str:
+        """"Quem está devendo justificativa" - uma linha por colaborador x regional, já ordenada
+        pela fila de cobrança (atrasado primeiro, depois quem tem mais pendência sem justificar,
+        depois a pendência mais velha).
+
+        Responde direto "quais colaboradores têm justificativa pendente nesta regional / neste
+        período", sem precisar listar caso por caso e agrupar depois. Cada linha traz o supervisor
+        responsável, o modelo de equipe, a idade da pendência e os ids dos casos abertos (pra abrir
+        o caso com `opr_management_cases` ou ler o texto com `opr_management_justifications`).
+
+        Atenção ao vocabulário de status: `pending` = a matriz cobrou e o supervisor AINDA NÃO
+        justificou; `justified` = justificado, esperando a decisão da matriz. Por padrão
+        (`only_open=true`) vêm os dois, mais `in_progress`. Use `pending_justification=true` pra
+        ver só quem não escreveu nada ainda.
+
+        Mesma visibilidade da tela: quem não é matriz só vê os próprios casos e os das regionais
+        que gerencia.
+
+        Args:
+            regional: nome da regional (normalizado internamente, ex.: "UNI JARU").
+            responsible_name: nome EXATO do colaborador (ignora maiúscula/minúscula).
+            collaborator_id: id do colaborador cadastrado.
+            supervisor_user_id: só as pendências sob um supervisor.
+            reference_date_from, reference_date_to: faixa de competência do caso (AAAA-MM-DD,
+                inclusiva nas duas pontas) - o recorte por dia/semana.
+            status, severity, case_type, reference_year, reference_month, only_overdue, search:
+                mesmos filtros de `opr_management_cases`.
+            only_open: padrão true - só casos ainda não encerrados, que é o que "pendência"
+                significa. Passe false pra incluir resolved/rejected no histórico.
+            pending_justification: só quem ainda não justificou (status pending).
+            awaiting_review: só o que já está justificado esperando a matriz.
+            min_days_pending: só pendências abertas há pelo menos N dias corridos.
+            limit: máximo de colaboradores na resposta (padrão 200).
+
+        Returns:
+            JSON {"total_collaborators", "total_cases", "truncated", "items": [{responsible_name,
+            regional, collaborator_id, supervisor_name, team_model_name, total_cases, open_cases,
+            pending_cases, justified_cases, in_progress_cases, closed_cases, overdue_cases,
+            high_severity_open, oldest_pending_date, max_days_pending, last_justified_at,
+            open_case_ids}, ...]}. `truncated=true` significa que havia mais colaboradores que o
+            `limit` - aumente o limite antes de concluir que a lista está completa.
+        """
+        user = _management_user()
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit deve estar entre 1 e 1000.")
+        filters = _management_case_filters(
+            status=status,
+            severity=severity,
+            regional=regional,
+            supervisor_user_id=supervisor_user_id,
+            case_type=case_type,
+            reference_year=reference_year,
+            reference_month=reference_month,
+            only_overdue=only_overdue,
+            only_open=only_open,
+            search=search,
+            responsible_name=responsible_name,
+            collaborator_id=collaborator_id,
+            reference_date_from=reference_date_from,
+            reference_date_to=reference_date_to,
+            reason_id=None,
+            pending_justification=pending_justification,
+            awaiting_review=awaiting_review,
+            has_justification=None,
+            min_days_pending=min_days_pending,
+        )
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.management_pending_justifications", "mcp")
+            conditions = [
+                *management_cases_engine.case_scope_conditions(user),
+                *management_cases_engine.case_filter_conditions(filters),
+            ]
+            return _dump(
+                management_cases_engine.pending_justifications_by_collaborator(db, conditions, limit=limit)
+            )
+
+    @mcp.tool(
+        name="opr_management_justifications",
+        annotations={"title": "Texto das justificativas de gestão", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_management_justifications(
+        regional: str | None = None,
+        responsible_name: str | None = None,
+        collaborator_id: int | None = None,
+        supervisor_user_id: int | None = None,
+        reference_date_from: str | None = None,
+        reference_date_to: str | None = None,
+        status: str | None = None,
+        severity: str | None = None,
+        case_type: str | None = None,
+        reference_year: int | None = None,
+        reference_month: int | None = None,
+        reason_id: int | None = None,
+        only_overdue: bool = False,
+        only_open: bool = False,
+        pending_justification: bool = False,
+        awaiting_review: bool = False,
+        has_justification: bool | None = None,
+        min_days_pending: int | None = None,
+        search: str | None = None,
+        include_comments: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> str:
+        """Lê as justificativas escritas pelos supervisores - o texto, o motivo escolhido, o plano
+        de ação e a decisão da matriz - por regional, colaborador e data.
+
+        É a leitura enxuta: só o que interessa da justificativa, sem o resto do payload do caso.
+        Para "quem ainda está devendo", use `opr_management_pending_justifications` primeiro e
+        depois traga os textos aqui.
+
+        Args:
+            regional: nome da regional (normalizado internamente).
+            responsible_name: nome EXATO do colaborador (ignora maiúscula/minúscula).
+            collaborator_id: id do colaborador cadastrado.
+            supervisor_user_id: só as justificativas sob um supervisor.
+            reference_date_from, reference_date_to: faixa de competência (AAAA-MM-DD, inclusiva).
+            status, severity, case_type, reference_year, reference_month, reason_id, only_overdue,
+                only_open, search: mesmos filtros de `opr_management_cases`.
+            pending_justification: casos ainda SEM justificativa (o texto vem vazio - útil pra
+                confirmar quem não escreveu nada).
+            awaiting_review: só justificado esperando a matriz.
+            has_justification: true = só o que já tem texto escrito (o caso de uso normal aqui).
+            min_days_pending: só casos abertos há pelo menos N dias corridos.
+            include_comments: traz também a thread de comentários de cada caso.
+            page, page_size: paginação (page_size máximo 200).
+
+        Returns:
+            JSON {"total", "page", "page_size", "items": [{case_id, reference_date, regional,
+            responsible_name, supervisor_name, status, severity, is_overdue, reason_name,
+            justification_text, action_plan, metric_name, expected_value, actual_value,
+            justified_at, reviewed_at, reviewer_name, comment_count, comments}, ...]}, do mais
+            recente pro mais antigo. `total` é o recorte inteiro, `items` só a página.
+        """
+        user = _management_user()
+        if page < 1:
+            raise ValueError("page deve ser >= 1.")
+        if not 1 <= page_size <= 200:
+            raise ValueError("page_size deve estar entre 1 e 200.")
+        filters = _management_case_filters(
+            status=status,
+            severity=severity,
+            regional=regional,
+            supervisor_user_id=supervisor_user_id,
+            case_type=case_type,
+            reference_year=reference_year,
+            reference_month=reference_month,
+            only_overdue=only_overdue,
+            only_open=only_open,
+            search=search,
+            responsible_name=responsible_name,
+            collaborator_id=collaborator_id,
+            reference_date_from=reference_date_from,
+            reference_date_to=reference_date_to,
+            reason_id=reason_id,
+            pending_justification=pending_justification,
+            awaiting_review=awaiting_review,
+            has_justification=has_justification,
+            min_days_pending=min_days_pending,
+        )
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.management_justifications", "mcp")
+            conditions = [
+                *management_cases_engine.case_scope_conditions(user),
+                *management_cases_engine.case_filter_conditions(filters),
+            ]
+            return _dump(
+                management_cases_engine.justification_rows(
+                    db, conditions, page=page, page_size=page_size, include_comments=include_comments
+                )
             )
 
     @mcp.tool(

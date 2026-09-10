@@ -99,6 +99,21 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     # análise sem precisar abrir a tela. `default_enabled=True`: é leitura agregada, mesmo dado que
     # a tela de Gestão já mostra a quem tem `management:read`.
     ("ai.management_cases_diagnostics", "Diagnóstico agregado de casos de gestão para IA (POST /ai/management/cases-diagnostics)", "api", True),
+    # Novo (pedido do usuário em 2026-09-10) - encontrar o colaborador com justificativa pendente e
+    # LER as justificativas por regional/colaborador/data, sem varrer a lista de casos.
+    # `ai.management_cases` NÃO entra aqui: a chave já existe lá acima (linha ~38, criada com a
+    # tool `opr_management_cases`) e agora passou a cobrir também `POST /ai/management/cases` e o
+    # gate da própria tool, que antes só checava `management:read` sem consultar a governança.
+    # `ai.management_pending_justifications` nasce habilitada: é o mesmo dado estruturado que
+    # `management:read` já vê na tela, na mesma linha do diagnóstico acima.
+    ("ai.management_pending_justifications", "Pendências de justificativa por colaborador para IA (POST /ai/management/pending-by-collaborator, opr_management_pending_justifications)", "api", True),
+    # Já `ai.management_justifications` nasce DESABILITADA de propósito: `justification_text`,
+    # `action_plan` e os comentários são texto livre escrito por supervisor sobre uma pessoa
+    # específica (motivo de falta, problema de saúde, conflito de equipe apareceram no dado real).
+    # Expor conteúdo desse tipo a uma chave de máquina é decisão de administrador, tomada de
+    # propósito na tela de governança - não um efeito colateral de subir esta versão. Mesmo
+    # racional dos endpoints de rede que nasceram com `default_enabled=False`.
+    ("ai.management_justifications", "Leitura do texto das justificativas de gestão para IA (POST /ai/management/justifications, opr_management_justifications)", "api", False),
 ]
 
 
