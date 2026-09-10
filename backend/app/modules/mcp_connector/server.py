@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -52,7 +52,17 @@ from app.modules.operations.onu_signal_snapshot import (
     query_onu_signal_history,
     query_onu_signal_status,
 )
-from app.modules.operations.queries import DATE_FIELD_COLUMNS, orders_by_identifiers
+from app.modules.support import opa_overview_service, router as support_router
+from app.modules.support.opa_filters import DATE_BASIS_COLUMNS, OpaAttendanceFilters, validate_opa_period
+from app.modules.operations import queries as operations_queries
+from app.modules.operations.queries import (
+    DATE_FIELD_COLUMNS,
+    FILTER_COLUMNS as OPERATIONS_FILTER_COLUMNS,
+    ORDER_SORT_COLUMNS as OPERATIONS_ORDER_SORT_COLUMNS,
+    SLA_RISK_LABELS,
+    SLA_RISK_ORDER,
+    orders_by_identifiers,
+)
 from app.modules.operations.schemas import OperationOrderDetailOut
 
 from .provider import SCOPE, OprMcpOAuthProvider, resolve_user_for_access_token
@@ -93,6 +103,32 @@ logger = logging.getLogger("mcp_connector")
 
 def _dump(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+
+
+def _iso_default(value: Any) -> str:
+    """Serializa datetime/date em ISO 8601 (com o "T" separando data e hora).
+
+    Existe porque `_dump` usa `default=str`, e `str(datetime)` produz "2026-09-10 20:24:57"
+    (espaço no lugar do "T") - que NÃO é ISO 8601 e é rejeitado por parser estrito. A mesma
+    leitura pela rota HTTP volta como "2026-09-10T20:24:57", porque o Pydantic serializa
+    corretamente. Achado real, pego pelo teste de paridade MCP x HTTP em 2026-09-10.
+
+    Aplicado só nas tools novas desta rodada de propósito: trocar o `default` de `_dump` mudaria
+    o formato de saída das 30 tools que já existem - uma quebra de contrato que precisa ser
+    decidida à parte, não um efeito colateral desta entrega. Ver a recomendação em
+    `docs/STATUS.md`.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _dump_iso(data: Any) -> str:
+    """`_dump` com datas em ISO 8601 - use nas tools cuja resposta precisa bater campo a campo
+    com a da rota HTTP equivalente."""
+    return json.dumps(data, indent=2, ensure_ascii=False, default=_iso_default)
 
 
 def _parse_date(value: str) -> date:
@@ -155,6 +191,268 @@ def _enforce(callable_, *args, **kwargs):
         return callable_(*args, **kwargs)
     except HTTPException as exc:
         raise ValueError(str(exc.detail)) from exc
+
+
+# --- SGP Suporte / OPA Suite ------------------------------------------------------------------
+
+SUPPORT_FILTERS_DOC = """dicionário opcional com o recorte de atendimentos, as MESMAS chaves que a
+                tela /suporte usa (todas opcionais; chave desconhecida gera erro, nunca é
+                ignorada):
+                - status, channel: status e canal do atendimento.
+                - attendant_id, department_id, reason_id, customer_id, tag_id: filtro por ID.
+                  Aceitam vários IDs separados por vírgula numa única string (ex.: "A-1,A-2"),
+                  em OU entre eles.
+                - attendant, department, reason: filtro por NOME EXATO, alternativa aos IDs acima.
+                - protocol, customer: protocolo e cliente do atendimento.
+                - search: busca livre.
+                - rating_min, rating_max: nota da pesquisa de satisfação, de 0 a 5.
+                - bot_human: recorte de participação de bot - with_bot, without_bot,
+                  reached_human, bot_only, handoff ou unclassified. Atenção: as colunas por trás
+                  são anuláveis e NULL significa "não classificado" (histórico antigo ou
+                  mensagens indisponíveis); todos esses recortes EXCLUEM os não classificados dos
+                  dois lados, então with_bot + without_bot pode somar menos que o total. Use
+                  "unclassified" para medir esse resto."""
+
+# Campos de `OpaAttendanceFilters` que o chamador pode preencher. `date_from`/`date_to`/
+# `date_basis` ficam de fora de propósito: são parâmetros de primeira classe das tools, não parte
+# do dicionário de recorte.
+_SUPPORT_FILTER_KEYS = frozenset(
+    {
+        "status",
+        "channel",
+        "attendant_id",
+        "department_id",
+        "reason_id",
+        "attendant",
+        "department",
+        "reason",
+        "protocol",
+        "customer",
+        "search",
+        "tag_id",
+        "customer_id",
+        "rating_min",
+        "rating_max",
+        "bot_human",
+    }
+)
+_SUPPORT_DATE_BASIS = frozenset(DATE_BASIS_COLUMNS)
+
+
+SUPPORT_OVERVIEW_DESCRIPTION = """Obtém indicadores consolidados do SGP Suporte/OPA Suite para o período solicitado,
+incluindo TMA (duração do atendimento), TMR (tempo de resposta) e a comparação automática
+com o período imediatamente anterior de mesma duração.
+
+Mesmo cálculo dos cards da tela /suporte (`expanded_overview`) - não é um número paralelo.
+
+Período: no máximo 32 dias por chamada, interpretado no fuso operacional
+America/Porto_Velho (o "dia" é o dia local, não UTC). `date_basis` decide se o período
+filtra pela ABERTURA (default) ou pelo ENCERRAMENTO do atendimento - em "closed_at",
+atendimentos ainda abertos nunca aparecem, por definição.
+
+O período comparativo é derivado automaticamente: mesma duração, imediatamente antes de
+date_from, com os MESMOS filtros. Não é passado por parâmetro.
+
+Args:
+    date_from, date_to: AAAA-MM-DD, inclusivos.
+    date_basis: opened_at (default) ou closed_at.
+    support_filters: """ + SUPPORT_FILTERS_DOC + """
+
+Returns:
+    JSON com o período atual e o anterior, e os indicadores. Os campos de comparação vêm
+    como {"current", "previous", "absolute_change", "percentage_change"}: total_attendances,
+    closed_attendances, open_attendances, closure_rate (percentual),
+    average_duration_seconds (TMA), average_rating, average_tmr_seconds (TMR da primeira
+    resposta), average_tmr_all_responses_seconds (TMR de todas as respostas),
+    distinct_attendants, distinct_departments. Sem comparação (só período atual):
+    tmr_all_responses_coverage (denominador real da média de TMR geral), by_channel,
+    by_status, customers, top_reasons, average_first_response_seconds, bot_human.
+    Tempos SEMPRE em segundos. Média `null` significa "sem base para calcular" no período
+    (nenhum atendimento com aquele dado), não zero.
+"""
+
+
+SUPPORT_BREAKDOWNS_DESCRIPTION = """Agrupa indicadores do SGP Suporte pelas dimensões suportadas - responde "quem/qual mais
+atendeu, com que TMA e que nota" sem precisar baixar os atendimentos um por um.
+
+Dimensões: attendant (atendente), department (departamento), reason (motivo), channel
+(canal), status, customer (cliente). Qualquer outro nome é rejeitado.
+
+Quando `date_from` e `date_to` são informados, cada linha traz também a comparação com o
+período anterior de mesma duração (previous_total, total_change, ...). Sem período, essas
+colunas de comparação vêm zeradas - não há período anterior de que compará-las.
+
+Args:
+    dimension: attendant, department, reason, channel, status ou customer.
+    date_from, date_to: AAAA-MM-DD, inclusivos, no máximo 32 dias. Opcionais aqui (ao
+        contrário de opr_support_overview) - sem eles a agregação varre todo o histórico
+        importado e não há comparativo.
+    date_basis: opened_at (default) ou closed_at.
+    sort_by: label, total (default), closed, open, closure_rate, avg_duration_seconds,
+        avg_rating, rating_count ou share_percentage.
+    sort_dir: desc (default) ou asc.
+    limit: top N linhas, 1 a 200 (default 20). `total` na resposta é o universo inteiro
+        do recorte, não a soma das linhas devolvidas.
+    support_filters: """ + SUPPORT_FILTERS_DOC + """
+
+Returns:
+    JSON {"dimension", "total", "limit", "sort_by", "sort_dir", "items": [...]}. Cada item:
+    {id, label, total, closed, open, closure_rate, avg_duration_seconds, avg_rating,
+    rating_count, share_percentage} mais os campos de comparação. `label` "Não
+    identificado" = a origem não informou nome para aquele id. Um recorte sem nenhum
+    atendimento devolve total=0 e items=[] - consulta válida, sem registros.
+"""
+
+
+SUPPORT_TIMESERIES_DESCRIPTION = """Obtém a evolução temporal dos indicadores do SGP Suporte - decomposição diária do MESMO
+recorte de `opr_support_overview`, não um cálculo paralelo.
+
+Granularidade: DIÁRIA, a única que existe nesta superfície (não há semana/mês aqui - para
+comparar meses, chame o overview uma vez por mês). Cada `day` é o dia local de operação
+(America/Porto_Velho). Período máximo de 32 dias por chamada.
+
+Dias sem nenhum atendimento aparecem com total/closed/open = 0, de propósito (um buraco na
+série esconderia justamente o dia parado). Já as MÉDIAS desses dias vêm `null`, não zero -
+não havia nada para tirar média. Não confunda os dois.
+
+Args:
+    date_from, date_to: AAAA-MM-DD, inclusivos.
+    date_basis: opened_at (default) ou closed_at.
+    support_filters: """ + SUPPORT_FILTERS_DOC + """
+
+Returns:
+    JSON {"date_basis", "date_from", "date_to", "points": [{day, total, closed, open,
+    average_duration_seconds, average_tmr_seconds, average_tmr_all_responses_seconds,
+    average_rating, tmr_all_responses_coverage}]}, um ponto por dia do período, em ordem.
+    Tempos em segundos.
+"""
+
+
+def _support_user():
+    """Usuário autenticado da chamada, checado contra `support:read` - a MESMA permissão que o
+    router do módulo exige em todas as rotas (`dependencies=[require_permission("support:read")]`).
+    O SGP não tem escopo por regional/atendente: quem tem a permissão vê o módulo inteiro na tela,
+    e as tools preservam isso, sem ampliar nem restringir."""
+    user = _current_user()
+    if "support:read" not in permissions_for_user(user):
+        raise RuntimeError("Este usuário não tem permissão para consultar o SGP Suporte (support:read).")
+    return user
+
+
+def _support_filters(
+    *,
+    date_from: str | None,
+    date_to: str | None,
+    date_basis: str,
+    extra: dict[str, Any] | None,
+) -> OpaAttendanceFilters:
+    """Monta o `OpaAttendanceFilters` real do módulo a partir dos parâmetros da tool.
+
+    Valida antes de montar: `date_basis` fora do mapa real cairia no default "opened_at" dentro de
+    `apply_opa_attendance_filters` (`DATE_BASIS_COLUMNS.get(..., default)`) e devolveria um recorte
+    diferente do pedido sem erro nenhum. O período passa por `validate_opa_period`, a MESMA regra
+    da tela (ordem das datas e teto de 32 dias)."""
+    if date_basis not in _SUPPORT_DATE_BASIS:
+        raise ValueError(
+            f"date_basis inválido: {date_basis!r}. Use um destes: {', '.join(sorted(_SUPPORT_DATE_BASIS))}."
+        )
+    unknown = sorted(set(extra or {}) - _SUPPORT_FILTER_KEYS)
+    if unknown:
+        hint = ""
+        if {"date_from", "date_to", "date_basis"} & set(unknown):
+            hint = " Período e date_basis são parâmetros próprios da tool, não vão em support_filters."
+        raise ValueError(
+            f"Filtro(s) não suportado(s) pelo SGP Suporte: {', '.join(unknown)}. "
+            f"Aceitos: {', '.join(sorted(_SUPPORT_FILTER_KEYS))}.{hint}"
+        )
+    parsed_from = _parse_date(date_from) if date_from else None
+    parsed_to = _parse_date(date_to) if date_to else None
+    if parsed_from and parsed_to:
+        # Mesma validação (e mesma mensagem) da tela - inclusive o teto de 32 dias.
+        _enforce(validate_opa_period, parsed_from, parsed_to)
+    values = {key: value for key, value in (extra or {}).items() if value is not None}
+    return OpaAttendanceFilters(
+        date_from=parsed_from,
+        date_to=parsed_to,
+        date_basis=date_basis,
+        **values,
+    )
+
+
+# --- Estado operacional atual (opr_operations_now) --------------------------------------------
+
+# Chaves de `filters` que `operations_queries._dimension_conditions` REALMENTE honra: as de
+# `FILTER_COLUMNS` (listas de valor exato), mais `team_models`, os recortes de dia da semana, a
+# janela semanal customizada, a busca livre e a faixa de horário de fechamento.
+#
+# Esta lista é declarada à parte de `AiOrderFilters` (usada por `_validated_filters`) de propósito:
+# `AiOrderFilters` aceita MAIS coisa do que `_dimension_conditions` sabe aplicar - `text_filters`,
+# `has_coordinates`, `near_latitude`/`near_longitude`/`radius_km` e os filtros de datetime exato
+# são interpretados por `ai.queries`, não por `_dimension_conditions`. Reaproveitar `AiOrderFilters`
+# aqui aceitaria esses campos e os descartaria em silêncio - exatamente o modo de falha que o
+# comentário de `_validated_filters` descreve (quem chamou lê "o filtro não funciona", sem erro
+# nenhum). Para recorte geográfico ou de texto em O.S. aberta, use `opr_search_orders`.
+_OPERATIONS_NOW_LIST_FILTERS = frozenset(
+    {
+        *OPERATIONS_FILTER_COLUMNS.keys(),
+        "team_models",
+        "opened_weekdays",
+        "closed_weekdays",
+        "custom_window_basis",
+    }
+)
+_OPERATIONS_NOW_SCALAR_FILTERS = frozenset(
+    {
+        "custom_window_start_weekday",
+        "custom_window_start_time",
+        "custom_window_end_weekday",
+        "custom_window_end_time",
+        "closed_time_from",
+        "closed_time_to",
+        "search",
+    }
+)
+_OPERATIONS_NOW_FILTER_KEYS = _OPERATIONS_NOW_LIST_FILTERS | _OPERATIONS_NOW_SCALAR_FILTERS
+
+# Dimensões que `in_progress_breakdown` conhece. Declaradas aqui porque a função original faz
+# `allowed_groups.get(group_by, OperationOrder.regional)` - um nome errado cairia em "regional"
+# sem avisar, e a resposta pareceria legítima. A tool valida antes de chamar.
+_OPERATIONS_NOW_GROUP_BY = frozenset({"regional", "city", "os_type", "subject", "status"})
+
+
+def _validated_in_progress_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
+    """Valida `filters` contra o que `_dimension_conditions` aplica de fato, rejeitando chave
+    desconhecida em vez de ignorá-la (mesmo contrato de `_validated_filters`, outro universo de
+    chaves - ver o comentário de `_OPERATIONS_NOW_LIST_FILTERS`)."""
+    if not filters:
+        return {}
+    unknown = sorted(set(filters) - _OPERATIONS_NOW_FILTER_KEYS)
+    if unknown:
+        geo_or_text = sorted(
+            key
+            for key in unknown
+            if key in {"text_filters", "has_coordinates", "near_latitude", "near_longitude", "radius_km"}
+        )
+        extra = (
+            " Filtro geográfico e de texto livre não existe nesta superfície (a tela de O.S. em "
+            "andamento não os oferece) - use opr_search_orders para isso."
+            if geo_or_text
+            else ""
+        )
+        raise ValueError(
+            f"Filtro(s) não suportado(s) por opr_operations_now: {', '.join(unknown)}. "
+            f"Aceitos: {', '.join(sorted(_OPERATIONS_NOW_FILTER_KEYS))}.{extra}"
+        )
+    cleaned: dict[str, Any] = {}
+    for key, value in filters.items():
+        if value is None:
+            continue
+        if key in _OPERATIONS_NOW_LIST_FILTERS and not isinstance(value, list):
+            raise ValueError(f"Filtro '{key}' espera uma lista de valores, recebeu {type(value).__name__}.")
+        if key in _OPERATIONS_NOW_SCALAR_FILTERS and isinstance(value, list):
+            raise ValueError(f"Filtro '{key}' espera um valor único, não uma lista.")
+        cleaned[key] = value
+    return cleaned
 
 
 def _management_user():
@@ -513,6 +811,223 @@ def build_mcp_server() -> FastMCP:
                     "items": items,
                     "not_found_order_codes": sorted(set(order_codes or []) - found_order_codes),
                     "not_found_source_order_ids": sorted(set(source_order_ids or []) - found_source_order_ids),
+                }
+            )
+
+    @mcp.tool(
+        name="opr_data_freshness",
+        annotations={"title": "Frescor dos dados operacionais", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_data_freshness() -> str:
+        """Verifica o frescor/atualização dos dados operacionais disponíveis: quando a última
+        importação de O.S. do IXC terminou com sucesso e que período ela cobriu.
+
+        Use ANTES de concluir qualquer análise operacional sensível a "agora" (backlog, SLA em
+        risco, produção do dia). Todas as outras ferramentas leem a projeção `operations_*`
+        alimentada por essa importação - se ela travou, elas respondem com dado velho sem avisar.
+
+        Escopo: cobre APENAS a Operação Analítica (O.S. vindas do IXC). O frescor do SGP
+        Suporte/OPA Suite e do Agendamento tem controle próprio, sob permissão de sincronização, e
+        não é lido aqui.
+
+        Sem parâmetros: a consulta original não tem filtro nenhum, é o estado global da última
+        importação bem-sucedida.
+
+        Returns:
+            JSON {"last_successful_import_at", "status", "date_from", "date_to",
+            "checked_at", "age_seconds", "has_data"}.
+            - last_successful_import_at: fim da última importação com status "completed" ou
+              "completed_with_warnings" (UTC, ISO8601). `null` = nunca houve importação
+              bem-sucedida registrada.
+            - status: o status dessa run ("completed" ou "completed_with_warnings" - o segundo
+              significa que importou, mas com avisos).
+            - date_from/date_to: o período de O.S. que essa importação cobriu.
+            - checked_at: instante desta consulta (UTC), a referência de "agora".
+            - age_seconds: idade em segundos = checked_at - last_successful_import_at. `null`
+              quando não há importação. É aritmética simples sobre os dois campos acima, NÃO uma
+              classificação de atraso: o sistema não define limite de "atrasado após X", então
+              nenhuma etiqueta desse tipo é devolvida aqui. Compare com o intervalo de
+              sincronização real configurado antes de chamar algo de atrasado.
+            - has_data: false quando não há nenhuma importação bem-sucedida (todos os campos de
+              data vêm nulos) - distingue "nunca importou" de "importou e está velho".
+        """
+        user = _current_user()  # exige autenticação; a consulta não é escopada por usuário
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.data_freshness", "mcp")
+            # Reusa a MESMA função da rota GET /operations/data-freshness, sem filtro nenhum.
+            freshness = operations_queries.data_freshness(db)
+            checked_at = datetime.now(timezone.utc)
+            last_import = freshness.get("last_successful_import_at")
+            age_seconds = None
+            if last_import is not None:
+                # SQLite (testes) devolve datetime sem tzinfo; o dado é persistido em UTC - mesmo
+                # fallback explícito de `operations_queries._as_utc`.
+                reference = last_import if last_import.tzinfo else last_import.replace(tzinfo=timezone.utc)
+                age_seconds = int((checked_at - reference).total_seconds())
+            return _dump_iso(
+                {
+                    **freshness,
+                    "checked_at": checked_at,
+                    "age_seconds": age_seconds,
+                    "has_data": last_import is not None,
+                }
+            )
+
+    @mcp.tool(
+        name="opr_operations_now",
+        annotations={"title": "Estado operacional atual (O.S. em andamento)", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_operations_now(
+        group_by: str = "regional",
+        filters: dict[str, Any] | None = None,
+        sla_risk: str | None = None,
+        include_orders: bool = False,
+        page: int = 1,
+        page_size: int = 50,
+        sort_by: str | None = None,
+        sort_dir: str = "asc",
+        fields: list[str] | None = None,
+        response_mode: str = "summary",
+    ) -> str:
+        """Consulta o estado atual das O.S. em andamento e os riscos de SLA - o "agora" da
+        operação, não um recorte histórico.
+
+        Diferente de todas as outras ferramentas de O.S., NÃO recebe período: o universo é
+        exatamente "O.S. ainda não fechada" (`is_closed = false`), o mesmo da tela de O.S. em
+        andamento. Para histórico use `opr_aggregate_orders`/`opr_search_orders`.
+
+        A classificação de risco é preditiva: compara horas decorridas contra a meta de SLA e diz
+        quanto da meta já foi consumido, ANTES de vencer - diferente de `sla_status`, que só vira
+        "fora do prazo" depois do vencimento. Os cinco baldes são os da própria aplicação:
+        breached (100%+ consumido), critical (80-99%), attention (50-79%), on_track (<50%) e
+        no_target (O.S. sem meta de SLA cadastrada - não é "tranquilo", é "não mensurável").
+
+        Confira `opr_data_freshness` antes de agir sobre este resultado: as horas decorridas são
+        recalculadas a cada sincronização do IXC, então uma importação travada envelhece o risco.
+
+        Args:
+            group_by: dimensão do resumo por quantidade - regional (default), city, os_type,
+                subject ou status. Nome inválido é rejeitado explicitamente.
+            filters: recorte opcional, só com as chaves que esta superfície aplica de verdade -
+                listas de valor exato (regionals, cities, os_types, subjects, diagnoses,
+                departments, sectors, priorities, creators, responsibles, responsible_ixc_ids,
+                statuses, sla_statuses, companies, states, contract_types, person_types, projects,
+                pops, customer_logins, team_models), os recortes de dia da semana
+                (opened_weekdays, closed_weekdays), a janela semanal customizada
+                (custom_window_*), a faixa de horário de fechamento (closed_time_from/to) e
+                `search` (busca livre). Chave desconhecida gera erro - nada é ignorado em
+                silêncio. Filtro geográfico e de texto por campo NÃO existem aqui.
+            sla_risk: quando `include_orders=true`, restringe as O.S. listadas a um único balde
+                (breached, critical, attention, on_track ou no_target). Não afeta os contadores.
+            include_orders: false (default) devolve só o resumo agregado. true acrescenta a página
+                de O.S. individuais - exige a permissão de ver detalhes de O.S., a mesma da tela.
+            page, page_size: paginação das O.S. individuais (page_size de 10 a 200).
+            sort_by: ordenação das O.S. - order_code, customer, regional, type_subject,
+                responsible, opened_at, closed_at, status ou sla_status. Default opened_at.
+            sort_dir: asc (default) ou desc.
+            fields: subconjunto de campos de cada O.S., rejeitado se algum nome não existir ou não
+                estiver autorizado para este perfil - nunca omitido em silêncio.
+            response_mode: "summary" (default aqui, poucos campos por O.S.) ou "full" (todos os
+                campos autorizados). Só tem efeito com include_orders=true.
+
+        Returns:
+            JSON {"checked_at", "total_in_progress", "sla_risk": [...], "breakdown": {...},
+            "applied_filters", "orders"}.
+            - sla_risk: os cinco baldes SEMPRE presentes, mesmo com quantity=0, cada um
+              {bucket, label, quantity, percentage} - a ausência de um balde na resposta nunca
+              significa "zero".
+            - breakdown: {"group_by", "items": [{label, quantity, percentage}]}, do maior pro
+              menor. `label` "Não identificado" = valor nulo na origem.
+            - applied_filters: exatamente as chaves de filtro que entraram na consulta (filtro
+              inválido não chega aqui, erra antes).
+            - orders: `null` quando include_orders=false; senão {"items", "total", "page",
+              "page_size", "total_pages"} - compare `total` com o tamanho de `items` antes de
+              concluir que viu tudo.
+        """
+        if group_by not in _OPERATIONS_NOW_GROUP_BY:
+            raise ValueError(
+                f"group_by inválido: {group_by!r}. Use um destes: {', '.join(sorted(_OPERATIONS_NOW_GROUP_BY))}. "
+                "(A camada de consulta cairia em 'regional' silenciosamente - preferimos errar.)"
+            )
+        if sla_risk is not None and sla_risk not in SLA_RISK_LABELS:
+            raise ValueError(
+                f"sla_risk inválido: {sla_risk!r}. Use um destes: {', '.join(SLA_RISK_ORDER)}."
+            )
+        if sort_by is not None and sort_by not in OPERATIONS_ORDER_SORT_COLUMNS:
+            raise ValueError(
+                f"sort_by inválido: {sort_by!r}. Use um destes: "
+                f"{', '.join(sorted(OPERATIONS_ORDER_SORT_COLUMNS))}."
+            )
+        if sort_dir not in ("asc", "desc"):
+            raise ValueError(f"sort_dir inválido: {sort_dir!r}. Use 'asc' ou 'desc'.")
+        if sla_risk is not None and not include_orders:
+            raise ValueError(
+                "sla_risk só recorta a lista de O.S. individuais, que não foi pedida "
+                "(include_orders=false). Passe include_orders=true, ou leia a quantidade desse "
+                "balde direto em sla_risk no resumo."
+            )
+        if include_orders and not 10 <= page_size <= 200:
+            raise ValueError("page_size deve estar entre 10 e 200.")
+        if include_orders and page < 1:
+            raise ValueError("page deve ser >= 1.")
+
+        user = _current_user()
+        permissions = permissions_for_user(user)
+        # Mesmas permissões que a tela exige nas rotas /operations/in-progress*: ver backlog para
+        # o resumo, e ver detalhes de O.S. também para a lista individual.
+        if "operations:view_backlog" not in permissions:
+            raise RuntimeError("Este usuário não tem permissão para ver o backlog da Operação (operations:view_backlog).")
+        if include_orders and "operations:view_order_details" not in permissions:
+            raise RuntimeError(
+                "Este usuário não tem permissão para ver detalhes de O.S. "
+                "(operations:view_order_details) - chame de novo com include_orders=false para o "
+                "resumo agregado."
+            )
+        validated = _validated_in_progress_filters(filters)
+        with SessionLocal() as db:
+            policy = _enforce(enforce_ai_endpoint_for_user, db, user, "ai.operations_now", "mcp")
+            checked_at = datetime.now(timezone.utc)
+            # As três funções abaixo são as MESMAS que as rotas da tela chamam, e cada uma aplica
+            # `_dimension_conditions`, que impõe o escopo regional DO USUÁRIO - o filtro recebido
+            # nunca amplia o acesso.
+            risk = operations_queries.in_progress_sla_risk(db, user, **validated)
+            breakdown = operations_queries.in_progress_breakdown(db, user, group_by, **validated)
+            orders_payload = None
+            if include_orders:
+                validated_fields = _enforce(
+                    enforce_requested_fields, policy, ENTITY_OPERATION_ORDERS, fields, "detail_available"
+                )
+                output_fields = resolve_ai_order_details_output_fields(policy, response_mode, validated_fields)
+                page_result = operations_queries.in_progress_order_page(
+                    db,
+                    user,
+                    page=page,
+                    page_size=page_size,
+                    sort_by=sort_by,
+                    sort_dir=sort_dir,
+                    sla_risk=sla_risk,
+                    **validated,
+                )
+                items = []
+                for order in page_result["items"]:
+                    # Mesma serialização + mesmo recorte de campo governado de opr_order_details -
+                    # sem isso, uma tool nova devolveria campos de O.S. que a política de IA
+                    # restringe nas outras.
+                    detail = OperationOrderDetailOut.model_validate(order).model_dump()
+                    if output_fields is not None:
+                        detail = {key: value for key, value in detail.items() if key in output_fields}
+                    items.append(detail)
+                orders_payload = {**page_result, "items": items, "sla_risk_filter": sla_risk}
+            return _dump_iso(
+                {
+                    "checked_at": checked_at,
+                    # O total vem da soma dos baldes, que cobrem o universo inteiro de O.S. aberta
+                    # do recorte - não de uma quarta consulta que poderia divergir.
+                    "total_in_progress": sum(item["quantity"] for item in risk),
+                    "sla_risk": risk,
+                    "breakdown": {"group_by": group_by, "items": breakdown},
+                    "applied_filters": validated,
+                    "orders": orders_payload,
                 }
             )
 
@@ -1713,6 +2228,121 @@ def build_mcp_server() -> FastMCP:
                 management_cases_engine.justification_rows(
                     db, conditions, page=page, page_size=page_size, include_comments=include_comments
                 )
+            )
+
+    @mcp.tool(
+        name="opr_support_overview",
+        description=SUPPORT_OVERVIEW_DESCRIPTION,
+        annotations={"title": "Visão geral do SGP Suporte", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_support_overview(
+        date_from: str,
+        date_to: str,
+        date_basis: str = "opened_at",
+        support_filters: dict[str, Any] | None = None,
+    ) -> str:
+        """Indicadores consolidados do SGP Suporte (TMA/TMR + comparativo). Ver SUPPORT_OVERVIEW_DESCRIPTION.
+
+        A descricao completa que a IA le vai em `description=` no decorador - docstring
+        montada com concatenacao de variavel NAO vira __doc__ (fica None).
+        """
+
+        user = _support_user()
+        filters = _support_filters(date_from=date_from, date_to=date_to, date_basis=date_basis, extra=support_filters)
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.support_overview", "mcp")
+            previous = filters.previous_period()
+            result = _enforce(opa_overview_service.expanded_overview, db, filters)
+            return _dump_iso(
+                {
+                    "current_period": {"date_from": filters.date_from, "date_to": filters.date_to},
+                    "previous_period": {"date_from": previous.date_from, "date_to": previous.date_to},
+                    "date_basis": filters.date_basis,
+                    **result,
+                }
+            )
+
+    @mcp.tool(
+        name="opr_support_breakdowns",
+        description=SUPPORT_BREAKDOWNS_DESCRIPTION,
+        annotations={"title": "Breakdowns do SGP Suporte", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_support_breakdowns(
+        dimension: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        date_basis: str = "opened_at",
+        sort_by: str = "total",
+        sort_dir: str = "desc",
+        limit: int = 20,
+        support_filters: dict[str, Any] | None = None,
+    ) -> str:
+        """Indicadores do SGP Suporte agrupados por dimensao. Ver SUPPORT_BREAKDOWNS_DESCRIPTION.
+
+        A descricao completa que a IA le vai em `description=` no decorador - docstring
+        montada com concatenacao de variavel NAO vira __doc__ (fica None).
+        """
+
+        if not 1 <= limit <= 200:
+            raise ValueError("limit deve estar entre 1 e 200.")
+        if sort_dir not in ("asc", "desc"):
+            raise ValueError(f"sort_dir inválido: {sort_dir!r}. Use 'asc' ou 'desc'.")
+        user = _support_user()
+        filters = _support_filters(date_from=date_from, date_to=date_to, date_basis=date_basis, extra=support_filters)
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.support_breakdowns", "mcp")
+            # `_opa_breakdown_rows` valida dimensão e sort_by levantando HTTPException(422) - o
+            # `_enforce` traduz isso na mensagem de erro que o cliente MCP lê.
+            total, items = _enforce(
+                support_router._opa_breakdown_rows,
+                db,
+                dimension=dimension,
+                filters=filters,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
+                limit=limit,
+            )
+            return _dump_iso(
+                {
+                    "dimension": dimension,
+                    "total": total,
+                    "limit": limit,
+                    "sort_by": sort_by,
+                    "sort_dir": sort_dir,
+                    "date_basis": filters.date_basis,
+                    "items": items,
+                }
+            )
+
+    @mcp.tool(
+        name="opr_support_timeseries",
+        description=SUPPORT_TIMESERIES_DESCRIPTION,
+        annotations={"title": "Série temporal do SGP Suporte", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_support_timeseries(
+        date_from: str,
+        date_to: str,
+        date_basis: str = "opened_at",
+        support_filters: dict[str, Any] | None = None,
+    ) -> str:
+        """Serie diaria dos indicadores do SGP Suporte. Ver SUPPORT_TIMESERIES_DESCRIPTION.
+
+        A descricao completa que a IA le vai em `description=` no decorador - docstring
+        montada com concatenacao de variavel NAO vira __doc__ (fica None).
+        """
+
+        user = _support_user()
+        filters = _support_filters(date_from=date_from, date_to=date_to, date_basis=date_basis, extra=support_filters)
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.support_timeseries", "mcp")
+            points = _enforce(opa_overview_service.daily_timeseries, db, filters)
+            return _dump_iso(
+                {
+                    "date_basis": filters.date_basis,
+                    "date_from": filters.date_from,
+                    "date_to": filters.date_to,
+                    "points": points,
+                }
             )
 
     @mcp.tool(

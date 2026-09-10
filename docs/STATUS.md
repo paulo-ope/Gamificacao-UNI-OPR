@@ -17,6 +17,59 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **1º pacote de expansão da exposição MCP: frescor do dado, "agora" da operação e SGP Suporte**
+  (2026-09-10, usuário: "quais endpoints novos podemos disponibilizar para facilitar minha vida" →
+  pacote com `opr_data_freshness`, `opr_operations_now` e as 3 do SGP Suporte). MCP passou de
+  **30 para 35 tools**.
+  - **Motivação medida na auditoria:** o MCP cobria O.S. e rede com profundidade (21 tools) e
+    **nada do "agora"** — `in-progress`, `sla-risk` e `data-freshness` existiam na tela e não para
+    a IA. E o **SGP Suporte tinha 23 rotas HTTP e zero tools**. Gamificação e Localiza seguem com
+    zero (fora deste pacote, de propósito).
+  - **Nenhuma regra nova.** As 5 tools chamam as MESMAS funções das rotas:
+    `operations_queries.data_freshness`, `in_progress_sla_risk`, `in_progress_breakdown`,
+    `in_progress_order_page`, `opa_overview_service.expanded_overview`, `daily_timeseries` e
+    `support_router._opa_breakdown_rows`.
+  - **Onde o trabalho real estava: filtro que seria ignorado em silêncio.** Três armadilhas
+    encontradas na camada reusada, todas com fallback silencioso — a tool valida ANTES e erra:
+    `in_progress_breakdown` faz `allowed_groups.get(group_by, regional)` (um `group_by="responsible"`
+    viraria agrupamento por regional com cara de legítimo); `_order_sort_clauses` cai em
+    `opened_at`; e `apply_opa_attendance_filters` faz `DATE_BASIS_COLUMNS.get(basis, opened_at)`.
+  - **`AiOrderFilters` NÃO serve para `opr_operations_now`** e por isso existe
+    `_validated_in_progress_filters`: `_dimension_conditions` não aplica `text_filters`,
+    `has_coordinates` nem `near_*`/`radius_km` (isso é lido por `ai.queries`). Aceitá-los ali
+    seria descartá-los sem erro. A mensagem de erro aponta `opr_search_orders` como alternativa.
+  - **Divergências do desenho inicial, corrigidas contra o código real:** o SLA em andamento tem
+    **5** baldes, não 4 — `no_target` (sem meta cadastrada) não é "tranquilo", é "não mensurável";
+    `in_progress_breakdown` **não** agrupa por `sector` nem `responsible`; a série do SGP é
+    **só diária** (não há semana/mês); e `data_freshness` é bem mais estreito do que parecia — 4
+    campos sobre a última run de importação, **sem** noção de fonte/dataset e **sem** classificação
+    de atraso. Nenhuma dessas foi inventada; `age_seconds` é aritmética explícita e vem documentada
+    como "não é classificação de atraso".
+  - **Achado do teste de paridade MCP × HTTP (novo `test_mcp_new_tools_match_http.py`):** `_dump`
+    serializa datetime com `default=str`, produzindo `"2026-09-10 20:24:57"` — espaço no lugar do
+    "T", ou seja **não é ISO 8601** e quebra parser estrito. A mesma leitura pela rota HTTP volta
+    com "T" (Pydantic). Corrigido com `_dump_iso` **só nas 5 tools novas**; trocar o `default` de
+    `_dump` mudaria a saída das 30 tools existentes. **Recomendação separada, não feita aqui:**
+    decidir se as 30 antigas migram para ISO 8601 (é quebra de contrato deliberada).
+  - **Autorização preservada, não ampliada:** `opr_operations_now` exige `operations:view_backlog`
+    e, só com `include_orders=true`, também `operations:view_order_details` — a mesma dupla das
+    rotas. As O.S. individuais passam pela MESMA política de campo de `ai.order_details`
+    (`OperationOrderDetailOut` + `enforce_requested_fields`), então a tool nova não é porta lateral
+    para campo que a política restringe nas outras. As 3 do SGP exigem `support:read`, a permissão
+    de router do módulo. Nenhum papel legado, aliás, tem `view_backlog` sem `view_order_details`:
+    hoje só `admin` tem `view_backlog`, e `operator` tem o detalhe sem o backlog — os testes montam
+    a combinação com `UserPermissionOverride`, que é o mecanismo real para isso.
+  - **Governança:** 5 chaves novas em `bootstrap.py` (`ai.data_freshness`, `ai.operations_now`,
+    `ai.support_overview`, `ai.support_breakdowns`, `ai.support_timeseries`), todas habilitadas —
+    entregam o mesmo dado que a tela já mostra a quem tem a permissão do módulo. Read-only provado
+    por teste que conta as linhas de **todas** as tabelas antes e depois de cada chamada, não só
+    pela anotação `readOnlyHint`.
+  - **Fora deste pacote (não implementado):** `opr_control_tower`, Agendamento
+    (dashboard/backlog), detalhe de atendimento do SGP, Gamificação, Localiza,
+    `opr_briefing_operacional`, e as tools novas no servidor **stdio**
+    (`mcp-server/opr_analitica_mcp.py`) — o stdio chama `/api/ai/*` por HTTP, e este pacote não
+    criou rotas REST equivalentes, só tools no conector remoto.
+
 - **Gamificação: tela destravada do mês 07, contagem de O.S. por equipe cadastrada e 15x mais
   rápida** (2026-09-10, usuário: "Gamificação está muito lenta, está travada no mês 07 [...] preciso
   ver somente a quantidade de O.S que foi feito pelas equipes cadastradas a ex agosto era para ter
