@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,8 +41,31 @@ from app.services.scoring_detail import (
     financial_breakdowns,
 )
 
+logger = logging.getLogger("dashboard")
+
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 FILTERED_BREAKDOWNS_CACHE: dict[tuple[int, tuple[str, ...]], dict] = {}
+
+# Detalhamento recalculado de fechamentos IMUTAVEIS (pago/cancelado), memorizado por id de run.
+# Existe pra fechamentos cujo `result_summary` gravado esta velho ou inflado e por isso e
+# recusado pela guarda de consistencia: sem isso a rota refazia `explain_orders` sobre o mes
+# inteiro em CADA requisicao - 6,36s por leitura no #1601 (07/2026, 10.685 O.S.) contra 0,31s
+# quando o cache e servido (medido em 2026-09-10). Um run pago ou cancelado e registro do que
+# aconteceu e nao muda mais, entao guardar o resultado pelo tempo de vida do processo e seguro.
+# Rascunho NAO entra aqui de proposito: `calculate_and_store_leadership_bonus` pode ser
+# reexecutado sobre um rascunho existente e mudaria o bonus por baixo do valor memorizado.
+IMMUTABLE_RUN_STATUSES = {"paid", "cancelled"}
+IMMUTABLE_BREAKDOWNS_CACHE: dict[int, dict] = {}
+# Teto simples pros dois dicionarios: eles vivem no processo e nada os invalidava. Com um run
+# novo a cada ciclo do sincronizador do IXC, sem teto isso cresce pra sempre.
+BREAKDOWNS_CACHE_MAX_ENTRIES = 64
+
+
+def _remember(cache: dict, key, value: dict) -> dict:
+    if len(cache) >= BREAKDOWNS_CACHE_MAX_ENTRIES:
+        cache.pop(next(iter(cache)), None)
+    cache[key] = value
+    return value
 
 
 def _empty_dashboard_summary(point_value: float) -> dict:
@@ -101,25 +125,65 @@ def _result_summary_cache(run: CalculationRun | None) -> dict:
 # arredondamento, e isso nao e motivo pra descartar o cache inteiro.
 BREAKDOWN_CONSISTENCY_TOLERANCE = 0.01
 
+# Um aviso por fechamento, nao um por requisicao: a inconsistencia e do dado gravado e nao muda
+# entre leituras, e a tela chama esta rota a cada abertura.
+WARNED_INCONSISTENT_RUNS: set[int] = set()
 
-def _regional_breakdown_is_consistent(summary_cache: dict, cards: dict, leadership_bonus: dict) -> bool:
-    """A soma de "Valor a ser pago por regional" tem que ser o valor dos tecnicos mais o bonus de
-    lideranca. Quando nao e, o detalhamento gravado esta velho ou inflado e nao pode ser servido.
+
+def _regional_breakdown_is_consistent(
+    summary_cache: dict, cards: dict, leadership_bonus: dict, run_id: int | None = None
+) -> bool:
+    """A soma de "Valor a ser pago por regional" nunca pode ser MAIOR que o valor dos tecnicos
+    mais o bonus de lideranca. Quando e, o detalhamento gravado esta velho ou inflado e nao pode
+    ser servido - devolver `False` faz a rota recalcular, curando a leitura sem depender de
+    reprocessar o fechamento (nao da pra recalcular um periodo ja pago).
 
     Existe por causa de dois achados reais da auditoria 2026-08-26: o detalhamento ficava
     congelado com a previa do rascunho depois do pagamento (C1) e o bonus de lideranca era somado
     de novo a cada recalculo (C2) - o fechamento pago #1601 tem R$ 38.264,02 nesta tabela contra
-    R$ 24.282,77 reais. Devolver `False` faz a rota recalcular na hora, curando a leitura sem
-    depender de reprocessar o fechamento (nao da pra recalcular um periodo ja pago).
+    R$ 24.282,77 reais.
+
+    A comparacao era de IGUALDADE e estava errada nessa direcao (achado real, 2026-09-10): o
+    detalhamento por regional pode legitimamente somar MENOS que o total, porque
+    `financial_breakdowns` so consegue atribuir a uma regional o valor que tem base de pontos
+    naquela regional. Quem tem multiplicador de saude 0 e recebe apenas credito de saldo entra no
+    total a pagar sem entrar em nenhuma regional - em 08/2026 sao R$ 1.291,08 de 37 pessoas. Com a
+    igualdade, a guarda reprovava o cache CORRETO de agosto pra sempre e a tela recalculava o mes
+    inteiro em cada requisicao (4,44s contra 0,31s servindo o cache). O piso ficou aberto de
+    proposito e a diferenca e logada, porque uma diferenca grande e sinal de problema de dado, nao
+    motivo pra jogar o cache fora.
     """
     cached = summary_cache.get("cost_by_regional") or []
     if not cached:
         return False
     cached_total = round(sum(float(item.get("estimated_payment") or 0) for item in cached), 2)
-    expected = round(
+    ceiling = round(
         float(cards.get("estimated_payment") or 0) + float(leadership_bonus.get("total_bonus_amount") or 0), 2
     )
-    return abs(cached_total - expected) <= BREAKDOWN_CONSISTENCY_TOLERANCE
+    should_log = run_id is None or run_id not in WARNED_INCONSISTENT_RUNS
+    if cached_total > ceiling + BREAKDOWN_CONSISTENCY_TOLERANCE:
+        if should_log:
+            logger.warning(
+                "Fechamento #%s: detalhamento por regional inflado (R$ %.2f contra teto de R$ %.2f). "
+                "Recalculando na leitura.",
+                run_id,
+                cached_total,
+                ceiling,
+            )
+            if run_id is not None:
+                WARNED_INCONSISTENT_RUNS.add(run_id)
+        return False
+    shortfall = round(ceiling - cached_total, 2)
+    if shortfall > BREAKDOWN_CONSISTENCY_TOLERANCE and should_log:
+        logger.info(
+            "Fechamento #%s: R$ %.2f do valor a pagar nao tem regional atribuivel "
+            "(colaborador com multiplicador de saude 0 recebendo somente credito de saldo).",
+            run_id,
+            shortfall,
+        )
+        if run_id is not None:
+            WARNED_INCONSISTENT_RUNS.add(run_id)
+    return True
 
 
 def _collaborator_financial_context(db: Session, run: CalculationRun) -> dict[int, dict[str, float | int | str]]:
@@ -307,7 +371,7 @@ def dashboard_summary(
     if (
         summary_cache.get("dashboard_cache_version") == 3
         and has_cached_breakdowns
-        and _regional_breakdown_is_consistent(summary_cache, reconciled_cards, leadership_bonus)
+        and _regional_breakdown_is_consistent(summary_cache, reconciled_cards, leadership_bonus, run_id=run.id)
     ):
         return {
             "run": serialized_run,
@@ -326,6 +390,37 @@ def dashboard_summary(
             "top_unmapped_subjects": summary_cache.get("top_unmapped_subjects", []),
         }
 
+    # Fechamento imutavel com cache recusado: recalcula UMA vez e memoriza. Sem isso, cada leitura
+    # da tela refazia `explain_orders` sobre o mes inteiro (6,36s no #1601 contra 0,31s servindo
+    # cache) - e um fechamento pago nao pode ter o `result_summary` reescrito pra curar o cache,
+    # porque esse JSON e o registro do que foi pago.
+    memoized = IMMUTABLE_BREAKDOWNS_CACHE.get(run.id) if run.status in IMMUTABLE_RUN_STATUSES else None
+    if memoized is None:
+        with performance_step("dashboard.summary", "recompute_breakdowns"):
+            memoized = _recompute_summary_breakdowns(db, run, point_value, leadership_bonus)
+        if run.status in IMMUTABLE_RUN_STATUSES:
+            _remember(IMMUTABLE_BREAKDOWNS_CACHE, run.id, memoized)
+
+    return {
+        "run": serialized_run,
+        "cards": reconciled_cards,
+        "ranking": serialized_run["scores"] if serialized_run else [],
+        "leadership_bonus": leadership_bonus,
+        "point_value": point_value,
+        **memoized,
+    }
+
+
+def _recompute_summary_breakdowns(
+    db: Session, run: CalculationRun, point_value: float, leadership_bonus: dict
+) -> dict:
+    """Reconstroi na hora tudo que o `result_summary` gravado deveria ter servido.
+
+    Devolve exatamente as chaves que a resposta de `/dashboard/summary` consome, pra poder ser
+    memorizada inteira em `IMMUTABLE_BREAKDOWNS_CACHE`. `leadership_bonus` entra como parametro
+    (nao e recalculado aqui) porque ele ja foi lido das linhas `leadership_bonus_results` pelo
+    chamador - recalcular de novo seria trabalho repetido.
+    """
     orders = _period_orders(db, run.reference_month, run.reference_year, run.regional)
     details = explain_orders(db, orders, default_point_value=point_value)
     health_by_regional = calculate_regional_health(db, [order for order in orders if counts_for_regional_health(order)])
@@ -342,15 +437,9 @@ def dashboard_summary(
     breakdowns["cost_by_regional"] = apply_leadership_bonus_to_cost_by_regional(
         breakdowns["cost_by_regional"], leadership_bonus
     )
-
     return {
-        "run": serialized_run,
-        "cards": reconciled_cards,
-        "ranking": serialized_run["scores"] if serialized_run else [],
-        "leadership_bonus": leadership_bonus,
         "penalty_distribution": calculate_penalty_distribution(db, orders, details=details),
         "health_by_regional": list(health_by_regional.values()),
-        "point_value": point_value,
         **breakdowns,
     }
 
@@ -439,8 +528,7 @@ def dashboard_filtered_breakdowns(
             "cost_by_group": [],
             "top_unmapped_subjects": [],
         }
-        FILTERED_BREAKDOWNS_CACHE[cache_key] = result
-        return result
+        return _remember(FILTERED_BREAKDOWNS_CACHE, cache_key, result)
 
     with performance_step("dashboard.filtered-breakdowns", "load_filtered_orders"):
         orders = _period_orders(db, run.reference_month, run.reference_year, run.regional)
@@ -453,8 +541,7 @@ def dashboard_filtered_breakdowns(
             "cost_by_group": [],
             "top_unmapped_subjects": [],
         }
-        FILTERED_BREAKDOWNS_CACHE[cache_key] = result
-        return result
+        return _remember(FILTERED_BREAKDOWNS_CACHE, cache_key, result)
 
     point_value = float(run.point_value)
     with performance_step("dashboard.filtered-breakdowns", "explain_orders"):
@@ -484,5 +571,4 @@ def dashboard_filtered_breakdowns(
         "cost_by_group": breakdowns.get("cost_by_group", []),
         "top_unmapped_subjects": breakdowns.get("top_unmapped_subjects", []),
     }
-    FILTERED_BREAKDOWNS_CACHE[cache_key] = result
-    return result
+    return _remember(FILTERED_BREAKDOWNS_CACHE, cache_key, result)

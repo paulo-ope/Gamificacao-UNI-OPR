@@ -17,6 +17,74 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## O que foi feito recentemente
 
+- **Gamificação: tela destravada do mês 07, contagem de O.S. por equipe cadastrada e 15x mais
+  rápida** (2026-09-10, usuário: "Gamificação está muito lenta, está travada no mês 07 [...] preciso
+  ver somente a quantidade de O.S que foi feito pelas equipes cadastradas a ex agosto era para ter
+  somente 9025 O.S faça uma validação desses bug da gamificação").
+  - **Travada no mês 07 — causa raiz**: `calculation.latest_run` delegava pra
+    `pick_run_by_status_priority`, que prioriza `status="paid"` sobre o histórico INTEIRO e não
+    dentro do período. Com 07/2026 pago (#1601) e 316 rascunhos de 08/2026, `/dashboard/bootstrap`
+    e `/dashboard/summary` devolviam julho indefinidamente — agosto só apareceria no dia em que
+    alguém marcasse agosto como pago. Passou a **resolver o período primeiro e o status depois**,
+    exatamente como `portal_dashboard._recent_official_runs` já fazia no Portal (achado A9, nunca
+    propagado pra cá). Dentro do período a prioridade pago > não cancelado > qualquer continua
+    idêntica — uma revisão cancelada mais nova não volta a esconder o pagamento do mesmo mês.
+    Agravante de UX que **fica pendente**: a tela não tem seletor de período no cabeçalho, o único
+    jeito de trocar o mês é um botão dentro da aba Importação (`onViewPeriod`).
+  - **Contagem de O.S.**: `cards.total_service_orders` conta o período inteiro, inclusive O.S. de
+    técnico SEM cadastro, que nunca entram no ranking nem geram pagamento. Em 07/2026 são 10.685
+    no total contra **9.122 de equipe cadastrada** (1.563 O.S. de 115 técnicos sem cadastro); em
+    08/2026, 6.989 contra 5.751. A tela se contradizia: a aba Ranking já dizia "9.122 entraram no
+    ranking, 1.563 ficaram fora" enquanto o card do Fechamento e a Auditoria mostravam 10.685.
+    Regra escolhida pelo usuário: **`is_registered`**, a mesma do ranking e do pagamento, como
+    número **principal em todas as telas do módulo**.
+  - **Por que via `collaborator_scores` e não via `explain_orders`**: os contadores novos
+    (`registered_service_orders`, `unregistered_service_orders`, `registered_collaborators`,
+    `unregistered_collaborators`) são reconciliados a partir das LINHAS em `_totals_from_scores`,
+    e gravados incondicionalmente em `cards` por `result_summary_with_totals_from_scores`. Isso faz
+    a correção valer **retroativamente pra todo o histórico, inclusive fechamentos pagos que não
+    podem ser recalculados**, sem reprocessar nada. Conferido contra consulta SQL própria: as
+    linhas batem exatamente com a contagem direta em `service_orders` nos 4 fechamentos oficiais.
+  - **Auditoria** (`get_period_audit`) ganhou `only_registered`, **ligado por padrão**, e
+    `registration_scope` (recorte do período, independente dos filtros) pra tela poder dizer o que
+    ficou de fora sem parecer perda de dado. Na tela: interruptor "Incluir O.S sem cadastro" e a
+    frase "Fora desta conferência: 1.238 O.S de técnico sem cadastro, de 6.989 no período" — posta
+    na faixa larga porque a fileira de 7 tiles trunca (4 dos 7 rótulos que já existiam truncam).
+  - **Lentidão — causa raiz**: `_regional_breakdown_is_consistent` exigia IGUALDADE entre a soma de
+    "por regional" e o total a pagar. O detalhamento por regional pode legitimamente somar MENOS,
+    porque `financial_breakdowns` só atribui a uma regional o valor que tem base de pontos ali —
+    quem está com multiplicador de saúde 0 e recebe apenas crédito de saldo entra no total e em
+    nenhuma regional. Resultado: a guarda reprovava o cache CORRETO de agosto **para sempre** e a
+    rota recalculava o mês inteiro (`explain_orders` sobre 7–11 mil O.S.) em CADA requisição. A
+    comparação virou **teto** (nunca pode somar mais; somar menos é logado, não descartado).
+  - **Fechamento imutável com cache ruim** (o #1601 tem R$ 38.264,02 gravados contra R$ 24.282,77
+    reais, achado C1/C2 da auditoria 2026-08-26) recalcula **uma vez por processo** e fica em
+    `IMMUTABLE_BREAKDOWNS_CACHE`, chaveado por id de run. Rascunho NÃO entra aí de propósito:
+    `calculate_and_store_leadership_bonus` pode ser reexecutado sobre um rascunho existente e
+    mudaria o bônus por baixo do valor memorizado. `FILTERED_BREAKDOWNS_CACHE`, que crescia sem
+    limite, ganhou teto junto.
+  - **Medido no ambiente real desta máquina** (usuário de teste descartável, removido ao final;
+    imagens reconstruídas e containers reiniciados): abrir a tela **4,56–6,36s toda vez → 0,28–0,65s**;
+    trocar pra julho 6,36s toda vez → 5,5s uma vez por processo e 0,4s depois; maio/junho (que já
+    serviam cache) inalterados em 0,31s. Conferido ao vivo com 3 fontes independentes reconciliando
+    em 5.751: card do Fechamento, aba Ranking e consulta SQL própria.
+  - **Achado financeiro colateral, decisão PENDENTE do usuário** (ele escolheu "investigar antes de
+    decidir"): em `calculation.py`, quando o multiplicador de saúde é 0 o `effective_rate` cai no
+    `else float(value_per_point)` e o crédito de saldo é convertido em dinheiro pelo **valor cheio
+    do ponto**, como se o multiplicador fosse 1,0. São **R$ 1.291,08 para 37 pessoas em 08/2026**.
+    **Nenhum fechamento pago foi afetado** — conferido em todos: só o rascunho de agosto e
+    R$ 148,40 numa revisão de julho que foi cancelada. Levantamento linha a linha em
+    `tmp/gamificacao-multiplicador-zero.csv` (fora do versionamento). É também a origem da
+    diferença que derrubava o cache; a guarda por teto já convive com ela, então a correção do
+    pagamento pode ser decidida sem pressa.
+  - **Também pendente**: poda de rascunhos de períodos FECHADOS. `prune_superseded_drafts` está
+    ligada (`keep=3`) mas só poda o período que está sendo recalculado, então os 779 rascunhos de
+    julho nunca serão podados — 1.106 fechamentos, 225.121 linhas de `collaborator_scores`, 58 MB
+    em `calculation_runs`. É rotina destrutiva: precisa de prévia do que sairia antes de rodar.
+  - Testes: 13 novos em `test_gamification_period_and_registered_orders.py`. Suíte completa
+    **1.061 passando**, as mesmas 13 falhas pré-existentes em `test_ai_*` (todas em
+    `modules/ai`/`modules/operations`, nada que esta frente tocou).
+
 - **Gestão: buscar colaborador com justificativa pendente e ler as justificativas (API + MCP)**
   (2026-09-10, usuário: "criar endpoints para os MCP e API conseguirem buscar colaborador com
   justificativa pendentes de forma mais fácil, valide todas rotas que tem e o que podemos expor

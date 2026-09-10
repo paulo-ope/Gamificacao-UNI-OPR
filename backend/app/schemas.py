@@ -1374,6 +1374,8 @@ class CollaboratorServiceOrdersDetailOut(BaseModel):
 
 class AuditSummary(BaseModel):
     total_service_orders: int
+    registered_service_orders: int = 0
+    unregistered_service_orders: int = 0
     scored_service_orders: int
     unscored_service_orders: int
     penalized_service_orders: int
@@ -1423,8 +1425,22 @@ class RecurrenceAuditOut(BaseModel):
     related_orders: list[AuditServiceOrderDetail]
 
 
+class AuditRegistrationScope(BaseModel):
+    """Recorte de cadastro do período, independente dos filtros da consulta.
+
+    Existe pra a tela poder dizer quantas O.S. de técnico sem cadastro ficaram de fora mesmo com
+    `only_registered` ligado - sem isso o número filtrado pareceria uma perda de dados.
+    """
+
+    only_registered: bool = True
+    period_total_service_orders: int = 0
+    period_registered_service_orders: int = 0
+    period_unregistered_service_orders: int = 0
+
+
 class AuditServiceOrdersOut(BaseModel):
     period: CollaboratorServiceOrdersPeriod
+    registration_scope: AuditRegistrationScope = AuditRegistrationScope()
     summary: AuditSummary
     orders: list[AuditServiceOrderDetail]
     group_summaries: dict[str, list[AuditGroupSummary]] = {}

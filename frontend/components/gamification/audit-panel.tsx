@@ -125,6 +125,10 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
+  // Desligado por padrao: a auditoria confere o que a gamificacao remunera, e remunerar so
+  // acontece pra equipe cadastrada. Ligar traz tambem as O.S de tecnico sem cadastro, que ficam
+  // fora do ranking e do pagamento - util pra conferir a base crua da importacao.
+  const [includeUnregistered, setIncludeUnregistered] = useState(false);
   const activeGroups = useMemo(() => groups.filter((group) => group.active), [groups]);
   const filteredCollaboratorOptions = useMemo(() => {
     const normalizedRegional = regional ? normalizeRegional(regional) : "";
@@ -132,7 +136,8 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       .filter((option) => !normalizedRegional || normalizeRegional(option.regional) === normalizedRegional)
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [collaboratorOptions, regional]);
-  const hasFilters = mode !== "all" || Boolean(regional || collaboratorId || groupId || subject || sla || selectedGroupLabel);
+  const hasFilters =
+    mode !== "all" || includeUnregistered || Boolean(regional || collaboratorId || groupId || subject || sla || selectedGroupLabel);
   const subjectSuggestions = useMemo(() => {
     const normalized = subject.trim().toLowerCase();
     const matches = normalized ? subjectOptions.filter((option) => option.toLowerCase().includes(normalized)) : subjectOptions;
@@ -157,17 +162,18 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       only_recurrence: mode === "recurrence" || undefined,
       only_non_recurrent: mode === "non_recurrent" || undefined,
       only_diagnosis_blocked: mode === "diagnosis_blocked" || undefined,
+      only_registered: includeUnregistered ? false : undefined,
       audit_group_mode: groupMode,
       audit_group_label: selectedGroupLabel || undefined,
       page,
       page_size: pageSize
     }),
-    [calculationRunId, collaboratorId, debouncedSubject, groupId, groupMode, mode, page, pageSize, regional, selectedGroupLabel, sla]
+    [calculationRunId, collaboratorId, debouncedSubject, groupId, groupMode, includeUnregistered, mode, page, pageSize, regional, selectedGroupLabel, sla]
   );
 
   useEffect(() => {
     setPage(1);
-  }, [calculationRunId, collaboratorId, debouncedSubject, groupId, mode, regional, selectedGroupLabel, sla]);
+  }, [calculationRunId, collaboratorId, debouncedSubject, groupId, includeUnregistered, mode, regional, selectedGroupLabel, sla]);
 
   useEffect(() => {
     setSelectedGroupLabel(null);
@@ -263,8 +269,15 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     if (subject) chips.push({ key: "subject", label: `Assunto: ${subject}`, onRemove: () => setSubject("") });
     if (sla) chips.push({ key: "sla", label: `SLA: ${sla}`, onRemove: () => setSla("") });
     if (selectedGroupLabel) chips.push({ key: "groupLabel", label: `Grupo selecionado: ${selectedGroupLabel}`, onRemove: () => setSelectedGroupLabel(null) });
+    if (includeUnregistered) {
+      chips.push({
+        key: "includeUnregistered",
+        label: "Incluindo O.S de técnico sem cadastro",
+        onRemove: () => setIncludeUnregistered(false)
+      });
+    }
     return chips;
-  }, [activeGroups, collaboratorId, collaboratorOptions, groupId, mode, regional, selectedGroupLabel, sla, subject]);
+  }, [activeGroups, collaboratorId, collaboratorOptions, groupId, includeUnregistered, mode, regional, selectedGroupLabel, sla, subject]);
 
   function clearFilters() {
     setMode("all");
@@ -274,6 +287,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     setSubject("");
     setSla("");
     setSelectedGroupLabel(null);
+    setIncludeUnregistered(false);
     setPage(1);
   }
 
@@ -355,13 +369,22 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           <h2 className="mt-1 text-base font-semibold text-slate-950">Conferência das O.S e regras aplicadas</h2>
           <p className="mt-1 text-[11px] text-slate-500">Base, regra aplicada, pontos anulados e resultado final em uma tela operacional.</p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {activeFilterChips.length > 0 ? (
             <span className="flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600">
               <Filter className="h-3.5 w-3.5 text-uni-royal" />
               {activeFilterChips.length} filtro(s) ativo(s)
             </span>
           ) : null}
+          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 hover:border-slate-300">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-[var(--uni-royal)]"
+              checked={includeUnregistered}
+              onChange={(event) => setIncludeUnregistered(event.target.checked)}
+            />
+            Incluir O.S sem cadastro
+          </label>
           <Button variant="outline" size="sm" onClick={clearFilters} disabled={!hasFilters}>
             Limpar
           </Button>
@@ -374,7 +397,14 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
 
       {audit ? (
         <div className="grid shrink-0 gap-2 overflow-x-auto border-b bg-white px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-          <SummaryMetric icon={ClipboardList} label="Total de O.S" value={`${formatInteger(audit.summary.total_service_orders)} O.S`} tone="slate" />
+          <SummaryMetric
+            icon={ClipboardList}
+            // Rotulo curto de proposito: este tile vive numa faixa de 7 colunas e o texto e
+            // truncado - "O.S de equipe cadastrada" perdia justamente a parte que distingue.
+            label={audit.registration_scope?.only_registered === false ? "Total de O.S" : "O.S cadastradas"}
+            value={`${formatInteger(audit.summary.total_service_orders)} O.S`}
+            tone="slate"
+          />
           <SummaryMetric
             icon={HelpCircle}
             label="O.S sem regra"
@@ -611,6 +641,16 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
             <span>
               {formatInteger(audit.total_orders ?? visibleOrders.length)} O.S no filtro atual, exibindo página {audit.page ?? page} de {audit.total_pages ?? 1}, por {groupModeLabel(groupMode)}.
             </span>
+            {/* A faixa de tiles acima e estreita e trunca - o recorte de cadastro fica aqui, onde
+                ha largura pra dizer o numero inteiro sem cortar. */}
+            {audit.registration_scope?.only_registered !== false &&
+            audit.registration_scope &&
+            audit.registration_scope.period_unregistered_service_orders > 0 ? (
+              <span className="text-slate-500">
+                Fora desta conferência: {formatInteger(audit.registration_scope.period_unregistered_service_orders)} O.S de
+                técnico sem cadastro, de {formatInteger(audit.registration_scope.period_total_service_orders)} no período.
+              </span>
+            ) : null}
             {loading ? <RefreshCw className="h-3 w-3 animate-spin text-uni-royal" /> : null}
           </div>
 

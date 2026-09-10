@@ -1325,6 +1325,17 @@ export type PortalOverview = {
 export type MetricCards = {
   total_collaborators: number;
   total_service_orders: number;
+  /**
+   * O.S. executadas por equipe cadastrada - o recorte que a gamificação remunera e o número
+   * principal das telas do módulo. `total_service_orders` conta também O.S. de técnico sem
+   * cadastro, que nunca entram no ranking nem geram pagamento (em 07/2026: 9.122 de 10.685).
+   * Reconciliado no backend a partir das linhas `collaborator_scores`, inclusive para
+   * fechamentos antigos - ver `calculation._totals_from_scores`.
+   */
+  registered_service_orders?: number;
+  unregistered_service_orders?: number;
+  registered_collaborators?: number;
+  unregistered_collaborators?: number;
   scored_service_orders: number;
   unscored_service_orders: number;
   penalized_service_orders: number;
@@ -2183,6 +2194,8 @@ export type CollaboratorOrderFilters = {
   only_recurrence?: boolean;
   only_non_recurrent?: boolean;
   only_diagnosis_blocked?: boolean;
+  /** Padrão do backend é `true`: só O.S. de equipe cadastrada, o mesmo recorte do pagamento. */
+  only_registered?: boolean;
   group_id?: number;
   os_type?: string;
   os_subject?: string;
@@ -2213,8 +2226,20 @@ export type AuditOrders = {
     reference_year: number;
     regional: string | null;
   };
+  /**
+   * Recorte de cadastro do período, independente dos filtros da consulta - permite a tela dizer
+   * quantas O.S. de técnico sem cadastro ficaram fora mesmo com `only_registered` ligado.
+   */
+  registration_scope?: {
+    only_registered: boolean;
+    period_total_service_orders: number;
+    period_registered_service_orders: number;
+    period_unregistered_service_orders: number;
+  };
   summary: {
     total_service_orders: number;
+    registered_service_orders?: number;
+    unregistered_service_orders?: number;
     scored_service_orders: number;
     unscored_service_orders: number;
     penalized_service_orders: number;
