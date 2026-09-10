@@ -831,11 +831,27 @@ export type OperationRegionalMatrix = {
   total: OperationRegionalMatrixItem;
 };
 
+/**
+ * Finalizadas por técnico no recorte atual (segundo nível do donut de modelo de equipe). Só nome e
+ * contagem de propósito - ver `queries.overview_collaborator_production` no backend: a rota de SLA
+ * por colaborador devolve 15 campos e ~11x mais bytes pra desenhar o mesmo donut.
+ */
+export type OperationOverviewCollaboratorProduction = {
+  date_from: string;
+  date_to: string;
+  items: Array<{ responsible: string; completed: number }>;
+};
+
+export type OverviewSupportFilterValues = {
+  support_department: string[];
+  support_channel: string[];
+  support_reason: string[];
+};
+
 export type OperationOverviewDefaultFilter = {
   available: boolean;
-  saved_filter_id: number | null;
-  name: string | null;
   filters: OperationSavedFilterValues | null;
+  support_filters: OverviewSupportFilterValues | null;
   can_manage: boolean;
 };
 
@@ -987,12 +1003,19 @@ export const operationsApi = {
     request<OperationRegionalMatrix>(
       `/operations/overview/regional-matrix?${query(filters)}`,
     ),
+  overviewCollaboratorProduction: (filters: OperationFilterState) =>
+    request<OperationOverviewCollaboratorProduction>(
+      `/operations/overview/collaborator-production?${query(filters)}`,
+    ),
   overviewDefaultFilter: () =>
     request<OperationOverviewDefaultFilter>("/operations/overview/default-filter"),
-  updateOverviewDefaultFilter: (savedFilterId: number | null) =>
+  updateOverviewDefaultFilter: (
+    filters: OperationSavedFilterValues | null,
+    supportFilters?: OverviewSupportFilterValues,
+  ) =>
     request<OperationOverviewDefaultFilter>("/operations/overview/default-filter", {
       method: "PUT",
-      body: JSON.stringify({ saved_filter_id: savedFilterId }),
+      body: JSON.stringify({ filters, support_filters: filters ? supportFilters ?? null : null }),
     }),
   overviewVisibleFilters: () =>
     request<OperationOverviewVisibleFilters>("/operations/overview/visible-filters"),

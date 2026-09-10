@@ -26,7 +26,14 @@ import { DeferUntilVisible } from "@/components/ui/defer-until-visible";
 import { FinancialTable } from "@/components/gamification/financial-table";
 import { InfoHint } from "@/components/gamification/info-hint";
 import type { ChartContext, ClosureBalanceImpact, ClosureFinancials, ClosureStatus } from "@/hooks/use-closure-data";
-import { formatMoney, formatNumber, formatPoints, pluralizeFilial } from "@/lib/gamificacao-helpers";
+import {
+  formatMoney,
+  formatNumber,
+  formatPoints,
+  pluralizeFilial,
+  registeredServiceOrders,
+  unregisteredServiceOrders
+} from "@/lib/gamificacao-helpers";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type { AuthUser, CollaboratorScore, DashboardSummary, PenaltyDistributionItem, RegionalHealthItem } from "@/lib/types";
 
@@ -295,12 +302,21 @@ export function ClosureTab({
             </div>
 
             <div className="divide-y divide-slate-100 rounded-[16px] border border-slate-100 bg-slate-50/60 px-4">
-              <div className="flex items-center justify-between gap-3 py-2.5 text-sm">
+              <div className="flex items-start justify-between gap-3 py-2.5 text-sm">
                 <span className="flex items-center gap-2 text-slate-500">
                   <ClipboardList className="h-3.5 w-3.5" />
-                  O.S no período
+                  O.S de equipe cadastrada
                 </span>
-                <span className="font-semibold text-slate-900">{formatNumber(summary.cards.total_service_orders)} O.S</span>
+                <span className="text-right">
+                  <span className="block font-semibold text-slate-900">
+                    {formatNumber(registeredServiceOrders(summary.cards))} O.S
+                  </span>
+                  {unregisteredServiceOrders(summary.cards) > 0 ? (
+                    <span className="mt-0.5 block text-xs text-slate-500">
+                      {formatNumber(summary.cards.total_service_orders)} no total, {formatNumber(unregisteredServiceOrders(summary.cards))} de técnico sem cadastro
+                    </span>
+                  ) : null}
+                </span>
               </div>
               <div className="flex items-center justify-between gap-3 py-2.5 text-sm">
                 <span className="flex items-center gap-2 text-slate-500">

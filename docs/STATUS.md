@@ -13,9 +13,447 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-09** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-10** — branch `claude/suporte-sync-backfill-madrugada`
 
 ## O que foi feito recentemente
+
+- **1º pacote de expansão da exposição MCP: frescor do dado, "agora" da operação e SGP Suporte**
+  (2026-09-10, usuário: "quais endpoints novos podemos disponibilizar para facilitar minha vida" →
+  pacote com `opr_data_freshness`, `opr_operations_now` e as 3 do SGP Suporte). MCP passou de
+  **30 para 35 tools**.
+  - **Motivação medida na auditoria:** o MCP cobria O.S. e rede com profundidade (21 tools) e
+    **nada do "agora"** — `in-progress`, `sla-risk` e `data-freshness` existiam na tela e não para
+    a IA. E o **SGP Suporte tinha 23 rotas HTTP e zero tools**. Gamificação e Localiza seguem com
+    zero (fora deste pacote, de propósito).
+  - **Nenhuma regra nova.** As 5 tools chamam as MESMAS funções das rotas:
+    `operations_queries.data_freshness`, `in_progress_sla_risk`, `in_progress_breakdown`,
+    `in_progress_order_page`, `opa_overview_service.expanded_overview`, `daily_timeseries` e
+    `support_router._opa_breakdown_rows`.
+  - **Onde o trabalho real estava: filtro que seria ignorado em silêncio.** Três armadilhas
+    encontradas na camada reusada, todas com fallback silencioso — a tool valida ANTES e erra:
+    `in_progress_breakdown` faz `allowed_groups.get(group_by, regional)` (um `group_by="responsible"`
+    viraria agrupamento por regional com cara de legítimo); `_order_sort_clauses` cai em
+    `opened_at`; e `apply_opa_attendance_filters` faz `DATE_BASIS_COLUMNS.get(basis, opened_at)`.
+  - **`AiOrderFilters` NÃO serve para `opr_operations_now`** e por isso existe
+    `_validated_in_progress_filters`: `_dimension_conditions` não aplica `text_filters`,
+    `has_coordinates` nem `near_*`/`radius_km` (isso é lido por `ai.queries`). Aceitá-los ali
+    seria descartá-los sem erro. A mensagem de erro aponta `opr_search_orders` como alternativa.
+  - **Divergências do desenho inicial, corrigidas contra o código real:** o SLA em andamento tem
+    **5** baldes, não 4 — `no_target` (sem meta cadastrada) não é "tranquilo", é "não mensurável";
+    `in_progress_breakdown` **não** agrupa por `sector` nem `responsible`; a série do SGP é
+    **só diária** (não há semana/mês); e `data_freshness` é bem mais estreito do que parecia — 4
+    campos sobre a última run de importação, **sem** noção de fonte/dataset e **sem** classificação
+    de atraso. Nenhuma dessas foi inventada; `age_seconds` é aritmética explícita e vem documentada
+    como "não é classificação de atraso".
+  - **Achado do teste de paridade MCP × HTTP (novo `test_mcp_new_tools_match_http.py`):** `_dump`
+    serializa datetime com `default=str`, produzindo `"2026-09-10 20:24:57"` — espaço no lugar do
+    "T", ou seja **não é ISO 8601** e quebra parser estrito. A mesma leitura pela rota HTTP volta
+    com "T" (Pydantic). Corrigido com `_dump_iso` **só nas 5 tools novas**; trocar o `default` de
+    `_dump` mudaria a saída das 30 tools existentes. **Recomendação separada, não feita aqui:**
+    decidir se as 30 antigas migram para ISO 8601 (é quebra de contrato deliberada).
+  - **Autorização preservada, não ampliada:** `opr_operations_now` exige `operations:view_backlog`
+    e, só com `include_orders=true`, também `operations:view_order_details` — a mesma dupla das
+    rotas. As O.S. individuais passam pela MESMA política de campo de `ai.order_details`
+    (`OperationOrderDetailOut` + `enforce_requested_fields`), então a tool nova não é porta lateral
+    para campo que a política restringe nas outras. As 3 do SGP exigem `support:read`, a permissão
+    de router do módulo. Nenhum papel legado, aliás, tem `view_backlog` sem `view_order_details`:
+    hoje só `admin` tem `view_backlog`, e `operator` tem o detalhe sem o backlog — os testes montam
+    a combinação com `UserPermissionOverride`, que é o mecanismo real para isso.
+  - **Governança:** 5 chaves novas em `bootstrap.py` (`ai.data_freshness`, `ai.operations_now`,
+    `ai.support_overview`, `ai.support_breakdowns`, `ai.support_timeseries`), todas habilitadas —
+    entregam o mesmo dado que a tela já mostra a quem tem a permissão do módulo. Read-only provado
+    por teste que conta as linhas de **todas** as tabelas antes e depois de cada chamada, não só
+    pela anotação `readOnlyHint`.
+  - **Fora deste pacote (não implementado):** `opr_control_tower`, Agendamento
+    (dashboard/backlog), detalhe de atendimento do SGP, Gamificação, Localiza,
+    `opr_briefing_operacional`, e as tools novas no servidor **stdio**
+    (`mcp-server/opr_analitica_mcp.py`) — o stdio chama `/api/ai/*` por HTTP, e este pacote não
+    criou rotas REST equivalentes, só tools no conector remoto.
+
+- **Gamificação: tela destravada do mês 07, contagem de O.S. por equipe cadastrada e 15x mais
+  rápida** (2026-09-10, usuário: "Gamificação está muito lenta, está travada no mês 07 [...] preciso
+  ver somente a quantidade de O.S que foi feito pelas equipes cadastradas a ex agosto era para ter
+  somente 9025 O.S faça uma validação desses bug da gamificação").
+  - **Travada no mês 07 — causa raiz**: `calculation.latest_run` delegava pra
+    `pick_run_by_status_priority`, que prioriza `status="paid"` sobre o histórico INTEIRO e não
+    dentro do período. Com 07/2026 pago (#1601) e 316 rascunhos de 08/2026, `/dashboard/bootstrap`
+    e `/dashboard/summary` devolviam julho indefinidamente — agosto só apareceria no dia em que
+    alguém marcasse agosto como pago. Passou a **resolver o período primeiro e o status depois**,
+    exatamente como `portal_dashboard._recent_official_runs` já fazia no Portal (achado A9, nunca
+    propagado pra cá). Dentro do período a prioridade pago > não cancelado > qualquer continua
+    idêntica — uma revisão cancelada mais nova não volta a esconder o pagamento do mesmo mês.
+    Agravante de UX que **fica pendente**: a tela não tem seletor de período no cabeçalho, o único
+    jeito de trocar o mês é um botão dentro da aba Importação (`onViewPeriod`).
+  - **Contagem de O.S.**: `cards.total_service_orders` conta o período inteiro, inclusive O.S. de
+    técnico SEM cadastro, que nunca entram no ranking nem geram pagamento. Em 07/2026 são 10.685
+    no total contra **9.122 de equipe cadastrada** (1.563 O.S. de 115 técnicos sem cadastro); em
+    08/2026, 6.989 contra 5.751. A tela se contradizia: a aba Ranking já dizia "9.122 entraram no
+    ranking, 1.563 ficaram fora" enquanto o card do Fechamento e a Auditoria mostravam 10.685.
+    Regra escolhida pelo usuário: **`is_registered`**, a mesma do ranking e do pagamento, como
+    número **principal em todas as telas do módulo**.
+  - **Por que via `collaborator_scores` e não via `explain_orders`**: os contadores novos
+    (`registered_service_orders`, `unregistered_service_orders`, `registered_collaborators`,
+    `unregistered_collaborators`) são reconciliados a partir das LINHAS em `_totals_from_scores`,
+    e gravados incondicionalmente em `cards` por `result_summary_with_totals_from_scores`. Isso faz
+    a correção valer **retroativamente pra todo o histórico, inclusive fechamentos pagos que não
+    podem ser recalculados**, sem reprocessar nada. Conferido contra consulta SQL própria: as
+    linhas batem exatamente com a contagem direta em `service_orders` nos 4 fechamentos oficiais.
+  - **Auditoria** (`get_period_audit`) ganhou `only_registered`, **ligado por padrão**, e
+    `registration_scope` (recorte do período, independente dos filtros) pra tela poder dizer o que
+    ficou de fora sem parecer perda de dado. Na tela: interruptor "Incluir O.S sem cadastro" e a
+    frase "Fora desta conferência: 1.238 O.S de técnico sem cadastro, de 6.989 no período" — posta
+    na faixa larga porque a fileira de 7 tiles trunca (4 dos 7 rótulos que já existiam truncam).
+  - **Lentidão — causa raiz**: `_regional_breakdown_is_consistent` exigia IGUALDADE entre a soma de
+    "por regional" e o total a pagar. O detalhamento por regional pode legitimamente somar MENOS,
+    porque `financial_breakdowns` só atribui a uma regional o valor que tem base de pontos ali —
+    quem está com multiplicador de saúde 0 e recebe apenas crédito de saldo entra no total e em
+    nenhuma regional. Resultado: a guarda reprovava o cache CORRETO de agosto **para sempre** e a
+    rota recalculava o mês inteiro (`explain_orders` sobre 7–11 mil O.S.) em CADA requisição. A
+    comparação virou **teto** (nunca pode somar mais; somar menos é logado, não descartado).
+  - **Fechamento imutável com cache ruim** (o #1601 tem R$ 38.264,02 gravados contra R$ 24.282,77
+    reais, achado C1/C2 da auditoria 2026-08-26) recalcula **uma vez por processo** e fica em
+    `IMMUTABLE_BREAKDOWNS_CACHE`, chaveado por id de run. Rascunho NÃO entra aí de propósito:
+    `calculate_and_store_leadership_bonus` pode ser reexecutado sobre um rascunho existente e
+    mudaria o bônus por baixo do valor memorizado. `FILTERED_BREAKDOWNS_CACHE`, que crescia sem
+    limite, ganhou teto junto.
+  - **Medido no ambiente real desta máquina** (usuário de teste descartável, removido ao final;
+    imagens reconstruídas e containers reiniciados): abrir a tela **4,56–6,36s toda vez → 0,28–0,65s**;
+    trocar pra julho 6,36s toda vez → 5,5s uma vez por processo e 0,4s depois; maio/junho (que já
+    serviam cache) inalterados em 0,31s. Conferido ao vivo com 3 fontes independentes reconciliando
+    em 5.751: card do Fechamento, aba Ranking e consulta SQL própria.
+  - **Achado financeiro colateral, decisão PENDENTE do usuário** (ele escolheu "investigar antes de
+    decidir"): em `calculation.py`, quando o multiplicador de saúde é 0 o `effective_rate` cai no
+    `else float(value_per_point)` e o crédito de saldo é convertido em dinheiro pelo **valor cheio
+    do ponto**, como se o multiplicador fosse 1,0. São **R$ 1.291,08 para 37 pessoas em 08/2026**.
+    **Nenhum fechamento pago foi afetado** — conferido em todos: só o rascunho de agosto e
+    R$ 148,40 numa revisão de julho que foi cancelada. Levantamento linha a linha em
+    `tmp/gamificacao-multiplicador-zero.csv` (fora do versionamento). É também a origem da
+    diferença que derrubava o cache; a guarda por teto já convive com ela, então a correção do
+    pagamento pode ser decidida sem pressa.
+  - **Também pendente**: poda de rascunhos de períodos FECHADOS. `prune_superseded_drafts` está
+    ligada (`keep=3`) mas só poda o período que está sendo recalculado, então os 779 rascunhos de
+    julho nunca serão podados — 1.106 fechamentos, 225.121 linhas de `collaborator_scores`, 58 MB
+    em `calculation_runs`. É rotina destrutiva: precisa de prévia do que sairia antes de rodar.
+  - Testes: 13 novos em `test_gamification_period_and_registered_orders.py`. Suíte completa
+    **1.061 passando**, as mesmas 13 falhas pré-existentes em `test_ai_*` (todas em
+    `modules/ai`/`modules/operations`, nada que esta frente tocou).
+
+- **Operação Analítica: barra de filtros deixou de esmagar os campos em telas de 1536–1780px**
+  (2026-09-10, usuário mandou print: "Alguns bug de layaut").
+  - **Causa raiz**: no `2xl` a grade era `..._repeat(5,minmax(0,1fr))_auto` e a coluna `auto` do
+    grupo Filtrar/Limpar/Filtros avançados/Visões reserva **552px fixos**. Como os 5 filtros tinham
+    mínimo ZERO, todo o aperto caía neles: **75px cada em janela de 1600px**, mostrando "T.." em vez
+    de "Todos". Em 1920px sobravam 139px e o defeito não aparecia — por isso parecia intermitente.
+  - **Correção**: os botões passaram a ocupar **linha própria** (`md:col-span-full`) em vez de
+    disputar a fileira, e a coluna do período ganhou teto (`minmax(15.5rem,20rem)`) pra folga ir
+    pros filtros. Não existe solução de uma linha só: 248 + 5x120 + 552 + gaps = 1448px, mais do que
+    os 1281px disponíveis em 1600px com a barra lateral aberta — forçar mínimo nos filtros sem tirar
+    os botões da fileira geraria overflow horizontal.
+  - **Segundo defeito, mesma fileira**: "Modelo de equipe" quebrava em 2 linhas quando a coluna
+    apertava e, como a barra alinha por baixo (`items-end`), a célula subia 16px e desalinhava a
+    fileira inteira. Rótulo agora fica sempre em uma linha (`truncate` + `title` com o texto cheio).
+  - **Medido em 5 larguras no ambiente real**: filtro em 1600px **75 → 173px**; 1920px 139 → 237px;
+    1540px → 161px. Dois ganhos colaterais: em 1366px o grupo de botões deixou de **transbordar** a
+    célula de 325px em que estava, e em 1100px deixou de quebrar em 4 linhas — a barra encurtou de
+    366 para 270px. Custo: +32px de barra fixa no `2xl` (97 → 129px). Mobile é byte-a-byte igual ao
+    de antes (nenhuma classe abaixo de `md` mudou).
+
+- **Gestão: buscar colaborador com justificativa pendente e ler as justificativas (API + MCP)**
+  (2026-09-10, usuário: "criar endpoints para os MCP e API conseguirem buscar colaborador com
+  justificativa pendentes de forma mais fácil, valide todas rotas que tem e o que podemos expor
+  para melhorar isso, e ela ler essas justificativas tbm por regional colaborador data").
+  - **O que faltava (auditoria das 3 superfícies):** não havia filtro por colaborador (só `search`,
+    um ILIKE em OR sobre responsável **ou** regional **ou** métrica - buscar "ANA" trazia
+    "Mariana"), não havia filtro por data nenhum (só `reference_year`/`reference_month`, apesar de
+    `reference_date` existir e ser indexada), não havia o conceito "justificativa pendente" (quem
+    chamava tinha que conhecer a máquina de estados), `diagnostics.by_responsible` dava só
+    contadores (sem regional, supervisor, idade ou texto), e `opr_management_cases` truncava em 500
+    sem dizer. Pela chave de API só existia o diagnóstico agregado - listar caso ou ler
+    justificativa era impossível.
+  - **Fonte única:** todos os filtros novos entraram em `ManagementCaseFilters` /
+    `case_filter_conditions` (`management/cases.py`): `responsible_name` (exato),
+    `collaborator_id`, `reference_date_from`/`reference_date_to`, `reason_id`,
+    `pending_justification`, `awaiting_review`, `has_justification`, `min_days_pending`. As seis
+    chamadas que já montavam esse dataclass herdaram tudo de graça. Na tela, as 4 assinaturas
+    repetidas viraram uma dependência única (`case_filters_query`) - antes um filtro novo entrava
+    na listagem e faltava no export, que deixava de bater com a tabela.
+  - **Combinação impossível erra, não devolve vazio:** seguindo o aviso que já existia para
+    `status` + `only_open`, agora `pending_justification` + `awaiting_review`,
+    `pending_justification` + `has_justification=true`, faixa de data invertida e `reference_year`
+    fora da faixa levantam 422 com mensagem acionável. Uma chamada que "tem sucesso" com 0
+    resultados é lida por IA como "não há pendência", que é o oposto da verdade.
+  - **Rotas novas da tela:** `GET /management/cases/pending-by-collaborator` (uma linha por
+    colaborador **x regional** - a mesma pessoa pode ter caso em duas, e somar esconderia onde a
+    pendência está; traz supervisor, modelo de equipe, `oldest_pending_date`, `max_days_pending`,
+    `open_case_ids`, ordenado pela fila de cobrança) e `GET /management/cases/justifications`
+    (texto, motivo, plano de ação, decisão da matriz, paginado, com `include_comments`). Declaradas
+    **antes** de `/cases/{case_id}` no router de propósito.
+  - **Chave de API:** `POST /ai/management/pending-by-collaborator`, `/ai/management/justifications`
+    e `/ai/management/cases`. **Sem escopo de supervisor de propósito** - a identidade da chave é
+    `role="ai_service"`, cujas permissões são só `{"ai:query"}`, sem `managed_regionals`: aplicar
+    `case_scope_conditions` nela viraria `supervisor_user_id == <usuário de serviço>`, ou seja ZERO
+    caso sempre (foi por isso que o `/ai/management/cases-diagnostics` de 2026-08-20 já era visão
+    de matriz). O controle nessa superfície é o escopo do token + a chave de governança; para
+    recortar existem `regional` e `supervisor_user_id`. No MCP, onde o chamador é um usuário OAuth
+    real, o escopo por supervisor/regional **continua aplicado**.
+  - **`ai.management_justifications` nasce DESLIGADA** na governança de IA: `justification_text`,
+    `action_plan` e os comentários são texto livre escrito por um supervisor sobre uma pessoa
+    específica. Ligar isso pra uma chave de máquina é decisão de administrador, não efeito
+    colateral do deploy. As outras duas nascem ligadas (dado estruturado, mesmo que a tela mostra).
+    `ai.management_cases` **já existia** no catálogo desde antes (criada com a tool, mas nunca
+    consultada pelo gate) - agora passou a valer de verdade.
+  - **MCP:** `opr_management_cases` ganhou os filtros novos e **paginação real** (`total` + `page`,
+    no lugar do `limit 500` silencioso); duas tools novas, `opr_management_pending_justifications`
+    e `opr_management_justifications`. Portadas também pro servidor stdio
+    (`mcp-server/opr_analitica_mcp.py`), que são chamadas HTTP finas - lá ainda faltam as 4 de
+    reagendamento/cockpit, e o README dele foi corrigido (listava 10 tools quando havia 23).
+  - **Correção de segurança achada no caminho:** `opr_management_cases_diagnostics` exigia só token
+    OAuth válido - **nem `management:read`, nem o gate de governança**. O escopo regional ainda
+    limitava o retorno, mas quem não tem acesso à Gestão na tela conseguia ler pelo MCP, e o admin
+    não tinha como desligar a capacidade. Agora as 4 tools de gestão passam por
+    `_management_user()` + gate.
+  - **Sem migration** - nenhuma coluna nova; os índices existentes (`regional`,
+    `responsible_name`, `reference_date`, `status`) já cobrem os filtros.
+  - **Nota de teste:** os `ERROR at teardown` nesta suíte são ruído pré-existente do ambiente
+    Windows (job de snapshot/monitor usando o `SessionLocal` global numa thread do TestClient),
+    reproduzem em arquivos não tocados e não indicam falha de asserção. Ao mexer em governança
+    dentro de teste, chame `bump_policy_version` - `resolve_effective_policy` tem cache chaveado
+    por `user.id ^ versão`, e como cada teste roda num `:memory:` novo os ids se repetem e a
+    política de outro teste vaza.
+
+- **Visão Geral: total de finalizadas no tooltip do SLA + drill do modelo de equipe até os técnicos**
+  (2026-09-10, usuário: "Trazer no gráfico de SLA a Quantidade de O.S total do dia" e "Trazer um
+  driwll no gráfico de qual modelo de equipe mais produziu com os técnicos").
+  - **Total no tooltip do SLA** (`buildOverviewSlaTrendOption`): o tooltip abre com "Finalizadas no
+    dia (total)" e só depois quebra em No prazo / Fora do prazo. Escolha do usuário foi
+    explicitamente **só no tooltip**, sem desenhar nada novo - o gráfico já tem 3 linhas e 2 barras,
+    mesmo princípio do "Fluxo diário desinchado" da rodada anterior. Existe também uma linha
+    condicional "Sem prazo medível" (a diferença entre o total e as barras, que empilham apenas no
+    prazo + fora do prazo), pra o total nunca parecer erro de conta.
+  - **Achado real, medido**: `completed_unmeasurable` é **sempre 0 neste banco** - 92.527 O.S.
+    fechadas entre dez/2024 e ago/2026, nenhuma sem `sla_status` mensurável (leitura direta). Ou
+    seja, hoje o total sempre bate com a soma das duas barras e a linha condicional nunca renderiza;
+    ela fica como guarda pro dia em que algum tipo de O.S. entrar sem prazo cadastrado. **Essa
+    ramificação não foi exercitada contra dado real** justamente porque o estado não ocorre aqui.
+  - **Drill até o técnico**: clicar num modelo de equipe continua aplicando o drill temporário de
+    sempre (`team_models`), e agora o card troca de nível - passa a mostrar "Quem produziu neste
+    modelo", finalizadas por técnico. Clicar num técnico recorta a tela inteira por ele (3º nível), e
+    o "Voltar" que já existia desfaz a sequência toda de uma vez.
+  - **Por que trocar de nível em vez de abrir um painel novo**: com um único modelo selecionado, o
+    donut de modelo virava uma fatia só de 100% - não informava mais nada. O segundo nível ocupa
+    exatamente esse estado morto, sem inventar interação nova.
+  - **Rota própria e enxuta em vez de reaproveitar a de SLA por colaborador** (decisão MEDIDA, não
+    preferência): a primeira versão usava `GET /operations/sla/collaborators`, que serve a Operação
+    Analítica. Medido no banco real (um modelo, 30 dias): **144 ms e ~19 KB** (15 campos por pessoa -
+    tempos de execução mín/méd/máx, aderência a agendamento e contagem por tipo de O.S. numa SEGUNDA
+    consulta) contra **58 ms e ~1,7 KB** de uma consulta enxuta, pro mesmo donut, que usa dois campos.
+    Criada `queries.overview_collaborator_production` +
+    `GET /operations/overview/collaborator-production`; a rota compartilhada de SLA ficou intacta
+    (segue em uso em `app/operacao/page.tsx`).
+    Dois ganhos além da latência: o `GROUP BY` passou a ser só por responsável (a rota de SLA agrupa
+    por responsável **e filial**, então quem atende duas filiais vinha em duas linhas e precisava ser
+    somado de novo na tela - agora não precisa), e a rota nova exige apenas `operations:read`, então
+    **o nível de técnico deixou de depender de `operations:view_sla`** - produção por técnico não é
+    dado de prazo, e nome + contagem já eram alcançáveis nesta mesma tela por quem escolhe um
+    colaborador no filtro. 4 testes novos travam exatamente isso
+    (`test_operations_overview_collaborator_production.py`), incluindo o teste de que a rota responde
+    200 com só `operations:read` e que a resposta não tem campo de prazo nenhum.
+  - **Verificado ao vivo no ambiente real desta máquina** (usuário de teste descartável, removido ao
+    final; frontend reconstruído oficialmente): tooltip do SLA em 21/08 mostrando "total 6 = 5 no
+    prazo + 1 fora"; drill em TECNICO 12/36H com o donut de técnicos fechando em **687**, o MESMO
+    número do KPI "Finalizadas" e do donut de filial (três fontes independentes reconciliando); os 4
+    primeiros técnicos (38/36/35/35) conferidos **contra o banco por consulta própria**, mesma ordem
+    e mesmos nomes; 3º nível recortando a tela por um técnico (que aparece em 2 filiais, 37+1=38);
+    "Voltar" desfazendo modelo + técnico num clique. Refeito na rota enxuta depois da otimização.
+
+- **Visão Geral: o filtro padrão parou de vazar pra Operação Analítica e passou a guardar também os
+  filtros do SGP** (2026-09-09, usuário viu o print da barra de filtros em produção sem os campos do
+  SGP e perguntou "Cade o filtro do opa que napo veio?" - resposta: feature deployada mas desligada
+  por padrão nesta instalação, ver Administração → Módulos. No mesmo fio, dois bugs reais: "Os
+  filtros quero que ele fique salvo somente na aba visão geral, naoq uero que ele vá para operação
+  analitica e pq quando eu salvo o filtro do opa ele nao salva?").
+  - **Causa raiz dos dois**: "Definir como padrão" da Visão Geral reaproveitava o mesmo mecanismo de
+    visão global (`OperationSavedFilter`, `visibility="global"`) que a Operação Analítica usa pra
+    "Visões salvas" - por isso o padrão aparecia nas duas telas, e por isso não tinha onde guardar
+    `support_department`/`support_channel`/`support_reason` (o schema por trás, `OperationSavedFilterValues`,
+    é só o catálogo de filtro de O.S.).
+  - **Redesenhado como um blob PRÓPRIO da Visão Geral** guardado em `app_settings`
+    (`overview_default_filter`, JSON com `filters` + `support_filters`), sem nenhuma referência a
+    `OperationSavedFilter` - `GET`/`PUT /operations/overview/default-filter` (`router.py`),
+    `OperationOverviewDefaultFilter`/`Update` reescritos (`schemas.py`, + `OverviewSupportFilterValues`
+    novo). "Definir como padrão" na tela deixou de abrir um diálogo pedindo nome (não é mais um item
+    numa lista de visões) - salva o recorte atual direto. `use-overview-filters.ts::initialize` passou
+    a aplicar os dois grupos de filtro no boot da tela (só aplicava os de O.S. antes - a causa direta
+    do "não salva" era essa mesma função nunca ter recebido `support_filters`).
+  - **Achado ao vivo, corrigido**: `app_settings.value` é `VARCHAR(255)` - o blob JSON (O.S. + SGP)
+    estourava isso fácil e a primeira tentativa de salvar quebrou com 500 (`StringDataRightTruncation`).
+    Migration `20260909_0090` alarga a coluna pra `TEXT`; é um key-value genérico reaproveitado por
+    outros recursos, nenhum depende do teto de 255.
+  - **Verificado ao vivo no ambiente real desta máquina** (usuário de teste descartável, papel admin,
+    removido ao final + migration aplicada + containers reconstruídos oficialmente): filial + um
+    filtro do SGP juntos em "Definir como padrão" → recarregar a tela reaplicou os dois; aberto
+    "Visões salvas" da Operação Analítica logo em seguida, só as 3 visões globais reais apareceram
+    (Geral/Garantias/Tecnicos Geral), nenhum vestígio do padrão da Visão Geral. Configuração de teste
+    (`overview_default_filter`) e usuário de teste removidos por completo ao final; nenhuma conta ou
+    visão real foi tocada. Suíte completa depois da mudança: 924 passando (1 a menos que o baseline
+    anterior porque 2 testes do desenho antigo, específicos de visão global, saíram e 1 novo entrou),
+    mesmas 133 falhas pré-existentes do baseline.
+
+- **Permissão por usuário: conceder ou negar uma permissão específica de uma pessoa, sem criar
+  perfil só para ela** (2026-09-09, pedido do usuário logo depois da rodada anterior de
+  Administração - "agora adiciona permissão por usuário", item que tinha ficado registrado como
+  pendência).
+
+  - **`UserPermissionOverride`** (models.py + migration `20260909_0089`, aditiva): uma linha por
+    (usuário, permissão), com `effect` `grant` ou `deny` e motivo opcional. `permissions_for_user`
+    (core/security.py) - fonte única usada em login, toda rota (`require_permission`), MCP e
+    notificações - passou a calcular: **base** (perfil ativo do usuário, ou o papel legado quando
+    ele não tem nenhum perfil) **+ concessões individuais − negações individuais**. Negação
+    individual sempre VENCE o que o perfil dá; concessão individual só soma. A exceção se propaga
+    para o sistema inteiro sem precisar tocar em nenhuma checagem existente, porque todas passam
+    pela mesma função.
+  - **Mesma trava de lockout da rodada anterior, agora por pessoa em vez de por perfil**
+    (`user_permissions_service.py`, `_would_orphan_admin_gatekeeper`): negar (ou remover a única
+    concessão individual que dá) `admin:users:write` da última pessoa ATIVA que o teria de verdade
+    é bloqueado com o motivo explicado na tela - o mesmo princípio da trava de exclusão/inativação
+    de perfil, olhando "pessoas" em vez de "perfis" porque são dois jeitos independentes de chegar
+    no mesmo problema (ecossistema sem ninguém que administre acesso).
+  - **3 endpoints** em `/admin/users/{id}/permissions[/{permission_key}]` (GET overview, PUT
+    concede/nega - troca o efeito em vez de empilhar, DELETE volta ao que o perfil dá), com
+    auditoria completa (before/after) e exigindo `admin:users:read`/`admin:users:write`, os mesmos
+    já usados pelo resto do módulo.
+  - **Catálogo de permissões ganhou `override_count`** (pessoas com exceção individual, separado
+    de `user_count` que já existia via perfil) - avisa antes de mexer num perfil ou excluir uma
+    permissão própria que tenha gente com exceção pendurada nela. `delete_custom_permission`
+    passou a bloquear a exclusão também quando há override, não só quando há perfil usando.
+  - **Frontend**: botão "Permissões individuais" no editor de usuário (só para usuário já
+    existente) abre um drawer novo (`user-permission-overrides-drawer.tsx`) com o catálogo
+    agrupado por módulo, mostrando "Tem acesso"/"Sem acesso" efetivo e se o perfil concede,
+    botões Conceder/Negar/Remover exceção, e motivo opcional editável inline (salva ao sair do
+    campo).
+  - **16 testes novos** (`test_user_permission_overrides.py`): concessão que o papel não dá,
+    negação que vence o perfil, trocar de efeito substitui em vez de empilhar, remover reverte,
+    chave inválida, gates de permissão de leitura/escrita, os dois lados do lockout (bloqueado sem
+    outro admin ativo, permitido com outro existindo, bloqueado ao remover a única concessão),
+    `override_count` no catálogo, permissão própria não pode ser excluída com override pendente.
+    Suíte completa depois da mudança: **925 passando, o mesmo conjunto de 133 falhas
+    pré-existentes do baseline** (nenhuma regressão, apesar de `permissions_for_user` ser usada em
+    praticamente toda checagem de permissão do sistema).
+  - **Verificado ao vivo no ambiente real** (migration aplicada no start, `docker compose build`):
+    negar `operations:read` de um usuário viewer via clique na UI mostrou "Sem acesso" mesmo com
+    "perfil concede" ao lado; removida a exceção, voltou a "Tem acesso"; motivo digitado via `curl`
+    apareceu certo no campo da tela; `override_count` refletiu a exceção no catálogo; auditoria
+    gravou before/after completo (`effective_permissions` antes e depois); 375px sem vazamento
+    horizontal. **Achado durante a verificação, não corrigido de propósito**: um admin pode negar a
+    própria `admin:users:write` e ficar sem conseguir desfazer sozinho quando existem outros admins
+    (a trava impede o ecossistema inteiro ficar sem administrador, não impede autolockout
+    individual) - mesmo risco que já existia ao remover o próprio perfil, não é uma fragilidade
+    nova desta feature. Dado de teste (2 usuários descartáveis + overrides + registros de
+    auditoria) criado e removido por completo ao final; nenhuma conta real foi tocada.
+
+- **Administração avançada e parametrizável: catálogo de permissões, exclusão que fica de pé e
+  módulo editável pela tela** (2026-09-09, usuário: "Preciso validar a aba adm para o modulo novo
+  que não está em alguns lugares, preciso melhorar o modulo adm podendo excluir permissão... deixar
+  esse modulo avançado e 100% parametrizavel" → escolheu, no diagnóstico: corrigir o restart que
+  devolve permissão, criar/excluir permissões próprias, excluir perfil, Localiza nos lugares que
+  faltavam, módulos editáveis e uma aba de Permissões nova).
+
+  - **O bug central era o restart do backend, não a tela.** `ensure_access_profiles`
+    (`core/security.py`) roda a cada start e fazia `permissions - existing` -> `db.add(...)`: só
+    somava. Qualquer permissão removida na tela de Perfis voltava sozinha na próxima subida do
+    container, sem aviso e sem auditoria - na prática, permissão de perfil de sistema NÃO era
+    removível, e nada na tela dizia isso. Agora a semeadura acontece **uma vez por (perfil de
+    sistema, permissão)**, registrada em `access_profile_permission_seeds` (migration
+    `20260909_0088`, aditiva). A contrapartida foi preservada de propósito: permissão nova que entre
+    em `ROLE_PERMISSIONS` (módulo novo) ainda chega aos perfis existentes na primeira subida - foi
+    exatamente assim que `admin:permissions:write` (criada nesta rodada) entrou sozinha no "Admin
+    Ecossistema" do banco real, confirmado por leitura direta.
+    **Backfill consciente**: a migration registra o que os perfis de sistema TÊM hoje; se alguém
+    removeu algo antes deste deploy, volta uma última vez e a partir dali a remoção fica de pé.
+
+  - **Excluir perfil de acesso deixou de ser beco sem saída** (`admin/router.py`).
+    Perfil de sistema virou excluível - o bloqueio antigo existia porque a semeadura o recriava no
+    restart, então "excluir" era ilusão. Perfil vinculado a usuários respondia 409 sem oferecer
+    saída nenhuma pela tela; agora a exclusão aceita `reassign_profile_id` e MOVE as pessoas na
+    mesma transação. A reatribuição é **exigida**, não opcional: usuário sem nenhum perfil cai no
+    conjunto do papel legado (`permissions_for_user`), o que poderia AMPLIAR o acesso em silêncio.
+    Trava nova contra lockout: o último perfil ativo que concede `admin:users:write` não pode ser
+    excluído **nem inativado** (os dois caminhos levam ao mesmo estrago). A tela mostra o motivo em
+    texto em vez de esconder o botão - "não consigo excluir e não sei por quê" era o pedido.
+    **Bug de UI corrigido junto**: `deleteProfileAction` não tinha `try/catch`, então o 409 do
+    backend estourava sem nada aparecer e o clique parecia simplesmente não ter efeito.
+
+  - **Catálogo de permissões = código + próprias** (`admin/permissions_service.py`, novo).
+    Permissão **do sistema** vem de `PERMISSION_LABELS` e é o que as rotas exigem: revogável de
+    qualquer perfil, nunca excluível do catálogo (apagar o rótulo não apagaria a exigência da rota,
+    só deixaria a rota inalcançável sem aviso). Permissão **própria** vive em `custom_permissions` e
+    é excluível enquanto nenhum perfil a usar. Chave normalizada e validada no formato
+    `modulo:acao`, nunca renomeável (perfis a referenciam por texto). **Limite dito na própria
+    tela**: permissão própria é marcador de acesso concedível/revogável, não passa a proteger rota
+    do backend por si só, porque rota é código.
+
+  - **Aba Permissões nova** (`components/admin/permissions-panel.tsx`): catálogo agrupado por
+    módulo com **uso de cada permissão** (quantos perfis, quantas pessoas - pessoa conta uma vez só,
+    a pergunta é "quem perde o acesso se eu revogar"), filtro por origem, busca, e o ciclo de vida
+    das próprias. Exige `admin:permissions:read`; criar/editar/excluir exige
+    `admin:permissions:write` (permissão nova, marcada como sensível junto com
+    `admin:modules:write`: quem redesenha o controle de acesso não entra de carona num "Selecionar
+    módulo").
+
+  - **Módulo do ecossistema parametrizável** (`admin/modules_service.py`, novo +
+    `workspace_module_settings`): nome, descrição, status e ordem passam a ser editáveis pela tela,
+    sobrepondo `modules/registry.py`; campo em branco volta ao padrão. **Rota web, prefixo de API e
+    permissão mínima continuam só em código, de propósito** - as rotas validam as próprias
+    permissões, então trocar a permissão mínima pela tela deixaria o módulo visível para quem vai
+    levar 403 em tudo lá dentro, o que é pior que não poder editar. `/admin/modules` e
+    `/workspace/modules` passaram a ler a MESMA fonte, então não existe módulo "desativado na
+    Administração e visível na barra lateral".
+
+  - **UNI Localiza: os 5 lugares onde o módulo novo não estava.** (1) O agrupamento de permissão por
+    módulo era lista escrita à mão no router e o Localiza - criado depois dela - caía em "Outras
+    permissões", **o único módulo ativo nessa condição**; agora é DERIVADO do registry (prefixo da
+    permissão mínima), com teste-trava garantindo que nenhuma permissão de código caia no grupo
+    genérico. (2) A "Central de parametrizações" era uma lista fixa de 6 módulos; virou derivada da
+    lista que a tela já carrega. (3) `WorkspaceVisibleModule["key"]` estava travado em 6 chaves
+    (faltavam `intelligence` e `localiza`) e a união `Permission` não tinha
+    `portal:update_self_profile` nem `ai:query` - alinhadas ao backend via `WorkspaceModuleKey` e
+    `PermissionKey`. (4) Era o único módulo ativo **sem telas** em `lib/module-screens.ts`, então o
+    menu lateral não oferecia nenhum destino dentro dele; ganhou `LOCALIZA_NAV_ITEMS` (lista única,
+    usada pela página e pelo menu). (5) A página ignorava `?tab=`, então o link do submenu não
+    abriria a aba certa - passou a ler, no mesmo padrão da Administração.
+
+  - **Dois achados durante a verificação ao vivo, corrigidos**: renomear módulo atualizava a tabela
+    na hora mas a barra lateral ficava até 30s com o nome antigo (cache de sessão de
+    `/workspace/modules`), o que se lê como "salvei e não mudou nada" - resolvido com
+    `invalidateSessionCache` + evento que a casca escuta (`notifyWorkspaceModulesChanged`). E o
+    painel novo **vazava a página de lado em 375px** (`body.scrollWidth` 918 contra 375 de tela):
+    item de grid nasce com `min-width: auto` e não encolhe abaixo do conteúdo, então a tabela de
+    860px esticava o card em vez de rolar dentro dele - resolvido com `min-w-0` na cadeia.
+
+  - **`lib/api.ts`: pendência anterior fechada.** O 422 do Pydantic (lista de objetos) aparecia como
+    JSON cru na tela - mesmo bug que já tinha sido corrigido em `lib/localiza-api.ts` e ficara
+    registrado aqui como pendência. Junto, respostas 204 (exclusão sem corpo) não estouram mais em
+    `response.json()`.
+
+  - **Verificado ao vivo no ambiente real desta máquina** (containers reconstruídos oficialmente via
+    `docker compose build`, migration aplicada no start): permissões do Localiza agrupadas sob "UNI
+    Localiza" com uso real; permissão própria criada, atribuída a perfil e excluída pela tela;
+    chave inválida mostrando mensagem legível em vez de JSON cru; módulo renomeado refletindo na
+    barra lateral, desativado saindo da navegação na hora e restaurado ao padrão; "Admin
+    Ecossistema" com exclusão bloqueada **e o motivo escrito na tela**; "Leitor Operacional" com o
+    seletor "Mover N pessoas para"; deep link `?tab=mapa` abrindo a aba certa; 375px sem vazamento
+    horizontal e com a tabela rolando dentro do card.
+    **Dado de teste sempre descartável e removido ao final** (usuário de QA + permissão de QA);
+    `custom_permissions` e `workspace_module_settings` voltaram a 0 linhas, nenhum perfil ou conta
+    real foi alterado. 30 testes novos de backend e 11 de frontend; suíte completa com conjunto de
+    falhas **idêntico ao baseline** (as pré-existentes do runner ad-hoc), 909 passando contra 882.
+    O drawer de parametrização de módulo não foi exercitado em 375px de forma interativa (o painel
+    do navegador ficou oculto e os cliques passaram a expirar) - segue o mesmo padrão de sheet
+    mobile dos outros drawers do projeto.
+
+  - **Pendência registrada**: permissão POR USUÁRIO (conceder/negar direto na pessoa, sem criar um
+    perfil só pra ela) foi oferecida no diagnóstico e o usuário não escolheu nesta rodada. Hoje o
+    caminho é perfil + exceção de visibilidade de módulo.
 
 - **Visão Geral: 3 "ganhos rápidos" de uma análise premium pedida pelo usuário** (2026-09-08/09,
   "Faça uma análise de como deixar mais premium" → usuário escolheu começar pelos ganhos rápidos).

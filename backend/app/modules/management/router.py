@@ -50,7 +50,9 @@ from app.modules.management.schemas import (
     ManagementCaseReview,
     ManagementCaseSummaryOut,
     ManagementDashboardOut,
+    ManagementJustificationPage,
     ManagementMemberUpdate,
+    ManagementPendingByCollaboratorOut,
     ManagementOperationalMemberOut,
     ManagementOptionOut,
     ManagementOptionsOut,
@@ -276,8 +278,7 @@ def _load_case_or_404(db: Session, case_id: int, user: User) -> ManagementCase:
     return item
 
 
-@router.get("/cases", response_model=ManagementCasePage)
-def list_cases(
+def case_filters_query(
     status: str | None = None,
     severity: str | None = None,
     regional: str | None = None,
@@ -288,12 +289,24 @@ def list_cases(
     only_overdue: bool = False,
     only_open: bool = False,
     search: str | None = None,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, le=200),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_permission("management:read")),
-):
-    filters = cases_engine.ManagementCaseFilters(
+    responsible_name: str | None = Query(
+        default=None,
+        description="Nome EXATO do colaborador (ignora maiúscula/minúscula). Diferente de `search`, que casa parcial em responsável, regional ou métrica.",
+    ),
+    collaborator_id: int | None = None,
+    reference_date_from: date | None = Query(default=None, description="Competência do caso a partir de (inclusiva, AAAA-MM-DD)."),
+    reference_date_to: date | None = Query(default=None, description="Competência do caso até (inclusiva, AAAA-MM-DD)."),
+    reason_id: int | None = None,
+    pending_justification: bool = Query(default=False, description="Só casos que o supervisor ainda não justificou (status pending)."),
+    awaiting_review: bool = Query(default=False, description="Só casos já justificados esperando decisão da matriz (status justified)."),
+    has_justification: bool | None = Query(default=None, description="true = só casos com texto de justificativa; false = só sem."),
+    min_days_pending: int | None = Query(default=None, ge=0, description="Só casos abertos há pelo menos N dias corridos."),
+) -> cases_engine.ManagementCaseFilters:
+    """Dependência única de filtro dos casos - a listagem, o export, o diagnóstico, as pendências
+    por colaborador e a leitura de justificativas compartilham exatamente o MESMO recorte. Quando
+    eram quatro assinaturas separadas, um filtro novo entrava em uma rota e faltava nas outras, e
+    o export deixava de bater com a tabela da tela."""
+    return cases_engine.ManagementCaseFilters(
         status=status,
         severity=severity,
         regional=regional,
@@ -304,7 +317,26 @@ def list_cases(
         only_overdue=only_overdue,
         search=search,
         statuses=list(OPEN_CASE_STATUSES) if only_open else [],
+        responsible_name=responsible_name,
+        collaborator_id=collaborator_id,
+        reference_date_from=reference_date_from,
+        reference_date_to=reference_date_to,
+        reason_id=reason_id,
+        pending_justification=pending_justification,
+        awaiting_review=awaiting_review,
+        has_justification=has_justification,
+        min_days_pending=min_days_pending,
     )
+
+
+@router.get("/cases", response_model=ManagementCasePage)
+def list_cases(
+    filters: cases_engine.ManagementCaseFilters = Depends(case_filters_query),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:read")),
+):
     try:
         conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
     except ValueError as exc:
@@ -335,44 +367,9 @@ def list_cases(
     )
 
 
-def _diagnostics_filters(
-    status: str | None,
-    severity: str | None,
-    regional: str | None,
-    supervisor_user_id: int | None,
-    case_type: str | None,
-    reference_year: int | None,
-    reference_month: int | None,
-    only_overdue: bool,
-    only_open: bool,
-    search: str | None,
-) -> cases_engine.ManagementCaseFilters:
-    return cases_engine.ManagementCaseFilters(
-        status=status,
-        severity=severity,
-        regional=regional,
-        supervisor_user_id=supervisor_user_id,
-        case_type=case_type,
-        reference_year=reference_year,
-        reference_month=reference_month,
-        only_overdue=only_overdue,
-        search=search,
-        statuses=list(OPEN_CASE_STATUSES) if only_open else [],
-    )
-
-
 @router.get("/cases/export")
 def export_cases(
-    status: str | None = None,
-    severity: str | None = None,
-    regional: str | None = None,
-    supervisor_user_id: int | None = None,
-    case_type: str | None = None,
-    reference_year: int | None = None,
-    reference_month: int | None = Query(default=None, ge=1, le=12),
-    only_overdue: bool = False,
-    only_open: bool = False,
-    search: str | None = None,
+    filters: cases_engine.ManagementCaseFilters = Depends(case_filters_query),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("management:read")),
 ):
@@ -382,10 +379,6 @@ def export_cases(
     import csv
     import io
 
-    filters = _diagnostics_filters(
-        status, severity, regional, supervisor_user_id, case_type, reference_year, reference_month,
-        only_overdue, only_open, search,
-    )
     try:
         conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
     except ValueError as exc:
@@ -436,30 +429,69 @@ def export_cases(
 
 @router.get("/cases/diagnostics", response_model=ManagementCaseDiagnosticsOut)
 def case_diagnostics(
-    status: str | None = None,
-    severity: str | None = None,
-    regional: str | None = None,
-    supervisor_user_id: int | None = None,
-    case_type: str | None = None,
-    reference_year: int | None = None,
-    reference_month: int | None = Query(default=None, ge=1, le=12),
-    only_overdue: bool = False,
-    only_open: bool = False,
-    search: str | None = None,
+    filters: cases_engine.ManagementCaseFilters = Depends(case_filters_query),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("management:read")),
 ):
     """Diagnóstico agregado (quem mais falha, por regional/responsável/motivo) do MESMO recorte
     filtrado na tela - pedido do usuário em 2026-08-20 pra não precisar contar caso por caso."""
-    filters = _diagnostics_filters(
-        status, severity, regional, supervisor_user_id, case_type, reference_year, reference_month,
-        only_overdue, only_open, search,
-    )
     try:
         conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ManagementCaseDiagnosticsOut(**cases_engine.case_diagnostics(db, conditions))
+
+
+@router.get("/cases/pending-by-collaborator", response_model=ManagementPendingByCollaboratorOut)
+def pending_by_collaborator(
+    filters: cases_engine.ManagementCaseFilters = Depends(case_filters_query),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:read")),
+):
+    """"Quem está devendo justificativa", uma linha por colaborador x regional, com a idade da
+    pendência e os ids dos casos abertos - pedido do usuário em 2026-09-10.
+
+    Antes disso, responder isso exigia listar os casos e agrupar por fora: `cases/diagnostics`
+    só devolve contadores por responsável, sem regional, sem supervisor e sem idade.
+
+    Combine com `pending_justification=true` para ver apenas quem ainda não justificou nada, ou
+    com `reference_date_from`/`reference_date_to` para recortar por dia/semana. Escopo de
+    visibilidade igual ao da tela."""
+    try:
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ManagementPendingByCollaboratorOut(
+        **cases_engine.pending_justifications_by_collaborator(db, conditions, limit=limit)
+    )
+
+
+@router.get("/cases/justifications", response_model=ManagementJustificationPage)
+def list_justifications(
+    filters: cases_engine.ManagementCaseFilters = Depends(case_filters_query),
+    include_comments: bool = Query(default=False, description="Traz também a thread de comentários de cada caso."),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:read")),
+):
+    """Leitura das justificativas do recorte - texto do supervisor, motivo, plano de ação e decisão
+    da matriz, achatados e paginados. Pedido do usuário em 2026-09-10 pra ler por regional,
+    colaborador e data sem abrir caso por caso.
+
+    Use `responsible_name` (nome exato) + `reference_date_from`/`reference_date_to` para o recorte
+    pedido; `has_justification=true` limita ao que já tem texto escrito. Escopo de visibilidade
+    igual ao da tela."""
+    try:
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ManagementJustificationPage(
+        **cases_engine.justification_rows(
+            db, conditions, page=page, page_size=page_size, include_comments=include_comments
+        )
+    )
 
 
 @router.post("/cases/bulk-review", response_model=ManagementCaseBulkReviewResult)

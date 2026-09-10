@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { StatusToast } from "@/components/ui/status-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -12,6 +13,7 @@ import { LocalizaCreateForm } from "@/components/localiza/localiza-create-form";
 import { LocalizaDetailPanel } from "@/components/localiza/localiza-detail-panel";
 import { LocalizaList, type LocalizaListScope } from "@/components/localiza/localiza-list";
 import { LocalizaMapView } from "@/components/localiza/localiza-map-view";
+import { LOCALIZA_NAV_ITEMS, isLocalizaTab, type LocalizaTab } from "@/components/localiza/localiza-nav-items";
 import { LocalizaSettingsPanel } from "@/components/localiza/localiza-settings-panel";
 
 // Limite alto de propósito: o mapa de referência (aba "Mapa") precisa enxergar TODO cliente que já
@@ -33,7 +35,19 @@ const LIST_POLL_INTERVAL_MS = 10_000;
 export default function LocalizaPage() {
   return (
     <WorkspaceAppShell activePath="/localiza" title="UNI Localiza" subtitle="Link para o cliente compartilhar localização por GPS">
-      {(user) => <LocalizaPageContent user={user} />}
+      {(user) => (
+        // `useSearchParams` (aba pedida pela URL) exige fronteira de Suspense em rota estática -
+        // mesmo padrão já usado em `app/admin/page.tsx`.
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando UNI Localiza...
+            </p>
+          }
+        >
+          <LocalizaPageContent user={user} />
+        </Suspense>
+      )}
     </WorkspaceAppShell>
   );
 }
@@ -42,7 +56,7 @@ function LocalizaPageContent({ user }: { user: AuthUser }) {
   const canRead = Boolean(user?.permissions.includes("localiza:read"));
   const canManage = Boolean(user?.permissions.includes("localiza:manage"));
 
-  const [activeTab, setActiveTab] = useState<"solicitacoes" | "mapa">("solicitacoes");
+  const [activeTab, setActiveTab] = useState<LocalizaTab>("solicitacoes");
   const [scope, setScope] = useState<LocalizaListScope>("mine");
   const [items, setItems] = useState<LocationRequest[]>([]);
   const [search, setSearch] = useState("");
@@ -57,6 +71,16 @@ function LocalizaPageContent({ user }: { user: AuthUser }) {
     const stored = window.localStorage.getItem(SCOPE_STORAGE_KEY);
     if (stored === "mine" || stored === "all") setScope(stored);
   }, []);
+
+  // Tela pedida pela URL (`?tab=`), como o submenu do módulo na barra lateral do ecossistema linka
+  // (ver `lib/module-screens.ts`). Depende de `searchParams` e não de `window.location` pelo mesmo
+  // motivo já documentado em `app/admin/page.tsx`: em navegação pelo lado do cliente a URL do
+  // navegador ainda não está atualizada na primeira renderização.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (isLocalizaTab(tab)) setActiveTab(tab);
+  }, [searchParams]);
 
   function changeScope(next: LocalizaListScope) {
     setScope(next);
@@ -166,10 +190,13 @@ function LocalizaPageContent({ user }: { user: AuthUser }) {
     <div className="min-w-0 px-4 py-5 lg:px-7">
       <StatusToast error={error} onDismissError={() => setError(null)} />
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "solicitacoes" | "mapa")}>
+      <Tabs value={activeTab} onValueChange={(value) => isLocalizaTab(value) && setActiveTab(value)}>
         <TabsList>
-          <TabsTrigger value="solicitacoes">Solicitações</TabsTrigger>
-          <TabsTrigger value="mapa">Mapa</TabsTrigger>
+          {LOCALIZA_NAV_ITEMS.map((item) => (
+            <TabsTrigger key={item.value} value={item.value}>
+              {item.label}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="solicitacoes" className="mt-4 grid gap-4">

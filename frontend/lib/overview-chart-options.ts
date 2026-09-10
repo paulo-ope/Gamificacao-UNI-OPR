@@ -231,6 +231,11 @@ export function buildBacklogTrendOption(
  *
  * Função PRÓPRIA da Visão Geral - mesma razão de `buildOverviewOpeningsTrendOption`: não alterar
  * `buildSlaTrendOption`, que o módulo de Operação usa sem pedir essa linha.
+ *
+ * O TOTAL de finalizadas do dia fica só no tooltip (pedido do usuário, 2026-09-10), não desenhado:
+ * as barras empilhadas mostram apenas no prazo + fora do prazo, então quem lia o gráfico não tinha
+ * como saber o volume total nem enxergar as O.S. sem prazo medível - que existem, entram no total e
+ * de propósito NÃO entram na conta do SLA (ver `services.py`, `completed_unmeasurable`).
  */
 export function buildOverviewSlaTrendOption(
   trend: OperationTrendSeries,
@@ -238,6 +243,12 @@ export function buildOverviewSlaTrendOption(
 ): EChartsOption {
   const labels = trend.points.map((point) => trendPointLabel(point.period_start, point.period_end, trend.granularity));
   const groupLabel = trend.granularity === "day" ? "SLA do dia" : trend.granularity === "week" ? "SLA da semana" : "SLA do mês";
+  const totalLabel =
+    trend.granularity === "day"
+      ? "Finalizadas no dia"
+      : trend.granularity === "week"
+        ? "Finalizadas na semana"
+        : "Finalizadas no mês";
   const previousCumulative = previousTrend?.points.map((point) => point.sla_cumulative_rate) ?? null;
 
   const series: NonNullable<EChartsOption["series"]> = [
@@ -319,11 +330,20 @@ export function buildOverviewSlaTrendOption(
         if (!point) return "";
         const lines = [
           `<strong>${labels[index]}</strong>`,
-          `O.S. no prazo: ${point.completed_on_time}`,
-          `O.S. fora do prazo: ${point.completed_out_of_time}`,
+          `${totalLabel} (total): ${numberFormat.format(point.completed)}`,
+          `No prazo: ${numberFormat.format(point.completed_on_time)}`,
+          `Fora do prazo: ${numberFormat.format(point.completed_out_of_time)}`,
+        ];
+        // Só quando existe: é a diferença entre o total e as barras desenhadas (que empilham
+        // apenas no prazo + fora do prazo). Sem esta linha, nos dias com O.S. sem prazo cadastrado
+        // o total do tooltip não fecha com a soma das duas linhas acima e parece erro de conta.
+        if (point.completed_unmeasurable > 0) {
+          lines.push(`Sem prazo medível: ${numberFormat.format(point.completed_unmeasurable)}`);
+        }
+        lines.push(
           `${groupLabel}: ${point.sla_rate === null ? "-" : `${point.sla_rate}%`}`,
           `SLA acumulado ponderado: ${point.sla_cumulative_rate === null ? "-" : `${point.sla_cumulative_rate}%`}`,
-        ];
+        );
         if (previousCumulative) {
           const prev = previousCumulative[index];
           lines.push(`SLA acumulado (período anterior): ${prev === null || prev === undefined ? "-" : `${prev}%`}`);

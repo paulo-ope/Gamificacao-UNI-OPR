@@ -283,19 +283,47 @@ class OperationSavedFilterOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OverviewSupportFilterValues(BaseModel):
+    """Só os 3 filtros do SGP Suporte que a Visão Geral usa - o universo de atendimento é próprio
+    dela, não existe em `OperationSavedFilterValues` (que é o catálogo de filtros de O.S.)."""
+
+    support_department: list[str] = Field(default_factory=list, max_length=100)
+    support_channel: list[str] = Field(default_factory=list, max_length=100)
+    support_reason: list[str] = Field(default_factory=list, max_length=100)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class OperationOverviewDefaultFilter(BaseModel):
     """Filtro pré-setado da Visão Geral executiva.
 
-    Aponta para uma visão GLOBAL já salva (`operations_saved_filters`, `visibility="global"`) em
-    vez de duplicar um catálogo de configuração de filtro: quem administra o ecossistema edita a
-    visão global de sempre e a Visão Geral acompanha. `available=False` significa "nenhum padrão
-    definido" - a tela abre sem filtro de dimensão, não em erro."""
+    Guardado como um blob PRÓPRIO da Visão Geral (`app_settings`), não como referência a uma
+    visão global de `operations_saved_filters` - achado real, 2026-09-09: apontar pra uma visão
+    global fazia esse "padrão" aparecer também na lista de visões da Operação Analítica (o
+    usuário não queria isso - "quero que ele fique salvo somente na aba visão geral") e, por
+    reaproveitar `OperationSavedFilterValues` (só campos de O.S.), não tinha onde guardar os
+    filtros do SGP (o motivo do "quando eu salvo o filtro do opa ele não salva"). `available=False`
+    significa "nenhum padrão definido" - a tela abre sem filtro de dimensão, não em erro."""
 
     available: bool
-    saved_filter_id: int | None = None
-    name: str | None = None
     filters: OperationSavedFilterValues | None = None
+    support_filters: OverviewSupportFilterValues | None = None
     can_manage: bool = False
+
+
+class OperationOverviewCollaboratorProductionItem(BaseModel):
+    responsible: str
+    completed: int
+
+
+class OperationOverviewCollaboratorProduction(BaseModel):
+    """Finalizadas por responsável no recorte atual - segundo nível do donut de modelo de equipe.
+    Deliberadamente só nome e contagem: é o que o donut desenha (ver
+    `queries.overview_collaborator_production` para o porquê de não reusar a rota de SLA)."""
+
+    date_from: date
+    date_to: date
+    items: list[OperationOverviewCollaboratorProductionItem]
 
 
 class OperationOverviewFilterOption(BaseModel):
@@ -321,8 +349,10 @@ class OperationOverviewVisibleFiltersUpdate(BaseModel):
 
 
 class OperationOverviewDefaultFilterUpdate(BaseModel):
-    # `None` limpa o padrão.
-    saved_filter_id: int | None = None
+    # `filters=None` limpa o padrão (equivalente a "nenhum" - `support_filters` sozinho não conta,
+    # a Visão Geral sempre manda os dois juntos).
+    filters: OperationSavedFilterValues | None = None
+    support_filters: OverviewSupportFilterValues | None = None
 
 
 class OperationOverview(BaseModel):

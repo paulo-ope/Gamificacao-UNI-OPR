@@ -559,18 +559,76 @@ def opr_onu_signal_history(params: OnuSignalHistoryInput) -> str:
     return _call("infra/onu-signal-history", payload)
 
 
-class ManagementCaseDiagnosticsInput(BaseModel):
+class ManagementCaseFiltersInput(BaseModel):
+    """Recorte compartilhado das tools de Gestão Integrada - mesmos nomes de campo que a rota
+    HTTP aceita (o backend valida com `extra="forbid"`, então nome errado dá 422, não silêncio).
+
+    O bloco responsible_name/reference_date_*/pending_justification entrou em 2026-09-10: até
+    então só existia `search` (parcial em 3 colunas ao mesmo tempo) e a competência por
+    ano/mês, o que tornava "quem tem justificativa pendente nesta regional neste dia" inviável.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     status: str | None = Field(default=None, description="pending, justified, in_progress, resolved ou rejected.")
     severity: str | None = Field(default=None, description="high, medium ou low.")
     regional: str | None = Field(default=None, description="Nome da regional (normalizado, ex.: 'UNI JARU').")
+    supervisor_user_id: int | None = Field(default=None, description="Só os casos sob um supervisor.")
     case_type: str | None = Field(default=None, description="productivity_below_target ou daily_performance_below_target.")
     reference_year: int | None = None
     reference_month: int | None = Field(default=None, ge=1, le=12)
     only_overdue: bool = False
     only_open: bool = False
-    search: str | None = Field(default=None, description="Busca livre por colaborador/regional/métrica.")
+    search: str | None = Field(
+        default=None,
+        description="Busca PARCIAL em colaborador OU regional OU métrica ao mesmo tempo. Para a pessoa exata, use responsible_name.",
+    )
+    responsible_name: str | None = Field(
+        default=None, description="Nome EXATO do colaborador (ignora maiúscula/minúscula)."
+    )
+    collaborator_id: int | None = None
+    reference_date_from: str | None = Field(
+        default=None, description="Competência do caso a partir de (AAAA-MM-DD, inclusiva)."
+    )
+    reference_date_to: str | None = Field(
+        default=None, description="Competência do caso até (AAAA-MM-DD, inclusiva)."
+    )
+    reason_id: int | None = Field(default=None, description="Motivo escolhido na justificativa.")
+    pending_justification: bool = Field(
+        default=False, description="Só o que o supervisor AINDA NÃO justificou (status pending)."
+    )
+    awaiting_review: bool = Field(
+        default=False, description="Só o que já foi justificado e espera a matriz (status justified)."
+    )
+    has_justification: bool | None = Field(
+        default=None, description="true = só com texto de justificativa; false = só sem."
+    )
+    min_days_pending: int | None = Field(
+        default=None, ge=0, description="Só casos abertos há pelo menos N dias corridos."
+    )
+
+
+class ManagementCaseDiagnosticsInput(ManagementCaseFiltersInput):
+    pass
+
+
+class ManagementPendingJustificationsInput(ManagementCaseFiltersInput):
+    only_open: bool = Field(
+        default=True,
+        description="Padrão true - só casos ainda não encerrados, que é o que 'pendência' significa.",
+    )
+    limit: int = Field(default=200, ge=1, le=1000, description="Máximo de colaboradores na resposta.")
+
+
+class ManagementJustificationsInput(ManagementCaseFiltersInput):
+    include_comments: bool = Field(default=False, description="Traz também a thread de comentários do caso.")
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=200)
+
+
+class ManagementCasesInput(ManagementCaseFiltersInput):
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=50, ge=1, le=200)
 
 
 @mcp.tool(
@@ -588,28 +646,126 @@ def opr_management_cases_diagnostics(params: ManagementCaseDiagnosticsInput) -> 
     mais não bate meta, por regional/colaborador/motivo". Visão de matriz (sem recorte por
     supervisor): mesmo dado agregado que a tela de Gestão mostra.
 
+    Para a fila de cobrança ("quem preciso cobrar hoje", com idade da pendência e ids dos casos),
+    prefira `opr_management_pending_justifications`.
+
     Args:
-        params (ManagementCaseDiagnosticsInput): filtros opcionais - status, severity, regional,
-            case_type, reference_year/reference_month (competência), only_overdue, only_open,
-            search.
+        params (ManagementCaseDiagnosticsInput): filtros opcionais - ver
+            `ManagementCaseFiltersInput` (status, severity, regional, supervisor_user_id,
+            responsible_name, collaborator_id, faixa de reference_date, competência por ano/mês,
+            pending_justification, awaiting_review, has_justification, min_days_pending, search).
 
     Returns:
         str: JSON com total_cases e três listas (by_regional, by_responsible, by_reason), cada
         item {"key", "label", "total", "open_cases", "overdue_cases"}, ordenadas do maior total
         pro menor (até 15 por dimensão).
     """
-    payload = {
-        "status": params.status,
-        "severity": params.severity,
-        "regional": params.regional,
-        "case_type": params.case_type,
-        "reference_year": params.reference_year,
-        "reference_month": params.reference_month,
-        "only_overdue": params.only_overdue,
-        "only_open": params.only_open,
-        "search": params.search,
-    }
-    return _call("management/cases-diagnostics", payload)
+    return _call("management/cases-diagnostics", params.model_dump(exclude_none=True))
+
+
+@mcp.tool(
+    name="opr_management_pending_justifications",
+    annotations={
+        "title": "Pendências de justificativa por colaborador",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_management_pending_justifications(params: ManagementPendingJustificationsInput) -> str:
+    """"Quem está devendo justificativa" - uma linha por colaborador x regional, já ordenada pela
+    fila de cobrança (atrasado primeiro, depois quem tem mais pendência sem justificar, depois a
+    pendência mais velha).
+
+    Responde direto "quais colaboradores têm justificativa pendente nesta regional / neste
+    período", sem listar caso por caso e agrupar depois. Cada linha traz o supervisor, o modelo de
+    equipe, a idade da pendência e os ids dos casos abertos (pra ler o texto depois com
+    `opr_management_justifications`).
+
+    Atenção ao vocabulário de status: `pending` = a matriz cobrou e o supervisor AINDA NÃO
+    justificou; `justified` = justificado, esperando a decisão da matriz. Por padrão
+    (`only_open=true`) vêm os dois, mais `in_progress`; use `pending_justification=true` pra ver
+    só quem não escreveu nada ainda.
+
+    Args:
+        params (ManagementPendingJustificationsInput): filtros de recorte + `limit` (máximo de
+            colaboradores). O recorte por dia/semana é `reference_date_from`/`reference_date_to`.
+
+    Returns:
+        str: JSON {"total_collaborators", "total_cases", "truncated", "items": [{responsible_name,
+        regional, collaborator_id, supervisor_name, team_model_name, total_cases, open_cases,
+        pending_cases, justified_cases, in_progress_cases, closed_cases, overdue_cases,
+        high_severity_open, oldest_pending_date, max_days_pending, last_justified_at,
+        open_case_ids}, ...]}. `truncated=true` significa que havia mais colaboradores que o
+        `limit` - aumente antes de concluir que a lista está completa.
+    """
+    return _call("management/pending-by-collaborator", params.model_dump(exclude_none=True))
+
+
+@mcp.tool(
+    name="opr_management_justifications",
+    annotations={
+        "title": "Texto das justificativas de gestão",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_management_justifications(params: ManagementJustificationsInput) -> str:
+    """Lê as justificativas escritas pelos supervisores - o texto, o motivo escolhido, o plano de
+    ação e a decisão da matriz - por regional, colaborador e data.
+
+    É a leitura enxuta: só o que interessa da justificativa, sem o resto do payload do caso. Para
+    "quem ainda está devendo", use `opr_management_pending_justifications` primeiro e traga os
+    textos aqui depois.
+
+    Esta capacidade nasce DESLIGADA na governança de IA (o texto é escrito por supervisor sobre uma
+    pessoa específica) - se voltar erro de endpoint não habilitado, um administrador precisa
+    liberá-la na tela de governança.
+
+    Args:
+        params (ManagementJustificationsInput): filtros de recorte + `include_comments` e
+            paginação. `has_justification=true` limita ao que já tem texto escrito.
+
+    Returns:
+        str: JSON {"total", "page", "page_size", "items": [{case_id, reference_date, regional,
+        responsible_name, supervisor_name, status, severity, is_overdue, reason_name,
+        justification_text, action_plan, metric_name, expected_value, actual_value, justified_at,
+        reviewed_at, reviewer_name, comment_count, comments}, ...]}, do mais recente pro mais
+        antigo. `total` é o recorte inteiro, `items` só a página.
+    """
+    return _call("management/justifications", params.model_dump(exclude_none=True))
+
+
+@mcp.tool(
+    name="opr_management_cases",
+    annotations={
+        "title": "Casos de Gestão Integrada",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+def opr_management_cases(params: ManagementCasesInput) -> str:
+    """Casos de gestão (desvios cobrados formalmente da matriz - produtividade abaixo da meta, dia
+    vermelho do calendário, etc.), com justificativa do supervisor e decisão da matriz. Payload
+    completo do caso, paginado.
+
+    Para "quem está devendo justificativa" agrupado por pessoa, use
+    `opr_management_pending_justifications`; para só os textos, `opr_management_justifications`.
+
+    Args:
+        params (ManagementCasesInput): filtros de recorte + paginação.
+
+    Returns:
+        str: JSON {"total", "page", "page_size", "summary": {...contadores do recorte INTEIRO...},
+        "items": [...]}. `total` é o recorte completo e `items` só a página pedida - compare os
+        dois antes de concluir "são só estes casos".
+    """
+    return _call("management/cases", params.model_dump(exclude_none=True))
 
 
 DateTimeOpDoc = (

@@ -217,7 +217,13 @@ function FilterField({
 }) {
   return (
     <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
-      {label}
+      {/* `truncate` mantem TODO rotulo em uma linha so. A barra alinha os campos por baixo
+          (`items-end`), entao um rotulo que quebra em duas linhas levanta a celula dele e
+          desalinha a fileira inteira - era o que "Modelo de equipe" fazia quando a coluna
+          apertava (achado real, 2026-09-10). O `title` preserva o texto completo no hover. */}
+      <span className="truncate" title={label}>
+        {label}
+      </span>
       <MultiSelect
         ariaLabel={`Filtrar por ${label}`}
         values={values}
@@ -1064,8 +1070,15 @@ export function OperationsFilterPanel({
           </span>
         </div>
       </div>
+      {/* A fileira de campos NAO divide espaco com os botoes. Antes o `2xl` era
+          `..._repeat(5,minmax(0,1fr))_auto`, e a coluna `auto` do grupo de botoes reservava 552px
+          fixos: como os 5 filtros tinham minimo ZERO, todo o aperto caia neles e entre 1536px e
+          ~1780px cada um ficava com 75px, mostrando "T.." em vez de "Todos" (achado real,
+          2026-09-10 - 139px em 1920px contra 75px em 1600px). Os botoes agora ocupam uma linha
+          propria (`col-span-full` abaixo) em toda largura de tela, o que tambem impede o grupo de
+          transbordar a celula dele no `xl` e de quebrar em 4 linhas no `md`. */}
       <div
-        className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-65px)] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[65px] md:z-40 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,1.45fr)_repeat(5,minmax(0,1fr))_auto]`}
+        className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-65px)] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[65px] md:z-40 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,20rem)_repeat(5,minmax(0,1fr))]`}
       >
         <DateRangePicker
           dateFrom={filters?.date_from || ""}
@@ -1095,7 +1108,7 @@ export function OperationsFilterPanel({
             onChange={(value) => onChange(field.key, value)}
           />
         ))}
-        <div className="flex flex-wrap gap-2 xl:flex-nowrap">
+        <div className="flex flex-wrap gap-2 md:col-span-full">
           <Button
             type="button"
             onClick={onApply}

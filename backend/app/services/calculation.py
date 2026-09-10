@@ -355,9 +355,23 @@ def calculate_scores(
         )
     }
     result_summary["score_summaries"] = cached_score_summaries
+    registered_details = [
+        item
+        for item in order_details
+        if scoring_detail.is_identified_collaborator_detail(item) and item.get("collaborator_is_registered")
+    ]
     result_summary["cards"] = {
         "total_collaborators": total_collaborators,
         "total_service_orders": len(orders),
+        # O.S. de equipe cadastrada: o recorte que a gamificacao remunera. Ver
+        # `_totals_from_scores` - na leitura estes dois campos sao reconciliados a partir das
+        # linhas `collaborator_scores`, que e a fonte unica; aqui sao gravados pra que o cache
+        # nasca completo.
+        "registered_service_orders": len(registered_details),
+        "unregistered_service_orders": len(orders) - len(registered_details),
+        "registered_collaborators": len({int(item["collaborator_id"]) for item in registered_details}),
+        "unregistered_collaborators": total_collaborators
+        - len({int(item["collaborator_id"]) for item in registered_details}),
         "scored_service_orders": sum(1 for item in order_details if item["is_scored"]),
         "unscored_service_orders": unscored_count,
         "penalized_service_orders": sum(1 for item in order_details if item["is_penalized"]),
@@ -496,21 +510,65 @@ def gamification_preview(db: Session, user) -> dict:
     }
 
 
-def latest_run(db: Session) -> CalculationRun | None:
-    with_orders_stmt = (
-        select(CalculationRun)
-        .join(CalculationRun.scores)
-        .where(CollaboratorScore.service_orders_count > 0)
-        .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
-    )
-    run_with_orders = pick_run_by_status_priority(db, with_orders_stmt)
-    if run_with_orders:
-        return run_with_orders
+def _latest_period_with_runs(db: Session, only_with_orders: bool) -> tuple[int, int] | None:
+    """O período (ano, mês) mais recente que tem apuração não cancelada.
 
-    any_run_stmt = select(CalculationRun).options(
-        selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator)
+    Cancelado fica de fora porque é registro de algo desfeito: um período cujo único fechamento
+    foi cancelado não é "o período corrente do módulo". Se nada sobrar, quem chama cai no fallback
+    que aceita qualquer status.
+    """
+    stmt = select(CalculationRun.reference_year, CalculationRun.reference_month)
+    if only_with_orders:
+        stmt = stmt.join(CalculationRun.scores).where(CollaboratorScore.service_orders_count > 0)
+    row = db.execute(
+        stmt.where(CalculationRun.status != "cancelled")
+        .group_by(CalculationRun.reference_year, CalculationRun.reference_month)
+        .order_by(desc(CalculationRun.reference_year), desc(CalculationRun.reference_month))
+        .limit(1)
+    ).first()
+    return (int(row[0]), int(row[1])) if row else None
+
+
+def latest_run(db: Session) -> CalculationRun | None:
+    """O fechamento oficial do período MAIS RECENTE que tem apuração.
+
+    Resolve o período primeiro e o status depois. `pick_run_by_status_priority` sozinho prioriza
+    `paid` sobre o histórico inteiro, não dentro do período - e isso travava a tela no último mês
+    PAGO: com 07/2026 pago (#1601) e 316 rascunhos de 08/2026, `/dashboard/bootstrap` e
+    `/dashboard/summary` devolviam julho indefinidamente, e agosto só apareceria no dia em que
+    alguém marcasse agosto como pago (achado real, 2026-09-10). É o mesmo defeito, e a mesma
+    correção, que `portal_dashboard._recent_official_runs` já aplicou no Portal (achado A9) - ela
+    nunca tinha sido propagada pra cá, que é o que a tela da Gamificação usa.
+
+    Dentro do período escolhido a prioridade de status continua idêntica à de antes (pago > não
+    cancelado > qualquer) - é o que impede uma revisão cancelada mais nova de esconder o
+    fechamento pago do mesmo mês.
+    """
+    for only_with_orders in (True, False):
+        period = _latest_period_with_runs(db, only_with_orders=only_with_orders)
+        if not period:
+            continue
+        reference_year, reference_month = period
+        stmt = (
+            select(CalculationRun)
+            .where(CalculationRun.reference_year == reference_year)
+            .where(CalculationRun.reference_month == reference_month)
+            .options(selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator))
+        )
+        if only_with_orders:
+            stmt = stmt.join(CalculationRun.scores).where(CollaboratorScore.service_orders_count > 0)
+        run = pick_run_by_status_priority(db, stmt)
+        if run:
+            return run
+
+    # Nenhum período tem apuração não cancelada: cai no comportamento antigo, que aceita qualquer
+    # status, pra a tela não ficar vazia quando só existirem fechamentos cancelados.
+    return pick_run_by_status_priority(
+        db,
+        select(CalculationRun).options(
+            selectinload(CalculationRun.scores).selectinload(CollaboratorScore.collaborator)
+        ),
     )
-    return pick_run_by_status_priority(db, any_run_stmt)
 
 
 def _run_extra_summaries(db: Session, run: CalculationRun) -> dict[int, dict[str, float | int | str]]:
@@ -557,14 +615,47 @@ def _run_extra_summaries(db: Session, run: CalculationRun) -> dict[int, dict[str
 
 TOTAL_FIELDS_FROM_SCORES = ("gross_points", "penalty_points", "net_points", "final_points", "estimated_payment")
 
+# Contadores de O.S. por situacao de cadastro do executante. Ficam separados de
+# TOTAL_FIELDS_FROM_SCORES porque sao gravados INCONDICIONALMENTE em `cards`, inclusive em
+# fechamentos antigos cujo `result_summary` nasceu sem eles - a reconciliacao a partir das linhas
+# vale retroativamente pra todo o historico, sem recalcular nada.
+REGISTRATION_COUNT_FIELDS_FROM_SCORES = (
+    "registered_service_orders",
+    "unregistered_service_orders",
+    "registered_collaborators",
+    "unregistered_collaborators",
+)
+
+
+def _score_is_registered(score: CollaboratorScore) -> bool:
+    return bool(score.collaborator and score.collaborator.is_registered)
+
 
 def _totals_from_scores(run: CalculationRun) -> dict[str, float]:
+    """Totais reconstruidos a partir das linhas `collaborator_scores` (fonte unica, achado C1).
+
+    `registered_service_orders` e a contagem de O.S. executadas por quem TEM cadastro concluido -
+    o unico numero que corresponde ao que a gamificacao de fato remunera. O total do periodo
+    (`total_service_orders`) conta tambem O.S. de tecnico sem cadastro, que nunca entram no
+    ranking nem geram pagamento: em 07/2026 sao 10.685 no total contra 9.122 de equipe cadastrada,
+    1.563 O.S. de 115 tecnicos sem cadastro (achado real, 2026-09-10 - a aba Ranking ja separava
+    isso, o card do Fechamento e a Auditoria mostravam o total e contradiziam a propria tela).
+    """
+    scores_with_orders = [score for score in run.scores if int(score.service_orders_count) > 0]
     return {
         "gross_points": round(sum(float(score.gross_points) for score in run.scores), 2),
         "penalty_points": round(sum(float(score.penalty_points) for score in run.scores), 2),
         "net_points": round(sum(float(score.net_points) for score in run.scores), 2),
         "final_points": round(sum(float(score.final_points) for score in run.scores), 2),
         "estimated_payment": round(sum(float(score.estimated_payment) for score in run.scores), 2),
+        "registered_service_orders": sum(
+            int(score.service_orders_count) for score in run.scores if _score_is_registered(score)
+        ),
+        "unregistered_service_orders": sum(
+            int(score.service_orders_count) for score in run.scores if not _score_is_registered(score)
+        ),
+        "registered_collaborators": sum(1 for score in scores_with_orders if _score_is_registered(score)),
+        "unregistered_collaborators": sum(1 for score in scores_with_orders if not _score_is_registered(score)),
     }
 
 
@@ -589,6 +680,8 @@ def result_summary_with_totals_from_scores(run: CalculationRun) -> dict | None:
         for field in TOTAL_FIELDS_FROM_SCORES:
             if field in updated_cards:
                 updated_cards[field] = totals[field]
+        for field in REGISTRATION_COUNT_FIELDS_FROM_SCORES:
+            updated_cards[field] = totals[field]
         summary["cards"] = updated_cards
     return summary
 

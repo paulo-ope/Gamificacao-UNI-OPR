@@ -11,6 +11,7 @@ export type Permission =
   | "calculation:run"
   | "users:manage"
   | "portal:read_self"
+  | "portal:update_self_profile"
   | "portal:read_regional_ranking"
   | "portal:simulate_self"
   | "portal:read_rules"
@@ -58,6 +59,7 @@ export type Permission =
   | "admin:roles:read"
   | "admin:roles:write"
   | "admin:permissions:read"
+  | "admin:permissions:write"
   | "admin:modules:read"
   | "admin:modules:write"
   | "admin:audit:read"
@@ -66,7 +68,32 @@ export type Permission =
   | "admin:ai_tokens:manage"
   | "intelligence:read"
   | "intelligence:manage"
-  | "intelligence:publish";
+  | "intelligence:publish"
+  // Identidade de máquina (chave de API do conector de IA), não uma pessoa logando - nunca aparece
+  // em `AuthUser.permissions` de um humano, mas existe no catálogo que a Administração lista
+  // (`/admin/permissions`), então precisa existir aqui.
+  | "ai:query";
+
+/**
+ * Chave de permissão como ela chega do backend: as declaradas em código (`Permission`, acima) mais
+ * as criadas pelo admin na aba Permissões, que só existem em banco e por definição não são
+ * conhecidas em tempo de compilação.
+ *
+ * Use `Permission` onde o código depende de uma permissão específica (gate de tela,
+ * `includes("operations:read")`) - ali a união estreita é a rede de proteção contra erro de
+ * digitação. Use `PermissionKey` no transporte de catálogo/perfil, que aceita qualquer chave.
+ */
+export type PermissionKey = Permission | (string & {});
+
+export type WorkspaceModuleKey =
+  | "gamification"
+  | "operations"
+  | "scheduling"
+  | "support"
+  | "management"
+  | "admin"
+  | "intelligence"
+  | "localiza";
 
 export type AuthUser = {
   id: number;
@@ -76,7 +103,10 @@ export type AuthUser = {
   active: boolean;
   created_at: string;
   updated_at: string;
-  permissions: Permission[];
+  /** Perfil (ou papel legado) + exceções individuais já aplicadas - o mesmo cálculo de
+   *  `permissions_for_user` no backend. Pode incluir permissão própria (criada na aba
+   *  Permissões), por isso `PermissionKey` e não a união estreita `Permission`. */
+  permissions: PermissionKey[];
   access_profile_ids: number[];
   access_profile_names: string[];
   collaborator_id: number | null;
@@ -169,10 +199,55 @@ export type PortalFirstAccessStatus = {
 };
 
 export type EcosystemPermission = {
-  key: Permission;
+  key: PermissionKey;
+  label: string;
+  /** Rótulo do grupo na tela (nome do módulo, ou área transversal como "Portal do Colaborador"). */
+  module: string;
+  /** Chave do módulo do registry, quando a permissão pertence a um. Null em permissão transversal. */
+  module_key: WorkspaceModuleKey | null;
+  sensitive: boolean;
+  /** true = criada na aba Permissões (excluível); false = declarada em código (só revogável). */
+  custom: boolean;
+  description: string | null;
+  /** Uso atual, para saber quem é afetado antes de revogar ou excluir. */
+  profile_count: number;
+  user_count: number;
+  profile_names: string[];
+  /** Pessoas com exceção individual (concessão ou negação) para esta permissão - fora de
+   *  `user_count` de propósito (perfil e exceção pessoal respondem perguntas diferentes). */
+  override_count: number;
+};
+
+export type UserPermissionOverrideEffect = "grant" | "deny";
+
+/** Exceção individual: concede ou nega UMA permissão específica de uma pessoa, por cima do que o
+ *  perfil dela dá - sem precisar criar um perfil só para ela. Ver aba "Permissões individuais" no
+ *  editor de usuário. */
+export type UserPermissionOverride = {
+  permission: PermissionKey;
   label: string;
   module: string;
-  sensitive?: boolean;
+  effect: UserPermissionOverrideEffect;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserPermissionOverview = {
+  user_id: number;
+  /** O que o perfil da pessoa concede (ou o papel legado, sem perfil) - ANTES das exceções. */
+  profile_permissions: PermissionKey[];
+  overrides: UserPermissionOverride[];
+  /** Resultado final (perfil + exceções já aplicadas) - o mesmo que `AuthUser.permissions`. */
+  effective_permissions: PermissionKey[];
+};
+
+export type EcosystemPermissionDraft = {
+  key: string;
+  label: string;
+  module_key: string;
+  description: string;
+  sensitive: boolean;
 };
 
 export type AccessProfile = {
@@ -182,10 +257,12 @@ export type AccessProfile = {
   legacy_role: string | null;
   active: boolean;
   is_system: boolean;
-  permission_keys: Permission[];
+  permission_keys: PermissionKey[];
   user_count: number;
   created_at: string;
   updated_at: string;
+  /** Motivo pelo qual este perfil não pode ser excluído agora (null = pode). Ver aba Perfis. */
+  delete_blocked_reason: string | null;
 };
 
 export type ManagementSummary = {
@@ -244,12 +321,13 @@ export type ManagementShiftPatternSuggestion = {
 };
 
 export type WorkspaceVisibleModule = {
-  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin";
+  /** Ver `WorkspaceModuleKey`: a união acompanha `backend/app/modules/registry.py`. */
+  key: WorkspaceModuleKey;
   name: string;
   description: string;
   web_path: string;
   api_prefix: string;
-  required_permission: Permission;
+  required_permission: PermissionKey;
   status: "active" | "planned" | "disabled" | string;
 };
 
@@ -703,6 +781,20 @@ export type AdminModuleUserVisibility = {
 export type AdminWorkspaceModule = WorkspaceVisibleModule & {
   profiles: AdminModuleProfileVisibility[];
   user_overrides: AdminModuleUserVisibility[];
+  /** Nome/descrição/status vindos do código (registry), antes de qualquer ajuste do admin. */
+  default_name: string;
+  default_description: string;
+  default_status: string;
+  /** true quando algum campo foi ajustado pela tela e sobrepõe o registry. */
+  customized: boolean;
+  sort_order: number;
+};
+
+export type AdminWorkspaceModuleSettingsPatch = {
+  name?: string | null;
+  description?: string | null;
+  status?: string | null;
+  sort_order?: number | null;
 };
 
 export type AdminStructureOption = {
@@ -1233,6 +1325,17 @@ export type PortalOverview = {
 export type MetricCards = {
   total_collaborators: number;
   total_service_orders: number;
+  /**
+   * O.S. executadas por equipe cadastrada - o recorte que a gamificação remunera e o número
+   * principal das telas do módulo. `total_service_orders` conta também O.S. de técnico sem
+   * cadastro, que nunca entram no ranking nem geram pagamento (em 07/2026: 9.122 de 10.685).
+   * Reconciliado no backend a partir das linhas `collaborator_scores`, inclusive para
+   * fechamentos antigos - ver `calculation._totals_from_scores`.
+   */
+  registered_service_orders?: number;
+  unregistered_service_orders?: number;
+  registered_collaborators?: number;
+  unregistered_collaborators?: number;
   scored_service_orders: number;
   unscored_service_orders: number;
   penalized_service_orders: number;
@@ -2091,6 +2194,8 @@ export type CollaboratorOrderFilters = {
   only_recurrence?: boolean;
   only_non_recurrent?: boolean;
   only_diagnosis_blocked?: boolean;
+  /** Padrão do backend é `true`: só O.S. de equipe cadastrada, o mesmo recorte do pagamento. */
+  only_registered?: boolean;
   group_id?: number;
   os_type?: string;
   os_subject?: string;
@@ -2121,8 +2226,20 @@ export type AuditOrders = {
     reference_year: number;
     regional: string | null;
   };
+  /**
+   * Recorte de cadastro do período, independente dos filtros da consulta - permite a tela dizer
+   * quantas O.S. de técnico sem cadastro ficaram fora mesmo com `only_registered` ligado.
+   */
+  registration_scope?: {
+    only_registered: boolean;
+    period_total_service_orders: number;
+    period_registered_service_orders: number;
+    period_unregistered_service_orders: number;
+  };
   summary: {
     total_service_orders: number;
+    registered_service_orders?: number;
+    unregistered_service_orders?: number;
     scored_service_orders: number;
     unscored_service_orders: number;
     penalized_service_orders: number;

@@ -16,7 +16,9 @@ import { AuditPanelSection } from "@/components/admin/audit-panel-section";
 import { IntegrationsPanel } from "@/components/admin/integrations-panel";
 import { InternalAccountsPanel } from "@/components/admin/internal-accounts-panel";
 import { InvitesPanel } from "@/components/admin/invites-panel";
+import { ModuleSettingsDrawer } from "@/components/admin/module-settings-drawer";
 import { ModulesPanel } from "@/components/admin/modules-panel";
+import { PermissionsPanel } from "@/components/admin/permissions-panel";
 import { OverviewSettingsPanel } from "@/components/admin/overview-settings-panel";
 import { PeopleStructurePanel } from "@/components/admin/people-structure-panel";
 import { PersonEditorDrawer } from "@/components/admin/person-editor-drawer";
@@ -24,6 +26,7 @@ import { PortalAccountsPanel } from "@/components/admin/portal-accounts-panel";
 import { ProfileEditorDrawer } from "@/components/admin/profile-editor-drawer";
 import { ProfilesPanel } from "@/components/admin/profiles-panel";
 import { UserEditorDrawer } from "@/components/admin/user-editor-drawer";
+import { UserPermissionOverridesDrawer } from "@/components/admin/user-permission-overrides-drawer";
 import {
   ADMIN_NAV_ITEMS,
   blankUserDraft,
@@ -31,15 +34,17 @@ import {
   permissionGroups,
   type AdminTab,
   type PersonStructureDraft,
+  type VisibleModuleRow,
   type ProfileDraft,
   type UserDraft,
 } from "@/components/admin/admin-shared";
 import { useConfirm } from "@/hooks/use-confirm";
+import { notifyWorkspaceModulesChanged } from "@/hooks/use-visible-modules";
 import { usePrompt } from "@/hooks/use-prompt";
 import { api } from "@/lib/api";
 import { workspaceModules } from "@/lib/module-registry";
 import { operationsApi, type OperationIxcSyncSettings } from "@/lib/operations-api";
-import type { AccessProfile, AdminPeopleStructure, AdminPersonStructure, AdminWorkspaceModule, AuthUser, EcosystemPermission, Permission, PortalAccessRequest, PortalInvite, PortalInviteCreateResult } from "@/lib/types";
+import type { AccessProfile, AdminPeopleStructure, AdminPersonStructure, AdminWorkspaceModule, AdminWorkspaceModuleSettingsPatch, AuthUser, EcosystemPermission, EcosystemPermissionDraft, PermissionKey, PortalAccessRequest, PortalInvite, PortalInviteCreateResult } from "@/lib/types";
 
 export default function AdminPage() {
   return (
@@ -95,6 +100,8 @@ function AdminPageContent({ user }: { user: AuthUser }) {
   const [approveCollaboratorByRequest, setApproveCollaboratorByRequest] = useState<Record<number, string>>({});
   const [decidingAccessRequestId, setDecidingAccessRequestId] = useState<number | null>(null);
   const [profileDraft, setProfileDraft] = useState<ProfileDraft | null>(null);
+  const [moduleSettingsDraft, setModuleSettingsDraft] = useState<VisibleModuleRow | null>(null);
+  const [permissionOverridesUser, setPermissionOverridesUser] = useState<{ id: number; name: string } | null>(null);
   const [personDraft, setPersonDraft] = useState<PersonStructureDraft | null>(null);
   const [personSearch, setPersonSearch] = useState("");
   const [personStatusFilter, setPersonStatusFilter] = useState("all");
@@ -105,6 +112,8 @@ function AdminPageContent({ user }: { user: AuthUser }) {
   const canWriteUsers = Boolean(user?.permissions.includes("admin:users:write"));
   const canDeleteUsers = Boolean(user?.permissions.includes("admin:users:delete"));
   const canWriteProfiles = Boolean(user?.permissions.includes("admin:roles:write"));
+  const canReadPermissions = Boolean(user?.permissions.includes("admin:permissions:read"));
+  const canWritePermissions = Boolean(user?.permissions.includes("admin:permissions:write"));
   const canWriteModules = Boolean(user?.permissions.includes("admin:modules:write"));
   const canEditIxcSync = Boolean(user?.permissions.includes("operations:sync_ixc"));
   const canReadAudit = Boolean(user?.permissions.includes("admin:audit:read"));
@@ -131,9 +140,12 @@ function AdminPageContent({ user }: { user: AuthUser }) {
     const matchesStatus = personStatusFilter === "all" || person.structure_status === personStatusFilter;
     return matchesSearch && matchesStatus;
   });
-  const visibleModuleRows = adminModules.length
+  // Fallback só para o primeiro quadro antes de `/admin/modules` responder: os valores do registro
+  // local, sem nenhum ajuste do admin (que só o backend conhece). `customized: false` aqui é
+  // honesto - este fallback não sabe se existe ajuste, e ele é substituído assim que a lista chega.
+  const visibleModuleRows: VisibleModuleRow[] = adminModules.length
     ? adminModules
-    : workspaceModules.map((module) => ({
+    : workspaceModules.map((module, index) => ({
         key: module.key,
         name: module.name,
         description: module.description,
@@ -141,6 +153,11 @@ function AdminPageContent({ user }: { user: AuthUser }) {
         api_prefix: module.apiPrefix,
         required_permission: module.requiredPermission,
         status: module.status,
+        default_name: module.name,
+        default_description: module.description,
+        default_status: module.status,
+        customized: false,
+        sort_order: index,
         profiles: [],
         user_overrides: [],
       }));
@@ -434,7 +451,7 @@ function AdminPageContent({ user }: { user: AuthUser }) {
     }
   }
 
-  function toggleProfilePermission(permission: Permission) {
+  function toggleProfilePermission(permission: PermissionKey) {
     setProfileDraft((current) => {
       if (!current) return current;
       const exists = current.permission_keys.includes(permission);
@@ -457,13 +474,113 @@ function AdminPageContent({ user }: { user: AuthUser }) {
     setProfileDraft(null);
   }
 
-  async function deleteProfileAction() {
+  async function deleteProfileAction(reassignProfileId: number | null) {
     if (!profileDraft || profileDraft.id === "new") return;
-    const ok = await confirm({ title: "Excluir perfil", description: "Excluir este perfil?", confirmLabel: "Excluir", tone: "danger" });
+    const destination = reassignProfileId ? profiles.find((profile) => profile.id === reassignProfileId) : null;
+    const ok = await confirm({
+      title: "Excluir perfil",
+      description: destination
+        ? `Excluir "${profileDraft.name}" e mover as pessoas vinculadas para "${destination.name}"?`
+        : `Excluir o perfil "${profileDraft.name}"?`,
+      confirmLabel: "Excluir",
+      tone: "danger",
+    });
     if (!ok) return;
-    await api.deleteAccessProfile(profileDraft.id);
-    closeProfileEditor();
-    await loadAdminData();
+    // O try/catch não existia (achado real): um 409 do backend - "perfil vinculado a usuários" -
+    // estourava sem nada aparecer na tela, e o clique parecia simplesmente não fazer efeito.
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await api.deleteAccessProfile(profileDraft.id, reassignProfileId);
+      closeProfileEditor();
+      setMessage(destination ? `Perfil excluído. Pessoas movidas para "${destination.name}".` : "Perfil excluído.");
+      await loadAdminData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível excluir o perfil.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createPermission(draft: EcosystemPermissionDraft) {
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await api.createEcosystemPermission({
+        key: draft.key,
+        label: draft.label,
+        module_key: draft.module_key || null,
+        description: draft.description || null,
+        sensitive: draft.sensitive,
+      });
+      setMessage("Permissão criada.");
+      await loadAdminData();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updatePermission(key: string, draft: EcosystemPermissionDraft) {
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await api.updateEcosystemPermission(key, {
+        label: draft.label,
+        module_key: draft.module_key || null,
+        description: draft.description || null,
+        sensitive: draft.sensitive,
+      });
+      setMessage("Permissão atualizada.");
+      await loadAdminData();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deletePermissionAction(permission: EcosystemPermission) {
+    const inUse = permission.profile_count > 0;
+    const ok = await confirm({
+      title: "Excluir permissão",
+      description: inUse
+        ? `"${permission.label}" está em ${permission.profile_count} perfil(is) e afeta ${permission.user_count} pessoa(s). O backend vai recusar até você removê-la desses perfis.`
+        : `Excluir a permissão "${permission.label}" (${permission.key})?`,
+      confirmLabel: "Excluir",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await api.deleteEcosystemPermission(permission.key);
+      setMessage("Permissão excluída.");
+      await loadAdminData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível excluir a permissão.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveModuleSettings(moduleKey: string, patch: AdminWorkspaceModuleSettingsPatch) {
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await api.updateAdminModuleSettings(moduleKey, patch);
+      setModuleSettingsDraft(null);
+      setMessage("Módulo atualizado.");
+      // Nome, status e ordem também alimentam a barra lateral do ecossistema
+      // (`/workspace/modules`, com cache curto de sessão) - sem este aviso ela ficava com o valor
+      // antigo por até 30s depois de salvar, parecendo que nada mudou.
+      notifyWorkspaceModulesChanged();
+      await loadAdminData();
+    } finally {
+      setSaving(false);
+    }
   }
 
   function setProfileModulePermissions(modulePermissions: EcosystemPermission[], selected: boolean) {
@@ -477,7 +594,7 @@ function AdminPageContent({ user }: { user: AuthUser }) {
       const modulePermissionKeys = bulkPermissions.map((permission) => permission.key);
       const moduleKeys = new Set(modulePermissionKeys);
       const permissionKeys = selected
-        ? new Set<Permission>(current.permission_keys.concat(modulePermissionKeys))
+        ? new Set<PermissionKey>(current.permission_keys.concat(modulePermissionKeys))
         : new Set(current.permission_keys.filter((permission) => !moduleKeys.has(permission)));
       return { ...current, permission_keys: Array.from(permissionKeys).sort() };
     });
@@ -719,6 +836,23 @@ function AdminPageContent({ user }: { user: AuthUser }) {
             <ProfilesPanel profiles={profiles} canWriteProfiles={canWriteProfiles} onOpenProfileEditor={openProfileEditor} />
           </TabsContent>
 
+          <TabsContent value="permissions" className="mt-4">
+            {canReadPermissions ? (
+              <PermissionsPanel
+                permissions={permissions}
+                canWritePermissions={canWritePermissions}
+                saving={saving}
+                onCreate={createPermission}
+                onUpdate={updatePermission}
+                onDelete={deletePermissionAction}
+              />
+            ) : (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                Seu perfil não possui a permissão admin:permissions:read para ver o catálogo de permissões.
+              </div>
+            )}
+          </TabsContent>
+
           <TabsContent value="structure" className="mt-4">
             <PeopleStructurePanel
               peopleStructure={peopleStructure}
@@ -741,6 +875,7 @@ function AdminPageContent({ user }: { user: AuthUser }) {
               onUpdateModuleVisibility={updateModuleVisibility}
               onAddModuleUserOverride={addModuleUserOverride}
               onRemoveModuleUserOverride={removeModuleUserOverride}
+              onOpenModuleSettings={setModuleSettingsDraft}
             />
             {/* Configuração da Visão Geral fica junto da visibilidade de módulos: os dois decidem o que
                 cada pessoa encontra ao entrar no ecossistema. */}
@@ -784,6 +919,22 @@ function AdminPageContent({ user }: { user: AuthUser }) {
           onChange={updateUserDraft}
           onCancel={() => setUserDraft(null)}
           onSave={saveUserDraft}
+          onOpenPermissionOverrides={
+            userDraft.id === "new"
+              ? undefined
+              : () => setPermissionOverridesUser({ id: userDraft.id as number, name: userDraft.name })
+          }
+        />
+      ) : null}
+
+      {permissionOverridesUser ? (
+        <UserPermissionOverridesDrawer
+          userId={permissionOverridesUser.id}
+          userName={permissionOverridesUser.name}
+          catalog={permissions}
+          canWrite={canWriteUsers}
+          onClose={() => setPermissionOverridesUser(null)}
+          onChanged={() => void loadAdminData()}
         />
       ) : null}
 
@@ -815,6 +966,15 @@ function AdminPageContent({ user }: { user: AuthUser }) {
           onClose={closeProfileEditor}
           onSave={saveProfileDraft}
           onDelete={deleteProfileAction}
+        />
+      ) : null}
+
+      {moduleSettingsDraft ? (
+        <ModuleSettingsDrawer
+          module={moduleSettingsDraft}
+          saving={saving}
+          onClose={() => setModuleSettingsDraft(null)}
+          onSave={(patch) => saveModuleSettings(moduleSettingsDraft.key, patch)}
         />
       ) : null}
     </div>

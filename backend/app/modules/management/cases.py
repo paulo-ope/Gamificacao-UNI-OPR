@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models import AppSetting, User
 from app.services import shift_schedule
@@ -992,6 +992,25 @@ class ManagementCaseFilters:
     only_overdue: bool = False
     search: str | None = None
     statuses: list[str] = field(default_factory=list)
+    # Recorte por pessoa e por data, pedido do usuário em 2026-09-10: até aqui só existia `search`
+    # (um ILIKE em OR sobre responsável OU regional OU métrica - buscar "ANA" trazia também a
+    # regional/métrica que contivesse "ana") e `reference_year`/`reference_month`. Sem nome exato e
+    # sem faixa de data, "quem está devendo justificativa nesta regional neste dia" só saía
+    # baixando o mês inteiro e filtrando fora do banco.
+    responsible_name: str | None = None
+    collaborator_id: int | None = None
+    reference_date_from: date | None = None
+    reference_date_to: date | None = None
+    reason_id: int | None = None
+    # Atalhos de intenção. O vocabulário de status é interno (`pending` = a matriz cobrou e o
+    # supervisor ainda não justificou; `justified` = justificado, esperando decisão da matriz), e
+    # quem chama de fora - IA inclusive - erra essa leitura. Estes três nomeiam a pergunta real em
+    # vez de exigir que o chamador conheça a máquina de estados.
+    pending_justification: bool = False
+    awaiting_review: bool = False
+    has_justification: bool | None = None
+    # Idade da pendência em dias corridos desde a abertura do caso (só faz sentido em caso aberto).
+    min_days_pending: int | None = None
 
 
 def case_filter_conditions(filters: ManagementCaseFilters) -> list:
@@ -1004,6 +1023,46 @@ def case_filter_conditions(filters: ManagementCaseFilters) -> list:
             f"Filtro contraditório: status={filters.status!r} não está entre os status abertos "
             f"{sorted(filters.statuses)!r} exigidos por only_open=true. Remova only_open ou "
             "escolha um status aberto (pending/justified/in_progress)."
+        )
+    # Mesmo racional do aviso acima (não devolver 0 em silêncio para filtro mal formado), agora
+    # para as combinações possíveis com os atalhos de intenção e a faixa de data.
+    if filters.pending_justification and filters.awaiting_review:
+        raise ValueError(
+            "Filtro contraditório: pending_justification=true (ainda sem justificativa) e "
+            "awaiting_review=true (já justificado, esperando a matriz) são estados mutuamente "
+            "exclusivos. Escolha um dos dois, ou use only_open=true para os dois juntos."
+        )
+    if filters.pending_justification and filters.status and filters.status != "pending":
+        raise ValueError(
+            f"Filtro contraditório: pending_justification=true exige status='pending', mas veio "
+            f"status={filters.status!r}. Remova um dos dois."
+        )
+    if filters.awaiting_review and filters.status and filters.status != "justified":
+        raise ValueError(
+            f"Filtro contraditório: awaiting_review=true exige status='justified', mas veio "
+            f"status={filters.status!r}. Remova um dos dois."
+        )
+    if filters.pending_justification and filters.has_justification is True:
+        raise ValueError(
+            "Filtro contraditório: pending_justification=true é justamente o caso SEM texto de "
+            "justificativa, então has_justification=true nunca casa. Remova um dos dois."
+        )
+    if (
+        filters.reference_date_from
+        and filters.reference_date_to
+        and filters.reference_date_from > filters.reference_date_to
+    ):
+        raise ValueError(
+            f"Faixa de data invertida: reference_date_from={filters.reference_date_from.isoformat()} "
+            f"é depois de reference_date_to={filters.reference_date_to.isoformat()}."
+        )
+    if filters.reference_year and (
+        (filters.reference_date_from and filters.reference_date_from.year > filters.reference_year)
+        or (filters.reference_date_to and filters.reference_date_to.year < filters.reference_year)
+    ):
+        raise ValueError(
+            f"Filtro contraditório: reference_year={filters.reference_year} está fora da faixa "
+            "pedida em reference_date_from/reference_date_to. Remova um dos dois."
         )
     conditions: list = []
     if filters.status:
@@ -1035,6 +1094,39 @@ def case_filter_conditions(filters: ManagementCaseFilters) -> list:
                 ManagementCase.metric_name.ilike(pattern),
             )
         )
+    if filters.responsible_name:
+        # Casamento EXATO da pessoa, ao contrário de `search` (ILIKE em OR sobre 3 colunas).
+        # `lower(trim(...))` é o análogo em SQL do `_norm` usado no Python daqui - cobre
+        # maiúscula/minúscula e espaço nas pontas; espaço duplo NO MEIO do nome não é coberto (não
+        # dá pra colapsar isso em SQL portável entre PostgreSQL e SQLite), e nunca apareceu no
+        # dado real vindo do IXC.
+        conditions.append(func.lower(func.trim(ManagementCase.responsible_name)) == _norm(filters.responsible_name))
+    if filters.collaborator_id:
+        conditions.append(ManagementCase.collaborator_id == filters.collaborator_id)
+    if filters.reference_date_from:
+        conditions.append(ManagementCase.reference_date.is_not(None))
+        conditions.append(ManagementCase.reference_date >= filters.reference_date_from)
+    if filters.reference_date_to:
+        conditions.append(ManagementCase.reference_date.is_not(None))
+        conditions.append(ManagementCase.reference_date <= filters.reference_date_to)
+    if filters.reason_id:
+        conditions.append(ManagementCase.reason_id == filters.reason_id)
+    if filters.pending_justification:
+        conditions.append(ManagementCase.status == "pending")
+    if filters.awaiting_review:
+        conditions.append(ManagementCase.status == "justified")
+    if filters.has_justification is True:
+        conditions.append(ManagementCase.justification_text.is_not(None))
+        conditions.append(func.trim(ManagementCase.justification_text) != "")
+    elif filters.has_justification is False:
+        conditions.append(
+            or_(ManagementCase.justification_text.is_(None), func.trim(ManagementCase.justification_text) == "")
+        )
+    if filters.min_days_pending is not None:
+        # "Pendente há N dias" só existe em caso aberto - um caso encerrado não está pendente de
+        # nada, então incluí-lo aqui daria uma lista de "atrasos" que ninguém precisa mais resolver.
+        conditions.append(ManagementCase.status.in_(OPEN_CASE_STATUSES))
+        conditions.append(ManagementCase.created_at <= datetime.now(timezone.utc) - timedelta(days=filters.min_days_pending))
     return conditions
 
 
@@ -1152,6 +1244,15 @@ def bulk_review_cases(
 
 _DIAGNOSTICS_TOP_N = 15
 
+# Quantos ids de caso aberto acompanham cada linha de `pending_justifications_by_collaborator` -
+# o suficiente pra abrir/justificar direto a partir da resposta, sem transformar o agregado numa
+# segunda listagem completa (o `open_cases` do próprio item diz se sobrou mais).
+_PENDING_CASE_IDS_PER_COLLABORATOR = 20
+
+# `ManagementCase` aponta duas vezes pra `users` (supervisor e revisor). Sem um alias, um segundo
+# outerjoin em `User` na mesma query erraria - o SQLAlchemy não sabe qual das duas FKs usar.
+_REVIEWER = aliased(User)
+
 
 def _diagnostics_bucket(rows: list[tuple[str, str, date | None]]) -> list[dict]:
     """`rows` é uma lista de (chave, status, due_date) já filtrada por uma dimensão (regional,
@@ -1202,6 +1303,282 @@ def case_diagnostics(db: Session, conditions: list) -> dict:
         "by_responsible": [{**bucket, "label": bucket["key"]} for bucket in by_responsible],
         "by_reason": [{**bucket, "label": bucket["key"]} for bucket in by_reason],
     }
+
+
+def pending_justifications_by_collaborator(db: Session, conditions: list, *, limit: int = 200) -> dict:
+    """"Quem está devendo justificativa", uma linha por colaborador, pedido do usuário em
+    2026-09-10.
+
+    `case_diagnostics.by_responsible` já contava caso por responsável, mas só isso: total, abertos
+    e atrasados, sem regional, sem supervisor, sem a idade da pendência e sem os ids pra abrir os
+    casos depois. Para responder "quem preciso cobrar hoje" era preciso listar os casos e agrupar
+    fora do banco.
+
+    A chave de agrupamento é (nome normalizado, regional), não o nome só: a mesma pessoa pode ter
+    linha em mais de uma regional (ver o mapa de identidade em `models.py`), e somar as duas
+    esconderia em qual regional a pendência está - que é exatamente o recorte que o supervisor
+    precisa. `regional` nula (caso manual sem regional) cai num bucket próprio.
+
+    Agrega em memória, mesmo racional de `_diagnostics_bucket`: o volume de casos é pequeno e assim
+    todos os contadores saem da MESMA leitura, sem risco de duas queries divergirem.
+    """
+    today = date.today()
+    now = datetime.now(timezone.utc)
+    rows = db.execute(
+        select(
+            ManagementCase.id,
+            ManagementCase.responsible_name,
+            ManagementCase.regional,
+            ManagementCase.collaborator_id,
+            ManagementCase.supervisor_user_id,
+            User.name,
+            OperationTeamModel.name,
+            ManagementCase.status,
+            ManagementCase.severity,
+            ManagementCase.due_date,
+            ManagementCase.reference_date,
+            ManagementCase.created_at,
+            ManagementCase.justified_at,
+        )
+        .outerjoin(User, User.id == ManagementCase.supervisor_user_id)
+        .outerjoin(OperationTeamModel, OperationTeamModel.id == ManagementCase.team_model_id)
+        .where(*conditions)
+    ).all()
+
+    buckets: dict[tuple[str, str], dict] = {}
+    for (
+        case_id,
+        responsible_name,
+        regional,
+        collaborator_id,
+        supervisor_user_id,
+        supervisor_name,
+        team_model_name,
+        status,
+        severity,
+        due_date,
+        reference_date,
+        created_at,
+        justified_at,
+    ) in rows:
+        display_name = (responsible_name or "").strip() or "Não identificado"
+        display_regional = (regional or "").strip() or "Não identificada"
+        key = (_norm(display_name), _norm(display_regional))
+        bucket = buckets.get(key)
+        if bucket is None:
+            bucket = buckets[key] = {
+                "responsible_name": display_name,
+                "regional": display_regional,
+                "collaborator_id": collaborator_id,
+                "supervisor_user_id": supervisor_user_id,
+                "supervisor_name": supervisor_name,
+                "team_model_name": team_model_name,
+                "total_cases": 0,
+                "open_cases": 0,
+                "pending_cases": 0,
+                "justified_cases": 0,
+                "in_progress_cases": 0,
+                "closed_cases": 0,
+                "overdue_cases": 0,
+                "high_severity_open": 0,
+                "oldest_pending_date": None,
+                "max_days_pending": 0,
+                "last_justified_at": None,
+                "open_case_ids": [],
+            }
+        # Um caso pode não ter colaborador/supervisor/equipe vinculado (caso manual, ou pessoa que
+        # não casou com o cadastro) - preenche o primeiro valor não nulo que aparecer no grupo, pra
+        # a linha não ficar vazia por causa da ordem em que os casos vieram.
+        bucket["collaborator_id"] = bucket["collaborator_id"] or collaborator_id
+        bucket["supervisor_user_id"] = bucket["supervisor_user_id"] or supervisor_user_id
+        bucket["supervisor_name"] = bucket["supervisor_name"] or supervisor_name
+        bucket["team_model_name"] = bucket["team_model_name"] or team_model_name
+
+        bucket["total_cases"] += 1
+        is_open = status in OPEN_CASE_STATUSES
+        if is_open:
+            bucket["open_cases"] += 1
+            if len(bucket["open_case_ids"]) < _PENDING_CASE_IDS_PER_COLLABORATOR:
+                bucket["open_case_ids"].append(case_id)
+            if severity == "high":
+                bucket["high_severity_open"] += 1
+            if due_date is not None and due_date < today:
+                bucket["overdue_cases"] += 1
+            if created_at is not None:
+                reference = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+                bucket["max_days_pending"] = max(bucket["max_days_pending"], (now - reference).days)
+        else:
+            bucket["closed_cases"] += 1
+        if status == "pending":
+            bucket["pending_cases"] += 1
+            if reference_date is not None and (
+                bucket["oldest_pending_date"] is None or reference_date < bucket["oldest_pending_date"]
+            ):
+                bucket["oldest_pending_date"] = reference_date
+        elif status == "justified":
+            bucket["justified_cases"] += 1
+        elif status == "in_progress":
+            bucket["in_progress_cases"] += 1
+        if justified_at is not None and (
+            bucket["last_justified_at"] is None or justified_at > bucket["last_justified_at"]
+        ):
+            bucket["last_justified_at"] = justified_at
+
+    # Fila de cobrança, não ordem alfabética: atrasado primeiro, depois quem tem mais pendência sem
+    # justificativa, depois a pendência mais velha.
+    ordered = sorted(
+        buckets.values(),
+        key=lambda item: (
+            -item["overdue_cases"],
+            -item["pending_cases"],
+            -item["max_days_pending"],
+            item["responsible_name"],
+        ),
+    )
+    return {
+        "total_collaborators": len(ordered),
+        "total_cases": len(rows),
+        "items": ordered[:limit],
+        "truncated": len(ordered) > limit,
+    }
+
+
+def justification_rows(
+    db: Session,
+    conditions: list,
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    include_comments: bool = False,
+) -> dict:
+    """Leitura achatada e paginada das justificativas do recorte - o texto do supervisor, o motivo
+    escolhido, o plano de ação e a decisão da matriz, sem o resto do payload de caso.
+
+    Pedido do usuário em 2026-09-10 ("ela ler essas justificativas por regional, colaborador,
+    data"). Paginado de verdade (`total` sempre devolvido) porque o consumidor é IA: um `limit`
+    fixo silencioso faz o chamador ler o pedaço como se fosse o universo.
+    """
+    total = db.scalar(select(func.count(ManagementCase.id)).where(*conditions)) or 0
+    rows = db.execute(
+        select(
+            ManagementCase.id,
+            ManagementCase.case_type,
+            ManagementCase.reference_date,
+            ManagementCase.reference_month,
+            ManagementCase.reference_year,
+            ManagementCase.regional,
+            ManagementCase.collaborator_id,
+            ManagementCase.responsible_name,
+            ManagementCase.supervisor_user_id,
+            User.name,
+            ManagementCase.metric_name,
+            ManagementCase.expected_value,
+            ManagementCase.actual_value,
+            ManagementCase.deviation_value,
+            ManagementCase.severity,
+            ManagementCase.status,
+            ManagementCase.due_date,
+            ManagementCaseReason.name,
+            ManagementCase.justification_text,
+            ManagementCase.action_plan,
+            ManagementCase.created_at,
+            ManagementCase.justified_at,
+            ManagementCase.reviewed_at,
+            _REVIEWER.name,
+        )
+        .outerjoin(User, User.id == ManagementCase.supervisor_user_id)
+        .outerjoin(_REVIEWER, _REVIEWER.id == ManagementCase.reviewed_by)
+        .outerjoin(ManagementCaseReason, ManagementCaseReason.id == ManagementCase.reason_id)
+        .where(*conditions)
+        # Mais recente primeiro: quem lê justificativa quer a última rodada de cobrança, não a
+        # primeira de 2024.
+        .order_by(ManagementCase.reference_date.desc().nulls_last(), ManagementCase.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+
+    case_ids = [row[0] for row in rows]
+    counts = comment_counts(db, case_ids)
+    comments_by_case: dict[int, list[dict]] = {}
+    if include_comments and case_ids:
+        comment_rows = db.execute(
+            select(
+                ManagementCaseComment.case_id,
+                ManagementCaseComment.id,
+                User.name,
+                ManagementCaseComment.comment,
+                ManagementCaseComment.created_at,
+            )
+            .outerjoin(User, User.id == ManagementCaseComment.user_id)
+            .where(ManagementCaseComment.case_id.in_(case_ids))
+            .order_by(ManagementCaseComment.created_at.asc())
+        ).all()
+        for case_id, comment_id, author_name, comment, created_at in comment_rows:
+            comments_by_case.setdefault(case_id, []).append(
+                {"id": comment_id, "author_name": author_name, "comment": comment, "created_at": created_at}
+            )
+
+    today = date.today()
+    items = []
+    for row in rows:
+        (
+            case_id,
+            case_type,
+            reference_date,
+            reference_month,
+            reference_year,
+            regional,
+            collaborator_id,
+            responsible_name,
+            supervisor_user_id,
+            supervisor_name,
+            metric_name,
+            expected_value,
+            actual_value,
+            deviation_value,
+            severity,
+            status,
+            due_date,
+            reason_name,
+            justification_text,
+            action_plan,
+            created_at,
+            justified_at,
+            reviewed_at,
+            reviewer_name,
+        ) = row
+        items.append(
+            {
+                "case_id": case_id,
+                "case_type": case_type,
+                "reference_date": reference_date,
+                "reference_month": reference_month,
+                "reference_year": reference_year,
+                "regional": regional,
+                "collaborator_id": collaborator_id,
+                "responsible_name": responsible_name,
+                "supervisor_user_id": supervisor_user_id,
+                "supervisor_name": supervisor_name,
+                "metric_name": metric_name,
+                "expected_value": expected_value,
+                "actual_value": actual_value,
+                "deviation_value": deviation_value,
+                "severity": severity,
+                "status": status,
+                "due_date": due_date,
+                "is_overdue": bool(status in OPEN_CASE_STATUSES and due_date is not None and due_date < today),
+                "reason_name": reason_name,
+                "justification_text": justification_text,
+                "action_plan": action_plan,
+                "created_at": created_at,
+                "justified_at": justified_at,
+                "reviewed_at": reviewed_at,
+                "reviewer_name": reviewer_name,
+                "comment_count": counts.get(case_id, 0),
+                "comments": comments_by_case.get(case_id, []) if include_comments else None,
+            }
+        )
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
 def validate_case_status(value: str) -> str:

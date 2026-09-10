@@ -312,6 +312,85 @@ class ManagementCaseDiagnosticsOut(BaseModel):
     by_reason: list[ManagementCaseDiagnosticsBucket]
 
 
+class ManagementPendingCollaboratorOut(BaseModel):
+    """Uma linha por colaborador x regional - "quem preciso cobrar". Ver
+    `cases.pending_justifications_by_collaborator` para a chave de agrupamento."""
+
+    responsible_name: str
+    regional: str
+    collaborator_id: int | None = None
+    supervisor_user_id: int | None = None
+    supervisor_name: str | None = None
+    team_model_name: str | None = None
+    total_cases: int
+    open_cases: int
+    pending_cases: int
+    justified_cases: int
+    in_progress_cases: int
+    closed_cases: int
+    overdue_cases: int
+    high_severity_open: int
+    # Competência do caso pendente mais antigo (o dia do caso diário, ou o fim do mês do mensal).
+    oldest_pending_date: date | None = None
+    # Dias corridos desde a ABERTURA do caso aberto mais velho - "há quanto tempo está devendo".
+    max_days_pending: int
+    last_justified_at: datetime | None = None
+    open_case_ids: list[int]
+
+
+class ManagementPendingByCollaboratorOut(BaseModel):
+    total_collaborators: int
+    total_cases: int
+    items: list[ManagementPendingCollaboratorOut]
+    truncated: bool
+
+
+class ManagementJustificationCommentOut(BaseModel):
+    id: int
+    author_name: str | None = None
+    comment: str
+    created_at: datetime
+
+
+class ManagementJustificationOut(BaseModel):
+    case_id: int
+    case_type: str
+    reference_date: date | None = None
+    reference_month: int | None = None
+    reference_year: int | None = None
+    regional: str | None = None
+    collaborator_id: int | None = None
+    responsible_name: str | None = None
+    supervisor_user_id: int | None = None
+    supervisor_name: str | None = None
+    metric_name: str
+    expected_value: float | None = None
+    actual_value: float | None = None
+    deviation_value: float | None = None
+    severity: str
+    status: str
+    due_date: date | None = None
+    is_overdue: bool
+    reason_name: str | None = None
+    justification_text: str | None = None
+    action_plan: str | None = None
+    created_at: datetime
+    justified_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    reviewer_name: str | None = None
+    comment_count: int
+    # `None` quando a chamada não pediu `include_comments` - diferente de `[]`, que significa
+    # "pedi os comentários e este caso não tem nenhum".
+    comments: list[ManagementJustificationCommentOut] | None = None
+
+
+class ManagementJustificationPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[ManagementJustificationOut]
+
+
 class ManagementCaseCommentOut(BaseModel):
     id: int
     case_id: int

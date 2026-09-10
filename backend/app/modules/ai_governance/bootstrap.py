@@ -99,6 +99,34 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     # análise sem precisar abrir a tela. `default_enabled=True`: é leitura agregada, mesmo dado que
     # a tela de Gestão já mostra a quem tem `management:read`.
     ("ai.management_cases_diagnostics", "Diagnóstico agregado de casos de gestão para IA (POST /ai/management/cases-diagnostics)", "api", True),
+    # Novo (pedido do usuário em 2026-09-10) - encontrar o colaborador com justificativa pendente e
+    # LER as justificativas por regional/colaborador/data, sem varrer a lista de casos.
+    # `ai.management_cases` NÃO entra aqui: a chave já existe lá acima (linha ~38, criada com a
+    # tool `opr_management_cases`) e agora passou a cobrir também `POST /ai/management/cases` e o
+    # gate da própria tool, que antes só checava `management:read` sem consultar a governança.
+    # `ai.management_pending_justifications` nasce habilitada: é o mesmo dado estruturado que
+    # `management:read` já vê na tela, na mesma linha do diagnóstico acima.
+    ("ai.management_pending_justifications", "Pendências de justificativa por colaborador para IA (POST /ai/management/pending-by-collaborator, opr_management_pending_justifications)", "api", True),
+    # Novo (pedido do usuário em 2026-09-10, 1o pacote de expansão da exposição MCP) - frescor do
+    # dado, estado operacional do "agora" e o módulo SGP Suporte, que até aqui não tinha nenhuma
+    # tool. Todas nascem habilitadas: entregam o MESMO dado que a tela já mostra a quem tem a
+    # permissão do módulo (`operations:view_backlog` / `support:read`), e as tools checam essa
+    # permissão antes de consultar. Nenhuma delas expõe conteúdo com controle específico próprio -
+    # o único trecho nominal é a lista de O.S. individuais de `opr_operations_now`, que fica atrás
+    # de `include_orders=true` + `operations:view_order_details` e passa pela MESMA política de
+    # campo de `ai.order_details`.
+    ("ai.data_freshness", "Frescor da última importação de O.S. para IA/MCP (opr_data_freshness)", "mcp", True),
+    ("ai.operations_now", "Estado atual de O.S. em andamento e risco de SLA para IA/MCP (opr_operations_now)", "mcp", True),
+    ("ai.support_overview", "Visão geral do SGP Suporte para IA/MCP (opr_support_overview)", "mcp", True),
+    ("ai.support_breakdowns", "Breakdowns do SGP Suporte para IA/MCP (opr_support_breakdowns)", "mcp", True),
+    ("ai.support_timeseries", "Série diária do SGP Suporte para IA/MCP (opr_support_timeseries)", "mcp", True),
+    # Já `ai.management_justifications` nasce DESABILITADA de propósito: `justification_text`,
+    # `action_plan` e os comentários são texto livre escrito por supervisor sobre uma pessoa
+    # específica (motivo de falta, problema de saúde, conflito de equipe apareceram no dado real).
+    # Expor conteúdo desse tipo a uma chave de máquina é decisão de administrador, tomada de
+    # propósito na tela de governança - não um efeito colateral de subir esta versão. Mesmo
+    # racional dos endpoints de rede que nasceram com `default_enabled=False`.
+    ("ai.management_justifications", "Leitura do texto das justificativas de gestão para IA (POST /ai/management/justifications, opr_management_justifications)", "api", False),
 ]
 
 
