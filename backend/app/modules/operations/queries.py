@@ -804,6 +804,43 @@ def regional_matrix(
     }
 
 
+def overview_collaborator_production(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
+    """Finalizadas por responsável - o segundo nível do donut de modelo de equipe da Visão Geral.
+
+    Existe como consulta PRÓPRIA e enxuta em vez de reaproveitar `collaborator_sla` (que responde a
+    `/operations/sla/collaborators`, usada pela Operação Analítica) por três motivos medidos no
+    banco real, 2026-09-10, no recorte de um modelo de equipe em 30 dias:
+
+    - `collaborator_sla` roda em ~144 ms e devolve ~19 KB (15 campos por pessoa: tempos de execução
+      mín/méd/máx, aderência ao agendamento, contagem por tipo de O.S. numa SEGUNDA consulta);
+      esta roda em ~58 ms e devolve ~1,7 KB. O donut usa dois campos: nome e finalizadas.
+    - `collaborator_sla` agrupa por responsável E filial, então quem atende mais de uma filial vem
+      em várias linhas e precisava ser somado de novo do lado da tela; aqui o `GROUP BY` já é só
+      por responsável.
+    - a rota de SLA exige `operations:view_sla`, e produção por técnico não é dado de SLA: nomes e
+      contagem de finalizadas já são alcançáveis por qualquer perfil com `operations:read` (basta
+      escolher um colaborador no filtro da própria tela). Uma rota própria não herda uma permissão
+      que este dado não precisa.
+
+    O escopo regional do usuário e todos os filtros de dimensão continuam aplicados por
+    `_query_conditions`, igual a qualquer outra consulta do módulo.
+    """
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
+    responsible = func.coalesce(OperationOrder.responsible, "Não identificado")
+    completed = func.count(OperationOrder.id)
+    rows = db.execute(
+        select(responsible, completed)
+        .where(*conditions, OperationOrder.closed_at.between(start, end))
+        .group_by(responsible)
+        .order_by(completed.desc(), responsible.asc())
+    ).all()
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "items": [{"responsible": row[0], "completed": row[1]} for row in rows],
+    }
+
+
 def backlog_daily_trend(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
     """Histórico diário do backlog (estoque de O.S. em aberto), lido da fotografia diária
     (`operations/backlog_snapshot.py`), não de `OperationOrder` - o snapshot já existe pra isso e

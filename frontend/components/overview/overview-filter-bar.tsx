@@ -95,7 +95,7 @@ export function OverviewFilterBar({
   onResetToDefault: () => void;
   onSaveAsDefault?: () => void;
 }) {
-  const presetName = defaultFilter?.available ? defaultFilter.name : null;
+  const hasPreset = defaultFilter?.available ?? false;
   const listKeys = visible.filter(isListKey);
   const supportKeys = visible.filter(isSupportKey);
 
@@ -282,15 +282,15 @@ export function OverviewFilterBar({
             ) : null}
 
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-              {presetName ? (
+              {hasPreset ? (
                 <p className="min-w-0 flex-1 text-[11px] text-slate-500">
-                  Filtro pré-setado desta tela: <span className="font-semibold text-slate-700">{presetName}</span>. Ele é
-                  uma visão global da Operação Analítica - mudar a visão muda o padrão de todo mundo.
+                  Este recorte é o filtro pré-setado desta tela, salvo só para a Visão Geral - não aparece nas visões da
+                  Operação Analítica.
                 </p>
               ) : (
                 <p className="min-w-0 flex-1 text-[11px] text-slate-500">
-                  Nenhum filtro padrão definido para esta tela. Quem administra visões globais pode escolher um em
-                  &quot;Definir como padrão&quot;.
+                  Nenhum filtro padrão definido para esta tela. Quem administra visões globais pode definir o recorte
+                  atual em &quot;Definir como padrão&quot;.
                 </p>
               )}
               <div className="flex shrink-0 items-center gap-2">

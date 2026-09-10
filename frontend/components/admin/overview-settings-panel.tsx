@@ -11,9 +11,18 @@ import { SectionCard } from "@/components/ui/section-card";
 import { useBlockQuery } from "@/hooks/use-block-query";
 import {
   operationsApi,
+  type OperationOverviewDefaultFilter,
   type OperationOverviewFilterKey,
   type OperationOverviewFilterOption,
 } from "@/lib/operations-api";
+
+/** Quantas dimensões o padrão atual tem preenchidas, pra dar alguma ideia sem reexibir o filtro inteiro. */
+function describeDefaultFilter(data: OperationOverviewDefaultFilter): string {
+  const listCount = Object.values(data.filters ?? {}).filter((values) => (values?.length ?? 0) > 0).length;
+  const supportCount = Object.values(data.support_filters ?? {}).filter((values) => (values?.length ?? 0) > 0).length;
+  const total = listCount + supportCount;
+  return total === 1 ? "1 filtro" : `${total} filtros`;
+}
 
 const GROUP_LABEL: Record<OperationOverviewFilterOption["group"], { title: string; hint: string }> = {
   operations: {
@@ -136,11 +145,11 @@ export function OverviewSettingsPanel({
           ))}
           <div className="lg:col-span-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
             <p className="text-[11px] text-slate-500">
-              Visão global pré-setada:{" "}
+              Filtro padrão da tela: {" "}
               {defaultFilter.data?.available ? (
-                <span className="font-semibold text-slate-700">{defaultFilter.data.name}</span>
+                <span className="font-semibold text-slate-700">definido ({describeDefaultFilter(defaultFilter.data)})</span>
               ) : (
-                <span className="text-slate-400">nenhuma - define-se na própria Visão Geral, em &quot;Definir como padrão&quot;</span>
+                <span className="text-slate-400">nenhum - define-se na própria Visão Geral, em &quot;Definir como padrão&quot;</span>
               )}
             </p>
             {canManage ? (

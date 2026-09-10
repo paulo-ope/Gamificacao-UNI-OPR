@@ -7,6 +7,7 @@ import type {
   OperationFilterState,
   OperationPeriod,
   OperationSavedFilterValues,
+  OverviewSupportFilterValues,
 } from "@/lib/operations-api";
 
 /** Padrão de período da Visão Geral, decidido com o usuário: últimos 30 dias. */
@@ -135,7 +136,11 @@ export function useOverviewFilters() {
    * vazio. Chamar de novo depois disso não faz nada - o usuário pode ter mexido no filtro.
    */
   const initialize = useCallback(
-    (period: OperationPeriod, defaultValues: OperationSavedFilterValues | null) => {
+    (
+      period: OperationPeriod,
+      defaultValues: OperationSavedFilterValues | null,
+      defaultSupportValues?: OverviewSupportFilterValues | null,
+    ) => {
       if (initialized.current) return;
       const range = defaultOverviewRange(period);
       if (!range) return;
@@ -144,6 +149,12 @@ export function useOverviewFilters() {
       if (defaultValues) {
         OVERVIEW_LIST_KEYS.forEach((key) => {
           const selected = defaultValues[key];
+          if (selected?.length) preset[key] = selected;
+        });
+      }
+      if (defaultSupportValues) {
+        OVERVIEW_SUPPORT_KEYS.forEach((key) => {
+          const selected = defaultSupportValues[key];
           if (selected?.length) preset[key] = selected;
         });
       }

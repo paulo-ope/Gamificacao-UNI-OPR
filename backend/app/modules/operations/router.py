@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, time, timezone
 from time import perf_counter
@@ -86,8 +87,10 @@ from .schemas import (
     OperationOverview,
     OperationWorkScheduleOverview,
     OperationPeriod,
+    OperationOverviewCollaboratorProduction,
     OperationOverviewDefaultFilter,
     OperationOverviewDefaultFilterUpdate,
+    OverviewSupportFilterValues,
     OperationOverviewVisibleFilters,
     OperationOverviewVisibleFiltersUpdate,
     OperationRegionalMatrix,
@@ -773,29 +776,24 @@ def overview(
     )
 
 
-OVERVIEW_DEFAULT_FILTER_SETTING = "overview_default_saved_filter_id"
+OVERVIEW_DEFAULT_FILTER_SETTING = "overview_default_filter"
 
 
 def _overview_default_filter_response(db: Session, user: User) -> dict:
     can_manage = "operations:views:update_global" in permissions_for_user(user)
     raw = (get_setting(db, OVERVIEW_DEFAULT_FILTER_SETTING, "") or "").strip()
-    if not raw.isdigit():
-        return {"available": False, "saved_filter_id": None, "name": None, "filters": None, "can_manage": can_manage}
-    item = db.scalar(
-        select(OperationSavedFilter).where(
-            OperationSavedFilter.id == int(raw),
-            OperationSavedFilter.visibility == "global",
-        )
-    )
-    if item is None:
-        # A visão global apontada foi apagada: responde "sem padrão" em vez de 404 - a Visão Geral
-        # tem que abrir de qualquer forma.
-        return {"available": False, "saved_filter_id": None, "name": None, "filters": None, "can_manage": can_manage}
+    if not raw:
+        return {"available": False, "filters": None, "support_filters": None, "can_manage": can_manage}
+    try:
+        blob = json.loads(raw)
+    except ValueError:
+        # Formato antigo (ID de visão global) ou lixo qualquer: trata como "sem padrão" em vez de
+        # quebrar a Visão Geral pra todo mundo por causa de um valor que não existe mais.
+        return {"available": False, "filters": None, "support_filters": None, "can_manage": can_manage}
     return {
         "available": True,
-        "saved_filter_id": item.id,
-        "name": item.name,
-        "filters": item.filters,
+        "filters": blob.get("filters"),
+        "support_filters": blob.get("support_filters"),
         "can_manage": can_manage,
     }
 
@@ -805,8 +803,9 @@ def overview_default_filter(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Qual visão global a Visão Geral executiva aplica ao abrir. Leitura liberada para qualquer
-    usuário do módulo: sem isso a tela não consegue abrir já pré-setada para quem só consulta."""
+    """Filtro pré-setado que a Visão Geral executiva aplica ao abrir. Leitura liberada para
+    qualquer usuário do módulo: sem isso a tela não consegue abrir já pré-setada para quem só
+    consulta."""
     return _overview_default_filter_response(db, user)
 
 
@@ -816,37 +815,35 @@ def update_overview_default_filter(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Define (ou limpa, com `saved_filter_id: null`) o padrão da Visão Geral.
+    """Define (ou limpa, com `filters: null`) o padrão da Visão Geral.
 
-    Exige a mesma permissão de editar visão global (`operations:views:update_global`): o padrão
-    vale para todo mundo, então não pode ser trocado por quem só gerencia filtros pessoais. Só
-    aceita visão GLOBAL - uma visão pessoal como padrão do ecossistema deixaria os outros
-    usuários presos a um filtro que eles não veem nem editam.
+    Guardado como um blob próprio da Visão Geral (`app_settings`) - não é mais uma referência a
+    uma visão de `operations_saved_filters`, então não aparece na lista de visões da Operação
+    Analítica nem fica limitado ao catálogo de filtros de O.S. (agora cabe também o que vem do
+    SGP Suporte). Exige a mesma permissão de editar visão global (`operations:views:update_global`):
+    o padrão vale para todo mundo, então não pode ser trocado por quem só gerencia filtros
+    pessoais.
     """
     _ensure_global_saved_filter_permission(user, "update")
-    if payload.saved_filter_id is None:
+    if payload.filters is None:
         upsert_setting(
             db,
             OVERVIEW_DEFAULT_FILTER_SETTING,
             "",
-            "Visão global aplicada por padrão na Visão Geral executiva.",
+            "Filtro padrão aplicado ao abrir a Visão Geral executiva.",
         )
         db.commit()
         return _overview_default_filter_response(db, user)
 
-    item = db.scalar(select(OperationSavedFilter).where(OperationSavedFilter.id == payload.saved_filter_id))
-    if item is None:
-        raise HTTPException(status_code=404, detail="Filtro salvo não encontrado.")
-    if item.visibility != "global":
-        raise HTTPException(
-            status_code=422,
-            detail="Somente uma visão global pode ser o filtro padrão da Visão Geral.",
-        )
+    blob = {
+        "filters": payload.filters.model_dump(mode="json"),
+        "support_filters": (payload.support_filters or OverviewSupportFilterValues()).model_dump(mode="json"),
+    }
     upsert_setting(
         db,
         OVERVIEW_DEFAULT_FILTER_SETTING,
-        str(item.id),
-        "Visão global aplicada por padrão na Visão Geral executiva.",
+        json.dumps(blob),
+        "Filtro padrão aplicado ao abrir a Visão Geral executiva.",
     )
     db.commit()
     return _overview_default_filter_response(db, user)
@@ -937,6 +934,31 @@ def overview_regional_matrix(
         date_to,
         user,
         include_sla=include_sla,
+        **selected_filters,
+    )
+
+
+@router.get("/overview/collaborator-production", response_model=OperationOverviewCollaboratorProduction)
+def overview_collaborator_production(
+    date_from: date,
+    date_to: date,
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Finalizadas por responsável no recorte atual - o segundo nível do donut de modelo de equipe
+    da Visão Geral ("quem produziu dentro deste modelo").
+
+    Só `operations:read` (a permissão do router), NÃO `operations:view_sla`: a resposta não tem
+    nenhum dado de prazo, e nome + contagem de finalizadas já são alcançáveis nesta mesma tela por
+    quem escolhe um colaborador no filtro. O escopo regional do usuário continua aplicado.
+    """
+    _validated_period(date_from, date_to)
+    return queries.overview_collaborator_production(
+        db,
+        date_from,
+        date_to,
+        user,
         **selected_filters,
     )
 

@@ -783,7 +783,9 @@ class AppSetting(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     key: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
-    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Alargado de VARCHAR(255) pra TEXT (migration 20260909_0090) - achado real salvando o filtro
+    # padrão da Visão Geral: o blob JSON (O.S. + SGP) passa de 255 caracteres fácil.
+    value: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

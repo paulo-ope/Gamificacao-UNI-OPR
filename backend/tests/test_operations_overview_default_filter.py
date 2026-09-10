@@ -1,9 +1,13 @@
 """Filtro pré-setado da Visão Geral executiva
 (`GET`/`PUT /operations/overview/default-filter`).
 
-O padrão aponta para uma visão GLOBAL já existente em vez de criar um catálogo de configuração
-paralelo. Os testes travam as duas regras que protegem isso: só visão global pode ser padrão, e
-só quem pode editar visão global pode trocar o padrão de todo mundo.
+O padrão é um blob PRÓPRIO da Visão Geral (guardado em `app_settings`), não uma referência a uma
+visão global de `operations_saved_filters` - achado real, 2026-09-09: apontar pra uma visão global
+fazia esse "padrão" aparecer também na lista de visões da Operação Analítica (indesejado) e não
+tinha onde guardar os filtros do SGP Suporte (`support_department`/`support_channel`/
+`support_reason`), que não existem em `OperationSavedFilterValues`. Os testes travam: o padrão
+guarda os dois tipos de filtro, não vaza para `OperationSavedFilter`, e só quem pode editar visão
+global pode trocar o padrão de todo mundo.
 """
 
 from __future__ import annotations
@@ -14,35 +18,8 @@ import pytest
 
 from app.core.security import get_current_user
 from app.main import app
-from app.modules.operations.models import OperationSavedFilter
 
 ENDPOINT = "/api/operations/overview/default-filter"
-
-
-@pytest.fixture()
-def global_view(db_session, admin_user):
-    item = OperationSavedFilter(
-        user_id=admin_user.id,
-        name="Visão da diretoria",
-        filters={"team_models": ["EQUIPE PRÓPRIA"], "sectors": ["Suporte Externo Fibra"]},
-        visibility="global",
-    )
-    db_session.add(item)
-    db_session.flush()
-    return item
-
-
-@pytest.fixture()
-def personal_view(db_session, admin_user):
-    item = OperationSavedFilter(
-        user_id=admin_user.id,
-        name="Minha visão",
-        filters={"team_models": ["TERCEIRIZADA"]},
-        visibility="personal",
-    )
-    db_session.add(item)
-    db_session.flush()
-    return item
 
 
 def test_no_default_configured_answers_unavailable_instead_of_error(client):
@@ -51,53 +28,57 @@ def test_no_default_configured_answers_unavailable_instead_of_error(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["available"] is False
-    assert payload["saved_filter_id"] is None
     assert payload["filters"] is None
+    assert payload["support_filters"] is None
     assert payload["can_manage"] is True
 
 
-def test_setting_a_global_view_as_the_default_returns_its_values(client, global_view):
-    updated = client.put(ENDPOINT, json={"saved_filter_id": global_view.id})
+def test_setting_a_filter_as_the_default_returns_its_values(client):
+    updated = client.put(
+        ENDPOINT,
+        json={
+            "filters": {"team_models": ["EQUIPE PRÓPRIA"], "sectors": ["Suporte Externo Fibra"]},
+            "support_filters": {"support_department": ["Comercial"]},
+        },
+    )
 
     assert updated.status_code == 200
     payload = updated.json()
     assert payload["available"] is True
-    assert payload["saved_filter_id"] == global_view.id
-    assert payload["name"] == "Visão da diretoria"
     assert payload["filters"]["team_models"] == ["EQUIPE PRÓPRIA"]
+    assert payload["support_filters"]["support_department"] == ["Comercial"]
 
     # Persistiu: uma leitura nova devolve o mesmo padrão.
-    assert client.get(ENDPOINT).json()["saved_filter_id"] == global_view.id
+    persisted = client.get(ENDPOINT).json()
+    assert persisted["filters"]["sectors"] == ["Suporte Externo Fibra"]
+    assert persisted["support_filters"]["support_department"] == ["Comercial"]
 
 
-def test_a_personal_view_cannot_be_the_default_of_everyone(client, personal_view):
-    response = client.put(ENDPOINT, json={"saved_filter_id": personal_view.id})
+def test_default_can_be_cleared(client):
+    client.put(ENDPOINT, json={"filters": {"team_models": ["EQUIPE PRÓPRIA"]}})
 
-    assert response.status_code == 422
-    assert client.get(ENDPOINT).json()["available"] is False
-
-
-def test_default_can_be_cleared(client, global_view):
-    client.put(ENDPOINT, json={"saved_filter_id": global_view.id})
-
-    cleared = client.put(ENDPOINT, json={"saved_filter_id": None})
+    cleared = client.put(ENDPOINT, json={"filters": None})
 
     assert cleared.status_code == 200
-    assert cleared.json()["available"] is False
+    payload = cleared.json()
+    assert payload["available"] is False
+    assert payload["filters"] is None
+    assert payload["support_filters"] is None
 
 
-def test_a_deleted_global_view_degrades_to_no_default(client, db_session, global_view):
-    client.put(ENDPOINT, json={"saved_filter_id": global_view.id})
-    db_session.delete(global_view)
-    db_session.flush()
+def test_saving_without_support_filters_defaults_them_to_empty(client):
+    updated = client.put(ENDPOINT, json={"filters": {"team_models": ["EQUIPE PRÓPRIA"]}})
 
-    response = client.get(ENDPOINT)
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["support_filters"] == {
+        "support_department": [],
+        "support_channel": [],
+        "support_reason": [],
+    }
 
-    assert response.status_code == 200
-    assert response.json()["available"] is False
 
-
-def test_changing_the_default_requires_the_global_view_permission(client, global_view):
+def test_changing_the_default_requires_the_global_view_permission(client):
     def user_with(*permissions: str):
         return SimpleNamespace(
             id=906,
@@ -112,18 +93,19 @@ def test_changing_the_default_requires_the_global_view_permission(client, global
             ],
         )
 
+    body = {"filters": {"team_models": ["EQUIPE PRÓPRIA"]}}
     try:
         # Gerenciar filtro pessoal não basta para trocar o padrão de todo mundo.
         app.dependency_overrides[get_current_user] = lambda: user_with(
             "operations:read", "operations:manage_filters"
         )
-        denied = client.put(ENDPOINT, json={"saved_filter_id": global_view.id})
+        denied = client.put(ENDPOINT, json=body)
         readable = client.get(ENDPOINT)
 
         app.dependency_overrides[get_current_user] = lambda: user_with(
             "operations:read", "operations:views:update_global"
         )
-        allowed = client.put(ENDPOINT, json={"saved_filter_id": global_view.id})
+        allowed = client.put(ENDPOINT, json=body)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
@@ -132,4 +114,4 @@ def test_changing_the_default_requires_the_global_view_permission(client, global
     assert readable.status_code == 200
     assert readable.json()["can_manage"] is False
     assert allowed.status_code == 200
-    assert allowed.json()["saved_filter_id"] == global_view.id
+    assert allowed.json()["filters"]["team_models"] == ["EQUIPE PRÓPRIA"]

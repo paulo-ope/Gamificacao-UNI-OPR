@@ -22,7 +22,6 @@ import {
   useOverviewFilters,
   type OverviewFilters,
 } from "@/hooks/use-overview-filters";
-import { usePrompt } from "@/hooks/use-prompt";
 import { api } from "@/lib/api";
 import { formatDateTime, formatIsoDate } from "@/lib/format";
 import {
@@ -36,6 +35,8 @@ import {
   type OperationOverviewDefaultFilter,
   type OperationOverviewFilterKey,
   type OperationPeriod,
+  type OperationSavedFilterValues,
+  type OverviewSupportFilterValues,
 } from "@/lib/operations-api";
 import { previousWindow, windowLengthDays } from "@/lib/period";
 import type { AuthUser } from "@/lib/types";
@@ -73,7 +74,6 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const [defaultFilter, setDefaultFilter] = useState<OperationOverviewDefaultFilter | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ error: string | null; message: string | null }>({ error: null, message: null });
-  const { promptText, PromptDialog } = usePrompt();
 
   /**
    * Liga/desliga a linha de período anterior nos 3 gráficos de tendência de uma vez só - pedido
@@ -114,7 +114,7 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         if (!active) return;
         setPeriod(availablePeriod);
         setDefaultFilter(savedDefault);
-        initialize(availablePeriod, savedDefault?.filters ?? null);
+        initialize(availablePeriod, savedDefault?.filters ?? null, savedDefault?.support_filters ?? null);
       })
       .catch((reason) => {
         if (active) setBootstrapError(errorMessage(reason, "Não foi possível carregar o período disponível."));
@@ -180,6 +180,24 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     enabled: ready,
     fallbackError: "Não foi possível carregar a produção por modelo de equipe.",
   });
+  /**
+   * Segundo nível do donut de modelo de equipe: quais TÉCNICOS produziram dentro do modelo escolhido
+   * (pedido do usuário, 2026-09-10).
+   *
+   * Só carrega quando exatamente UM modelo está selecionado - que é o estado em que o donut de
+   * modelo não informa mais nada (uma fatia só, 100%), então o card troca de nível em vez de
+   * desenhar um anel inútil.
+   *
+   * Rota própria e enxuta (`/operations/overview/collaborator-production`, só nome + finalizadas)
+   * em vez da rota de SLA por colaborador: medido no banco real, ~58 ms contra ~144 ms e ~1,7 KB
+   * contra ~19 KB pro mesmo donut. Ela também exige apenas `operations:read`, então este nível não
+   * depende de `operations:view_sla` - produção por técnico não é dado de prazo.
+   */
+  const drilledTeamModel = filters?.team_models?.length === 1 ? filters.team_models[0] : null;
+  const collaborators = useBlockQuery(() => operationsApi.overviewCollaboratorProduction(opFilters!), [filterKey], {
+    enabled: ready && drilledTeamModel !== null,
+    fallbackError: "Não foi possível carregar a produção por técnico.",
+  });
   const support = useBlockQuery(
     () =>
       api.supportOpaOverview({
@@ -219,9 +237,8 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     OVERVIEW_LIST_KEYS.forEach((key) => {
       preset[key] = defaultFilter?.filters?.[key] ?? [];
     });
-    // Os filtros do SGP não fazem parte da visão global: restaurar o padrão os limpa.
     OVERVIEW_SUPPORT_KEYS.forEach((key) => {
-      preset[key] = [];
+      preset[key] = defaultFilter?.support_filters?.[key] ?? [];
     });
     update({ ...range, ...preset });
   }, [defaultFilter, period, update]);
@@ -229,35 +246,31 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   /**
    * Torna o recorte atual o padrão da tela para todo mundo.
    *
-   * O backend só aceita uma VISÃO GLOBAL como padrão (nunca um filtro pessoal, que os outros não
-   * veriam nem poderiam editar), então o fluxo é: salvar o recorte atual como visão global e
-   * apontar o padrão para ela. Assim o padrão continua editável pela tela de visões da Operação
-   * Analítica, sem um cadastro paralelo só para esta tela.
+   * Guardado como um blob próprio da Visão Geral (não mais uma visão global da Operação
+   * Analítica) - achado real, 2026-09-09: apontar pra uma visão global fazia esse "padrão"
+   * aparecer também na lista de visões da Operação Analítica ("quero que ele fique salvo somente
+   * na aba visão geral") e não tinha onde guardar os filtros do SGP ("quando eu salvo o filtro do
+   * opa ele não salva"). Sem nome porque não é mais um item numa lista de visões - é só "o
+   * padrão desta tela", então não precisa perguntar.
    */
   const saveAsDefault = useCallback(async () => {
     if (!filters) return;
-    const name = await promptText({
-      title: "Definir o filtro padrão da Visão Geral",
-      description:
-        "O recorte atual é salvo como uma visão global da Operação Analítica e passa a ser o padrão desta tela para todos os usuários.",
-      label: "Nome da visão global",
-      placeholder: "Ex.: Visão da diretoria",
-      confirmLabel: "Definir como padrão",
-    });
-    const trimmed = name?.trim();
-    if (!trimmed) return;
     try {
-      const values: Partial<OperationFilterState> = {};
+      const values: OperationSavedFilterValues = {};
       OVERVIEW_LIST_KEYS.forEach((key) => {
         values[key] = filters[key] ?? [];
       });
-      const saved = await operationsApi.createSavedFilter(trimmed, values, "global");
-      setDefaultFilter(await operationsApi.updateOverviewDefaultFilter(saved.id));
-      setFeedback({ error: null, message: `"${trimmed}" agora é o filtro padrão da Visão Geral.` });
+      const supportValues: OverviewSupportFilterValues = {
+        support_department: filters.support_department ?? [],
+        support_channel: filters.support_channel ?? [],
+        support_reason: filters.support_reason ?? [],
+      };
+      setDefaultFilter(await operationsApi.updateOverviewDefaultFilter(values, supportValues));
+      setFeedback({ error: null, message: "O recorte atual agora é o filtro padrão da Visão Geral." });
     } catch (reason) {
       setFeedback({ error: errorMessage(reason, "Não foi possível definir o filtro padrão."), message: null });
     }
-  }, [filters, promptText]);
+  }, [filters]);
 
   const previousTrendForCharts = showPreviousPeriod ? previousTrends.data : null;
   const previousBacklogForChart = showPreviousPeriod ? previousBacklogTrend.data : null;
@@ -336,6 +349,12 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const completedByTeamModel = useMemo(
     () => (workSchedule.data?.by_model ?? []).map((item) => ({ label: item.model_name, value: item.completed })),
     [workSchedule.data],
+  );
+  // Já vem agrupado por responsável e ordenado por produção do backend - a tela só renomeia os
+  // campos pro formato do donut.
+  const completedByCollaborator = useMemo(
+    () => (collaborators.data?.items ?? []).map((item) => ({ label: item.responsible, value: item.completed })),
+    [collaborators.data],
   );
   const attendancesByChannel = useMemo(
     () => (support.data?.by_channel ?? []).map((item) => ({ label: item.channel, value: item.total })),
@@ -466,7 +485,8 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
               description={
                 "Linha contínua: SLA acumulado ponderado do período. Linha tracejada: SLA do dia" +
                 (previousTrendForCharts ? "; linha cinza tracejada: SLA acumulado do período anterior" : "") +
-                ". Clique num dia pra detalhar só ele."
+                ". Total de finalizadas do dia no tooltip - as barras só empilham no prazo e fora do prazo." +
+                " Clique num dia pra detalhar só ele."
               }
               badge="Meta 80%"
               option={slaOption}
@@ -510,15 +530,31 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           // ultrapassa isso.
           maxSlices={completedByRegional.length}
         />
-        <OverviewShareDonut
-          eyebrow="Finalizadas por modelo de equipe"
-          title="Quem executa a produção"
-          subtitle="Respeita os filtros aplicados. Clique para recortar por um modelo."
-          items={completedByTeamModel}
-          totalLabel="finalizadas"
-          state={{ loading: workSchedule.loading, error: workSchedule.error }}
-          onSelect={(model) => drillFilters({ team_models: [model] })}
-        />
+        {drilledTeamModel ? (
+          <OverviewShareDonut
+            eyebrow={`Técnicos · ${drilledTeamModel}`}
+            title="Quem produziu neste modelo"
+            subtitle="Finalizadas por técnico dentro do modelo selecionado. Clique num nome para recortar a tela por ele."
+            items={completedByCollaborator}
+            totalLabel="finalizadas"
+            state={{ loading: collaborators.loading, error: collaborators.error }}
+            onSelect={(responsible) => drillFilters({ responsibles: [responsible] })}
+            // Todos os técnicos nomeados, sem dobrar em "Outros" - mesma escolha do donut de filial
+            // (pedido do usuário em 2026-09-04). A cor repete a partir do 9º nome, mas a lista ao
+            // lado continua distinguindo cada pessoa por nome e número.
+            maxSlices={completedByCollaborator.length}
+          />
+        ) : (
+          <OverviewShareDonut
+            eyebrow="Finalizadas por modelo de equipe"
+            title="Quem executa a produção"
+            subtitle="Respeita os filtros aplicados. Clique para recortar por um modelo e ver os técnicos dele."
+            items={completedByTeamModel}
+            totalLabel="finalizadas"
+            state={{ loading: workSchedule.loading, error: workSchedule.error }}
+            onSelect={(model) => drillFilters({ team_models: [model] })}
+          />
+        )}
         {canSeeSupport ? (
           <OverviewShareDonut
             eyebrow="SGP Suporte"
@@ -558,7 +594,6 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         onDismissError={() => setFeedback((current) => ({ ...current, error: null }))}
         onDismissMessage={() => setFeedback((current) => ({ ...current, message: null }))}
       />
-      {PromptDialog}
     </div>
   );
 }
