@@ -85,6 +85,26 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
     **1.061 passando**, as mesmas 13 falhas pré-existentes em `test_ai_*` (todas em
     `modules/ai`/`modules/operations`, nada que esta frente tocou).
 
+- **Operação Analítica: barra de filtros deixou de esmagar os campos em telas de 1536–1780px**
+  (2026-09-10, usuário mandou print: "Alguns bug de layaut").
+  - **Causa raiz**: no `2xl` a grade era `..._repeat(5,minmax(0,1fr))_auto` e a coluna `auto` do
+    grupo Filtrar/Limpar/Filtros avançados/Visões reserva **552px fixos**. Como os 5 filtros tinham
+    mínimo ZERO, todo o aperto caía neles: **75px cada em janela de 1600px**, mostrando "T.." em vez
+    de "Todos". Em 1920px sobravam 139px e o defeito não aparecia — por isso parecia intermitente.
+  - **Correção**: os botões passaram a ocupar **linha própria** (`md:col-span-full`) em vez de
+    disputar a fileira, e a coluna do período ganhou teto (`minmax(15.5rem,20rem)`) pra folga ir
+    pros filtros. Não existe solução de uma linha só: 248 + 5x120 + 552 + gaps = 1448px, mais do que
+    os 1281px disponíveis em 1600px com a barra lateral aberta — forçar mínimo nos filtros sem tirar
+    os botões da fileira geraria overflow horizontal.
+  - **Segundo defeito, mesma fileira**: "Modelo de equipe" quebrava em 2 linhas quando a coluna
+    apertava e, como a barra alinha por baixo (`items-end`), a célula subia 16px e desalinhava a
+    fileira inteira. Rótulo agora fica sempre em uma linha (`truncate` + `title` com o texto cheio).
+  - **Medido em 5 larguras no ambiente real**: filtro em 1600px **75 → 173px**; 1920px 139 → 237px;
+    1540px → 161px. Dois ganhos colaterais: em 1366px o grupo de botões deixou de **transbordar** a
+    célula de 325px em que estava, e em 1100px deixou de quebrar em 4 linhas — a barra encurtou de
+    366 para 270px. Custo: +32px de barra fixa no `2xl` (97 → 129px). Mobile é byte-a-byte igual ao
+    de antes (nenhuma classe abaixo de `md` mudou).
+
 - **Gestão: buscar colaborador com justificativa pendente e ler as justificativas (API + MCP)**
   (2026-09-10, usuário: "criar endpoints para os MCP e API conseguirem buscar colaborador com
   justificativa pendentes de forma mais fácil, valide todas rotas que tem e o que podemos expor
