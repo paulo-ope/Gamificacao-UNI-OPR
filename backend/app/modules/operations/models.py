@@ -172,6 +172,11 @@ class OperationTeamModel(Base):
     good_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#dcfce7")
     excellent_color: Mapped[str] = mapped_column(String(7), nullable=False, default="#dbeafe")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    # Desliga a cobrança de justificativa (caso automático + botão "Justificar dia/mês") pra este
+    # modelo - o dia continua pintado de vermelho abaixo da meta (decisão de produto: cor é
+    # informativa), só não abre caso nem exige explicação do colaborador. Default True preserva o
+    # comportamento anterior à existência deste campo.
+    requires_justification: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
