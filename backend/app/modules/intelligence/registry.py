@@ -64,6 +64,12 @@ def _alert_rules_runner(db: Session) -> MonitorRunResult:
     return run_alert_rules_monitor(db)
 
 
+def _ixc_ticket_burst_runner(db: Session) -> MonitorRunResult:
+    from .monitors.ixc_ticket_burst import run_ixc_ticket_burst_monitor
+
+    return run_ixc_ticket_burst_monitor(db)
+
+
 MONITORS: tuple[MonitorDefinition, ...] = (
     MonitorDefinition(
         key="collective_outage",
@@ -128,6 +134,20 @@ MONITORS: tuple[MonitorDefinition, ...] = (
         scope_strategy="regional",
         resolve_after_misses=2,
         runner=_alert_rules_runner,
+    ),
+    MonitorDefinition(
+        key="ixc_ticket_burst",
+        name="Pico de atendimento IXC",
+        description=(
+            "Escalona automaticamente pro cockpit quando o BURST_V1 (janelas de 2h/6h contra o "
+            "baseline horario do Atendimento IXC) detecta um pico acima do esperado, por regional "
+            "e para a operacao inteira."
+        ),
+        default_interval_minutes=15,
+        enabled_by_default=True,
+        scope_strategy="regional",
+        resolve_after_misses=2,
+        runner=_ixc_ticket_burst_runner,
     ),
 )
 

@@ -171,7 +171,7 @@ export function FirstAccessOnboarding({ onComplete }: Props) {
                     <IdCard className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                     <Input
                       id={cpfId}
-                      className="pl-9 focus-visible:ring-[#2d5fff]"
+                      className="pl-9 focus-visible:ring-uni-royal"
                       inputMode="numeric"
                       placeholder="000.000.000-00"
                       value={cpf}
@@ -200,7 +200,7 @@ export function FirstAccessOnboarding({ onComplete }: Props) {
                       <Phone className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                       <Input
                         id={phoneId}
-                        className="pl-9 focus-visible:ring-[#2d5fff]"
+                        className="pl-9 focus-visible:ring-uni-royal"
                         inputMode="tel"
                         placeholder="(00) 00000-0000"
                         value={phone}
@@ -215,7 +215,7 @@ export function FirstAccessOnboarding({ onComplete }: Props) {
                       <Mail className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                       <Input
                         id={emailId}
-                        className="pl-9 focus-visible:ring-[#2d5fff]"
+                        className="pl-9 focus-visible:ring-uni-royal"
                         type="email"
                         placeholder="voce@exemplo.com"
                         value={email}
@@ -236,7 +236,7 @@ export function FirstAccessOnboarding({ onComplete }: Props) {
                       <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                       <Input
                         id={newPasswordId}
-                        className="px-9 focus-visible:ring-[#2d5fff]"
+                        className="px-9 focus-visible:ring-uni-royal"
                         type={showPassword ? "text" : "password"}
                         autoComplete="new-password"
                         value={newPassword}
@@ -263,7 +263,7 @@ export function FirstAccessOnboarding({ onComplete }: Props) {
                       <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                       <Input
                         id={confirmPasswordId}
-                        className="pl-9 focus-visible:ring-[#2d5fff]"
+                        className="pl-9 focus-visible:ring-uni-royal"
                         type={showPassword ? "text" : "password"}
                         autoComplete="new-password"
                         value={confirmPassword}

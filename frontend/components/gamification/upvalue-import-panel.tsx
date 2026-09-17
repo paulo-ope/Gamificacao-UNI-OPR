@@ -1,11 +1,14 @@
 ﻿"use client";
 
-import { BarChart3, CalendarDays, Database, Eye, FileSpreadsheet, RefreshCw, Trash2, UploadCloud } from "lucide-react";
+import { AlertTriangle, BarChart3, CalendarDays, Database, Eye, FileSpreadsheet, RefreshCw, Trash2, UploadCloud } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Loading } from "@/components/ui/loading";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { formatDateTime, formatInteger } from "@/lib/format";
@@ -233,7 +236,7 @@ export function UpvalueImportPanel({
   }
 
   return (
-    <section className="panel">
+    <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
       <div className="grid gap-4 border-b bg-gradient-to-r from-slate-50 via-white to-white p-5 lg:grid-cols-[1fr_auto] lg:items-start">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -375,8 +378,12 @@ export function UpvalueImportPanel({
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={5} className="py-6 text-center text-sm text-slate-500">
-                      {loadingPeriods ? "Carregando períodos..." : "Nenhuma O.S importada encontrada."}
+                    <TableCell colSpan={5}>
+                      {loadingPeriods ? (
+                        <Loading label="Carregando períodos..." className="py-6" />
+                      ) : (
+                        <EmptyState variant="plain" title="Nenhuma O.S importada encontrada." />
+                      )}
                     </TableCell>
                   </TableRow>
                 )}
@@ -415,7 +422,10 @@ export function UpvalueImportPanel({
         </div>
 
         {canImport && error ? (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+          <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            {error}
+          </div>
         ) : null}
 
         {canImport && loadingPreview ? (
@@ -641,7 +651,10 @@ export function UpvalueImportPanel({
                 </TableHeader>
                 <TableBody>
                   {preview.sample_rows.slice(0, 8).map((row, index) => (
-                    <TableRow key={index}>
+                    // Chave derivada do conteúdo real da linha (não o índice) - linhas de preview
+                    // são só leitura e nunca reordenam, mas isso evita reconciliação errada se
+                    // `sample_rows` mudar de tamanho entre uma pré-visualização e outra.
+                    <TableRow key={`${sampleColumns.map((column) => String(row[column] ?? "")).join("|")}-${index}`}>
                       {sampleColumns.map((column) => (
                         <TableCell key={column} className="max-w-48 truncate">
                           {formatValue(row[column])}
@@ -679,7 +692,7 @@ export function UpvalueImportPanel({
           </div>
         ) : null}
       </div>
-    </section>
+    </Card>
   );
 }
 

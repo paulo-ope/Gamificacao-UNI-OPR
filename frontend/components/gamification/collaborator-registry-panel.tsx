@@ -1,14 +1,16 @@
 "use client";
 
 import { Building2, CircleAlert, KeyRound, Link2, Mail, Phone, Save, Trash2, Upload, UserPlus, Users2, X } from "lucide-react";
-import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AppCheckbox, AppCombobox, AppDrawer, AppInput, AppModal, AppSwitch, Avatar, RowActionMenu, StatusBadge } from "@/components/gamification/config-ui";
+import { AppCheckbox, AppCombobox, AppDrawer, AppInput, AppModal, AppSwitch, Avatar, RowActionMenu } from "@/components/gamification/config-ui";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
+import { SummaryCard } from "@/components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { normalizeRegional, regionalName } from "@/lib/regional";
@@ -69,9 +71,9 @@ function effectiveRegional(item: CollaboratorRegistryItem) {
 }
 
 function statusBadge(item: CollaboratorRegistryItem) {
-  if (!item.is_registered) return <StatusBadge tone="warning">Pendente</StatusBadge>;
-  if (!item.active) return <StatusBadge>Inativo</StatusBadge>;
-  return <StatusBadge tone="success">Cadastrado</StatusBadge>;
+  if (!item.is_registered) return <StatusBadge tone="amber">Pendente</StatusBadge>;
+  if (!item.active) return <StatusBadge tone="slate">Inativo</StatusBadge>;
+  return <StatusBadge tone="emerald">Cadastrado</StatusBadge>;
 }
 
 function draftFromItem(item: CollaboratorRegistryItem): EditDraft {
@@ -85,38 +87,6 @@ function draftFromItem(item: CollaboratorRegistryItem): EditDraft {
     active: item.active,
     is_registered: item.is_registered,
   };
-}
-
-function SummaryCard({
-  icon,
-  label,
-  value,
-  hint,
-  accent = "default",
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  hint: string;
-  accent?: "default" | "highlight" | "warning";
-}) {
-  const accentClass =
-    accent === "highlight"
-      ? "text-uni-royal"
-      : accent === "warning"
-        ? "text-amber-700"
-        : "text-slate-950";
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-        {icon}
-        {label}
-      </div>
-      <div className={cn("mt-3 text-2xl font-semibold", accentClass)}>{value}</div>
-      <div className="mt-1 text-sm text-slate-500">{hint}</div>
-    </div>
-  );
 }
 
 function RegionalSelect({
@@ -529,7 +499,7 @@ export function CollaboratorRegistryPanel({
         />
       </div>
 
-      <div className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
         <div className="border-b border-slate-200 px-5 py-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
@@ -634,7 +604,7 @@ export function CollaboratorRegistryPanel({
           </div>
 
           {activeList === "registered" ? (
-            <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                   <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -695,8 +665,8 @@ export function CollaboratorRegistryPanel({
                   ))}
                   {filteredRegistered.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="py-6 text-center text-sm text-slate-500">
-                        Nenhum colaborador cadastrado para os filtros atuais.
+                      <TableCell colSpan={7}>
+                        <EmptyState variant="plain" title="Nenhum colaborador cadastrado para os filtros atuais." />
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -704,7 +674,7 @@ export function CollaboratorRegistryPanel({
               </Table>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-slate-200">
+            <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                   <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -752,8 +722,8 @@ export function CollaboratorRegistryPanel({
                   ))}
                   {filteredUnregistered.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="py-6 text-center text-sm text-slate-500">
-                        Nenhum colaborador pendente de cadastro.
+                      <TableCell colSpan={5}>
+                        <EmptyState variant="plain" title="Nenhum colaborador pendente de cadastro." />
                       </TableCell>
                     </TableRow>
                   ) : null}

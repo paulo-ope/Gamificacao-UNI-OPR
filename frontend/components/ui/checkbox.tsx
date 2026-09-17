@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 // Visual de caixa de seleção (quadrado) - usado quando o clique SELECIONA um item/linha para uma
 // ação em lote ou marca uma opção booleana, nunca para representar liga/desliga de uma
-// configuração real (isso é o AppSwitch, components/gamification/config-ui.tsx). Compartilhado
+// configuração real (isso é o AppSwitch, components/ui/switch.tsx). Compartilhado
 // entre os módulos de gamificação, operações e admin para manter uma única linguagem visual.
 export function AppCheckbox({
   checked,

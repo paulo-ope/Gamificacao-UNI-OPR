@@ -11,6 +11,7 @@ import {
   Save,
   Search,
   Settings2,
+  ShieldOff,
   Sparkles,
   Tags,
   Target,
@@ -97,6 +98,7 @@ const DEFAULT_MODEL: OperationTeamModelPayload = {
   good_color: "#dcfce7",
   excellent_color: "#dbeafe",
   active: true,
+  requires_justification: true,
   target_rules: BASE_RULES,
 };
 
@@ -831,6 +833,19 @@ export function OperationsTeamConfiguration({
                 As cores usam a quantidade de O.S. finalizadas no dia, sem
                 percentuais.
               </p>
+              {editingId ? (
+                <p className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-800">
+                  <Settings2 className="h-3 w-3" />
+                  Editando: {data?.models.find((item) => item.id === editingId)?.name || form.name}
+                  <button
+                    type="button"
+                    onClick={startNew}
+                    className="ml-1 rounded-full px-1.5 text-blue-500 hover:bg-blue-100 hover:text-blue-700"
+                  >
+                    Cancelar
+                  </button>
+                </p>
+              ) : null}
             </div>
             <Button
               type="button"
@@ -868,10 +883,11 @@ export function OperationsTeamConfiguration({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-semibold text-blue-950">
-                    Onde cada desempenho começa?
+                    Onde cada desempenho começa? (segunda a sexta)
                   </p>
                   <p className="text-[11px] text-blue-700">
-                    Exemplo legado: mediano 3, bom 4 e excelente/meta 5.
+                    Também define as faixas da meta &quot;Segunda a sexta&quot; logo
+                    abaixo - sábado, domingo e mensal têm suas próprias faixas.
                   </p>
                 </div>
                 <Button
@@ -981,7 +997,41 @@ export function OperationsTeamConfiguration({
                           {rule.enabled ? "Regra ativa" : "Sem meta"}
                         </label>
                       </div>
-                      {rule.enabled ? (
+                      {rule.enabled && rule.period_type === "weekday" ? (
+                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                          <label className="grid gap-1 text-[10px] font-semibold text-slate-500">
+                            Início
+                            <Input
+                              type="time"
+                              value={(rule.start_time || "").slice(0, 5)}
+                              disabled={!canManage}
+                              onChange={(event) =>
+                                updateRule(rule.period_type, {
+                                  start_time: event.target.value || null,
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="grid gap-1 text-[10px] font-semibold text-slate-500">
+                            Término
+                            <Input
+                              type="time"
+                              value={(rule.end_time || "").slice(0, 5)}
+                              disabled={!canManage}
+                              onChange={(event) =>
+                                updateRule(rule.period_type, {
+                                  end_time: event.target.value || null,
+                                })
+                              }
+                            />
+                          </label>
+                          <p className="self-end text-[10px] text-slate-400">
+                            Boa/Ótima/Excelente seguem o bloco &quot;Onde cada
+                            desempenho começa?&quot; acima ({rule.median_from_quantity}
+                            /{rule.good_from_quantity}/{rule.target_quantity}+).
+                          </p>
+                        </div>
+                      ) : rule.enabled ? (
                         <div className="mt-2 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
                           {rule.period_type !== "monthly" ? (
                             <>
@@ -1019,9 +1069,7 @@ export function OperationsTeamConfiguration({
                               type="number"
                               min={2}
                               value={numericInputValue(rule.median_from_quantity)}
-                              disabled={
-                                !canManage || rule.period_type === "weekday"
-                              }
+                              disabled={!canManage}
                               onChange={(event) =>
                                 updateRule(rule.period_type, {
                                   median_from_quantity: parseNumericInput(
@@ -1037,9 +1085,7 @@ export function OperationsTeamConfiguration({
                               type="number"
                               min={3}
                               value={numericInputValue(rule.good_from_quantity)}
-                              disabled={
-                                !canManage || rule.period_type === "weekday"
-                              }
+                              disabled={!canManage}
                               onChange={(event) =>
                                 updateRule(rule.period_type, {
                                   good_from_quantity: parseNumericInput(
@@ -1055,9 +1101,7 @@ export function OperationsTeamConfiguration({
                               type="number"
                               min={4}
                               value={numericInputValue(rule.target_quantity)}
-                              disabled={
-                                !canManage || rule.period_type === "weekday"
-                              }
+                              disabled={!canManage}
                               onChange={(event) =>
                                 updateRule(rule.period_type, {
                                   target_quantity: parseNumericInput(event.target.value),
@@ -1162,17 +1206,50 @@ export function OperationsTeamConfiguration({
                 aplicável, início e término da jornada.
               </p>
             ) : null}
-            <label className="flex items-center gap-2 text-xs text-slate-600">
-              <AppCheckbox
-                checked={form.active}
-                disabled={!canManage}
-                onCheckedChange={(checked) =>
-                  setForm({ ...form, active: checked })
-                }
-                ariaLabel="Modelo ativo"
-              />{" "}
-              Modelo ativo
-            </label>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center gap-2">
+                <Settings2 className="h-4 w-4 text-blue-600" />
+                <div>
+                  <p className="text-xs font-semibold text-slate-900">
+                    Status e cobrança
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Controla se o modelo pode ser atribuído e se ele cobra
+                    justificativa quando a produção fica abaixo da meta.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 space-y-2">
+                <label className="flex items-center gap-2 text-xs text-slate-600">
+                  <AppCheckbox
+                    checked={form.active}
+                    disabled={!canManage}
+                    onCheckedChange={(checked) =>
+                      setForm({ ...form, active: checked })
+                    }
+                    ariaLabel="Modelo ativo"
+                  />{" "}
+                  Modelo ativo
+                </label>
+                <label className="flex items-start gap-2 text-xs text-slate-600">
+                  <AppCheckbox
+                    checked={form.requires_justification}
+                    disabled={!canManage}
+                    onCheckedChange={(checked) =>
+                      setForm({ ...form, requires_justification: checked })
+                    }
+                    ariaLabel="Exigir justificativa quando abaixo da meta mínima"
+                  />
+                  <span>
+                    Exigir justificativa quando abaixo da meta mínima
+                    <span className="block text-[11px] text-slate-400">
+                      Desligado: o dia continua vermelho no calendário, mas não abre cobrança de
+                      justificativa nem o botão &quot;Justificar dia/mês&quot;.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
             {canManage ? (
               <div className="flex gap-2">
                 <Button
@@ -1229,6 +1306,17 @@ export function OperationsTeamConfiguration({
                       <Badge className="ml-2 border-slate-200 bg-slate-100 text-slate-500">
                         Inativo
                       </Badge>
+                    ) : null}
+                    {!model.requires_justification ? (
+                      <span
+                        className="ml-2 inline-block align-text-bottom"
+                        title="Não exige justificativa quando abaixo da meta mínima"
+                      >
+                        <ShieldOff
+                          className="h-3.5 w-3.5 text-amber-500"
+                          aria-label="Não exige justificativa quando abaixo da meta mínima"
+                        />
+                      </span>
                     ) : null}
                   </button>
                 ))}

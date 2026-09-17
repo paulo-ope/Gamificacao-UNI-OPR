@@ -52,3 +52,16 @@ export function pluralizeFilial(count: number, suffix: "" | " selecionada" | " c
   const suffixPlural = suffix ? `${suffix}s` : "";
   return count === 1 ? `filial${suffix}` : `filiais${suffixPlural}`;
 }
+
+/**
+ * R$ por ponto (valor pago ÷ pontos finais) - mesma conta reimplementada de 3 formas levemente
+ * diferentes em `audit-panel.tsx`, `collaborator-orders-sheet.tsx` e `ranking-table.tsx` (achado
+ * real da auditoria de layout, Fase 5, 2026-09-17): uma delas usava `|| 1` pra evitar divisão por
+ * zero (o que fazia `payment / 1` aparecer como "valor do ponto" quando pontos = 0, em vez de "sem
+ * base"), as outras duas já tratavam pontos ≤ 0 como zero. Consolidado aqui com UM critério:
+ * `null` quando não há pontos pra dividir - quem chama decide se isso vira "R$ 0,00", "-" ou nada
+ * na tela, mas o CÁLCULO em si passa a ser sempre o mesmo.
+ */
+export function pointValueFromTotals(estimatedPayment: number, finalPoints: number): number | null {
+  return finalPoints > 0 ? estimatedPayment / finalPoints : null;
+}

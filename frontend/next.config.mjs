@@ -35,6 +35,41 @@ const nextConfig = {
         },
       }
     : {}),
+  // Headers de segurança defensivos - achado da auditoria de 2026-09-14: nenhum header desse tipo
+  // existia, nem aqui nem no FastAPI. Implementados só aqui (não duplicados no backend) porque o
+  // navegador só fala diretamente com o Next.js: as rotas de API também chegam ao cliente através
+  // do proxy `/api/:path*` abaixo, então um único `headers()` cobrindo `/:path*` já protege tanto
+  // as páginas quanto as respostas de API que o navegador recebe.
+  //
+  // Sem CSP de propósito (pedido explícito): a tela carrega ECharts, Radix, fontes e outros
+  // recursos que precisariam de um levantamento cuidadoso de origens antes de travar uma política -
+  // uma CSP errada quebra a tela em produção de um jeito que só aparece depois do deploy. Fica
+  // registrado como melhoria futura, não implementada às cegas aqui.
+  //
+  // `X-Frame-Options: SAMEORIGIN` (não `DENY`): há evidência de que a tela já rodou dentro de um
+  // iframe em algum ambiente (ver hooks/use-prompt.tsx, achado de 2026-08-29 sobre `window.prompt`
+  // em iframe) - sem confirmar se é um embed cross-origin legítimo, `DENY` arriscava quebrar esse
+  // uso. `SAMEORIGIN` ainda bloqueia o ataque real de clickjacking (um site DE FORA enquadrando
+  // esta aplicação).
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Desliga por padrão recursos de navegador que a aplicação não usa - a Geolocation API
+          // (usada pelo UNI Localiza) continua liberada, mas só para a própria origem.
+          { key: "Permissions-Policy", value: "geolocation=(self), camera=(), microphone=(), payment=()" },
+          // HSTS só tem efeito quando o navegador já viu a resposta por HTTPS - inofensivo em
+          // desenvolvimento (http://localhost, onde o navegador ignora o header) e reforça produção
+          // (VM atrás de proxy reverso com TLS, ver FRONTEND_URL em .env.example).
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     return [
       {

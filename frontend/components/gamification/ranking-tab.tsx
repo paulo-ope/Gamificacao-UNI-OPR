@@ -4,7 +4,9 @@ import { BarChart3, CheckCircle2, CircleDollarSign, ClipboardList, HelpCircle, M
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AppMultiSelect } from "@/components/gamification/config-ui";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { Input } from "@/components/ui/input";
 import { RankingTable } from "@/components/gamification/ranking-table";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -29,7 +31,7 @@ const STAT_TONE_CLASS: Record<StatRow["tone"], string> = {
 
 function StatStrip({ rows }: { rows: StatRow[] }) {
   return (
-    <div className="grid divide-y divide-slate-100 rounded-[14px] border border-slate-200 bg-white sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-5">
+    <div className="grid divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-5">
       {rows.map((row) => {
         const Icon = row.icon;
         return (
@@ -99,7 +101,7 @@ export function RankingTab({
 }: RankingTabProps) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
         <div className="shrink-0 border-b bg-gradient-to-r from-slate-50 via-white to-white px-4 py-4">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
@@ -114,12 +116,13 @@ export function RankingTab({
               </p>
             </div>
             <div className="grid gap-2 xl:min-w-[420px]">
-              <AppMultiSelect
+              <MultiSelect
                 values={selectedRegionals}
                 onChange={onSelectedRegionalsChange}
-                options={regionalOptions.map((regional) => ({ value: normalizeRegional(regional), label: regionalName(regional) }))}
+                options={regionalOptions}
+                getValue={normalizeRegional}
+                formatOption={regionalName}
                 placeholder="Todas as filiais"
-                searchPlaceholder="Buscar regional"
                 ariaLabel="Filtrar por regional"
               />
               <div className="relative">
@@ -267,8 +270,8 @@ export function RankingTab({
                     })}
                     {filteredLeadershipResults.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
-                          Nenhum líder encontrado para os filtros atuais.
+                        <TableCell colSpan={7}>
+                          <EmptyState variant="plain" title="Nenhum líder encontrado para os filtros atuais." />
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -278,7 +281,7 @@ export function RankingTab({
             </div>
           )}
         </div>
-      </section>
+      </Card>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, peekSessionCache, setAuthToken } from "@/lib/api";
+import { onUnauthorized } from "@/lib/auth-token";
 import type { AuthUser } from "@/lib/types";
 
 
@@ -32,6 +33,20 @@ export function useWorkspaceAuth() {
     return () => {
       active = false;
     };
+  }, []);
+
+  // Sessão caindo NO MEIO do uso (token expirou/foi revogado) - achado da auditoria de 2026-09-14:
+  // antes disso não existia tratamento nenhum, cada tela só mostrava "Erro HTTP 401" genérico.
+  // Qualquer client HTTP do app (ver lib/auth-token.ts) chama `notifyUnauthorized()` ao receber
+  // 401 de uma chamada que JÁ tinha token (nunca de uma tentativa de login com senha errada, que
+  // não tem token nenhum) - aqui só reage limpando `user`, o que já é suficiente pra
+  // `WorkspaceAppShell` desenhar a tela de login de novo, sem precisar de reload de página.
+  useEffect(() => {
+    return onUnauthorized(() => {
+      setUser(null);
+      setChecking(false);
+      setError("Sua sessão expirou. Entre novamente para continuar.");
+    });
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

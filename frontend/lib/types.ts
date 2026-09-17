@@ -339,6 +339,10 @@ export type SupportOpaSyncSettings = {
   backfill_run_hour: number;
   backfill_lookback_months: number;
   dimensions_refresh_hours: number;
+  tmr_backfill_enabled: boolean;
+  tmr_backfill_run_hour: number;
+  tmr_backfill_run_until_hour: number;
+  tmr_backfill_daily_limit: number;
 };
 
 export type SupportOpaImportMonth = {
@@ -362,6 +366,11 @@ export type SupportOpaSyncStatus = SupportOpaSyncSettings & {
   active_run_mode: string | null;
   active_run_started_at: string | null;
   next_window_delayed: boolean;
+  tmr_backfill_pending_count: number;
+  tmr_backfill_processed_today: number;
+  tmr_backfill_last_success_at: string | null;
+  tmr_backfill_last_error: string | null;
+  tmr_backfill_last_error_at: string | null;
 };
 
 export type SupportOpaAttendantOverride = {
@@ -2273,4 +2282,189 @@ export type AuditOrders = {
   page: number;
   page_size: number;
   total_pages: number;
+};
+
+// Atendimento real do IXC (su_ticket) - o protocolo que dispara a O.S., usado como indicador
+// antecipado de incidente. Drill-down regional -> cidade -> bairro -> motivo/protocolo.
+// Ver docs/STATUS.md 2026-09-11.
+export type SupportIxcTicketBreakdownLevel = "regional" | "city" | "neighborhood" | "reason";
+
+export type SupportIxcTicketBreakdownItem = {
+  key: string;
+  label: string;
+  ticket_count: number;
+  contract_count: number | null;
+  tickets_per_1000_contracts: number | null;
+  // % dos contratos ativos da regional com cidade resolvida - só vem preenchido no nível "city".
+  // Explica por que tickets_per_1000_contracts pode vir null mesmo com contract_count preenchido
+  // (cobertura baixa demais pra confiar na taxa - ver MIN_CITY_COVERAGE_PCT no backend).
+  coverage_pct: number | null;
+  // Desvio vs. a janela imediatamente anterior de mesmo tamanho em dias (não meses-calendário,
+  // diferente da Visão Geral) - null quando o período anterior não tem amostra suficiente
+  // (MIN_DEVIATION_SAMPLE no backend), não quando "não mudou".
+  previous_ticket_count: number;
+  deviation_pct: number | null;
+};
+
+export type SupportIxcTicketBreakdown = {
+  level: SupportIxcTicketBreakdownLevel;
+  regional: string | null;
+  city: string | null;
+  neighborhood: string | null;
+  items: SupportIxcTicketBreakdownItem[];
+};
+
+export type SupportIxcTicketOut = {
+  id: number;
+  source_id: string;
+  protocol: string | null;
+  customer_name: string | null;
+  regional: string | null;
+  city: string | null;
+  neighborhood: string | null;
+  locality_type: string | null;
+  subject_id: string | null;
+  subject_name: string | null;
+  sector_id: string | null;
+  sector_name: string | null;
+  status: string | null;
+  sub_status: string | null;
+  title: string | null;
+  report: string | null;
+  created_at: string | null;
+  // Taxonomia (tema/categoria) e risco combinando o peso-base do tema com o sinal textual da
+  // descrição (pedido do usuário, 2026-09-15) - `null` quando o motivo ainda não está mapeado.
+  theme_id: string | null;
+  theme_label: string | null;
+  category_id: string | null;
+  category_label: string | null;
+  risk_score: number | null;
+  subtema_inferido: string | null;
+};
+
+export type SupportIxcTicketPage = {
+  total: number;
+  items: SupportIxcTicketOut[];
+};
+
+export type SupportIxcTicketFilterOption = {
+  id: string;
+  name: string;
+};
+
+export type SupportIxcTicketThemeOption = {
+  id: string;
+  name: string;
+  category_id: string;
+  category_name: string;
+  subject_ids: string[];
+};
+
+export type SupportIxcTicketFilterOptions = {
+  subjects: SupportIxcTicketFilterOption[];
+  sectors: SupportIxcTicketFilterOption[];
+  themes: SupportIxcTicketThemeOption[];
+};
+
+export type SupportIxcTicketSavedFilterValues = {
+  subject_ids: string[];
+  sector_ids: string[];
+};
+
+export type SupportIxcTicketSavedFilter = {
+  id: number;
+  name: string;
+  filters: SupportIxcTicketSavedFilterValues;
+  is_default: boolean;
+  updated_at: string;
+};
+
+export type SupportIxcTicketSeverity = "critico" | "dentro_da_curva" | "em_melhora" | "sem_dado";
+
+export type SupportIxcTicketOverviewKpis = {
+  month: string;
+  cutoff_day: number;
+  incidencia_parcial: number | null;
+  ticket_count: number;
+  media_historica: number | null;
+  history_months_used: number;
+  desvio_pct: number | null;
+  severity: SupportIxcTicketSeverity;
+  contract_count: number;
+  coverage_pct: number | null;
+  taxonomy_coverage_pct: number | null;
+};
+
+export type SupportIxcTicketDailyPoint = {
+  day: number;
+  current: number | null;
+  previous_month: number | null;
+  historical_avg: number | null;
+  moving_avg_7d: number | null;
+};
+
+export type SupportIxcTicketSeverityBasis = "historical" | "peers" | "none";
+
+export type SupportIxcTicketPriorityItem = {
+  regional: string;
+  category: string;
+  incidencia_parcial: number | null;
+  historical_deviation_pct: number | null;
+  peers_deviation_pct: number | null;
+  severity: SupportIxcTicketSeverity;
+  // Qual comparação decidiu `severity` - "peers" quando não há histórico suficiente (a regional é
+  // nova ou tem poucos meses de dado) mas ainda dá pra comparar contra as demais regionais do
+  // período. Sem isso a tela mostraria "sem_dado" mesmo quando existe um sinal real.
+  severity_basis: SupportIxcTicketSeverityBasis;
+};
+
+// Fase 2/3 do plano de evolução analítica do Atendimento IXC (2026-09-14/15): contrato de
+// contexto único (`GET /support/ixc/analytics/*`) - modelo de período livre (date_from/date_to +
+// janela anterior de mesmo tamanho), aditivo aos tipos acima (que continuam servindo a Visão
+// Geral/drill-down atuais).
+export type SupportIxcAnalyticsDimension = "regional" | "city" | "neighborhood" | "subject";
+
+export type SupportIxcAnalyticsReach = {
+  unique_customers: number;
+  tickets_per_customer: number | null;
+  repeat_customers: number;
+  repeat_contact: Record<string, number>;
+};
+
+export type SupportIxcAnalyticsDriverItem = {
+  subject_name: string;
+  current: number;
+  expected: number;
+  excess: number;
+  contribution_pct: number;
+};
+
+export type SupportIxcAnalyticsContext = {
+  regional: string | null;
+  city: string | null;
+  neighborhood: string | null;
+  date_from: string | null;
+  date_to: string | null;
+  ticket_count: number;
+  contract_count: number | null;
+  tickets_per_1000_contracts: number | null;
+  previous_ticket_count: number;
+  deviation_pct: number | null;
+  severity: SupportIxcTicketSeverity;
+  next_dimension: SupportIxcAnalyticsDimension | null;
+  reach: SupportIxcAnalyticsReach;
+  top_driver: SupportIxcAnalyticsDriverItem | null;
+};
+
+export type SupportIxcAnalyticsPriorityItem = {
+  key: string;
+  label: string;
+  dimension: SupportIxcAnalyticsDimension;
+  ticket_count: number;
+  contract_count: number | null;
+  tickets_per_1000_contracts: number | null;
+  coverage_pct: number | null;
+  previous_ticket_count: number;
+  deviation_pct: number | null;
+  severity: SupportIxcTicketSeverity;
 };

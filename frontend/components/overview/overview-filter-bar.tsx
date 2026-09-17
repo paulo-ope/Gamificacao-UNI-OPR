@@ -27,7 +27,7 @@ type SupportKey = (typeof OVERVIEW_SUPPORT_KEYS)[number];
 /** Rótulo e placeholder de cada filtro de O.S.; a ORDEM de exibição vem do catálogo do backend. */
 const LIST_FIELDS: Record<ListKey, { label: string; placeholder: string }> = {
   team_models: { label: "Modelo de equipe", placeholder: "Todos os modelos" },
-  regionals: { label: "Filial", placeholder: "Todas as filiais" },
+  regional_groups: { label: "Regional", placeholder: "Todas as regionais" },
   sectors: { label: "Setor", placeholder: "Setores padrão" },
   os_types: { label: "Tipo de O.S.", placeholder: "Todos os tipos" },
   responsibles: { label: "Colaborador", placeholder: "Todos os colaboradores" },

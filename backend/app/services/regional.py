@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import unicodedata
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models import User
 
 
 SAO_FRANCISCO_REGIONAL = "UNI - SAO FRANCISCO DO GUAPORE"
@@ -29,6 +33,19 @@ REGIONAL_CODE_MAP: dict[str, str] = {
     "17": "UNI - SERINGUEIRAS",
     "18": SAO_FRANCISCO_REGIONAL,
 }
+
+# Alias textual explícito (mesma filial, grafia divergente) - NÃO é agrupamento de negócio como
+# `REGIONAL_GROUP_ALIASES` abaixo, é a mesma regional real com hífen em vez de espaço. Achado da
+# auditoria de frontend de 2026-09-14: `operations_responsible_assignments.regional` (atribuição
+# manual) tinha 36 registros gravados como "UNI - JI-PARANA", nunca passados pelo
+# `REGIONAL_CODE_MAP` (que só normaliza id_filial numérico) - apareciam como uma segunda opção no
+# filtro de regional da Gestão Integrada. Chave em `normalize_key()` para pegar variação de
+# maiúsculas/acentos também, não só o hífen. Deliberadamente restrito a este caso confirmado -
+# não vira uma normalização genérica de texto que arriscaria juntar regionais diferentes.
+REGIONAL_NAME_ALIASES: dict[str, str] = {
+    "UNI - JI-PARANA": "UNI - JI PARANA",
+}
+
 
 REGIONAL_GROUP_ALIASES: dict[str, str] = {
     "UNI - SAO MIGUEL DO GUAPORE": SAO_FRANCISCO_REGIONAL,
@@ -74,6 +91,9 @@ def normalize_regional(value: str | None) -> str:
     # regional) continuam passando cru.
     if raw.isdigit():
         return "NAO IDENTIFICADO"
+    alias = REGIONAL_NAME_ALIASES.get(normalize_key(raw))
+    if alias is not None:
+        return alias
     return raw
 
 
@@ -115,6 +135,63 @@ def effective_managed_regionals(managed_regional: str | None, managed_regionals:
         if normalized != "NAO IDENTIFICADO":
             seen.setdefault(normalized, normalized)
     return list(seen.values())
+
+
+def regional_scope_or_deny(user: "User | None") -> tuple[list[str], bool]:
+    """(regionais permitidas, nega_tudo) - mesma regra de escopo regional já aplicada em
+    `operations.queries._dimension_conditions`, generalizada aqui pra qualquer função FORA desse
+    módulo que também precise respeitar o escopo do usuário (achado P0-2 da auditoria de
+    2026-09-15: as consultas de rede - login/ONU/geolocalização - não aplicavam nenhum escopo,
+    deixando um gestor regional consultar dado de QUALQUER regional).
+
+    `nega_tudo=True` só para `regional_manager_viewer` sem nenhuma regional configurada - mesmo
+    critério de `_dimension_conditions` (não é um acesso amplo por omissão, é ausência de
+    configuração). Quando `regionais permitidas` vem não-vazia, o chamador deve SEMPRE aplicar
+    `IN (...)` com essa lista (mesmo que também tenha um filtro de regional próprio vindo do
+    cliente - os dois combinados via AND já produzem a interseção certa, e nunca ampliam o
+    acesso).
+
+    `user=None` é acesso IRRESTRITO deliberado (`([], False)`) - só para chamador de sistema sem
+    usuário associado (ex.: monitor de background do `intelligence` varrendo o sistema inteiro
+    pra detectar outage coletivo, `monitors/collective_outage.py`/`monitors/rules_engine.py`),
+    nunca para uma requisição HTTP/MCP real, que sempre tem um `user` autenticado."""
+    if user is None:
+        return [], False
+    allowed = effective_managed_regionals(user.managed_regional, user.managed_regionals)
+    deny_all = not allowed and user.role == "regional_manager_viewer"
+    return allowed, deny_all
+
+
+def _build_grouped_to_granular() -> dict[str, list[str]]:
+    mapping: dict[str, list[str]] = {}
+    for granular in dict.fromkeys(REGIONAL_CODE_MAP.values()):
+        mapping.setdefault(normalize_regional_grouped(granular), []).append(granular)
+    return mapping
+
+
+# Regional agrupada (filtro "Regional" da Operação Analítica/Visão Geral/IA) -> lista das filiais
+# granulares reais que a compõem (o valor guardado em `OperationOrder.regional`). Construído uma
+# vez a partir de `REGIONAL_CODE_MAP`/`REGIONAL_GROUP_ALIASES`, que já são a fonte usada pela
+# Gamificação - nenhum cadastro novo, só reaproveita a mesma regra.
+GROUPED_TO_GRANULAR: dict[str, list[str]] = _build_grouped_to_granular()
+
+
+def regional_group_options() -> list[str]:
+    """Lista as regionais agrupadas distintas (ex.: "UNI - ROLIM DE MOURA" já cobre São Felipe
+    D'Oeste) - usada para popular o filtro "Regional" nas telas e na IA."""
+    return sorted(GROUPED_TO_GRANULAR, key=str.casefold)
+
+
+def granular_regionals_for_group(group: str) -> list[str]:
+    """Expande uma regional agrupada (valor selecionado no filtro "Regional") para as filiais
+    granulares reais que a compõem, para filtrar `OperationOrder.regional` (que guarda a
+    identidade granular) via IN(...). Grupo desconhecido devolve lista vazia - o chamador deve
+    tratar isso como "nenhuma O.S. corresponde", não como "sem filtro"."""
+    normalized_group = normalize_key(group)
+    for grouped_name, granular_list in GROUPED_TO_GRANULAR.items():
+        if normalize_key(grouped_name) == normalized_group:
+            return granular_list
+    return []
 
 
 def effective_managed_regionals_grouped(managed_regional: str | None, managed_regionals: list[str] | None) -> list[str]:

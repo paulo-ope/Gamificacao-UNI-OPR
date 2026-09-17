@@ -150,7 +150,7 @@ export function WorkspaceLogin({ isLoading, error, onLogin, eyebrow, title, subt
                 required
                 autoComplete="email"
                 autoFocus
-                className="focus-visible:ring-[#2d5fff]"
+                className="focus-visible:ring-uni-royal"
               />
             </div>
             <div className="grid gap-1.5">
@@ -162,7 +162,7 @@ export function WorkspaceLogin({ isLoading, error, onLogin, eyebrow, title, subt
                 onChange={(event) => setPassword(event.target.value)}
                 required
                 autoComplete="current-password"
-                className="focus-visible:ring-[#2d5fff]"
+                className="focus-visible:ring-uni-royal"
               />
             </div>
             {error ? (

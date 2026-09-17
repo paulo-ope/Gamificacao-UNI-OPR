@@ -16,6 +16,7 @@ import { useSearchParams } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pagination } from "@/components/ui/pagination";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
@@ -526,39 +527,19 @@ export function ManagementCasesPanel({
             </Button>
           </div>
           {data && data.total > PAGE_SIZE ? (
-            <div className="flex items-center gap-3">
-              <span>
-                Página {data.page} de {totalPages} · {data.total} caso(s)
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={page <= 1 || loading}
-                  onClick={() => {
-                    const next = page - 1;
-                    setPage(next);
-                    void load(next);
-                  }}
-                >
-                  Anterior
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={page >= totalPages || loading}
-                  onClick={() => {
-                    const next = page + 1;
-                    setPage(next);
-                    void load(next);
-                  }}
-                >
-                  Próxima
-                </Button>
-              </div>
-            </div>
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              totalItems={data.total}
+              itemLabel="caso(s)"
+              disabled={loading}
+              className="flex-row items-center gap-3"
+              showIcons={false}
+              onPageChange={(next) => {
+                setPage(next);
+                void load(next);
+              }}
+            />
           ) : null}
         </div>
       </div>

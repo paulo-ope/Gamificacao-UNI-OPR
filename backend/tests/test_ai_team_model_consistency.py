@@ -63,13 +63,13 @@ def test_filter_and_group_by_team_model_agree_even_across_regionals(db_session, 
     filtered = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="regional", metric="quantidade_fechada",
         date_from=DATE_FROM, date_to=DATE_TO, team_models=["SUPORTE CARRO"],
-    )
+    )["data"]
     filtered_total = sum(item["quantity"] for item in filtered)
 
     grouped = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="team_model", metric="quantidade_fechada",
         date_from=DATE_FROM, date_to=DATE_TO,
-    )
+    )["data"]
     grouped_by_label = {item["label"]: item["quantity"] for item in grouped}
 
     assert filtered_total == 1
@@ -108,13 +108,13 @@ def test_filter_and_group_by_team_model_agree_across_metrics(db_session, ai_user
     filtered = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="regional", metric=metric,
         date_from=DATE_FROM, date_to=DATE_TO, team_models=["RURAL"],
-    )
+    )["data"]
     filtered_total = sum(item["quantity"] for item in filtered)
 
     grouped = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="team_model", metric=metric,
         date_from=DATE_FROM, date_to=DATE_TO,
-    )
+    )["data"]
     grouped_by_label = {item["label"]: item["quantity"] for item in grouped}
 
     assert filtered_total == grouped_by_label.get("RURAL", 0)

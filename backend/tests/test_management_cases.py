@@ -108,6 +108,22 @@ def test_engine_skips_member_meeting_target(db_session, operation_setup):
     assert result["evaluated_members"] == 1
 
 
+def test_engine_skips_member_whose_model_does_not_require_justification(db_session, operation_setup):
+    """Modelo com `requires_justification=False`: mesma produção abaixo da meta de
+    `test_engine_opens_case_for_member_below_daily_target`, mas nenhum caso mensal nasce."""
+    operation_setup["model"].requires_justification = False
+    db_session.flush()
+    for day in range(1, 7):
+        for index in range(2):
+            db_session.add(_order("Joao Campo", "UNI JARU", day, index))
+    db_session.flush()
+
+    result = cases_engine.generate_performance_cases(db_session, year=YEAR, month=MONTH)
+
+    assert result["created_cases"] == 0
+    assert db_session.query(ManagementCase).count() == 0
+
+
 def test_engine_skips_member_with_insufficient_days_worked(db_session, operation_setup):
     # Só 2 dias trabalhados (mínimo padrão é 5): média não é estatisticamente honesta, sem caso.
     # É o cenário de férias/admissão no meio do mês, que não pode virar cobrança.
@@ -442,6 +458,19 @@ def test_get_or_create_daily_case_uses_canonical_regional_when_calendar_regional
     assert case.supervisor_user_id == operation_setup["supervisor"].id
     assert case.team_model_id == operation_setup["model"].id
     assert case.collaborator_id == operation_setup["collaborator"].id
+
+
+def test_team_model_requires_justification_reflects_the_members_model(db_session, operation_setup):
+    assert cases_engine.team_model_requires_justification(db_session, "Joao Campo") is True
+
+    operation_setup["model"].requires_justification = False
+    db_session.commit()
+
+    assert cases_engine.team_model_requires_justification(db_session, "Joao Campo") is False
+
+
+def test_team_model_requires_justification_defaults_to_true_without_a_resolved_member(db_session):
+    assert cases_engine.team_model_requires_justification(db_session, "Ninguem Cadastrado") is True
 
 
 def test_resolve_member_for_case_prefers_manual_assignment_over_order_history(db_session):

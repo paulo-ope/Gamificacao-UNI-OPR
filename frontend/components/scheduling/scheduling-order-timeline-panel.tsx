@@ -59,7 +59,10 @@ export function OrderTimelinePanel({ ixcOsId, onClose }: { ixcOsId: number; onCl
             {data.events.map((event, index) => {
               const tone = eventTypeTone(event.event_type);
               return (
-              <li key={index} className="relative">
+              // Chave derivada do próprio evento (não há id próprio no payload) - `event_at` +
+              // `event_type` já distingue a esmagadora maioria dos casos; o índice só desempata
+              // o raro caso de dois eventos idênticos no mesmo instante.
+              <li key={`${event.event_at}-${event.event_type}-${index}`} className="relative">
                 <span className={`absolute -left-[27px] top-3 h-3 w-3 rounded-full ring-4 ring-white ${tone.dot}`} />
                 <div className={`rounded-xl border border-slate-100 border-l-4 ${tone.accent} bg-white p-3 shadow-sm`}>
                   <div className="flex flex-wrap items-center justify-between gap-2">

@@ -223,6 +223,13 @@ def detect_post_payment_warranty_debits(
             candidates_by_identity[candidate_identity].append(candidate)
 
     created: list[PointBalanceEntry] = []
+    # `_original_already_debited` consulta o banco via SELECT - nao enxerga `db.add(entry)` de uma
+    # iteracao anterior DESTE MESMO lote, porque o flush so acontece depois do loop inteiro
+    # (SessionLocal tem autoflush=False). Sem este set, duas O.S de garantia distintas contra a
+    # MESMA O.S original no mesmo lote geravam DOIS debitos - achado real (auditoria 2026-09-15),
+    # exatamente a regressao que o docstring de `_original_already_debited` diz existir pra evitar
+    # ("uma chegou a 12 debitos, -72 pontos so dela").
+    debited_original_keys: set[tuple[int | None, str | None]] = set()
 
     for later, later_date in later_dates:
         identity = scoring_detail._recurrence_identity_for_fields(later, identity_fields)
@@ -303,6 +310,9 @@ def detect_post_payment_warranty_debits(
             continue
 
         if _original_already_debited(db, original):
+            continue
+
+        if (original.id, original.os_code) in debited_original_keys:
             continue
 
         if normalized_action in {scoring_detail.normalize("no_penalty"), scoring_detail.normalize("nao_penaliza")}:
@@ -415,6 +425,7 @@ def detect_post_payment_warranty_debits(
         )
         db.add(entry)
         created.append(entry)
+        debited_original_keys.add((original.id, original.os_code))
 
     if not created:
         return created

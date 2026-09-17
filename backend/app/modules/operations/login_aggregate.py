@@ -6,10 +6,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from sqlalchemy import func, select, text
+from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.orm import Session
 
+from app.models import User
 from app.modules.ai_governance.response_meta import build_meta
+from app.services.regional import regional_scope_or_deny
 
 from .login_geo_clusters import find_offline_login_clusters
 from .models import OperationLoginCurrentStatus, OperationLoginStatusSnapshot, OperationOnuSignalCurrent
@@ -39,6 +41,7 @@ _LOOKBACK_BUFFER = timedelta(minutes=20)
 def login_aggregate(
     db: Session,
     *,
+    user: User | None,
     group_by: LoginAggregateDimension,
     regionals: list[str] | None = None,
     online_statuses: list[str] | None = None,
@@ -49,11 +52,23 @@ def login_aggregate(
     de conectividade, não sobre O.S. `group_by` desconhecido levanta erro explícito (mesma correção
     aplicada em `_group_label` - nunca cai num fallback silencioso). `status_changed_since` restringe
     a quem TRANSICIONOU de estado dentro da janela (ex.: combinado com `online_statuses=["N"]`,
-    responde "quem caiu E continua caído nos últimos N minutos, por dimensão")."""
+    responde "quem caiu E continua caído nos últimos N minutos, por dimensão"). Sempre aplica o
+    escopo regional de `user` (achado P0-2 da auditoria de 2026-09-15)."""
     if group_by not in LoginAggregateDimension.__args__:
         raise ValueError(f"group_by inválido: '{group_by}'. Dimensões aceitas: {', '.join(LoginAggregateDimension.__args__)}.")
 
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return {
+            "meta": build_meta(
+                applied_filters={"group_by": group_by, "regionals": regionals, "online_statuses": online_statuses, "status_changed_since": status_changed_since},
+                source_last_sync=_login_source_last_sync(db),
+            ),
+            "data": [],
+        }
     conditions = []
+    if allowed_regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
     if regionals:
         conditions.append(OperationLoginCurrentStatus.regional.in_(regionals))
     if online_statuses:
@@ -100,6 +115,7 @@ def login_aggregate(
 def login_outages(
     db: Session,
     *,
+    user: User | None,
     since: datetime,
     until: datetime | None = None,
     regionals: list[str] | None = None,
@@ -113,13 +129,26 @@ def login_outages(
 
     Limitação conhecida: só pega quedas que CONTINUAM offline no momento da consulta - um login que
     caiu e já reconectou dentro da janela não aparece aqui (nesse caso, veja `opr_get_login_detail`
-    -> `recent_events`, que reconstrói o histórico completo por login individual)."""
+    -> `recent_events`, que reconstrói o histórico completo por login individual). Sempre aplica o
+    escopo regional de `user` (achado P0-2 da auditoria de 2026-09-15)."""
     until = until or datetime.now(timezone.utc)
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return {
+            "meta": build_meta(
+                applied_filters={"since": since, "until": until, "regionals": regionals, "limit": limit},
+                warnings=[],
+                source_last_sync=_login_source_last_sync(db),
+            ),
+            "data": [],
+        }
     conditions = [
         OperationLoginCurrentStatus.online == "N",
         OperationLoginCurrentStatus.status_changed_at >= since,
         OperationLoginCurrentStatus.status_changed_at <= until,
     ]
+    if allowed_regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
     if regionals:
         conditions.append(OperationLoginCurrentStatus.regional.in_(regionals))
     rows = db.execute(
@@ -182,8 +211,50 @@ _TIMESERIES_SQL = text(
     """
 )
 
+# Mesma consulta acima, mas restrita ao escopo regional de `user` (achado P0-2 da auditoria de
+# 2026-09-15) - `operations_login_status_snapshots` não tem coluna própria de regional, então o
+# recorte só é possível fazendo JOIN com `operations_login_current_status` (que tem) pelo
+# `login_id`. Só usada quando o escopo realmente restringe (`allowed_regionals` não vazio) - quem
+# enxerga tudo continua na consulta simples acima, sem o JOIN extra.
+_TIMESERIES_SQL_SCOPED = text(
+    """
+    WITH captures AS (
+        SELECT
+            s.captured_at AS captured_at,
+            s.login_id AS login_id,
+            s.online AS online,
+            LAG(s.online) OVER (PARTITION BY s.login_id ORDER BY s.captured_at) AS prev_online
+        FROM operations_login_status_snapshots s
+        JOIN operations_login_current_status c ON c.login_id = s.login_id
+        WHERE s.captured_at BETWEEN :lookback_start AND :until
+          AND c.regional IN :allowed_regionals
+    )
+    SELECT
+        captured_at,
+        count(*) FILTER (WHERE online = 'N') AS disconnected,
+        count(*) FILTER (WHERE online = 'S') AS connected,
+        count(*) FILTER (WHERE online = 'N' AND prev_online IS DISTINCT FROM 'N') AS new_drops,
+        count(*) FILTER (WHERE online = 'S' AND prev_online IS DISTINCT FROM 'S') AS new_reconnects
+    FROM captures
+    WHERE captured_at >= :since
+    GROUP BY captured_at
+    ORDER BY captured_at
+    """
+).bindparams(bindparam("allowed_regionals", expanding=True))
 
-def login_timeseries(db: Session, *, since: datetime, until: datetime | None = None) -> list[dict]:
+_BASELINE_EXISTS_SQL = text(
+    "SELECT EXISTS (SELECT 1 FROM operations_login_status_snapshots "
+    "WHERE captured_at >= :lookback_start AND captured_at < :since)"
+)
+
+_BASELINE_EXISTS_SQL_SCOPED = text(
+    "SELECT EXISTS (SELECT 1 FROM operations_login_status_snapshots s "
+    "JOIN operations_login_current_status c ON c.login_id = s.login_id "
+    "WHERE s.captured_at >= :lookback_start AND s.captured_at < :since AND c.regional IN :allowed_regionals)"
+).bindparams(bindparam("allowed_regionals", expanding=True))
+
+
+def login_timeseries(db: Session, *, user: User | None, since: datetime, until: datetime | None = None) -> list[dict]:
     """Série temporal de conectados/desconectados/quedas novas/reconexões novas, um ponto por
     captura real do snapshot (a cada ~5-15min, conforme o loop de captura em produção - não há
     agregação por bucket de tempo fixo, cada captura já é um ponto discreto).
@@ -191,10 +262,24 @@ def login_timeseries(db: Session, *, since: datetime, until: datetime | None = N
     "Quedas novas"/"reconexões novas" (não só a contagem estática de quem está offline/online numa
     captura) usam `LAG()` por login comparando com a captura ANTERIOR - por isso a consulta busca
     um pouco antes de `since` (20 minutos, ~2-4 capturas) só para ter o "antes" da primeira captura
-    dentro da janela pedida; o resultado devolvido começa exatamente em `since`."""
+    dentro da janela pedida; o resultado devolvido começa exatamente em `since`. Sempre aplica o
+    escopo regional de `user` (achado P0-2 da auditoria de 2026-09-15) - sem isso, os totais
+    conectado/desconectado do sistema INTEIRO vazavam pra um gestor restrito a uma regional."""
     until = until or datetime.now(timezone.utc)
     lookback_start = since - _LOOKBACK_BUFFER
-    rows = db.execute(_TIMESERIES_SQL, {"lookback_start": lookback_start, "since": since, "until": until}).all()
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return {
+            "meta": build_meta(applied_filters={"since": since, "until": until}, warnings=[], source_last_sync=_login_source_last_sync(db)),
+            "data": [],
+        }
+    params = {"lookback_start": lookback_start, "since": since, "until": until}
+    if allowed_regionals:
+        stmt, baseline_stmt = _TIMESERIES_SQL_SCOPED, _BASELINE_EXISTS_SQL_SCOPED
+        params["allowed_regionals"] = allowed_regionals
+    else:
+        stmt, baseline_stmt = _TIMESERIES_SQL, _BASELINE_EXISTS_SQL
+    rows = db.execute(stmt, params).all()
     # Achado real da auditoria de 2026-08-21: quando não existe NENHUMA captura entre
     # lookback_start e since (início real da coleta de dados, ou gap de captura > 20min antes de
     # `since`), o LAG() da query não tem "antes" pra comparar - toda linha da primeira captura
@@ -203,11 +288,8 @@ def login_timeseries(db: Session, *, since: datetime, until: datetime | None = N
     # barata (EXISTS) pra sinalizar isso de forma estruturada, em vez de só documentar em prosa.
     has_baseline = bool(
         db.execute(
-            text(
-                "SELECT EXISTS (SELECT 1 FROM operations_login_status_snapshots "
-                "WHERE captured_at >= :lookback_start AND captured_at < :since)"
-            ),
-            {"lookback_start": lookback_start, "since": since},
+            baseline_stmt,
+            {"lookback_start": lookback_start, "since": since, **({"allowed_regionals": allowed_regionals} if allowed_regionals else {})},
         ).scalar()
     )
     data = [
@@ -248,6 +330,7 @@ MAX_INCIDENT_GEO_CLUSTER_LOGINS = 50
 def login_incident_analysis(
     db: Session,
     *,
+    user: User | None,
     window_minutes: int = 90,
     regionals: list[str] | None = None,
     cluster_radius_meters: float = 300.0,
@@ -266,19 +349,19 @@ def login_incident_analysis(
       fronteira de regional)."""
     since = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
 
-    timeseries_points = login_timeseries(db, since=since)["data"]
+    timeseries_points = login_timeseries(db, user=user, since=since)["data"]
     new_drops = sum(point["new_drops"] for point in timeseries_points)
     reconnects = sum(point["new_reconnects"] for point in timeseries_points)
 
-    still_offline_items = login_outages(db, since=since, regionals=regionals, limit=MAX_LOGIN_OUTAGES_RESULTS)["data"]
+    still_offline_items = login_outages(db, user=user, since=since, regionals=regionals, limit=MAX_LOGIN_OUTAGES_RESULTS)["data"]
 
     def _breakdown(dimension: LoginAggregateDimension) -> list[dict]:
         return login_aggregate(
-            db, group_by=dimension, regionals=regionals, online_statuses=["N"], status_changed_since=since
+            db, user=user, group_by=dimension, regionals=regionals, online_statuses=["N"], status_changed_since=since
         )["data"]
 
     clusters = find_offline_login_clusters(
-        db, radius_meters=cluster_radius_meters, min_cluster_size=cluster_min_size, window_minutes=window_minutes
+        db, user=user, radius_meters=cluster_radius_meters, min_cluster_size=cluster_min_size, window_minutes=window_minutes
     )
 
     return {

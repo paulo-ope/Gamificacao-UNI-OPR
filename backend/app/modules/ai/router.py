@@ -162,15 +162,25 @@ def validate_ai_search_fields(policy: EffectivePolicy, fields: list[str] | None)
 
 
 def resolve_ai_search_output_fields(policy: EffectivePolicy, response_mode: str, fields: list[str] | None) -> list[str] | None:
+    """Achado P0-3 da auditoria de 2026-09-15: `response_mode="full"` (o padrão) devolvia `None`
+    ("sem filtro") quando `fields` não vinha explícito - a governança de campo
+    (`AiFieldPermission`) nunca se aplicava no caminho mais comum. Agora "full" também recorta
+    pelo que a política autoriza, só que sobre TODOS os campos (`AI_SEARCH_ITEM_FIELDS`) em vez do
+    conjunto enxuto de "summary" - nomes fora de `AI_SEARCH_GOVERNED_FIELDS` (calculados, ex.
+    `distance_km`) não são catalogados e continuam sempre disponíveis (`field_allowed_or_uncatalogued`)."""
     if fields is not None:
         return fields
-    if response_mode != "summary":
-        return None
     allowed_entity_fields = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
+    if response_mode == "summary":
+        return [
+            name
+            for name in AI_SEARCH_SUMMARY_FIELDS
+            if AI_SEARCH_GOVERNED_FIELDS.get(name, name) in allowed_entity_fields
+        ]
     return [
         name
-        for name in AI_SEARCH_SUMMARY_FIELDS
-        if AI_SEARCH_GOVERNED_FIELDS.get(name, name) in allowed_entity_fields
+        for name in sorted(AI_SEARCH_ITEM_FIELDS)
+        if policy.field_allowed_or_uncatalogued(ENTITY_OPERATION_ORDERS, AI_SEARCH_GOVERNED_FIELDS.get(name, name), "selectable")
     ]
 
 
@@ -225,12 +235,20 @@ AI_ORDER_DETAIL_SUMMARY_FIELDS = [
 
 
 def resolve_ai_order_details_output_fields(policy: EffectivePolicy, response_mode: str, fields: list[str] | None) -> list[str] | None:
+    """Mesmo achado P0-3 de `resolve_ai_search_output_fields` - "full" (padrão) agora recorta pelo
+    que a política autoriza (capacidade `detail_available`, igual ao resto do detalhe) sobre TODOS
+    os campos de `OperationOrderDetailOut` (inclui `raw_payload`, que só existe no detalhe), em vez
+    de devolver tudo sem checagem nenhuma."""
     if fields is not None:
         return fields
-    if response_mode != "summary":
-        return None
-    allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
-    return [name for name in AI_ORDER_DETAIL_SUMMARY_FIELDS if name in allowed]
+    if response_mode == "summary":
+        allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
+        return [name for name in AI_ORDER_DETAIL_SUMMARY_FIELDS if name in allowed]
+    return [
+        name
+        for name in OperationOrderDetailOut.model_fields
+        if policy.field_allowed_or_uncatalogued(ENTITY_OPERATION_ORDERS, name, "detail_available")
+    ]
 
 
 @router.post("/orders/details", response_model=AiOrderDetailsResponse)
@@ -298,6 +316,7 @@ def offline_login_clusters_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.offline_login_clusters", "api")
     result = offline_login_clusters_response(
         db,
+        user=context.user,
         radius_meters=payload.radius_meters,
         min_cluster_size=payload.min_cluster_size,
         window_minutes=payload.window_minutes,
@@ -329,6 +348,7 @@ def login_status_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_status", "api")
     results = query_login_status(
         db,
+        user=context.user,
         logins=payload.logins,
         online_statuses=payload.online_statuses,
         regionals=payload.regionals,
@@ -364,6 +384,7 @@ def search_logins_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.search_logins", "api")
     result = search_logins(
         db,
+        user=context.user,
         logins=payload.logins,
         login_query=payload.login_query,
         login_ids=payload.login_ids,
@@ -407,7 +428,7 @@ def login_detail_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_detail", "api")
-    detail = get_login_detail(db, login=payload.login, login_id=payload.login_id, history_hours=payload.history_hours)
+    detail = get_login_detail(db, user=context.user, login=payload.login, login_id=payload.login_id, history_hours=payload.history_hours)
     if detail is None:
         raise HTTPException(status_code=404, detail="Login não encontrado.")
     record_ai_access(
@@ -435,7 +456,7 @@ def login_aggregate_route(
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_aggregate", "api")
     try:
-        result = login_aggregate(db, group_by=payload.group_by, regionals=payload.regionals, online_statuses=payload.online_statuses)
+        result = login_aggregate(db, user=context.user, group_by=payload.group_by, regionals=payload.regionals, online_statuses=payload.online_statuses)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     record_ai_access(
@@ -457,7 +478,7 @@ def login_outages_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_outages", "api")
-    result = login_outages(db, since=payload.since, until=payload.until, regionals=payload.regionals, limit=payload.limit)
+    result = login_outages(db, user=context.user, since=payload.since, until=payload.until, regionals=payload.regionals, limit=payload.limit)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_outages", user=context.user, token_id=context.token_id,
         filters={"since": payload.since, "regionals": payload.regionals}, result_count=len(result["data"]),
@@ -477,7 +498,7 @@ def login_timeseries_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_timeseries", "api")
-    result = login_timeseries(db, since=payload.since, until=payload.until)
+    result = login_timeseries(db, user=context.user, since=payload.since, until=payload.until)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_timeseries", user=context.user, token_id=context.token_id,
         filters={"since": payload.since}, result_count=len(result["data"]),
@@ -499,7 +520,7 @@ def login_incident_analysis_route(
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_incident_analysis", "api")
     result = login_incident_analysis(
-        db, window_minutes=payload.window_minutes, regionals=payload.regionals,
+        db, user=context.user, window_minutes=payload.window_minutes, regionals=payload.regionals,
         cluster_radius_meters=payload.cluster_radius_meters, cluster_min_size=payload.cluster_min_size,
     )
     record_ai_access(
@@ -523,7 +544,7 @@ def coordinate_quality_route(
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.coordinate_quality", "api")
     result = coordinate_quality_audit(
-        db, entity=payload.entity, outlier_km=payload.outlier_km, duplicate_threshold=payload.duplicate_threshold
+        db, user=context.user, entity=payload.entity, outlier_km=payload.outlier_km, duplicate_threshold=payload.duplicate_threshold
     )
     record_ai_access(
         db, origin="api", endpoint_key="ai.coordinate_quality", user=context.user, token_id=context.token_id,
@@ -547,6 +568,7 @@ def onu_signal_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.onu_signal", "api")
     results = query_onu_signal_status(
         db,
+        user=context.user,
         login_ids=payload.login_ids,
         last_drop_causes=payload.last_drop_causes,
         transmitter_ids=payload.transmitter_ids,
@@ -581,6 +603,7 @@ def onu_signal_history_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.onu_signal_history", "api")
     results = query_onu_signal_history(
         db,
+        user=context.user,
         login_ids=payload.login_ids,
         onu_serials=payload.onu_serials,
         date_from=payload.date_from,

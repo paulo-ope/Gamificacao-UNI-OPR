@@ -72,7 +72,7 @@ type FilterDefinition = {
 type ActiveChip = { id: string; label: string; remove: () => void };
 
 const mainFilters: FilterDefinition[] = [
-  { key: "regionals", label: "Regional", options: "regionals" },
+  { key: "regional_groups", label: "Regional", options: "regional_groups" },
   { key: "team_models", label: "Modelo de equipe", options: "team_models" },
   { key: "os_types", label: "Tipo geral", options: "os_types" },
   { key: "subjects", label: "Assunto", options: "subjects" },
@@ -86,9 +86,10 @@ const advancedGroups: Array<{
 }> = [
   {
     title: "Localização",
-    description: "Empresa, UF e cidade.",
+    description: "Filial, empresa, UF e cidade.",
     fields: [
-      { key: "companies", label: "Empresa / filial", options: "companies" },
+      { key: "regionals", label: "Filial", options: "regionals" },
+      { key: "companies", label: "Empresa", options: "companies" },
       { key: "states", label: "UF", options: "states" },
       { key: "cities", label: "Cidade", options: "cities" },
     ],
@@ -1077,8 +1078,16 @@ export function OperationsFilterPanel({
           2026-09-10 - 139px em 1920px contra 75px em 1600px). Os botoes agora ocupam uma linha
           propria (`col-span-full` abaixo) em toda largura de tela, o que tambem impede o grupo de
           transbordar a celula dele no `xl` e de quebrar em 4 linhas no `md`. */}
+      {/* `top-[var(--workspace-header-height)]`: precisa começar exatamente onde termina o
+          cabecalho fixo da casca (`WorkspaceAppShell`, `<header className="sticky top-0 ...">`).
+          A variável é medida ao vivo por `ResizeObserver` no próprio app-shell (ver
+          `--workspace-header-height` em app/globals.css) - não é mais um pixel copiado à mão.
+          Achado real (2026-09-14): um valor fixo (65px) desatualizado em relação à altura real do
+          header (79px, 3 linhas: eyebrow + titulo + subtitulo) fazia esta barra de filtros ficar
+          "presa" 14px antes do fim do cabecalho, sobrepondo visualmente o subtitulo ao rolar a
+          página. Confirmado nos 4 breakpoints pedidos (1920x1080, 1366x768, 1024x768, 768x1024). */}
       <div
-        className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-65px)] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[65px] md:z-40 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,20rem)_repeat(5,minmax(0,1fr))]`}
+        className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-var(--workspace-header-height))] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[var(--workspace-header-height)] md:z-40 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,20rem)_repeat(5,minmax(0,1fr))]`}
       >
         <DateRangePicker
           dateFrom={filters?.date_from || ""}

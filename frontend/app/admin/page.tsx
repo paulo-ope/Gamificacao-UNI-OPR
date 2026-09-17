@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -8,7 +7,6 @@ import { useSearchParams } from "next/navigation";
 import { WorkspaceAppShell } from "@/components/workspace/app-shell";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
 import { AiGovernancePanel } from "@/components/admin/ai-governance-panel";
 import { AccessRequestsPanel } from "@/components/admin/access-requests-panel";
 import { AdminOverviewPanel } from "@/components/admin/admin-overview-panel";
@@ -249,8 +247,15 @@ function AdminPageContent({ user }: { user: AuthUser }) {
   }
 
   async function saveUserDraft() {
-    if (!userDraft || !userDraft.name.trim() || !userDraft.email.trim()) return;
-    if (userDraft.id === "new" && !userDraft.password.trim()) return;
+    if (!userDraft) return;
+    if (!userDraft.name.trim() || !userDraft.email.trim()) {
+      setError("Preencha nome e e-mail antes de salvar.");
+      return;
+    }
+    if (userDraft.id === "new" && !userDraft.password.trim()) {
+      setError("Defina uma senha inicial antes de salvar.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
     setError(null);
@@ -326,8 +331,15 @@ function AdminPageContent({ user }: { user: AuthUser }) {
       tone: "danger",
     });
     if (!ok) return;
-    await api.deleteUser(row.id);
-    await loadAdminData();
+    setMessage(null);
+    setError(null);
+    try {
+      await api.deleteUser(row.id);
+      setMessage("Acesso excluído.");
+      await loadAdminData();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Não foi possível excluir o acesso.");
+    }
   }
 
   async function createInviteSubmit() {
@@ -425,7 +437,11 @@ function AdminPageContent({ user }: { user: AuthUser }) {
   }
 
   async function saveProfileDraft() {
-    if (!profileDraft || !profileDraft.name.trim()) return;
+    if (!profileDraft) return;
+    if (!profileDraft.name.trim()) {
+      setError("Preencha o nome do perfil antes de salvar.");
+      return;
+    }
     setSaving(true);
     setMessage(null);
     setError(null);

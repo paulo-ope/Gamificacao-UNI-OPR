@@ -71,7 +71,7 @@ def test_query_onu_signal_status_joins_login_name(db_session):
     _make_signal(db_session, 1)
     db_session.commit()
 
-    results = query_onu_signal_status(db_session, login_ids=[1])
+    results = query_onu_signal_status(db_session, user=None, login_ids=[1])
     assert len(results) == 1
     assert results[0]["login"] == "cliente.teste"
     assert results[0]["last_drop_cause"] == "Link Loss"
@@ -85,7 +85,7 @@ def test_query_onu_signal_status_filters_by_drop_cause(db_session):
     _make_signal(db_session, 2, last_drop_cause="Power Fail")
     db_session.commit()
 
-    results = query_onu_signal_status(db_session, last_drop_causes=["Power Fail"])
+    results = query_onu_signal_status(db_session, user=None, last_drop_causes=["Power Fail"])
     assert [row["login"] for row in results] == ["login-b"]
 
 

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import serialize_user
-from app.core.security import create_access_token, require_permission
+from app.core.security import create_access_token, require_any_permission
 from app.db.session import get_db
 from app.models import AccountActionToken, User
 from app.schemas import (
@@ -50,7 +50,7 @@ def _guard_accept_attempts(request: Request) -> None:
 def create_invite_route(
     payload: PortalInviteCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     invite, raw_token = create_invite(db, user, email=payload.email, collaborator_id=payload.collaborator_id, role=payload.role)
     return {**invite, "token": raw_token}
@@ -60,7 +60,7 @@ def create_invite_route(
 def lookup_ixc_cpf_route(
     payload: IxcCpfLookupRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     """Fase 2C - convite inteligente por CPF integrado ao IXC. Só busca e sugere - nunca cria
     usuário, convite ou vínculo sozinha (ver docs/portal-ciclo-vida-conta-colaborador.md)."""
@@ -84,7 +84,7 @@ def lookup_ixc_cpf_route(
 def create_invite_from_ixc_route(
     payload: PortalInviteFromIxcRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     """Confirma o colaborador encontrado no IXC e gera o convite - `collaborator_id` é sempre
     exigido explicitamente no corpo (nunca aceito por omissão, mesmo quando bate com a sugestão
@@ -96,7 +96,7 @@ def create_invite_from_ixc_route(
 
 
 @router.get("", response_model=list[PortalInviteOut])
-def list_invites_route(db: Session = Depends(get_db), user: User = Depends(require_permission("users:manage"))):
+def list_invites_route(db: Session = Depends(get_db), user: User = Depends(require_any_permission("users:manage", "admin:users:read"))):
     return list_invites(db)
 
 
@@ -104,7 +104,7 @@ def list_invites_route(db: Session = Depends(get_db), user: User = Depends(requi
 def revoke_invite_route(
     invite_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     invite = db.get(AccountActionToken, invite_id)
     if not invite or invite.purpose != "invite":

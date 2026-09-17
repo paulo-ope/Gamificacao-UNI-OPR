@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import Float, case, cast, func, or_, select
+from sqlalchemy import Float, case, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,11 +30,20 @@ from app.services.opa_scheduler import (
     SUPPORT_OPA_SYNC_LAST_SUCCESS_AT_KEY,
     SUPPORT_OPA_SYNC_LOOKBACK_DAYS_KEY,
     SUPPORT_OPA_SYNC_NEXT_ALLOWED_AT_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_DAILY_LIMIT_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_ENABLED_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_AT_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_LAST_RUN_DATE_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_LAST_SUCCESS_AT_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_PROCESSED_TODAY_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_RUN_HOUR_KEY,
+    SUPPORT_OPA_TMR_BACKFILL_RUN_UNTIL_HOUR_KEY,
     recompute_support_opa_next_allowed_at,
 )
 
-from . import opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_timeline_service
-from .models import SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
+from . import ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_timeline_service
+from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
     OpaAttendanceFilters,
@@ -52,11 +61,29 @@ from .opa_ingestion import (
     active_opa_import_run,
     import_months_status,
     opa_import_lock_busy,
+    pending_tmr_backfill_count,
     resume_opa_import_run,
     run_opa_import_background_job,
 )
 from .schemas import (
     SupportImportResult,
+    SupportIxcAnalyticsContextOut,
+    SupportIxcAnalyticsPriorityItem,
+    SupportIxcAnalyticsDriverItem,
+    SupportIxcTicketBurstWindow,
+    SupportIxcTicketMomentum,
+    SupportIxcTicketOsConversion,
+    SupportIxcTicketBreakdown,
+    SupportIxcTicketCityPriorityItem,
+    SupportIxcTicketDailyPoint,
+    SupportIxcTicketOut,
+    SupportIxcTicketOverviewKpis,
+    SupportIxcTicketPage,
+    SupportIxcTicketPriorityItem,
+    SupportIxcTaxonomyMappingOut,
+    SupportIxcTicketSavedFilterCreate,
+    SupportIxcTicketSavedFilterOut,
+    SupportIxcTicketSavedFilterUpdate,
     SupportOpaImportMonthOut,
     SupportOpaAttendanceDetail,
     SupportOpaAttendancePage,
@@ -278,6 +305,25 @@ def _sync_settings_response(db: Session) -> dict:
             minimum=1,
             maximum=168,
         ),
+        "tmr_backfill_enabled": _bool_setting(get_setting(db, SUPPORT_OPA_TMR_BACKFILL_ENABLED_KEY, ""), False),
+        "tmr_backfill_run_hour": _int_setting(
+            get_setting(db, SUPPORT_OPA_TMR_BACKFILL_RUN_HOUR_KEY, ""),
+            1,
+            minimum=0,
+            maximum=23,
+        ),
+        "tmr_backfill_run_until_hour": _int_setting(
+            get_setting(db, SUPPORT_OPA_TMR_BACKFILL_RUN_UNTIL_HOUR_KEY, ""),
+            6,
+            minimum=0,
+            maximum=23,
+        ),
+        "tmr_backfill_daily_limit": _int_setting(
+            get_setting(db, SUPPORT_OPA_TMR_BACKFILL_DAILY_LIMIT_KEY, ""),
+            5000,
+            minimum=100,
+            maximum=20000,
+        ),
     }
 
 
@@ -296,6 +342,14 @@ def _sync_status_response(db: Session) -> dict:
     next_window_delayed = bool(
         sync_in_progress and next_allowed_at is not None and next_allowed_at <= datetime.now(timezone.utc)
     )
+    today_iso = datetime.now(SUPPORT_TIMEZONE).date().isoformat()
+    tmr_last_run_date = get_setting(db, SUPPORT_OPA_TMR_BACKFILL_LAST_RUN_DATE_KEY, "")
+    tmr_processed_today = 0
+    if tmr_last_run_date == today_iso:
+        try:
+            tmr_processed_today = int(get_setting(db, SUPPORT_OPA_TMR_BACKFILL_PROCESSED_TODAY_KEY, "0") or "0")
+        except ValueError:
+            tmr_processed_today = 0
 
     return {
         "configured": bool(settings.opa_api_base_url and settings.opa_api_token),
@@ -312,6 +366,15 @@ def _sync_status_response(db: Session) -> dict:
         "active_run_mode": active_run.mode if active_run is not None else None,
         "active_run_started_at": active_run.started_at if active_run is not None else None,
         "next_window_delayed": next_window_delayed,
+        "tmr_backfill_pending_count": pending_tmr_backfill_count(db),
+        "tmr_backfill_processed_today": tmr_processed_today,
+        "tmr_backfill_last_success_at": _parse_app_setting_datetime(
+            get_setting(db, SUPPORT_OPA_TMR_BACKFILL_LAST_SUCCESS_AT_KEY, "")
+        ),
+        "tmr_backfill_last_error": get_setting(db, SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_KEY, "") or None,
+        "tmr_backfill_last_error_at": _parse_app_setting_datetime(
+            get_setting(db, SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_AT_KEY, "")
+        ),
     }
 
 
@@ -691,6 +754,34 @@ def update_opa_sync_settings(
             SUPPORT_OPA_DIMENSIONS_REFRESH_HOURS_KEY,
             str(payload.dimensions_refresh_hours),
             description="De quantas em quantas horas a sincronização refaz a busca completa de usuários/motivos/departamentos/etiquetas/clientes do OPA Suite (cache local usado nos ciclos intermediários).",
+        )
+    if payload.tmr_backfill_enabled is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_TMR_BACKFILL_ENABLED_KEY,
+            "true" if payload.tmr_backfill_enabled else "false",
+            description="Liga ou desliga o backfill noturno de TMR histórico (reprocessa atendimentos já fechados sem tmr_all_responses_seconds, 1 chamada extra à API do OPA Suite por atendimento).",
+        )
+    if payload.tmr_backfill_run_hour is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_TMR_BACKFILL_RUN_HOUR_KEY,
+            str(payload.tmr_backfill_run_hour),
+            description="Hora do dia (0-23, fuso America/Porto_Velho) em que a janela do backfill noturno de TMR histórico abre.",
+        )
+    if payload.tmr_backfill_run_until_hour is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_TMR_BACKFILL_RUN_UNTIL_HOUR_KEY,
+            str(payload.tmr_backfill_run_until_hour),
+            description="Hora do dia (0-23, fuso America/Porto_Velho) em que a janela do backfill noturno de TMR histórico fecha.",
+        )
+    if payload.tmr_backfill_daily_limit is not None:
+        upsert_setting(
+            db,
+            SUPPORT_OPA_TMR_BACKFILL_DAILY_LIMIT_KEY,
+            str(payload.tmr_backfill_daily_limit),
+            description="Quantos atendimentos o backfill noturno de TMR histórico processa por noite, no máximo (1 chamada à API do OPA Suite cada).",
         )
     after = _sync_settings_response(db)
     record_audit_log(db, user, "update", "support_opa_sync_settings", "opa", before, after)
@@ -1412,3 +1503,474 @@ def opa_metrics(
         "by_attendant": grouped(SupportOpaAttendance.attendant_name),
         "by_reason": grouped(SupportOpaAttendance.reason_name),
     }
+
+
+@router.get("/ixc/tickets/overview", response_model=SupportIxcTicketOverviewKpis)
+def ixc_ticket_overview_kpis(
+    month: date = Query(default_factory=lambda: date.today().replace(day=1)),
+    regional: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    day: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """KPIs do topo da Visão Geral (indicador antecipado de incidente, ver docs/STATUS.md):
+    incidência parcial, média histórica no mesmo corte de dia, desvio e base ativa comparável.
+
+    `subject_id`/`sector_id` aceitam múltiplos valores separados por vírgula (pedido do usuário,
+    2026-09-12: filtro de motivo/setor é multi-seleção e vale pra Visão Geral inteira, não só o
+    drill-down).
+
+    `day` (pedido do usuário, 2026-09-12: "ver só um dia específico"): quando informado, os KPIs
+    passam a contar só aquele dia (não acumulado desde o início do mês) - `month` é derivado dele,
+    o chamador não precisa calcular os dois."""
+    effective_month = day.replace(day=1) if day else month
+    return ixc_ticket_overview.overview_kpis(
+        db, month=effective_month, regional=regional, subject_id=subject_id, sector_id=sector_id, day=day
+    )
+
+
+@router.get("/ixc/tickets/daily-series", response_model=list[SupportIxcTicketDailyPoint])
+def ixc_ticket_daily_series(
+    month: date = Query(default_factory=lambda: date.today().replace(day=1)),
+    regional: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Série diária pro gráfico "Curva diária de incidência": mês corrente, mês anterior, média
+    histórica por dia-do-mês e média móvel de 7 dias."""
+    return ixc_ticket_overview.daily_incidence_series(
+        db, month=month, regional=regional, subject_id=subject_id, sector_id=sector_id
+    )
+
+
+@router.get("/ixc/tickets/priorities", response_model=list[SupportIxcTicketPriorityItem])
+def ixc_ticket_priorities(
+    month: date = Query(default_factory=lambda: date.today().replace(day=1)),
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    day: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Lista "Prioridades detectadas": uma linha por regional, ordenada pelo maior desvio contra
+    a própria história (não substitui a O.S. - é indicador antecipado)."""
+    effective_month = day.replace(day=1) if day else month
+    return ixc_ticket_overview.priorities(
+        db, month=effective_month, subject_id=subject_id, sector_id=sector_id, day=day
+    )
+
+
+@router.get("/ixc/tickets/city-priorities", response_model=list[SupportIxcTicketCityPriorityItem])
+def ixc_ticket_city_priorities(
+    month: date = Query(default_factory=lambda: date.today().replace(day=1)),
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    day: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Lista "Prioridades detectadas" por CIDADE: pares = todas as cidades do sistema com base
+    ativa suficiente, independente de regional (decisão explícita do usuário, 2026-09-11) - pega
+    problema hiperlocal que se dilui no nível regional."""
+    effective_month = day.replace(day=1) if day else month
+    return ixc_ticket_overview.city_priorities(
+        db, month=effective_month, subject_id=subject_id, sector_id=sector_id, day=day
+    )
+
+
+@router.get("/ixc/tickets/breakdown", response_model=SupportIxcTicketBreakdown)
+def ixc_ticket_breakdown(
+    level: str = Query(pattern="^(regional|city|neighborhood|reason)$"),
+    regional: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Drill-down do atendimento IXC (indicador antecipado de incidente, ver docs/STATUS.md):
+    regional -> cidade -> bairro -> motivo. Cada nível exige os pais já selecionados - clicar numa
+    regional busca `level=city&regional=...`, clicar numa cidade busca
+    `level=neighborhood&regional=...&city=...`, e assim por diante.
+
+    `subject_id`/`sector_id` são filtros ORTOGONAIS ao nível (pedido do usuário, 2026-09-12):
+    restringem qualquer nível (inclusive `reason`) a um ou mais motivos/setores, sem mudar em que
+    degrau do drill-down a tela está. Multi-seleção: aceitam vários ids separados por vírgula."""
+    if level in ("city", "neighborhood", "reason") and not regional:
+        raise HTTPException(status_code=400, detail="Parâmetro 'regional' é obrigatório para este nível.")
+    if level in ("neighborhood", "reason") and not city:
+        raise HTTPException(status_code=400, detail="Parâmetro 'city' é obrigatório para este nível.")
+    if level == "reason" and not neighborhood:
+        raise HTTPException(status_code=400, detail="Parâmetro 'neighborhood' é obrigatório para este nível.")
+
+    if level == "regional":
+        items = ixc_ticket_queries.regional_breakdown(
+            db, date_from=date_from, date_to=date_to, subject_id=subject_id, sector_id=sector_id
+        )
+    elif level == "city":
+        items = ixc_ticket_queries.city_breakdown(
+            db, regional=regional, date_from=date_from, date_to=date_to, subject_id=subject_id, sector_id=sector_id
+        )
+    elif level == "neighborhood":
+        items = ixc_ticket_queries.neighborhood_breakdown(
+            db,
+            regional=regional,
+            city=city,
+            date_from=date_from,
+            date_to=date_to,
+            subject_id=subject_id,
+            sector_id=sector_id,
+        )
+    else:
+        items = ixc_ticket_queries.reason_breakdown(
+            db,
+            regional=regional,
+            city=city,
+            neighborhood=neighborhood,
+            date_from=date_from,
+            date_to=date_to,
+            subject_id=subject_id,
+            sector_id=sector_id,
+        )
+
+    return {"level": level, "regional": regional, "city": city, "neighborhood": neighborhood, "items": items}
+
+
+@router.get("/ixc/tickets/filter-options")
+def ixc_ticket_filter_options(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Motivos e setores distintos vistos nos atendimentos, pra popular os dropdowns de filtro da
+    tela de drill-down (pedido do usuário, 2026-09-12)."""
+    return ixc_ticket_queries.filter_options(db)
+
+
+@router.get("/ixc/tickets/taxonomy-mappings", response_model=list[SupportIxcTaxonomyMappingOut])
+def ixc_ticket_taxonomy_mappings(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Fase 0 do plano de evolução analítica do Atendimento IXC (2026-09-14): lista o de-para de
+    motivo -&gt; tema -&gt; categoria cadastrado em `support_ixc_taxonomy_mappings`. A tabela nasce
+    vazia (endpoint volta `[]`) - popular o mapeamento é uma decisão de negócio separada, fora
+    desta fase."""
+    return ixc_ticket_taxonomy.list_taxonomy_mappings(db)
+
+
+def _ixc_saved_filter_payload(row: SupportIxcTicketSavedFilter) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "filters": row.filters_json or {},
+        "is_default": row.is_default,
+        "updated_at": row.updated_at,
+    }
+
+
+@router.get("/ixc/saved-filters", response_model=list[SupportIxcTicketSavedFilterOut])
+def ixc_ticket_saved_filters(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Visões salvas do Atendimento IXC - item 10 do plano de evolução analítica (2026-09-17):
+    SEMPRE pessoais (ver docstring de `SupportIxcTicketSavedFilter`), nunca a de outra pessoa."""
+    rows = db.scalars(
+        select(SupportIxcTicketSavedFilter)
+        .where(SupportIxcTicketSavedFilter.owner_id == user.id)
+        .order_by(SupportIxcTicketSavedFilter.name.asc())
+    ).all()
+    return [_ixc_saved_filter_payload(row) for row in rows]
+
+
+@router.post("/ixc/saved-filters", response_model=SupportIxcTicketSavedFilterOut, status_code=201)
+def create_ixc_ticket_saved_filter(
+    payload: SupportIxcTicketSavedFilterCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    # "Só uma pode ser padrão por dono ao mesmo tempo" (ver docstring do model) - desmarca a(s)
+    # anterior(es) ANTES de criar a nova, não depois (senão uma corrida rápida de 2 requests
+    # poderia deixar duas marcadas por um instante).
+    if payload.is_default:
+        db.execute(
+            update(SupportIxcTicketSavedFilter)
+            .where(SupportIxcTicketSavedFilter.owner_id == user.id, SupportIxcTicketSavedFilter.is_default.is_(True))
+            .values(is_default=False)
+        )
+    row = SupportIxcTicketSavedFilter(
+        name=payload.name.strip(),
+        filters_json=payload.filters.model_dump(),
+        is_default=payload.is_default,
+        owner_id=user.id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _ixc_saved_filter_payload(row)
+
+
+@router.patch("/ixc/saved-filters/{saved_filter_id}", response_model=SupportIxcTicketSavedFilterOut)
+def update_ixc_ticket_saved_filter(
+    saved_filter_id: int,
+    payload: SupportIxcTicketSavedFilterUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Só troca `is_default` hoje (renomear/editar o recorte em si não foi pedido - quem quiser
+    outro recorte salva um novo e apaga o antigo)."""
+    row = db.get(SupportIxcTicketSavedFilter, saved_filter_id)
+    if row is None or row.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Visão salva não encontrada.")
+    if payload.is_default and not row.is_default:
+        db.execute(
+            update(SupportIxcTicketSavedFilter)
+            .where(SupportIxcTicketSavedFilter.owner_id == user.id, SupportIxcTicketSavedFilter.is_default.is_(True))
+            .values(is_default=False)
+        )
+    row.is_default = payload.is_default
+    db.commit()
+    db.refresh(row)
+    return _ixc_saved_filter_payload(row)
+
+
+@router.delete("/ixc/saved-filters/{saved_filter_id}")
+def delete_ixc_ticket_saved_filter(
+    saved_filter_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    row = db.get(SupportIxcTicketSavedFilter, saved_filter_id)
+    if row is None or row.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Visão salva não encontrada.")
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted"}
+
+
+@router.get("/ixc/analytics/context", response_model=SupportIxcAnalyticsContextOut)
+def ixc_analytics_context(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    regional: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Fase 2 do plano de evolução analítica do Atendimento IXC (2026-09-14): contexto único de
+    um escopo (aditivo - não substitui `/ixc/tickets/overview`, que continua servindo a Visão
+    Geral atual). Ver `ixc_ticket_context.resolve_context`: modelo de período livre
+    (`date_from`/`date_to` + janela anterior de mesmo tamanho), não mês-calendário."""
+    if city and not regional:
+        raise HTTPException(status_code=400, detail="Parâmetro 'regional' é obrigatório para filtrar por 'city'.")
+    if neighborhood and not city:
+        raise HTTPException(status_code=400, detail="Parâmetro 'city' é obrigatório para filtrar por 'neighborhood'.")
+    return ixc_ticket_context.resolve_context(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        regional=regional,
+        city=city,
+        neighborhood=neighborhood,
+        subject_id=subject_id,
+        sector_id=sector_id,
+    )
+
+
+@router.get("/ixc/analytics/priorities", response_model=list[SupportIxcAnalyticsPriorityItem])
+def ixc_analytics_priorities(
+    dimension: str = Query(pattern="^(regional|city|neighborhood|subject)$"),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    regional: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Ranking do PRÓXIMO NÍVEL relevante (item 3 do plano) - `dimension` escolhe explicitamente
+    o eixo do ranking, em vez de uma rota fixa por nível como `/ixc/tickets/breakdown`."""
+    try:
+        return ixc_ticket_context.priorities_for_context(
+            db,
+            dimension=dimension,
+            date_from=date_from,
+            date_to=date_to,
+            regional=regional,
+            city=city,
+            neighborhood=neighborhood,
+            subject_id=subject_id,
+            sector_id=sector_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/ixc/analytics/drivers", response_model=list[SupportIxcAnalyticsDriverItem])
+def ixc_analytics_drivers(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    regional: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Decomposição do excesso por motivo (`current - esperado`, esperado = mesma janela no
+    período ANTERIOR de tamanho igual) com `contribution_pct` - mesma ideia de
+    `ixc_ticket_overview.driver_decomposition`, no modelo de período livre deste contrato único."""
+    if city and not regional:
+        raise HTTPException(status_code=400, detail="Parâmetro 'regional' é obrigatório para filtrar por 'city'.")
+    if neighborhood and not city:
+        raise HTTPException(status_code=400, detail="Parâmetro 'city' é obrigatório para filtrar por 'neighborhood'.")
+    return ixc_ticket_context.driver_decomposition_for_period(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        regional=regional,
+        city=city,
+        neighborhood=neighborhood,
+        subject_id=subject_id,
+        sector_id=sector_id,
+    )
+
+
+@router.get("/ixc/analytics/bursts", response_model=list[SupportIxcTicketBurstWindow])
+def ixc_analytics_bursts(
+    regional: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Fase 4 do plano de evolução analítica do Atendimento IXC (2026-09-15): `BURST_V1` - compara
+    o observado nas últimas 1h/2h/6h contra o baseline pré-computado (`ixc_ticket_baseline`) de
+    atendimentos esperados por hora-do-dia/dia-da-semana. `basis="none"` quando o escopo ainda não
+    tem baseline calculado (job diário não rodou ainda, ou dado insuficiente)."""
+    scope_type = "regional" if regional else "global"
+    return ixc_ticket_baseline.detect_bursts(db, scope_type=scope_type, scope_id=regional)
+
+
+@router.get("/ixc/analytics/momentum", response_model=SupportIxcTicketMomentum)
+def ixc_analytics_momentum(
+    regional: str | None = None,
+    city: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Fase 4 do plano de evolução analítica do Atendimento IXC (2026-09-15): `MOMENTUM_V1` -
+    tendência recente (últimos dias), complementar ao desvio pontual de `/ixc/tickets/overview` e
+    `/ixc/analytics/context`. Responde "está piorando/melhorando/estável", não "está fora da curva
+    hoje" (isso já é `/ixc/analytics/bursts`)."""
+    return ixc_ticket_momentum.daily_momentum(
+        db, regional=regional, city=city, subject_id=subject_id, sector_id=sector_id
+    )
+
+
+@router.get("/ixc/analytics/os-conversion", response_model=SupportIxcTicketOsConversion)
+def ixc_analytics_os_conversion(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    regional: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Fase 6 do plano de evolução analítica do Atendimento IXC (2026-09-15): `OS_CONVERSION_V1` -
+    quantos atendimentos deste recorte viraram O.S. dentro de 2h/6h/24h/48h, usando o vínculo que
+    já existe no schema (`OperationOrder.ticket_id == SupportIxcTicket.source_id`). Não substitui
+    a O.S. como fonte de verdade - mede se o indicador ANTECIPADO (este módulo) de fato antecipa
+    ação real."""
+    return ixc_ticket_os_conversion.os_conversion_rate(
+        db, date_from=date_from, date_to=date_to, regional=regional, subject_id=subject_id, sector_id=sector_id
+    )
+
+
+@router.get("/ixc/tickets", response_model=SupportIxcTicketPage)
+def ixc_tickets_list(
+    regional: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Nó final do drill-down: lista os atendimentos individuais (protocolo, status, motivo) de um
+    recorte regional/cidade/bairro/motivo - "clica no bairro, mostra os motivos E os protocolos"
+    (pedido explícito do usuário, ver docs/STATUS.md 2026-09-11)."""
+    total, rows = ixc_ticket_queries.list_tickets(
+        db,
+        regional=regional,
+        city=city,
+        neighborhood=neighborhood,
+        subject_id=subject_id,
+        sector_id=sector_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+    )
+    # Taxonomia por `subject_id`, resolvida uma vez por motivo distinto da página (não por linha) -
+    # uma página de até 200 protocolos raramente tem mais que uma dezena de motivos diferentes.
+    taxonomy_cache: dict[str | None, dict] = {}
+
+    def _taxonomy_for(subject_id: str | None) -> dict:
+        if subject_id not in taxonomy_cache:
+            taxonomy_cache[subject_id] = ixc_ticket_taxonomy.resolve_theme_for_subject(db, subject_id)
+        return taxonomy_cache[subject_id]
+
+    def _none_if_unmapped(value: str) -> str | None:
+        return None if value == ixc_ticket_taxonomy.NAO_MAPEADO else value
+
+    items = []
+    for row in rows:
+        taxonomy = _taxonomy_for(row.subject_id)
+        risk = ixc_ticket_text_signal.resolve_ticket_risk(base_weight=taxonomy["risk_weight"], report=row.report)
+        items.append(
+            SupportIxcTicketOut(
+                id=row.id,
+                source_id=row.source_id,
+                protocol=row.protocol,
+                customer_name=row.customer_name,
+                regional=row.regional,
+                city=row.city,
+                neighborhood=row.neighborhood,
+                locality_type=row.locality_type,
+                subject_id=row.subject_id,
+                subject_name=row.subject_name,
+                sector_id=row.sector_id,
+                sector_name=row.sector_name,
+                status=row.status,
+                sub_status=row.sub_status,
+                title=row.title,
+                report=row.report,
+                created_at=row.created_at,
+                theme_id=_none_if_unmapped(taxonomy["theme_id"]),
+                theme_label=_none_if_unmapped(taxonomy["theme_label"]),
+                category_id=_none_if_unmapped(taxonomy["category_id"]),
+                category_label=_none_if_unmapped(taxonomy["category_label"]),
+                risk_score=risk["risco"],
+                subtema_inferido=risk["subtema_inferido"],
+            )
+        )
+    return {"total": total, "items": items}

@@ -88,7 +88,15 @@ export function LocalizaSettingsPanel() {
           <span>
             Validade do link: <span className="font-medium text-slate-950">{ttlHours ?? "..."}h</span>
           </span>
-          <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-slate-500" onClick={startEditing}>
+          <Button
+            aria-label="Editar validade do link"
+            title="Editar validade do link"
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-slate-500"
+            onClick={startEditing}
+          >
             <Pencil className="h-3 w-3" aria-hidden="true" />
           </Button>
         </>

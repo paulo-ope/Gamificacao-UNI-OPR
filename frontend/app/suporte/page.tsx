@@ -1,24 +1,20 @@
 "use client";
 
-import Link from "next/link";
 import {
   ArrowUpDown,
-  ChevronLeft,
-  ChevronRight,
   Database,
   Eye,
-  Home,
   Loader2,
-  LogOut,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { type ReactNode, Suspense, useEffect, useMemo, useState } from "react";
+import { type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Loading } from "@/components/ui/loading";
+import { Pagination } from "@/components/ui/pagination";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -37,7 +33,6 @@ import {
   OpaAttendantOverridesPanel,
   OpaGlobalFilters,
   OpaAttendantsPanel,
-  OPA_NAV_ITEMS,
   OPA_MAX_PERIOD_DAYS,
   opaPeriodSpanDays,
   OpaOverview,
@@ -54,6 +49,11 @@ import {
 } from "@/app/suporte/_components/opa-module-components";
 import { BotHumanChart, RankingChart, TimeTrendChart, VolumeTrendChart } from "@/app/suporte/_components/opa-charts";
 import { OpaDrilldownSheet, type OpaDrilldown } from "@/app/suporte/_components/opa-drilldown";
+import { IxcTicketAnalyticsPanel } from "@/app/suporte/_components/ixc-ticket-analytics-panel";
+import { IxcTicketDrilldownPanel } from "@/app/suporte/_components/ixc-ticket-drilldown";
+import { IxcTicketFiltersBar } from "@/app/suporte/_components/ixc-ticket-filters-bar";
+import { IxcTicketOverviewPanel } from "@/app/suporte/_components/ixc-ticket-overview";
+import { IxcTicketSavedFiltersBar } from "@/app/suporte/_components/ixc-ticket-saved-filters";
 import { OpaSavedFiltersBar } from "@/app/suporte/_components/opa-saved-filters";
 import type {
   SupportOpaAttendanceDetail,
@@ -69,6 +69,7 @@ import type {
   SupportOpaBreakdownItem,
   SupportOpaBreakdowns,
   SupportOpaFilters,
+  SupportIxcTicketFilterOptions,
   SupportOpaImportMonth,
   SupportOpaOverview,
   SupportOpaSyncSettings,
@@ -286,6 +287,36 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const [overviewRankingLoading, setOverviewRankingLoading] = useState(false);
   const [drilldown, setDrilldown] = useState<OpaDrilldown | null>(null);
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
+  // Visão Geral (KPIs/gráfico/prioridades) é a entrada da aba "Atendimento IXC" - clicar numa
+  // prioridade aprofunda pro drill-down já existente, pré-selecionando a regional clicada.
+  const [ixcTicketFocusRegional, setIxcTicketFocusRegional] = useState<string | null>(null);
+  // Filtro de motivo/setor da aba "Atendimento IXC" - levantado pra este nível (em vez de viver
+  // dentro do drill-down) porque precisa valer TANTO na Visão Geral quanto no drill-down, sem se
+  // perder ao trocar entre os dois (pedido explícito do usuário, 2026-09-12: "não é só lá no
+  // drill, tem que ser ali no gráfico também").
+  const [ixcTicketSubjectIds, setIxcTicketSubjectIds] = useState<string[]>([]);
+  const [ixcTicketSectorIds, setIxcTicketSectorIds] = useState<string[]>([]);
+  const [ixcTicketFilterOptions, setIxcTicketFilterOptions] = useState<SupportIxcTicketFilterOptions | null>(null);
+  // Fase 3 do plano de evolução analítica do Atendimento IXC (2026-09-15): painel unificado é o
+  // padrão desde 2026-09-15 (validado ao vivo com dado real) - os componentes antigos (Visão
+  // Geral/drill-down) continuam no código, acessíveis pelo mesmo botão, caso precise reverter.
+  const [ixcTicketAnalyticsBeta, setIxcTicketAnalyticsBeta] = useState(true);
+
+  useEffect(() => {
+    if (activeView !== "ixc_tickets" || ixcTicketFilterOptions) return;
+    let cancelled = false;
+    api
+      .supportIxcTicketFilterOptions()
+      .then((data) => {
+        if (!cancelled) setIxcTicketFilterOptions(data);
+      })
+      .catch(() => {
+        // Dropdowns ficam vazios se isso falhar - não impede o resto da tela de funcionar.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, ixcTicketFilterOptions]);
 
   // `initialTab` (acima) só seeda `activeView` na MONTAGEM - navegação pelo lado do cliente para
   // `/suporte?tab=X` vindo de um submenu da barra lateral, estando já em `/suporte`, não remonta a
@@ -312,6 +343,13 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const [attendantSummaryError, setAttendantSummaryError] = useState<string | null>(null);
   const [filterOptions, setFilterOptions] = useState<SupportOpaFilters | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  // Guarda de corrida (mesmo padrão de `dashboardRequest` em app/operacao/page.tsx): trocar de aba
+  // rapidamente (ex.: "data" -> "attendants" -> "data") dispara mais de um `loadAttendances`/
+  // `loadAttendantBreakdown` em paralelo - sem isso, uma resposta antiga que chega depois de uma
+  // mais recente sobrescrevia a tela com dado desatualizado. Só a chamada com o id mais recente
+  // pode aplicar `setState`.
+  const attendancesRequestId = useRef(0);
+  const attendantBreakdownRequestId = useRef(0);
   const [selectedAttendanceId, setSelectedAttendanceId] = useState<number | null>(null);
   const [attendanceDetail, setAttendanceDetail] = useState<SupportOpaAttendanceDetail | null>(null);
   const [attendanceDetailLoading, setAttendanceDetailLoading] = useState(false);
@@ -474,6 +512,8 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   }
 
   async function loadAttendances(next: Partial<SupportOpaAttendanceFilters> = {}) {
+    const requestId = attendancesRequestId.current + 1;
+    attendancesRequestId.current = requestId;
     const merged = {
       ...attendanceFilters,
       ...next,
@@ -484,12 +524,14 @@ function SupportPageContent({ user }: { user: AuthUser }) {
     setError(null);
     try {
       const pageData = await api.supportOpaAttendances(merged);
+      if (attendancesRequestId.current !== requestId) return;
       setAttendanceFilters(merged);
       setAttendancePage(pageData);
     } catch (reason) {
+      if (attendancesRequestId.current !== requestId) return;
       setError(reason instanceof Error ? reason.message : "Falha ao carregar atendimentos OPA.");
     } finally {
-      setAttendanceLoading(false);
+      if (attendancesRequestId.current === requestId) setAttendanceLoading(false);
     }
   }
 
@@ -518,6 +560,8 @@ function SupportPageContent({ user }: { user: AuthUser }) {
     sortBy = attendantSortBy,
     sortDir = attendantSortDir,
   ) {
+    const requestId = attendantBreakdownRequestId.current + 1;
+    attendantBreakdownRequestId.current = requestId;
     setAttendantBreakdownLoading(true);
     setError(null);
     try {
@@ -527,11 +571,13 @@ function SupportPageContent({ user }: { user: AuthUser }) {
         sort_dir: sortDir,
         limit: 200,
       });
+      if (attendantBreakdownRequestId.current !== requestId) return;
       setAttendantBreakdown(data);
     } catch (reason) {
+      if (attendantBreakdownRequestId.current !== requestId) return;
       setError(reason instanceof Error ? reason.message : "Falha ao carregar atendentes OPA.");
     } finally {
-      setAttendantBreakdownLoading(false);
+      if (attendantBreakdownRequestId.current === requestId) setAttendantBreakdownLoading(false);
     }
   }
 
@@ -735,6 +781,11 @@ function SupportPageContent({ user }: { user: AuthUser }) {
 
       <StatusToast error={error} message={message} onDismissError={() => setError(null)} onDismissMessage={() => setMessage(null)} />
 
+      {/* Filtros do OPA Suite (período/atendente/departamento/canal, filtros salvos) não fazem
+       * sentido na aba "Atendimento IXC" - é outra fonte de dado, com seu próprio período dentro
+       * do painel (ver IxcTicketOverviewPanel/IxcTicketDrilldownPanel) - pedido explícito do
+       * usuário (2026-09-12). */}
+      {activeView !== "ixc_tickets" ? (
       <OpaGlobalFilters
         period={period}
         filters={attendanceFilters}
@@ -750,7 +801,9 @@ function SupportPageContent({ user }: { user: AuthUser }) {
         onClear={clearFilters}
         onImport={() => void importPeriod()}
       />
+      ) : null}
 
+      {activeView !== "ixc_tickets" ? (
       <OpaSavedFiltersBar
         period={period}
         filters={attendanceFilters}
@@ -798,6 +851,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
           void load(nextPeriod, nextFilters, activeView);
         }}
       />
+      ) : null}
 
       <section className="px-4 py-6 lg:px-7">
         <div className="grid gap-5">
@@ -855,6 +909,57 @@ function SupportPageContent({ user }: { user: AuthUser }) {
               onChange={(next) => void loadAttendances({ ...next, page: next.page ?? 1 })}
               onOpenDetail={(id) => void openAttendanceDetail(id)}
             />
+          ) : null}
+          {activeView === "ixc_tickets" ? (
+            <div className="grid gap-4">
+              <div className="flex items-center justify-between gap-2">
+                <IxcTicketFiltersBar
+                  options={ixcTicketFilterOptions}
+                  subjectIds={ixcTicketSubjectIds}
+                  sectorIds={ixcTicketSectorIds}
+                  onChange={({ subjectIds, sectorIds }) => {
+                    setIxcTicketSubjectIds(subjectIds);
+                    setIxcTicketSectorIds(sectorIds);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIxcTicketAnalyticsBeta((current) => !current)}
+                  title="Painel único (Fase 3 do plano de evolução analítica) é o padrão desde 2026-09-15 - este botão volta pra Visão Geral/drill-down antigos, se precisar"
+                >
+                  {ixcTicketAnalyticsBeta ? "Usar painel clássico" : "Voltar pro painel único"}
+                </Button>
+              </div>
+              <IxcTicketSavedFiltersBar
+                current={{ subject_ids: ixcTicketSubjectIds, sector_ids: ixcTicketSectorIds }}
+                onApply={(filters) => {
+                  setIxcTicketSubjectIds(filters.subject_ids);
+                  setIxcTicketSectorIds(filters.sector_ids);
+                }}
+                onDefaultLoaded={(filters) => {
+                  setIxcTicketSubjectIds(filters.subject_ids);
+                  setIxcTicketSectorIds(filters.sector_ids);
+                }}
+              />
+              {ixcTicketAnalyticsBeta ? (
+                <IxcTicketAnalyticsPanel subjectIds={ixcTicketSubjectIds} sectorIds={ixcTicketSectorIds} />
+              ) : ixcTicketFocusRegional ? (
+                <IxcTicketDrilldownPanel
+                  initialRegional={ixcTicketFocusRegional}
+                  onBackToOverview={() => setIxcTicketFocusRegional(null)}
+                  subjectIds={ixcTicketSubjectIds}
+                  sectorIds={ixcTicketSectorIds}
+                />
+              ) : (
+                <IxcTicketOverviewPanel
+                  onSelectRegional={(regional) => setIxcTicketFocusRegional(regional)}
+                  subjectIds={ixcTicketSubjectIds}
+                  sectorIds={ixcTicketSectorIds}
+                />
+              )}
+            </div>
           ) : null}
           {activeView === "sync" ? (
             <div className="grid gap-5">
@@ -1008,17 +1113,15 @@ function AttendanceDataTable({
           </TableBody>
         </Table>
       </div>
-      <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
-        <span>Página {currentPage} de {totalPages || 1}</span>
-        <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" disabled={loading || currentPage <= 1} onClick={() => onChange({ page: currentPage - 1 })}>
-            <ChevronLeft className="h-4 w-4" /> Anterior
-          </Button>
-          <Button type="button" variant="outline" disabled={loading || totalPages === 0 || currentPage >= totalPages} onClick={() => onChange({ page: currentPage + 1 })}>
-            Próxima <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
+      <Pagination
+        page={currentPage}
+        totalPages={totalPages || 1}
+        disabled={loading}
+        size="default"
+        labelClassName="text-sm text-slate-600"
+        className="border-t border-slate-200 px-4 py-3"
+        onPageChange={(next) => onChange({ page: next })}
+      />
     </div>
   );
 }
@@ -1196,11 +1299,7 @@ function AttendantDetailSheet({
                 </p>
               </div>
 
-              {summaryLoading ? (
-                <div className="flex min-h-32 items-center justify-center gap-2 p-4 text-sm text-slate-500">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Carregando painel individual...
-                </div>
-              ) : null}
+              {summaryLoading ? <Loading label="Carregando painel individual..." className="min-h-32 p-4" /> : null}
 
               {!summaryLoading && summaryError ? (
                 <div className="m-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{summaryError}</div>
@@ -1283,11 +1382,7 @@ function AttendantDetailSheet({
                 ) : null}
               </div>
 
-              {loading ? (
-                <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-slate-500">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Carregando atendimentos...
-                </div>
-              ) : null}
+              {loading ? <Loading label="Carregando atendimentos..." className="min-h-32" /> : null}
 
               {!loading && error ? (
                 <div className="m-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>
@@ -1521,11 +1616,7 @@ function AttendanceTimelineSection({
         </p>
       </div>
 
-      {loading ? (
-        <div className="mt-3 flex min-h-24 items-center justify-center gap-2 rounded-lg border border-slate-100 text-sm text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin" /> Carregando timeline...
-        </div>
-      ) : null}
+      {loading ? <Loading label="Carregando timeline..." className="mt-3 min-h-24 rounded-lg border border-slate-100" /> : null}
 
       {!loading && error ? (
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -1618,11 +1709,7 @@ function AttendanceDetailSheet({
         </SheetHeader>
 
         <div className="mt-5 grid gap-4">
-          {loading ? (
-            <div className="flex min-h-48 items-center justify-center gap-2 rounded-lg border border-slate-200 text-sm text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin" /> Carregando detalhe...
-            </div>
-          ) : null}
+          {loading ? <Loading label="Carregando detalhe..." className="min-h-48 rounded-lg border border-slate-200" /> : null}
 
           {!loading && error ? (
             <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">

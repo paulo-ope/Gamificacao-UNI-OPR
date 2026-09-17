@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ChevronDown, LogOut, Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
@@ -60,6 +60,24 @@ export function WorkspaceAppShell({
 }) {
   const { user, checking, error, login, logout } = useWorkspaceAuth();
   const modules = useVisibleModules(user);
+  const headerRef = useRef<HTMLElement>(null);
+
+  // Fonte única da altura real do header para qualquer elemento sticky que precise começar logo
+  // abaixo dele (barra de filtros de Operação/Suporte, aviso de drill-down da Visão Geral) - ver
+  // `--workspace-header-height` em app/globals.css. ResizeObserver em vez de um número fixo:
+  // se o header mudar de altura por qualquer motivo (nova ação no cabeçalho, ajuste de padding),
+  // todo consumidor se ajusta sozinho, sem precisar caçar `top-[NNpx]` copiado em vários arquivos.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const applyHeight = () => {
+      document.documentElement.style.setProperty("--workspace-header-height", `${header.offsetHeight}px`);
+    };
+    applyHeight();
+    const observer = new ResizeObserver(applyHeight);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [user]);
   // Nasce COMPLETA (pedido do usuário em 2026-09-03): a barra lateral inteira é a navegação
   // principal do ecossistema, não um detalhe a ser descoberto. Recolher para a trilha de ícones
   // continua possível, mas é escolha de quem quer mais espaço - nunca o padrão.
@@ -157,7 +175,7 @@ export function WorkspaceAppShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <header ref={headerRef} className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
           <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
               <div className="lg:hidden">

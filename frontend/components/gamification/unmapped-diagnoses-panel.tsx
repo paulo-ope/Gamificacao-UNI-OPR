@@ -3,19 +3,22 @@
 import { ClipboardCheck, Info, Save, Search, Settings2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { AppCombobox, AppInput, StatusBadge } from "@/components/gamification/config-ui";
+import { AppCombobox, AppInput } from "@/components/gamification/config-ui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatInteger, formatMoney } from "@/lib/format";
 import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import type { DiagnosisActionType, ImportedDiagnosis } from "@/lib/types";
 
-function severityTone(serviceOrdersCount: number): "danger" | "warning" | "neutral" {
-  if (serviceOrdersCount >= 50) return "danger";
-  if (serviceOrdersCount >= 10) return "warning";
-  return "neutral";
+function severityTone(serviceOrdersCount: number): "red" | "amber" | "slate" {
+  if (serviceOrdersCount >= 50) return "red";
+  if (serviceOrdersCount >= 10) return "amber";
+  return "slate";
 }
 
 type Props = {
@@ -118,20 +121,20 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
   }
 
   return (
-    <section className="panel overflow-hidden">
-      <div className="panel-header bg-slate-50/70">
+    <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
+      <CardHeader className="flex min-w-0 flex-col gap-3 border-b bg-slate-50/70 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700">
             <ClipboardCheck className="h-5 w-5" />
           </div>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="panel-title">Diagnósticos sem regra</h2>
+              <CardTitle className="text-base font-semibold text-foreground">Diagnósticos sem regra</CardTitle>
               <Badge className="border-amber-200 bg-amber-50 text-amber-700">
                 {formatInteger(diagnoses.length)} item(ns)
               </Badge>
             </div>
-            <p className="panel-subtitle">Fila de diagnósticos importados que ainda não possuem regra de liberação ou anulação.</p>
+            <p className="text-sm text-muted-foreground">Fila de diagnósticos importados que ainda não possuem regra de liberação ou anulação.</p>
           </div>
         </div>
         <div className="flex w-full flex-col gap-2 sm:w-96">
@@ -147,7 +150,7 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
             />
           </div>
         </div>
-      </div>
+      </CardHeader>
 
       <div className="flex items-center gap-2 border-b bg-amber-50 px-5 py-3 text-sm text-amber-800">
         <Info className="h-4 w-4 shrink-0" />
@@ -212,8 +215,8 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
         <TableBody>
           {filtered.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={9} className="h-28 text-center text-sm text-slate-500">
-                Nenhum diagnóstico sem regra encontrado para os filtros atuais.
+              <TableCell colSpan={9}>
+                <EmptyState variant="plain" title="Nenhum diagnóstico sem regra encontrado para os filtros atuais." />
               </TableCell>
             </TableRow>
           ) : null}
@@ -223,7 +226,7 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
               <TableRow key={item.diagnosis_name}>
                 <TableCell className="min-w-56">
                   <div className="font-medium text-slate-950">{item.diagnosis_name}</div>
-                  <StatusBadge tone="warning" className="mt-1">Sem regra</StatusBadge>
+                  <StatusBadge tone="amber" className="mt-1">Sem regra</StatusBadge>
                 </TableCell>
                 <TableCell>
                   <StatusBadge tone={severityTone(item.service_orders_count)}>{formatInteger(item.service_orders_count)}</StatusBadge>
@@ -283,7 +286,7 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
         </TableBody>
         </Table>
       </div>
-    </section>
+    </Card>
   );
 }
 

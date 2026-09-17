@@ -1132,6 +1132,7 @@ def build_mcp_server() -> FastMCP:
                 _enforce(enforce_filter_field, policy, ENTITY_LOGIN_CURRENT_STATUS, "longitude", "filterable")
             rows = query_login_status(
                 db,
+                user=user,
                 logins=logins or [],
                 online_statuses=online_statuses or [],
                 regionals=regionals or [],
@@ -1202,6 +1203,7 @@ def build_mcp_server() -> FastMCP:
                 _enforce(enforce_filter_field, policy, ENTITY_ONU_SIGNAL_CURRENT, "transmitter_id", "filterable")
             items = query_onu_signal_status(
                 db,
+                user=user,
                 login_ids=login_ids or [],
                 last_drop_causes=last_drop_causes or [],
                 transmitter_ids=transmitter_ids or [],
@@ -1261,6 +1263,7 @@ def build_mcp_server() -> FastMCP:
             return _dump(
                 query_onu_signal_history(
                     db,
+                    user=user,
                     login_ids=login_ids or [],
                     onu_serials=onu_serials or [],
                     date_from=_parse_datetime(date_from) if date_from else None,
@@ -1422,6 +1425,7 @@ def build_mcp_server() -> FastMCP:
             return _dump(
                 search_logins(
                     db,
+                    user=user,
                     logins=logins or [],
                     login_query=login_query,
                     login_ids=login_ids or [],
@@ -1468,7 +1472,7 @@ def build_mcp_server() -> FastMCP:
         user = _current_user()
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_detail", "mcp")
-            detail = get_login_detail(db, login=login, login_id=login_id, history_hours=history_hours)
+            detail = get_login_detail(db, user=user, login=login, login_id=login_id, history_hours=history_hours)
             if detail is None:
                 raise ValueError(f"Login não encontrado: {login or login_id}")
             return _dump(detail)
@@ -1498,7 +1502,7 @@ def build_mcp_server() -> FastMCP:
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_aggregate", "mcp")
             try:
-                return _dump(login_aggregate(db, group_by=group_by, regionals=regionals or [], online_statuses=online_statuses or []))
+                return _dump(login_aggregate(db, user=user, group_by=group_by, regionals=regionals or [], online_statuses=online_statuses or []))
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc
 
@@ -1527,7 +1531,7 @@ def build_mcp_server() -> FastMCP:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_outages", "mcp")
             return _dump(
                 login_outages(
-                    db, since=_parse_datetime(since), until=_parse_datetime(until) if until else None,
+                    db, user=user, since=_parse_datetime(since), until=_parse_datetime(until) if until else None,
                     regionals=regionals or [], limit=limit,
                 )
             )
@@ -1559,7 +1563,7 @@ def build_mcp_server() -> FastMCP:
         user = _current_user()
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_timeseries", "mcp")
-            return _dump(login_timeseries(db, since=_parse_datetime(since), until=_parse_datetime(until) if until else None))
+            return _dump(login_timeseries(db, user=user, since=_parse_datetime(since), until=_parse_datetime(until) if until else None))
 
     @mcp.tool(
         name="opr_offline_login_clusters",
@@ -1592,7 +1596,7 @@ def build_mcp_server() -> FastMCP:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.offline_login_clusters", "mcp")
             return _dump(
                 offline_login_clusters_response(
-                    db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+                    db, user=user, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
                 )
             )
 
@@ -1629,7 +1633,7 @@ def build_mcp_server() -> FastMCP:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.login_incident_analysis", "mcp")
             return _dump(
                 login_incident_analysis(
-                    db, window_minutes=window_minutes, regionals=regionals or [],
+                    db, user=user, window_minutes=window_minutes, regionals=regionals or [],
                     cluster_radius_meters=cluster_radius_meters, cluster_min_size=cluster_min_size,
                 )
             )
@@ -1667,7 +1671,7 @@ def build_mcp_server() -> FastMCP:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.coordinate_quality", "mcp")
             try:
                 return _dump(
-                    coordinate_quality_audit(db, entity=entity, outlier_km=outlier_km, duplicate_threshold=duplicate_threshold)
+                    coordinate_quality_audit(db, user=user, entity=entity, outlier_km=outlier_km, duplicate_threshold=duplicate_threshold)
                 )
             except ValueError as exc:
                 raise ValueError(str(exc)) from exc

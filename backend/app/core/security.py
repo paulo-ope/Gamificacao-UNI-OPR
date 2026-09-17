@@ -443,6 +443,28 @@ def require_permission(permission: str):
     return dependency
 
 
+def require_any_permission(*permissions: str):
+    """Libera a rota se o usuário tiver PELO MENOS UMA das permissões informadas.
+
+    Existe pra unificar duas famílias de permissão que hoje protegem o mesmo domínio sem se
+    conhecerem: `users:manage` (legado, único que as rotas de `/users`, `/invites` e
+    `/access-requests` aceitavam) e `admin:users:read/write/delete` (catálogo do módulo
+    Administração, o que a tela `/admin` e o registro de módulos realmente usam pra decidir se
+    mostram a seção). Achado real da auditoria de 2026-09-15: um perfil de acesso montado só com
+    `admin:users:*` (exatamente o que o catálogo do módulo sugere ser suficiente) via a tela de
+    Administração inteira, mas toda chamada a `/users` batia em 403 por exigir `users:manage`, uma
+    permissão de uma família diferente que o catálogo do módulo Admin nem expõe como
+    correspondente. Aceitar qualquer uma das duas aqui resolve os dois lados sem quebrar contas que
+    já dependem só de `users:manage`."""
+
+    def dependency(user: User = Depends(get_current_user)) -> User:
+        if not set(permissions) & permissions_for_user(user):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permissão insuficiente.")
+        return user
+
+    return dependency
+
+
 def portal_first_access_pending(user: User) -> bool:
     """`True` só pra usuário que REPRESENTA um colaborador (`collaborator_id` vinculado) e nunca
     completou o primeiro acesso obrigatório. Usuário interno (admin/operator/viewer sem vínculo) ou

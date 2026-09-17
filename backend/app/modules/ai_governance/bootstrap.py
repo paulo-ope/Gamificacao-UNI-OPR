@@ -120,6 +120,13 @@ _SEED_ENDPOINTS: list[tuple[str, str, str, bool]] = [
     ("ai.support_overview", "Visão geral do SGP Suporte para IA/MCP (opr_support_overview)", "mcp", True),
     ("ai.support_breakdowns", "Breakdowns do SGP Suporte para IA/MCP (opr_support_breakdowns)", "mcp", True),
     ("ai.support_timeseries", "Série diária do SGP Suporte para IA/MCP (opr_support_timeseries)", "mcp", True),
+    # Novo (Fase 5 do plano de evolução analítica do Atendimento IXC, 2026-09-15) - camada de
+    # sinais/resumo do indicador antecipado de incidente (`su_ticket`) pra IA, combinando as
+    # heurísticas das Fases 1-4 (desvio histórico, abrangência, momentum, burst). Nasce habilitada:
+    # mesmo dado agregado (nenhum atendimento individual) que `support:read` já vê na aba
+    # Atendimento IXC da tela /suporte.
+    ("ai.ixc_brief", "Resumo do estado atual do Atendimento IXC para IA/MCP (opr_ixc_brief)", "mcp", True),
+    ("ai.ixc_signals", "Sinais/anomalias detectados no Atendimento IXC para IA/MCP (opr_ixc_signals)", "mcp", True),
     # Já `ai.management_justifications` nasce DESABILITADA de propósito: `justification_text`,
     # `action_plan` e os comentários são texto livre escrito por supervisor sobre uma pessoa
     # específica (motivo de falta, problema de saúde, conflito de equipe apareceram no dado real).

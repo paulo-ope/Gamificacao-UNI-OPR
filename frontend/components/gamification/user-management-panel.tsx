@@ -1,7 +1,6 @@
 "use client";
 
 import { Save, ShieldCheck, UserCog, UserPlus, Users2 } from "lucide-react";
-import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -12,14 +11,15 @@ import {
   AppSwitch,
   RegionalMultiSelect,
   RowActionMenu,
-  StatusBadge,
   uniqueRegionals,
 } from "@/components/gamification/config-ui";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { SummaryCard } from "@/components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { normalizeRegional, regionalName } from "@/lib/regional";
-import { cn } from "@/lib/utils";
 import type { AuthUser, CollaboratorRegistryItem } from "@/lib/types";
 
 type UserPayload = {
@@ -85,36 +85,12 @@ function roleLabel(role: string) {
   return roles.find((item) => item.value === role)?.label ?? role;
 }
 
-function SummaryCard({
-  icon,
-  label,
-  value,
-  hint,
-  accent = "default",
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  hint: string;
-  accent?: "default" | "highlight";
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-        {icon}
-        {label}
-      </div>
-      <div className={cn("mt-3 text-2xl font-semibold", accent === "highlight" ? "text-uni-royal" : "text-slate-950")}>{value}</div>
-      <div className="mt-1 text-sm text-slate-500">{hint}</div>
-    </div>
-  );
-}
 
 function statusBadge(active: boolean) {
   return active ? (
-    <StatusBadge tone="success">Ativo</StatusBadge>
+    <StatusBadge tone="emerald">Ativo</StatusBadge>
   ) : (
-    <StatusBadge>Inativo</StatusBadge>
+    <StatusBadge tone="slate">Inativo</StatusBadge>
   );
 }
 
@@ -280,7 +256,7 @@ export function UserManagementPanel({ users, collaborators = [], regionalOptions
         />
       </div>
 
-      <div className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
         <div className="border-b border-slate-200 px-5 py-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
@@ -297,7 +273,7 @@ export function UserManagementPanel({ users, collaborators = [], regionalOptions
         </div>
 
         <div className="p-5">
-          <div className="overflow-hidden rounded-2xl border border-slate-200">
+          <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                 <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -332,8 +308,8 @@ export function UserManagementPanel({ users, collaborators = [], regionalOptions
                 ))}
                 {rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-10 text-center text-sm text-slate-500">
-                      Nenhum usuário cadastrado até o momento.
+                    <TableCell colSpan={6}>
+                      <EmptyState variant="plain" title="Nenhum usuário cadastrado até o momento." />
                     </TableCell>
                   </TableRow>
                 ) : null}

@@ -106,6 +106,11 @@ class OperationOrder(Base):
     source_order_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     order_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     protocol: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    # `su_oss_chamado.id_ticket` do IXC - referencia o atendimento (su_ticket) que disparou esta
+    # O.S. Nenhuma O.S. é aberta diretamente no IXC, sempre passa por um atendimento primeiro (ver
+    # docs/STATUS.md 2026-09-11 e SupportIxcTicket em modules/support/models.py). Nullable porque
+    # O.S. importadas antes desta coluna existir não têm o vínculo retroativo preenchido.
+    ticket_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     contract_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     customer_login: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
@@ -499,6 +504,41 @@ class OperationOnuSignalSnapshot(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True, default=utc_now)
+
+
+class OperationCustomerContract(Base):
+    """Base de contratos de cliente do IXC (tabela `cliente_contrato`, ver
+    `app/services/ixc_client.fetch_customer_contracts`) - denominador de qualquer métrica
+    normalizada "por 1.000 clientes" (ex.: incidência de atendimento por regional, ver
+    docs/STATUS.md 2026-09-11). Cadastro puro, sem O.S./atendimento - uma linha por contrato,
+    não por cliente (um cliente pode ter mais de um contrato).
+
+    `status`/`status_internet` guardam os códigos crus do IXC (ex.: visto em amostra "P" e "AA")
+    porque o enum completo ainda não foi confirmado contra uma amostra grande o suficiente -
+    não inferir "ativo" a partir de um valor específico sem validar antes (ver
+    docs/plano-integracao-ixc.md e a ressalva na docstring de `fetch_customer_contracts`)."""
+
+    __tablename__ = "operations_customer_contracts"
+    __table_args__ = (
+        UniqueConstraint("source_contract_id", name="uq_operations_customer_contracts_source_id"),
+        Index("ix_operations_customer_contracts_regional_status", "regional", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_contract_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    regional: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    city: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    # Achado real 2026-09-11: `cliente_contrato.bairro` é campo próprio (texto livre, não FK) -
+    # usado como fallback de bairro do atendimento IXC quando o cliente não tem o campo
+    # preenchido, e como fonte da heurística de atendimento por bairro/cidade (ver
+    # docs/STATUS.md e modules/support/ixc_ticket_overview.py).
+    neighborhood: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    status: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    status_internet: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    raw_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    first_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    last_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class OperationBranchCapacity(Base):

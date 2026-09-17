@@ -14,8 +14,10 @@ from app.modules.support.opa_ingestion import (
     OpaImportInterrupted,
     _maybe_mark_month_complete,
     _month_bounds,
+    _support_opa_import_lock,
     import_months_status,
     import_opa_attendances,
+    run_tmr_history_backfill,
 )
 from app.services.calculation import get_setting, upsert_setting
 from app.services.opa_client import get_opa_client
@@ -43,6 +45,23 @@ SUPPORT_OPA_BACKFILL_ENABLED_KEY = "support_opa_backfill_enabled"
 SUPPORT_OPA_BACKFILL_RUN_HOUR_KEY = "support_opa_backfill_run_hour"
 SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY = "support_opa_backfill_lookback_months"
 SUPPORT_OPA_BACKFILL_LAST_RUN_DATE_KEY = "support_opa_backfill_last_run_date"
+
+# Backfill noturno de TMR HISTÓRICO (reprocessa `tmr_all_responses_seconds` de
+# atendimentos já fechados e já gravados, diferente do backfill acima que importa
+# meses inteiros de atendimentos que ainda não existem no banco). Nasce DESLIGADO
+# por padrão (decisão do usuário 2026-09-16): 1 chamada extra à API do OPA Suite
+# por atendimento, ~45 mil pendentes no lançamento - alguém liga manualmente via
+# PUT /opa-sync-settings quando decidir arcar com o custo.
+SUPPORT_OPA_TMR_BACKFILL_ENABLED_KEY = "support_opa_tmr_backfill_enabled"
+SUPPORT_OPA_TMR_BACKFILL_RUN_HOUR_KEY = "support_opa_tmr_backfill_run_hour"
+SUPPORT_OPA_TMR_BACKFILL_RUN_UNTIL_HOUR_KEY = "support_opa_tmr_backfill_run_until_hour"
+SUPPORT_OPA_TMR_BACKFILL_DAILY_LIMIT_KEY = "support_opa_tmr_backfill_daily_limit"
+SUPPORT_OPA_TMR_BACKFILL_LAST_RUN_DATE_KEY = "support_opa_tmr_backfill_last_run_date"
+SUPPORT_OPA_TMR_BACKFILL_PROCESSED_TODAY_KEY = "support_opa_tmr_backfill_processed_today"
+SUPPORT_OPA_TMR_BACKFILL_LAST_SUCCESS_AT_KEY = "support_opa_tmr_backfill_last_success_at"
+SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_KEY = "support_opa_tmr_backfill_last_error"
+SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_AT_KEY = "support_opa_tmr_backfill_last_error_at"
+SUPPORT_OPA_TMR_BACKFILL_BATCH_SIZE = 150
 
 
 def _parse_sync_timestamp(value: str | None) -> datetime | None:
@@ -300,6 +319,129 @@ def run_opa_backfill_once(lookback_months: int | None = None) -> dict | None:
     return {"imported_months": imported}
 
 
+def _current_tmr_backfill_enabled(default: bool) -> bool:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, SUPPORT_OPA_TMR_BACKFILL_ENABLED_KEY, "")
+    except SQLAlchemyError:
+        return False
+    if not raw:
+        return default
+    return raw.strip().lower() in {"true", "1", "sim", "yes"}
+
+
+def _current_tmr_backfill_run_hour(default: int) -> int:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, SUPPORT_OPA_TMR_BACKFILL_RUN_HOUR_KEY, "")
+    except SQLAlchemyError:
+        return default
+    try:
+        hour = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(hour, 0), 23)
+
+
+def _current_tmr_backfill_run_until_hour(default: int) -> int:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, SUPPORT_OPA_TMR_BACKFILL_RUN_UNTIL_HOUR_KEY, "")
+    except SQLAlchemyError:
+        return default
+    try:
+        hour = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(hour, 0), 23)
+
+
+def _current_tmr_backfill_daily_limit(default: int) -> int:
+    try:
+        with SessionLocal() as db:
+            raw = get_setting(db, SUPPORT_OPA_TMR_BACKFILL_DAILY_LIMIT_KEY, "")
+    except SQLAlchemyError:
+        return default
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(limit, 100), 20000)
+
+
+def _tmr_backfill_window_open(now_local: datetime, run_hour: int, run_until_hour: int) -> bool:
+    """Janela [run_hour, run_until_hour) no fuso local. Suporta janela cruzando a
+    meia-noite (ex.: 22h-5h) quando `run_until_hour <= run_hour`."""
+    if run_hour == run_until_hour:
+        return True
+    if run_hour < run_until_hour:
+        return run_hour <= now_local.hour < run_until_hour
+    return now_local.hour >= run_hour or now_local.hour < run_until_hour
+
+
+def _tmr_backfill_processed_today(db: Session, today_iso: str) -> int:
+    last_run_date = get_setting(db, SUPPORT_OPA_TMR_BACKFILL_LAST_RUN_DATE_KEY, "")
+    if last_run_date != today_iso:
+        return 0
+    try:
+        return int(get_setting(db, SUPPORT_OPA_TMR_BACKFILL_PROCESSED_TODAY_KEY, "0") or "0")
+    except ValueError:
+        return 0
+
+
+def run_opa_tmr_backfill_once(batch_size: int = SUPPORT_OPA_TMR_BACKFILL_BATCH_SIZE) -> dict | None:
+    """Um lote do backfill noturno de TMR histórico - roda só dentro da janela
+    configurada (`SUPPORT_OPA_TMR_BACKFILL_RUN_HOUR_KEY`/`..._RUN_UNTIL_HOUR_KEY`,
+    padrão 1h-6h no fuso `SUPPORT_TIMEZONE`) e respeita uma cota diária
+    (`SUPPORT_OPA_TMR_BACKFILL_DAILY_LIMIT_KEY`, padrão 5000 atendimentos - cada um é
+    1 chamada à API do OPA Suite). Chamado repetidamente pelo loop principal
+    (`run_opa_sync_loop`) durante a janela: cada chamada processa até
+    `batch_size` atendimentos e para quando a cota do dia acaba ou a fila esvazia.
+    Usa o MESMO lock consultivo da importação normal (`_support_opa_import_lock`)
+    pra nunca escrever na mesma linha que uma sincronização periódica concorrente."""
+    settings = get_settings()
+    if not settings.opa_api_base_url or not settings.opa_api_token:
+        return None
+    if not _current_tmr_backfill_enabled(default=False):
+        return None
+
+    now_local = datetime.now(SUPPORT_TIMEZONE)
+    run_hour = _current_tmr_backfill_run_hour(default=1)
+    run_until_hour = _current_tmr_backfill_run_until_hour(default=6)
+    if not _tmr_backfill_window_open(now_local, run_hour, run_until_hour):
+        return None
+
+    today_iso = now_local.date().isoformat()
+    daily_limit = _current_tmr_backfill_daily_limit(default=5000)
+    with SessionLocal() as db:
+        processed_today = _tmr_backfill_processed_today(db, today_iso)
+    remaining_budget = daily_limit - processed_today
+    if remaining_budget <= 0:
+        return None
+
+    batch_limit = min(batch_size, remaining_budget)
+    client = get_opa_client()
+    with SessionLocal() as db:
+        try:
+            with _support_opa_import_lock(db):
+                result = run_tmr_history_backfill(db, client, limit=batch_limit)
+            upsert_setting(db, SUPPORT_OPA_TMR_BACKFILL_LAST_RUN_DATE_KEY, today_iso)
+            upsert_setting(db, SUPPORT_OPA_TMR_BACKFILL_PROCESSED_TODAY_KEY, str(processed_today + result["processed"]))
+            if result["updated"]:
+                upsert_setting(db, SUPPORT_OPA_TMR_BACKFILL_LAST_SUCCESS_AT_KEY, datetime.now(timezone.utc).isoformat())
+            db.commit()
+            logger.info("Backfill de TMR histórico: %s", result)
+            return result
+        except Exception as exc:
+            db.rollback()
+            logger.exception("Falha no backfill de TMR histórico do OPA Suite")
+            with SessionLocal() as err_db:
+                upsert_setting(err_db, SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_KEY, str(exc)[:250])
+                upsert_setting(err_db, SUPPORT_OPA_TMR_BACKFILL_LAST_ERROR_AT_KEY, datetime.now(timezone.utc).isoformat())
+                err_db.commit()
+            return None
+
+
 def _backfill_due(default_enabled: bool, default_run_hour: int) -> bool:
     if not _current_backfill_enabled(default=default_enabled):
         return False
@@ -323,6 +465,11 @@ async def run_opa_sync_loop(interval_minutes: int, initial_enabled: bool = True)
                 await asyncio.to_thread(run_opa_backfill_once)
             except Exception:
                 logger.exception("Falha ao rodar o backfill automático de meses do OPA Suite")
+
+        try:
+            await asyncio.to_thread(run_opa_tmr_backfill_once)
+        except Exception:
+            logger.exception("Falha ao rodar o backfill automático de TMR histórico do OPA Suite")
 
         if not _current_sync_enabled(default=initial_enabled):
             await asyncio.sleep(poll_seconds)

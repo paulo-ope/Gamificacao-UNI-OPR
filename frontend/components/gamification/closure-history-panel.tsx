@@ -3,6 +3,8 @@
 import { CalendarDays, Clock3, Trophy } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatAnnulledPoints, formatDateTime, formatInteger, formatMoney, formatPoints } from "@/lib/format";
 import { regionalName } from "@/lib/regional";
@@ -16,15 +18,15 @@ export function ClosureHistoryPanel({ runs }: Props) {
   const latest = runs[0];
 
   return (
-    <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="panel-header shrink-0 bg-slate-50/70">
+    <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
+      <CardHeader className="flex min-w-0 shrink-0 flex-col gap-3 border-b bg-slate-50/70 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700">
             <Clock3 className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="panel-title">Histórico de fechamentos</h2>
-            <p className="panel-subtitle">Cada recálculo fica salvo como uma apuração, com período, valor do ponto e resultado geral.</p>
+            <CardTitle className="text-base font-semibold text-foreground">Histórico de fechamentos</CardTitle>
+            <p className="text-sm text-muted-foreground">Cada recálculo fica salvo como uma apuração, com período, valor do ponto e resultado geral.</p>
           </div>
         </div>
         {latest ? (
@@ -32,7 +34,7 @@ export function ClosureHistoryPanel({ runs }: Props) {
             Última apuração #{latest.id} - {latest.reference_month}/{latest.reference_year}
           </Badge>
         ) : null}
-      </div>
+      </CardHeader>
 
       {latest ? (
         <div className="grid shrink-0 gap-3 border-b bg-white p-4 md:grid-cols-5">
@@ -121,15 +123,15 @@ export function ClosureHistoryPanel({ runs }: Props) {
             ))}
             {runs.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13} className="py-8 text-center text-sm text-slate-500">
-                  Nenhuma apuração salva ainda. Recalcule um período para criar o primeiro histórico.
+                <TableCell colSpan={13}>
+                  <EmptyState variant="plain" title="Nenhuma apuração salva ainda. Recalcule um período para criar o primeiro histórico." />
                 </TableCell>
               </TableRow>
             ) : null}
           </TableBody>
         </Table>
       </div>
-    </section>
+    </Card>
   );
 }
 

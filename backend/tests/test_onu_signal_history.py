@@ -127,7 +127,7 @@ def test_capture_onu_signal_snapshot_pulls_from_ixc_and_records_both_tables(db_s
 
 
 def test_query_onu_signal_history_requires_an_identifier(db_session):
-    assert query_onu_signal_history(db_session, login_ids=None, onu_serials=None) == []
+    assert query_onu_signal_history(db_session, user=None, login_ids=None, onu_serials=None) == []
 
 
 def test_query_onu_signal_history_filters_by_login_and_date_range(db_session):
@@ -138,7 +138,7 @@ def test_query_onu_signal_history_filters_by_login_and_date_range(db_session):
     _make_snapshot(db_session, login_id=2, captured_at=recent_point, signal_rx_dbm=-30.0)
     db_session.commit()
 
-    results = query_onu_signal_history(db_session, login_ids=[1], date_from=datetime.now(timezone.utc) - timedelta(days=1))
+    results = query_onu_signal_history(db_session, user=None, login_ids=[1], date_from=datetime.now(timezone.utc) - timedelta(days=1))
 
     assert len(results) == 1
     assert results[0]["login_id"] == 1
@@ -150,7 +150,7 @@ def test_query_onu_signal_history_filters_by_onu_serial(db_session):
     _make_snapshot(db_session, login_id=2, onu_serial="SERIAL-B")
     db_session.commit()
 
-    results = query_onu_signal_history(db_session, onu_serials=["SERIAL-B"])
+    results = query_onu_signal_history(db_session, user=None, onu_serials=["SERIAL-B"])
 
     assert [row["onu_serial"] for row in results] == ["SERIAL-B"]
 

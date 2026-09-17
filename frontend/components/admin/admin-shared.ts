@@ -194,11 +194,15 @@ export function blankProfileDraft(): ProfileDraft {
   };
 }
 
+/** Rótulo de apresentação da coluna "Perfis" - não muda `role` nem autorização, só o texto
+ * exibido. Achado da auditoria de frontend de 2026-09-14: um usuário salvo sem nenhum perfil
+ * vinculado mostrava o código interno bruto do `role` legado (ex.: "workspace_restricted") na
+ * tabela, em vez de um rótulo compreensível para quem administra o ecossistema. */
 export function profileNames(user: AuthUser, profiles: AccessProfile[]) {
   const names = user.access_profile_ids
     .map((id) => profiles.find((profile) => profile.id === id)?.name)
     .filter(Boolean);
-  return names.length ? names.join(", ") : user.role;
+  return names.length ? names.join(", ") : "Sem perfil definido";
 }
 
 export function permissionGroups(permissions: EcosystemPermission[]) {

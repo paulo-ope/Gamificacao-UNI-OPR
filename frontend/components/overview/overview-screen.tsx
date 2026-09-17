@@ -3,9 +3,9 @@
 import { Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { AppSwitch } from "@/components/gamification/config-ui";
 import { OverviewFilterBar } from "@/components/overview/overview-filter-bar";
 import { Button } from "@/components/ui/button";
+import { AppSwitch } from "@/components/ui/switch";
 import { OverviewGamificationCard } from "@/components/overview/overview-gamification-card";
 import { OverviewKpiStrip } from "@/components/overview/overview-kpi-strip";
 import { OverviewRegionalTable } from "@/components/overview/overview-regional-table";
@@ -429,8 +429,11 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         na tela. Âmbar (não azul, já usado pelo resto da barra de filtros) pra se destacar como
         um estado temporário, não mais um filtro comum.
       */}
+      {/* `top-[var(--workspace-header-height)]`: mesma fonte única do offset do header usada em
+          `operations-filter-panel.tsx` e `opa-module-components.tsx` - ver
+          `--workspace-header-height` em app/globals.css (medida ao vivo por `WorkspaceAppShell`). */}
       {isDrilled && preDrillFilters ? (
-        <div className="sticky top-[79px] z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 shadow-md">
+        <div className="sticky top-[var(--workspace-header-height)] z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 shadow-md">
           <span className="font-medium">
             Recorte temporário aplicado - clicou num dia, filial ou modelo pra detalhar só aquilo.
           </span>
@@ -514,20 +517,20 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
 
       <div className="grid gap-4 xl:grid-cols-3">
         <OverviewShareDonut
-          eyebrow="Finalizadas por filial"
+          eyebrow="Finalizadas por regional"
           title="Onde a produção se concentra"
-          subtitle="Todas as filiais, cada uma com número e cor - sem agrupar em Outros."
+          subtitle="Todas as regionais, cada uma com número e cor - sem agrupar em Outros."
           items={completedByRegional}
           totalLabel="finalizadas"
           state={{ loading: matrix.loading, error: matrix.error }}
-          onSelect={(regional) => drillFilters({ regionals: [regional] })}
+          onSelect={(regional) => drillFilters({ regional_groups: [regional] })}
           // Pedido explícito do usuário (2026-09-04): "que os donuts apareça todas filial" - nunca
           // dobrar em "Outros" aqui, mesmo além do teto de cor da paleta (`CATEGORICAL_SLOTS`, 8
           // slots). Além do 8º nome, a fatia cai no cinza neutro (`assignSeriesColors`) e passa a
-          // repetir cor com outra(s) filial(is) no ANEL - mas a lista ao lado (nome, número, %)
+          // repetir cor com outra(s) regional(is) no ANEL - mas a lista ao lado (nome, número, %)
           // continua distinguindo cada uma individualmente, então nenhum dado fica escondido, só a
-          // cor deixa de ser exclusiva a partir da 9ª. Nº de filiais reais hoje (~13-15) já
-          // ultrapassa isso.
+          // cor deixa de ser exclusiva a partir da 9ª. Desde 2026-09-14 a tela agrupa por Regional
+          // (não mais Filial granular), então o teto passou a valer bem menos vezes.
           maxSlices={completedByRegional.length}
         />
         {drilledTeamModel ? (
@@ -571,7 +574,7 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         data={matrix.data}
         capacity={capacity.data?.items ?? null}
         state={{ loading: matrix.loading, error: matrix.error }}
-        onDrillRegional={(regional) => drillFilters({ regionals: [regional] })}
+        onDrillRegional={(regional) => drillFilters({ regional_groups: [regional] })}
       />
 
       <div className="grid gap-4 xl:grid-cols-2">

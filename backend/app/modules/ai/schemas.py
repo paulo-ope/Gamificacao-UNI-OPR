@@ -76,6 +76,9 @@ class AiOrderFilters(BaseModel):
     team_models: list[str] = Field(default_factory=list, max_length=100)
     companies: list[str] = Field(default_factory=list, max_length=100)
     regionals: list[str] = Field(default_factory=list, max_length=100)
+    # "Regional" agrupada (ex.: "UNI - ROLIM DE MOURA" já inclui São Felipe D'Oeste) - filtro
+    # adicional ao lado de `regionals` (granular), ver services/regional.py.
+    regional_groups: list[str] = Field(default_factory=list, max_length=100)
     states: list[str] = Field(default_factory=list, max_length=100)
     cities: list[str] = Field(default_factory=list, max_length=100)
     contract_types: list[str] = Field(default_factory=list, max_length=100)

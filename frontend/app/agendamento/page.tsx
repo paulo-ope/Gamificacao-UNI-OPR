@@ -124,9 +124,6 @@ function AgendamentoPageContent({ user }: { user: AuthUser }) {
   const [options, setOptions] = useState<SchedulingFilterOptions>(EMPTY_OPTIONS);
   const [dashboard, setDashboard] = useState<SchedulingDashboard | null>(null);
   const [todayDashboard, setTodayDashboard] = useState<SchedulingDashboard | null>(null);
-  const [backlog, setBacklog] = useState<SchedulingBacklogItem[]>([]);
-  const [reschedulesByTechnician, setReschedulesByTechnician] = useState<SchedulingRescheduleByTechnicianItem[]>([]);
-  const [reschedulesByOperator, setReschedulesByOperator] = useState<SchedulingRescheduleByOperatorItem[]>([]);
   // Dados das abas Rankings e Desempenho - janela própria (`period`), independente do mês em
   // navegação no calendário do Painel (pedido do usuário 2026-08-31, ver `defaultPeriod`).
   const [periodDashboard, setPeriodDashboard] = useState<SchedulingDashboard | null>(null);
@@ -166,18 +163,17 @@ function AgendamentoPageContent({ user }: { user: AuthUser }) {
       const bounds = monthBounds(nextMonth);
       const monthFilters = toFilterState(bounds, secondary);
       const todayFilters = toFilterState({ date_from: isoDate(new Date()), date_to: isoDate(new Date()) }, secondary);
-      const [nextDashboard, nextToday, nextBacklog, nextByTechnician, nextByOperator] = await Promise.all([
+      // Achado de auditoria (2026-09-14): esta função só alimenta o Painel (calendário do mês),
+      // que usa somente `dashboard`/`todayDashboard` - backlog e reagendamentos por
+      // técnico/operador do mês eram buscados aqui e nunca lidos (Rankings/Desempenho usam a
+      // janela própria de `loadPeriodData`, com seus próprios `periodBacklog`/
+      // `periodReschedulesBy*`). Removidas as 3 chamadas de API que só desperdiçavam requisição.
+      const [nextDashboard, nextToday] = await Promise.all([
         schedulingApi.dashboard(monthFilters, signal),
         schedulingApi.dashboard(todayFilters, signal),
-        schedulingApi.backlog(monthFilters, 100, signal),
-        schedulingApi.reschedulesByTechnician(monthFilters, signal),
-        schedulingApi.reschedulesByOperator(monthFilters, signal),
       ]);
       setDashboard(nextDashboard);
       setTodayDashboard(nextToday);
-      setBacklog(nextBacklog);
-      setReschedulesByTechnician(nextByTechnician.items);
-      setReschedulesByOperator(nextByOperator.items);
       setAppliedFilters(secondary);
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;

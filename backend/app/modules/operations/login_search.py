@@ -11,7 +11,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from app.models import User
 from app.modules.ai_governance.response_meta import build_meta
+from app.services.regional import regional_scope_or_deny
 
 from .login_geo_clusters import _geo_radius_condition
 from .models import OperationLoginCurrentStatus, OperationLoginStatusSnapshot, OperationOnuSignalCurrent
@@ -66,6 +68,7 @@ def _datetime_op_conditions(column, op: dict | None) -> list:
 def search_logins(
     db: Session,
     *,
+    user: User | None,
     logins: list[str] | None = None,
     login_query: str | None = None,
     login_ids: list[int] | None = None,
@@ -89,9 +92,33 @@ def search_logins(
     `logins` é igualdade exata (lista); `login_query` é busca parcial (`ILIKE %valor%`) - "pesquise
     o login cliente123" usa `login_query`, "traga estes 3 logins exatos" usa `logins`. `pon_ids`/
     `transmitter_ids`/`contract_ids` fazem JOIN com `operations_onu_signal_current` (só logins com
-    telemetria capturada aparecem quando esses filtros são usados)."""
+    telemetria capturada aparecem quando esses filtros são usados). Sempre aplica o escopo
+    regional de `user` (achado P0-2 da auditoria de 2026-09-15) - `regionals` do chamador só
+    recorta DENTRO desse escopo, nunca amplia."""
     page_size = min(page_size, MAX_LOGIN_SEARCH_RESULTS)
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return {
+            "items": [],
+            "total_encontrado": 0,
+            "page": page,
+            "page_size": page_size,
+            "has_more": False,
+            "meta": build_meta(
+                applied_filters={
+                    "logins": logins, "login_query": login_query, "login_ids": login_ids,
+                    "online_statuses": online_statuses, "regionals": regionals,
+                    "pon_ids": pon_ids, "transmitter_ids": transmitter_ids, "contract_ids": contract_ids,
+                    "near_latitude": near_latitude, "near_longitude": near_longitude, "radius_km": radius_km,
+                    "status_changed_at": status_changed_at, "last_connected_at": last_connected_at,
+                    "last_disconnected_at": last_disconnected_at, "captured_at": captured_at,
+                },
+                source_last_sync=_login_source_last_sync(db),
+            ),
+        }
     conditions = []
+    if allowed_regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
     if logins:
         conditions.append(OperationLoginCurrentStatus.login.in_(logins))
     if login_query:
@@ -217,14 +244,23 @@ def _recent_login_events(db: Session, login_id: int, *, since: datetime) -> list
     return events
 
 
-def get_login_detail(db: Session, *, login: str | None = None, login_id: int | None = None, history_hours: int = 24) -> dict | None:
+def get_login_detail(
+    db: Session, *, user: User | None, login: str | None = None, login_id: int | None = None, history_hours: int = 24
+) -> dict | None:
     """Detalhamento completo de um login (identificação, status de conexão com tempo no estado
     atual JÁ CALCULADO, telemetria ONU/PON e histórico recente de eventos) - `login` ou `login_id`,
     pelo menos um dos dois. Retorna `None` quando não encontrado (o chamador decide o formato do
-    erro - HTTPException na rota REST, ValueError na tool MCP)."""
+    erro - HTTPException na rota REST, ValueError na tool MCP) - inclusive quando o login existe
+    mas está fora do escopo regional de `user` (achado P0-2 da auditoria de 2026-09-15): devolver
+    404 em vez de 403 evita vazar que o login existe em outra regional."""
     if login is None and login_id is None:
         raise ValueError("Informe login ou login_id.")
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return None
     conditions = []
+    if allowed_regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
     if login_id is not None:
         conditions.append(OperationLoginCurrentStatus.login_id == login_id)
     if login is not None:

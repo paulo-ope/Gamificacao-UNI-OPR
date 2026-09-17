@@ -285,7 +285,7 @@ export default function PortalPage() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background px-4">
         <div className="flex items-center gap-3 rounded-lg border bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
-          <Loader2 className="h-4 w-4 animate-spin text-[#2d5fff]" />
+          <Loader2 className="h-4 w-4 animate-spin text-uni-royal" />
           Carregando portal
         </div>
       </main>
@@ -305,7 +305,7 @@ export default function PortalPage() {
         helperText={
           <>
             Precisa de acesso?{" "}
-            <Link href="/solicitar-acesso" className="font-medium text-[#0028f3] hover:underline">
+            <Link href="/solicitar-acesso" className="font-medium text-uni-impact hover:underline">
               Solicite aqui
             </Link>
             .
@@ -333,7 +333,7 @@ export default function PortalPage() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background px-4">
         <div className="flex items-center gap-3 rounded-lg border bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
-          <Loader2 className="h-4 w-4 animate-spin text-[#2d5fff]" />
+          <Loader2 className="h-4 w-4 animate-spin text-uni-royal" />
           Carregando portal
         </div>
       </main>
@@ -365,14 +365,14 @@ export default function PortalPage() {
           <div className="flex min-w-0 items-center gap-3">
             <Image alt="UNI Internet" className="h-9 w-14 shrink-0 object-contain object-left" height={36} priority src="/brand/uni-logo.png" width={56} />
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase text-[#0028f3]">UNI OPR</p>
+              <p className="text-xs font-semibold uppercase text-uni-impact">UNI OPR</p>
               <h1 className="truncate text-lg font-semibold"><span className="sm:hidden">Portal</span><span className="hidden sm:inline">Portal do ranking</span></h1>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <label className="sr-only" htmlFor="portal-period">Fechamento</label>
             <select
-              className="h-8 max-w-24 rounded-md border border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 outline-none ring-offset-2 focus:ring-2 focus:ring-[#2d5fff]"
+              className="h-8 max-w-24 rounded-md border border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 outline-none ring-offset-2 focus:ring-2 focus:ring-uni-royal"
               id="portal-period"
               value={selectedPeriod
                 ? periodKey(selectedPeriod.reference_month, selectedPeriod.reference_year)
@@ -427,7 +427,7 @@ export default function PortalPage() {
                 <p className="text-sm text-slate-500">Acompanhamento executivo de todas as regionais</p>
                 <h2 className="text-xl font-semibold leading-tight sm:text-2xl">Visão geral do fechamento</h2>
               </div>
-              <Badge className="border-[#2d5fff]/25 bg-[#2d5fff]/10 text-[#0028f3]">{overview.total_regionals} regionais</Badge>
+              <Badge className="border-uni-royal/25 bg-uni-royal/10 text-uni-impact">{overview.total_regionals} regionais</Badge>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard label="Colaboradores cadastrados" value={formatNumber(overview.total_collaborators)} detail={`${formatNumber(overview.total_service_orders)} O.S. no período`} />
@@ -497,7 +497,7 @@ export default function PortalPage() {
             {audit.message ? <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{audit.message}</p> : null}
             <section className="grid gap-3 lg:grid-cols-[1.4fr_1fr]">
               <div className="rounded-lg border bg-white p-5 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">Composição do resultado</h3><Badge className="border-[#2d5fff]/25 bg-[#2d5fff]/10 text-[#0028f3]">{audit.health_status}</Badge></div>
+                <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">Composição do resultado</h3><Badge className="border-uni-royal/25 bg-uni-royal/10 text-uni-impact">{audit.health_status}</Badge></div>
                 <div className="mt-5 grid gap-4 sm:grid-cols-3">
                   <div><p className="text-xs font-medium uppercase text-slate-500">Pontos base</p><p className="mt-1 text-xl font-semibold">{formatNumber(audit.gross_points)}</p></div>
                   <div><p className="text-xs font-medium uppercase text-slate-500">Descontos</p><p className="mt-1 text-xl font-semibold text-rose-700">-{formatNumber(audit.penalty_points)}</p></div>
@@ -522,7 +522,7 @@ export default function PortalPage() {
             <section className="rounded-lg border bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3"><div className="min-w-0"><h3 className="font-semibold">O que mais pagou no período</h3><p className="mt-1 text-sm text-slate-500">Distribuição dos pontos líquidos por origem.</p></div><div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto"><Button size="sm" variant={auditBreakdown === "groups" ? "default" : "outline"} onClick={() => setAuditBreakdown("groups")}>Grupos</Button><Button size="sm" variant={auditBreakdown === "subjects" ? "default" : "outline"} onClick={() => setAuditBreakdown("subjects")}>Assuntos</Button></div></div>
               <div className="mt-5 space-y-4">
-                {auditBreakdowns.map((item) => <div key={item.label}><div className="mb-1 grid gap-1 text-sm sm:grid-cols-[1fr_auto] sm:items-center sm:gap-3"><div className="min-w-0"><p className="truncate font-medium">{item.label}</p><p className="text-xs text-slate-500">{item.service_orders} O.S. · {formatNumber(item.base_points)} pts base</p></div><p className="font-semibold text-[#0028f3] sm:whitespace-nowrap">{formatNumber(item.net_points)} pts</p></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-[#2d5fff]" style={{ width: `${Math.max(3, (item.net_points / auditMaxBreakdownPoints) * 100)}%` }} /></div></div>)}
+                {auditBreakdowns.map((item) => <div key={item.label}><div className="mb-1 grid gap-1 text-sm sm:grid-cols-[1fr_auto] sm:items-center sm:gap-3"><div className="min-w-0"><p className="truncate font-medium">{item.label}</p><p className="text-xs text-slate-500">{item.service_orders} O.S. · {formatNumber(item.base_points)} pts base</p></div><p className="font-semibold text-uni-impact sm:whitespace-nowrap">{formatNumber(item.net_points)} pts</p></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-uni-royal" style={{ width: `${Math.max(3, (item.net_points / auditMaxBreakdownPoints) * 100)}%` }} /></div></div>)}
                 {!auditBreakdowns.length ? <p className="text-sm text-slate-500">Ainda não há pontuação para agrupar.</p> : null}
               </div>
             </section>
@@ -569,7 +569,7 @@ export default function PortalPage() {
             {summary.ranking.map((item) => (
               <div
                 key={item.collaborator_id}
-              className={`rounded-lg border bg-white p-4 shadow-sm ${item.is_current_user ? "border-[#2d5fff] ring-2 ring-[#27d9bf]/40" : ""}`}
+              className={`rounded-lg border bg-white p-4 shadow-sm ${item.is_current_user ? "border-uni-royal ring-2 ring-uni-turquoise/40" : ""}`}
               >
                 <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-start">
                   <div className="min-w-0">
@@ -632,8 +632,8 @@ export default function PortalPage() {
                   <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     <p className={`text-sm font-semibold ${order.net_points > 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatNumber(order.net_points)} pts</p>
                     <Badge className={`${statusClass(order.status_label)} w-fit`}>{order.status_label}</Badge>
-                    <span className="text-xs font-medium text-[#0028f3] group-open:hidden">Detalhes</span>
-                    <span className="hidden text-xs font-medium text-[#0028f3] group-open:inline">Fechar</span>
+                    <span className="text-xs font-medium text-uni-impact group-open:hidden">Detalhes</span>
+                    <span className="hidden text-xs font-medium text-uni-impact group-open:inline">Fechar</span>
                   </div>
                 </summary>
                 <div className="border-t p-4">
@@ -659,14 +659,14 @@ export default function PortalPage() {
                     <p className="text-xs text-emerald-700">Com multiplicador: {formatNumber(multiplierEffect(order.net_points, score?.health_multiplier ?? audit?.health_multiplier))} pts</p>
                   </div>
                 </div>
-                <div className="mt-3 rounded-lg border border-[#2d5fff]/15 bg-[#2d5fff]/5 p-3 text-sm text-slate-700">
+                <div className="mt-3 rounded-lg border border-uni-royal/15 bg-uni-royal/5 p-3 text-sm text-slate-700">
                   <p className="font-medium text-slate-950">{orderEffectLabel(order)}</p>
                   <p className="mt-1 text-xs text-slate-600">
                     No ranking: esta O.S. ajuda com {formatNumber(order.net_points)} pts líquidos antes do multiplicador de saúde operacional.
                   </p>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge className="border-[#2d5fff]/20 bg-[#2d5fff]/5 text-[#0028f3]">SLA: {slaLabel(order.sla_status_normalized)}</Badge>
+                  <Badge className="border-uni-royal/20 bg-uni-royal/5 text-uni-impact">SLA: {slaLabel(order.sla_status_normalized)}</Badge>
                   {order.diagnosis ? <Badge className="border-slate-200 bg-slate-50 text-slate-700">Diagnóstico: {order.diagnosis}</Badge> : null}
                 </div>
                 {order.reason ? <p className="mt-3 text-xs text-slate-600">{order.reason}</p> : null}
@@ -712,7 +712,7 @@ export default function PortalPage() {
           return (
             <button
               key={tab.id}
-              className={`flex min-w-[76px] flex-col items-center gap-1 rounded-2xl px-2 py-2.5 text-[11px] font-medium transition ${active ? "bg-[#2d5fff]/10 text-[#0028f3] ring-1 ring-[#2d5fff]/15" : "text-slate-500"}`}
+              className={`flex min-w-[76px] flex-col items-center gap-1 rounded-2xl px-2 py-2.5 text-[11px] font-medium transition ${active ? "bg-uni-royal/10 text-uni-impact ring-1 ring-uni-royal/15" : "text-slate-500"}`}
               type="button"
               onClick={() => setActiveTab(tab.id)}
             >

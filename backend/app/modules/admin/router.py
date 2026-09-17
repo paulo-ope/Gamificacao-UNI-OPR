@@ -85,6 +85,13 @@ STRUCTURE_STATUSES = ("pending_review", "validated", "needs_fix", "outside_opera
 # nem inativado por engano (ver `_profile_delete_blocked_reason`).
 ADMIN_GATEKEEPER_PERMISSION = "admin:users:write"
 
+# Achado da auditoria de 2026-09-15 (P0): as rotas REAIS de `/users`/`/invites`/`/access-requests`
+# sempre aceitaram o legado `users:manage`, uma permissão que esta trava nunca considerava - dava
+# pra excluir/inativar o último perfil com `users:manage` sem aviso algum, mesmo que ele não
+# concedesse `admin:users:write` (que só controla a TELA de administração, não as rotas de `/users`
+# de verdade - ver `require_any_permission` em `core/security.py`). A trava agora olha as DUAS.
+USER_MANAGEMENT_GATEKEEPER_PERMISSIONS = (ADMIN_GATEKEEPER_PERMISSION, "users:manage")
+
 
 def _profile_delete_blocked_reason(db: Session, profile: AccessProfile, action: str = "excluir") -> str | None:
     """Motivo para NÃO poder excluir este perfil, ou None quando pode.
@@ -99,7 +106,10 @@ def _profile_delete_blocked_reason(db: Session, profile: AccessProfile, action: 
     de permissões do papel legado (`permissions_for_user`), o que seria uma mudança de acesso
     silenciosa em vez de uma remoção.
     """
-    grants_gatekeeper = any(item.permission == ADMIN_GATEKEEPER_PERMISSION for item in profile.permissions)
+    grants_gatekeeper = {
+        permission for permission in USER_MANAGEMENT_GATEKEEPER_PERMISSIONS
+        if any(item.permission == permission for item in profile.permissions)
+    }
     if not grants_gatekeeper or not profile.active:
         return None
     others = db.scalars(
@@ -108,15 +118,16 @@ def _profile_delete_blocked_reason(db: Session, profile: AccessProfile, action: 
         .where(
             AccessProfile.id != profile.id,
             AccessProfile.active.is_(True),
-            AccessProfilePermission.permission == ADMIN_GATEKEEPER_PERMISSION,
+            AccessProfilePermission.permission.in_(USER_MANAGEMENT_GATEKEEPER_PERMISSIONS),
         )
     ).all()
     if others:
         return None
     return (
         "É o último perfil ativo que concede a administração de acessos "
-        f"({ADMIN_GATEKEEPER_PERMISSION}). Crie outro perfil com essa permissão antes de {action} "
-        "este, ou ninguém mais consegue administrar o ecossistema."
+        f"({' ou '.join(USER_MANAGEMENT_GATEKEEPER_PERMISSIONS)}). Crie outro perfil com pelo menos "
+        f"uma dessas permissões antes de {action} este, ou ninguém mais consegue administrar o "
+        "ecossistema."
     )
 
 

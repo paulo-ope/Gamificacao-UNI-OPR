@@ -28,7 +28,7 @@ function period(month: number | null | undefined, year: number | null | undefine
 function bandClass(label: string | null | undefined) {
   if (label === "Acima da faixa") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   if (label === "Abaixo da faixa") return "border-rose-200 bg-rose-50 text-rose-800";
-  return "border-[#2d5fff]/25 bg-[#2d5fff]/10 text-[#0028f3]";
+  return "border-uni-royal/25 bg-uni-royal/10 text-uni-impact";
 }
 
 function MiniMetric({
@@ -49,7 +49,7 @@ function MiniMetric({
       ? "border-emerald-200 bg-emerald-50 text-emerald-900"
       : tone === "warn"
         ? "border-amber-200 bg-amber-50 text-amber-900"
-        : "border-[#2d5fff]/20 bg-white text-slate-950";
+        : "border-uni-royal/20 bg-white text-slate-950";
   return (
     <div className={`min-w-0 rounded-lg border p-4 shadow-sm ${toneClass}`}>
       <div className="flex items-center justify-between gap-3">
@@ -141,7 +141,7 @@ export function ManagerTeamOverview({ team }: Props) {
                 <div className="mb-1 grid gap-1 text-sm sm:grid-cols-[88px_1fr_auto] sm:items-center sm:gap-3">
                   <p className="font-medium">{period(item.reference_month, item.reference_year)}</p>
                   <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-[#2d5fff]" style={{ width: `${Math.max(4, (item.final_points / maxHistoryPoints) * 100)}%` }} />
+                    <div className="h-full rounded-full bg-uni-royal" style={{ width: `${Math.max(4, (item.final_points / maxHistoryPoints) * 100)}%` }} />
                   </div>
                   <p className="text-sm font-semibold text-slate-900">{number(item.sla_rate)}% SLA</p>
                 </div>
@@ -156,7 +156,7 @@ export function ManagerTeamOverview({ team }: Props) {
 
         <div className="rounded-lg border bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center gap-2">
-            <Activity className="h-4 w-4 text-[#0028f3]" />
+            <Activity className="h-4 w-4 text-uni-impact" />
             <h3 className="font-semibold">Faixas do time</h3>
           </div>
           <div className="mt-5 space-y-4">

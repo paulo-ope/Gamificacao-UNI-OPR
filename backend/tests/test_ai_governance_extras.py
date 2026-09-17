@@ -109,5 +109,5 @@ def test_query_login_status_filters_by_radius(db_session):
     )
     db_session.commit()
 
-    results = query_login_status(db_session, near_latitude=-10.88, near_longitude=-61.95, radius_km=5)
+    results = query_login_status(db_session, user=None, near_latitude=-10.88, near_longitude=-61.95, radius_km=5)
     assert [row.login for row in results] == ["perto"]

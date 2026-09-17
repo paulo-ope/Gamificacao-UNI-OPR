@@ -13,25 +13,208 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-16** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-17** — branch `claude/suporte-sync-backfill-madrugada`
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
-compartilhado por várias sessões rodando em paralelo no mesmo dia (2026-09-15) -
-`git status` mostra ~145 arquivos modificados/novos, **nada commitado, nada
-enviado ao remoto** (`git status --branch` sem `[ahead]`). Antes de rodar qualquer
-comando destrutivo (`git checkout .`, `git reset --hard`, `git clean`), leia esta
-seção inteira - o trabalho de outra sessão pode estar exatamente nesses arquivos
-"soltos". As frentes simultâneas de hoje, todas já registradas abaixo com detalhe:
-(1) auditoria + 2 bugs críticos + 6 altos corrigidos na Gamificação Operacional;
-(2) filtro "Regional" (agrupado) implementado e validado na Operação
-Analítica/Visão Geral/IA; (3) auditoria técnica geral do sistema inteiro
-(diagnóstico, `docs/auditoria-tecnica-geral-2026-09-15.md`, nada corrigido ainda).
-Rodar a suíte de testes já confirmou 1340 passed/0 failures numa rodada completa
-(ver checkpoint abaixo) - o erro de ambiente do SQLite-em-thread é intermitente,
-não indica regressão.
+compartilhado por várias sessões rodando em paralelo há alguns dias -
+`git status` mostra bem mais de 145 arquivos modificados/novos, **nada
+commitado, nada enviado ao remoto** (`git status --branch` sem `[ahead]`). Antes
+de rodar qualquer comando destrutivo (`git checkout .`, `git reset --hard`,
+`git clean`), leia esta seção inteira - o trabalho de outra sessão pode estar
+exatamente nesses arquivos "soltos". As frentes simultâneas mais recentes, todas
+já registradas abaixo com detalhe: (1) auditoria + 2 bugs críticos + 6 altos
+corrigidos na Gamificação Operacional; (2) filtro "Regional" (agrupado)
+implementado e validado na Operação Analítica/Visão Geral/IA; (3) auditoria
+técnica geral do sistema inteiro (diagnóstico, completa em
+`docs/auditoria-tecnica-geral-2026-09-15.md`; **P0-1 já corrigido em 2026-09-17,
+P0-2/P0-3/P0-4 ainda não** - ver item dedicado); (4) split do
+`logic-configuration-panel.tsx` em arquivos por seção (Gamificação); (5)
+limpeza segura de Docker na VM de produção; (6) **plano de evolução analítica do
+Atendimento IXC (Fases 0-6) implementado por completo** (2026-09-15/17, ver item
+dedicado logo abaixo) - painel único (`IxcTicketAnalyticsPanel`) agora é o
+PADRÃO da aba `/suporte?tab=ixc_tickets`, taxonomia populada com peso de risco,
+sinal textual sobre a descrição do atendimento. **Esta é a MESMA frente dos
+itens 8/9 acima** (taxonomia estendida/burst→Intelligence) - não é trabalho
+duplicado, é a mesma evolução continuada por sessões diferentes no mesmo
+checkout, sem conflito confirmado (`alembic current` bate, `tsc --noEmit`
+limpo, suíte `-k "ixc"` 228/228 passed rodando tudo junto). Rodar a suíte de
+testes já confirmou 1340 passed/0 failures numa rodada completa (ver checkpoint
+abaixo) - o erro de ambiente do SQLite-em-thread é intermitente, não indica
+regressão.
 
 ## O que foi feito recentemente
 
+- **Plano de evolução analítica do Atendimento IXC — Fases 0 a 6 implementadas por
+  completo (2026-09-15/17)**. Plano técnico de 16 seções apresentado e aprovado antes
+  de codificar (arquitetura: camada nova por cima de `SupportIxcTicket`, rotas antigas
+  preservadas - estratégia strangler). Resumo por fase, todas com teste próprio e
+  validação ao vivo no navegador (login real, dado real):
+  - **Fase 0/1** (fundação + métricas novas): índices compostos
+    (`subject_id+created_at`, `customer_id+created_at`); `support_ixc_taxonomy_mappings`
+    (tema/categoria por `subject_id`, versionada por `effective_from`);
+    `ixc_ticket_reach.py` (clientes únicos, reincidência 24h/72h/7d);
+    `driver_decomposition()` (excesso/`contribution_pct` por motivo).
+  - **Fase 2** (contexto único): `ixc_ticket_context.py` generaliza o drill por
+    `dimension` (regional→cidade→bairro→motivo) com filtros independentes, inspirado no
+    `control_tower()` de Operações. Rotas novas `GET /support/ixc/analytics/
+    {context,priorities,drivers}`, modelo de período livre (não mês-calendário).
+  - **Fase 3** (frontend unificado): `IxcTicketAnalyticsPanel`
+    (`frontend/app/suporte/_components/ixc-ticket-analytics-panel.tsx`) - tela única com
+    breadcrumb, KPIs, drivers, prioridades e (desde 2026-09-15) lista de protocolos com
+    risco no fim do drill. **É o PADRÃO da aba desde 2026-09-15** - os componentes
+    antigos (`ixc-ticket-overview.tsx`/`ixc-ticket-drilldown.tsx`) continuam no código,
+    acessíveis pelo botão "Usar painel clássico", não removidos.
+  - **Fase 4** (momentum/burst): `support_ixc_hourly_baselines` (baseline por
+    dia-da-semana/hora, job diário idempotente) + `MOMENTUM_V1`
+    (`ixc_ticket_momentum.py`) + `BURST_V1` (`ixc_ticket_baseline.detect_bursts`, depois
+    integrado ao motor de alertas do UNI Intelligence por outra sessão - ver item
+    dedicado "Item 9" abaixo, mesma frente).
+  - **Fase 5** (camada de IA): tools MCP `opr_ixc_brief`/`opr_ixc_signals`, governadas
+    por `ai.ixc_brief`/`ai.ixc_signals` - **desvio deliberado do plano original**: sem a
+    máquina pesada de token/API-key de `ai/router.py` (`search_orders`), mesmo padrão
+    mais simples já usado por `opr_support_overview/breakdowns/timeseries`.
+  - **Fase 6** (correlação O.S.): `ixc_ticket_os_conversion.py` (`OS_CONVERSION_V1`),
+    usa o vínculo que já existia no schema (`OperationOrder.ticket_id ==
+    SupportIxcTicket.source_id`, migração `20260911_0091`) - nenhuma migração nova.
+    **Campo `lift` do contrato original não implementado** (exigiria heurística de
+    correlação probabilística própria, fora do escopo desta rodada).
+  - **Recalibração + risco textual (pedido do usuário, 2026-09-15)**: limiar de desvio
+    CRÍTICO/EM MELHORA recalibrado de +20%/-10% pra **+15%/-15%**
+    (`ixc_ticket_overview.CRITICAL_DEVIATION_PCT`/`IMPROVING_DEVIATION_PCT`). Taxonomia
+    populada com 71 motivos reais (tema/categoria + `risk_weight` 0-100, ver migração
+    `20260915_0099`) - correção explícita do usuário: "N1/N2" não é tema, motivo
+    genérico (`Registro de Atendimento Operacional`, N1/N2) entra em
+    "Suporte Interno" com peso baixo, a DESCRIÇÃO decide o resto. Novo
+    `ixc_ticket_text_signal.py`: analisa `SupportIxcTicket.report` por palavra-chave
+    (zera por termo financeiro, sobe muito por "sem conexão"/"LOS", sobe por
+    "lentidão"/"oscilação", reduz por "roteador"/"wi-fi") e combina com o peso do tema
+    em `resolve_ticket_risk()` (0-100, clampado) - conectado em `/support/ixc/tickets`
+    (campos `risk_score`/`subtema_inferido`/tema/categoria) e nas telas (clássica e
+    painel único), coluna "Risco" na lista de protocolos.
+  - **Nota importante pra quem entrar depois**: os itens "8" e "9" mais abaixo neste
+    mesmo documento (taxonomia estendida pro catálogo completo do IXC, burst→motor de
+    alertas do Intelligence) são a MESMA frente, continuada por outra sessão nos
+    mesmos arquivos - não é duplicação, é continuação. Confirmado sem conflito:
+    `alembic current` = `20260917_0103` (head), `tsc --noEmit` limpo, suíte `pytest -k
+    "ixc"` = **228 passed** rodando tudo junto (2026-09-17).
+  - **Achado de ambiente, não de código**: a suíte completa `-k "ixc"` travou uma vez
+    em ~2% de CPU sem progredir (mesmo sintoma documentado no item de "Frentes em
+    andamento" sobre `test_operations_module.py`) - resolvido reiniciando o container
+    (`docker compose restart backend`), confirmando não ser regressão.
+
+- **Limpeza segura de Docker na VM de produção (`noc.uni@zige`, 2026-09-17)**,
+  relacionada ao [[incidente de disco de 12/09]] (`operations_login_status_snapshots`
+  sem retenção). `docker system df` antes: 3 imagens, 3 containers, 2 volumes locais
+  (82.51GB, 1 ativo), 912.6MB de build cache - tudo já ativo/reclamável em 0B, exceto
+  uma rede órfã (`opr-gamificacao-backup-20260730-143935_default`, removida pelo
+  `docker system prune -a -f`, sem tocar em volumes). Investigado à parte o volume
+  inativo `opr-gamificacao-backup-20260730-143935_postgres_data`: confirmado vazio
+  (`du -sh` = 4.0K, só o diretório) antes de remover - o backup de 30/07 nunca chegou
+  a popular esse volume. Removido com `docker volume rm`. `docker system df` depois:
+  1 volume local (82.51GB, ativo = produção), nada mais reclamável. **Nenhum dado de
+  produção foi tocado** - `docker system prune` por padrão nunca mexe em volumes;
+  a remoção do volume órfão foi manual e só depois de confirmado vazio via `du`.
+- **`logic-configuration-panel.tsx` — passo 2 de N do split em arquivos por seção
+  (2026-09-17)**. 6 seções do modo "avançado" extraídas pra arquivos próprios com props
+  tipadas (`logic-configuration-{categories,diagnoses,sla,recurrence,integration,advanced}-section.tsx`).
+  Arquivo principal: 3.110 → 1.687 linhas. "Grupos" e "Assuntos" continuam no arquivo
+  principal de propósito (drawer de edição e modais de exclusão em lote são
+  compartilhados entre as duas, split ainda não decidido). `tsc`/`vitest` limpos, todas
+  as seções validadas ao vivo no navegador uma por uma.
+  - **Incidente registrado por transparência**: o agente que fez a extração corrompeu o
+    arquivo e rodou `git checkout --` nele sem perguntar - destrutivo, e arriscado nesse
+    checkout compartilhado por várias sessões. Apurado depois: só a edição não commitada
+    do passo 1 (extração de helpers) foi perdida, e foi reconstruída a partir do `HEAD` +
+    `logic-configuration-helpers.tsx`; nada de outras sessões foi afetado (o trabalho de
+    Fases 3/5 nesse arquivo já estava commitado em `7702004`) e nenhum outro arquivo foi
+    tocado. Detalhe completo em `docs/plano-gamificacao-reestruturacao.md`.
+  - **Passo 3 de N — concluído, feito direto (sem subagente) por causa do incidente
+    acima**: as duas tabelas restantes, "Grupos" e "Assuntos", foram extraídas pra
+    `logic-configuration-groups-section.tsx` (213 linhas) e
+    `logic-configuration-subjects-section.tsx` (225 linhas). Os 4 modais de exclusão e
+    os 2 drawers de edição continuam no arquivo principal, de propósito, por serem
+    compartilhados entre as duas seções. `logic-configuration-panel.tsx`: 1.687 → 1.428
+    linhas. `tsc`/`vitest` limpos, validado ao vivo (tabelas + os 2 drawers de edição
+    abrindo certo a partir das seções extraídas). **Split considerado fechado** - as 9
+    seções JSX do modo avançado foram todas extraídas.
+- **Fase 5 do plano de reestruturação da Gamificação — "regra de negócio no
+  frontend" investigada, 1 de 3 pontos era duplicação real (2026-09-17)**. A
+  auditoria original listava ~12 pontos contra a norma "KPI vive no service,
+  frontend só formata"; investigado item a item antes de mexer:
+  - Reconstrução da média de liderança em `app/gamificacao/page.tsx`
+    (`leadershipAudit`, o item apontado como "mais grave"): confirmado no
+    backend (`services/leadership_bonus.py`) que `audit` é hoje SEMPRE
+    populado - o fallback do frontend só serve fechamentos antigos, anteriores
+    ao campo existir, e já se rotula na tela como reconstrução. **Fallback de
+    compatibilidade deliberado, não bug - não mexido.**
+  - `rankingScopeTotals`/`rankingPeriodTotalOrders` (`page.tsx`) e as somas de
+    `use-closure-data.ts`: agregação de tela (`reduce`) sobre dado já
+    carregado por inteiro, não regra reimplementada. **Não mexido.**
+  - R$/ponto duplicado 3x (`audit-panel.tsx`, `collaborator-orders-sheet.tsx`,
+    `ranking-table.tsx`) — **corrigido**: consolidado em
+    `pointValueFromTotals` (`lib/gamificacao-helpers.ts`); a versão de
+    `collaborator-orders-sheet.tsx` tinha um bug real (`|| 1` como guarda de
+    divisão por zero, que mostrava o pagamento bruto como "valor do ponto"
+    quando pontos = 0, em vez de indicar "sem base"). Validado ao vivo nas 3
+    telas (Auditoria, Ranking, Extrato do colaborador) - todas mostrando
+    `R$ 0,35/pt` pros casos normais e `R$ 0,00/pt` pros casos de 0 pontos
+    finais. `tsc --noEmit` e `vitest run` (83 testes) limpos.
+  - Detalhe completo em `docs/plano-gamificacao-reestruturacao.md`.
+
+- **Item 9 do plano de evolução analítica do Atendimento IXC — escalonamento automático quando
+  bursts detectados (2026-09-17)**. Não criou canal de alerta/notificação novo: integrou o
+  `BURST_V1` (`ixc_ticket_baseline.detect_bursts`, já existia e só era consultado sob demanda
+  pelo endpoint `/support/ixc/analytics/bursts`) no MESMO motor de alertas/incidentes do UNI
+  Intelligence que já escalona SLA, pressão operacional e incidente coletivo pro cockpit
+  (dedupe por `dedupe_key`, lifecycle NEW→CONFIRMED, auto-resolve por ciclos sem redetecção).
+  - Novo monitor `backend/app/modules/intelligence/monitors/ixc_ticket_burst.py`: avalia a
+    operação inteira + cada regional válida, só escalona as janelas de 2h/6h (a de 1h fica de
+    fora do BURST_V1 por ser sensível a ruído de minuto), severidade por proporção sobre o
+    esperado (≥3x CRÍTICO, ≥2x ALTA, senão MÉDIA).
+  - Registrado em `registry.py` como `ixc_ticket_burst` (15 min de intervalo padrão) — só isso
+    já basta pro scheduler existente rodar/criar/auto-resolver o alerta e aparecer no
+    cockpit/Administração; a tela de monitores já é genérica, não precisou de frontend novo.
+  - Testes novos em `backend/tests/test_ixc_ticket_burst_monitor.py`: detecção ativa por
+    regional, escopo sem baseline não escalona nada, e um teste fim-a-fim confirmando que a
+    detecção vira `IntelligenceAlert` de verdade pelo motor de dedupe/lifecycle compartilhado —
+    **3/3 passed**. Rodado junto com `test_intelligence_monitors.py` (11 passed),
+    `test_intelligence_scheduler.py` (5 passed) e `test_intelligence_admin.py` (18 passed, só
+    demorou ~4min neste ambiente Docker local, não é falha) sem nenhuma regressão.
+
+- **Item 8 do plano de evolução analítica do Atendimento IXC — revisão dos mapeamentos
+  `NAO_MAPEADO` (2026-09-17)**. Diagnóstico feito direto no banco local (subiu-se
+  `docker compose up -d db` pra isso): dos 130.569 atendimentos já importados (71
+  `subject_id` distintos), **100% já tinham tema mapeado** pela seed de
+  `20260915_0099` — nenhum atendimento real caía em `NAO_MAPEADO`. O risco era
+  futuro: o catálogo `su_oss_assunto` do IXC (consultado ao vivo via
+  `fetch_assuntos`) tem 145 motivos, e 74 nunca apareceram num atendimento
+  importado e ficavam sem taxonomia — se o IXC passasse a usar um deles, o
+  atendimento cairia em `NAO_MAPEADO`/`risk_weight=0` sem nenhum aviso.
+  - Nova migration `backend/alembic/versions/20260917_0101_ixc_ticket_taxonomy_seed_extended.py`
+    (aditiva, `effective_from=2026-09-17`) com os 74 mapeamentos, classificação
+    revisada e aprovada pelo usuário (reaproveita tema existente onde fazia
+    sentido; temas novos só pra cluster sem equivalente: `teste_interno`,
+    `pos_venda_homologacao`, `cobranca`, `sistemas_integracao`, `telefonia`).
+    Aplicada no banco local — `support_ixc_taxonomy_mappings` foi de 71 para 145
+    linhas, catálogo 100% coberto agora.
+  - `taxonomy_coverage_pct` (já existia em `ixc_ticket_taxonomy.py`, mas era código
+    morto — nenhum endpoint chamava) agora é calculado em
+    `ixc_ticket_overview.overview_kpis` (ponderado por atendimento, não por motivo
+    distinto) e exposto em `SupportIxcTicketOverviewKpis.taxonomy_coverage_pct`.
+  - Frontend (`ixc-ticket-overview.tsx`): banner âmbar que só aparece se a
+    cobertura cair abaixo de 100% — não polui a tela enquanto estiver tudo
+    mapeado (regra visual da seção 10 da norma).
+  - Testes novos em `test_ixc_ticket_overview.py` (cobertura ponderada por
+    atendimento, `None` sem atendimento no recorte); rodados junto com toda
+    `test_ixc_ticket_taxonomy.py` dentro do container — **33/33 passed**.
+  - **Pendência conhecida, não é regressão de código**: tentativas de rodar a
+    suíte ampla (`test_operations_module.py` e afins) dentro do container
+    `opr-gamification-backend` ficaram travadas por 15+ minutos sem crescer CPU
+    de forma condizente, mesmo os testes usando SQLite in-memory isolado (não
+    tocam o Postgres real). Não investigado a fundo ainda — parece ambiente
+    Docker Desktop local, não o código desta mudança. Se alguém esbarrar nisso de
+    novo, vale reiniciar o container (`docker compose restart backend`) antes de
+    insistir.
 - **Fase 5 (estrutura) da Gamificação — 2 itens feitos em 2026-09-17** (usuário pediu
   ritmo mais rápido, "não corrigir um bug por vez e sim vários, o que preciso mais rápido
   é a padronização no frontend" — lote validado com `tsc`/`vitest` a cada bloco e visual
@@ -64,8 +247,21 @@ não indica regressão.
     `operations/`/`management/` no mesmo checkout — não relacionada): Fechamento, aba
     Usuários (`SummaryCard` + permissão `users:manage` juntos) e Saldo de pontos
     (`isAdmin` de `user.role` + `EmptyState` nos 3 buckets vazios) — todas corretas.
-  - **Próximo passo natural**: restante da Fase 5 (regra de negócio no frontend, quebra de
-    `logic-configuration-panel.tsx` em seções) — maior risco, convém não apressar.
+  - **`logic-configuration-panel.tsx` — passo 1 de N feito (2026-09-17), com cuidado**:
+    usuário pediu explicitamente pra ir devagar aqui. Tudo que não dependia de estado do
+    componente (tipos, constantes, ~20 funções puras, o componente `SearchableMultiSelect`)
+    saiu pra `components/gamification/logic-configuration-helpers.tsx` — arquivo principal
+    caiu de 3.075 pra 2.813 linhas. Achado real: a lista de "8 exports exclusivos" da Fase
+    3.1 estava errada — `SearchableMultiSelect` nunca foi export de `config-ui.tsx`, era
+    função local deste arquivo; a lista certa tem 7, não 8. `tsc`/`vitest` limpos,
+    validado ao vivo (Governança e Tipos gerais). **A parte grande e de risco de verdade
+    continua pendente**: os 9 blocos de JSX ainda estão no arquivo principal, presos aos
+    38 `useState`/`useMemo` que ainda não foram tocados — extrair cada um exige threading
+    de ~30-40 props.
+  - **Próximo passo natural**: continuar a quebra de `logic-configuration-panel.tsx`
+    (extrair os 9 blocos de JSX, um de cada vez, com validação a cada um) ou a regra de
+    negócio no frontend (mover pra `services/` no backend) — ambos ainda pendentes,
+    maior risco, convém não apressar.
 
 - **Fase 3 (fundação visual) da Gamificação — iniciada, 3 dos 5 itens de 3.1 feitos**
   (2026-09-16, usuário: "quero atacar a parte das melhorias do layout, ler a auditoria
@@ -281,17 +477,14 @@ não indica regressão.
   abaixo, ele tem o "porquê" e a evidência completa que não cabe aqui.
   - Rodada com 7 investigações paralelas (subagentes), cada uma lendo código real
     e citando linha exata - não é achado por inspeção superficial.
-  - **4 achados P0 (crítico), nenhum corrigido ainda**, na ordem que o relatório
-    recomenda: (1) tela de Administração quebra para perfil montado só com
-    permissões `admin:*` (o backend real exige `users:manage`/`audit:read`,
-    família de permissão diferente da que o catálogo do módulo Admin declara -
-    `frontend/app/admin/page.tsx:109` vs. `backend/app/api/routes/users.py:69-71`;
-    a trava "não remova o último admin" também não cobre `users:manage`, risco de
-    lockout total); (2) `/operations/network/*` (login, ONU, geolocalização) não
-    aplica o escopo regional do gestor - usuário restrito a uma filial consegue
-    consultar dado de rede de qualquer regional (`operations/router.py:1402-1666`,
-    funções chamadas não recebem `user`); (3) governança de campo da IA
-    (`AiFieldPermission`) não tem efeito na chamada padrão de
+  - **4 achados P0 (crítico) - P0-1 e P0-2 CORRIGIDOS em 2026-09-17, P0-3 e P0-4
+    ainda não**, na ordem que o relatório recomenda: (1) ~~tela de Administração
+    quebra para perfil montado só com permissões `admin:*`~~ **corrigido** (ver
+    item dedicado abaixo); (2) ~~`/operations/network/*` (login, ONU,
+    geolocalização) não aplica o escopo regional do gestor~~ **corrigido** (ver
+    item dedicado abaixo - escopo real acabou incluindo `/api/ai/infra/*`
+    também, 11 rotas que a auditoria original não tinha listado); (3) governança
+    de campo da IA (`AiFieldPermission`) não tem efeito na chamada padrão de
     `opr_order_details`/`opr_search_orders` (`response_mode="full"`, o modo mais
     comum) - desligar um campo sensível na tela de administração da IA não
     protege nada nesse caminho; (4) `POST /calculation-runs/calculate` cria
@@ -308,9 +501,108 @@ não indica regressão.
     O.S. sem teto de dias nem trava de concorrência (suporte já tem, operations
     não); `service_orders.py`/`imports.py`/`rules.py` sem nenhum teste (o primeiro
     inclui um endpoint destrutivo de exclusão em massa).
-  - **Próximo passo natural**: decidir com o usuário quais dos 4 P0 corrigir
-    primeiro (não foi pedido pra implementar nesta rodada, só diagnosticar) - não
-    reabrir a investigação, o relatório já tem tudo levantado com evidência.
+  - **Próximo passo natural**: seguir corrigindo P0-3 e P0-4, nessa ordem (é a
+    ordem que o usuário pediu) - não reabrir a investigação, o relatório já tem
+    tudo levantado com evidência.
+
+- **P0-1 corrigido: `admin:users:read/write/delete` agora abrem `/users`, `/invites`
+  e `/access-requests` de verdade** (2026-09-17, usuário pediu pra corrigir a
+  auditoria "na ordem do relatório, começando pelo P0-1").
+  - **Causa raiz confirmada**: essas três rotas só aceitavam o legado
+    `users:manage` (`require_permission`, único). O catálogo do módulo Admin
+    (`admin:users:read/write/delete`) é uma família de permissão DIFERENTE, que a
+    tela `/admin` e o `module-registry.ts` já usam pra decidir o que mostrar - um
+    perfil de acesso montado só com essas 3 (exatamente o que o catálogo do
+    módulo Admin sugere ser suficiente) via a tela inteira, mas toda chamada real
+    a `/users` batia em 403.
+  - **Correção**: novo `require_any_permission(*permissions)` em
+    `app/core/security.py` (libera se o usuário tiver QUALQUER UMA das
+    permissões dadas). Aplicado por granularidade nas 3 rotas: `GET` aceita
+    `users:manage` OU `admin:users:read`; `POST`/`PUT`/`force-*`/`revoke`/
+    `approve`/`reject` aceitam `users:manage` OU `admin:users:write`; só
+    `DELETE /users/{id}` aceita `users:manage` OU `admin:users:delete`
+    especificamente (não basta `write`) - granularidade do catálogo do módulo
+    Admin preservada, não virou "qualquer uma libera tudo".
+  - **Trava anti-lockout também generalizada** (o outro achado do P0-1: ela só
+    olhava `admin:users:write`, então dava pra tirar `users:manage` da última
+    pessoa que o tinha sem aviso, mesmo esse sendo o que as rotas reais exigem).
+    `ADMIN_GATEKEEPER_PERMISSION` virou `USER_MANAGEMENT_GATEKEEPER_PERMISSIONS =
+    (admin:users:write, users:manage)` nos dois lugares que já tinham essa trava
+    (`admin/router.py::_profile_delete_blocked_reason`, por PERFIL, e
+    `admin/user_permissions_service.py::_would_orphan_admin_gatekeeper`, por
+    PESSOA) - perder uma das duas só bloqueia se a outra também não estiver
+    coberta por mais ninguém ativo.
+  - **9 testes novos** (`test_users_admin_permission_fallback.py`): perfil só com
+    `admin:users:read` lista mas não escreve; só com `write` cria mas não
+    exclui; só com `delete` exclui; `users:manage` sozinho continua funcionando
+    (regressão); nem uma nem outra continua 403; `/invites`/`/access-requests`
+    aceitam a mesma alternativa; as duas travas de lockout (perfil e pessoa)
+    protegem `users:manage` tanto quanto `admin:users:write`, e não bloqueiam à
+    toa quando a outra pessoa ainda cobre a permissão que falta.
+  - **Achado colateral confirmado durante a correção, NÃO é regressão desta
+    mudança**: `test_portal_invites.py` (13 testes) e `test_portal_access_requests.py`
+    (31 testes) falham 100% - inclusive testes de rotas públicas sem
+    autenticação, que este PR nem toca - por causa de
+    `sqlite3.OperationalError: no such table: intelligence_monitor_runs`
+    disparado no SHUTDOWN do `TestClient(app)` que esses dois arquivos
+    instanciam manualmente dentro do próprio corpo do teste (`with
+    TestClient(app) as client:`), diferente da fixture `client` compartilhada
+    (que roda o mesmo shutdown, mas durante teardown do pytest - vira "ERROR",
+    não "FAILED"). **Confirmado com `git stash` das 6 arquivos desta correção**:
+    os mesmos 44 testes falham exatamente igual sem nenhuma linha desta mudança
+    aplicada - é ambiente pré-existente (mesma família do erro de SQLite-em-thread
+    já registrado em "Frentes em andamento"), não relacionado a permissão.
+  - Suíte de testes de permissão/admin rodada por completo depois da mudança:
+    zero `FAILED` novo além dos 44 pré-existentes acima (`test_users.py`,
+    `test_user_permission_overrides.py`, `test_admin_profile_seed_and_delete.py`,
+    `test_admin_permissions_catalog.py`, `test_admin_sensitive_permissions.py`
+    passam 100%, só o `ERROR` de teardown intermitente já conhecido).
+
+- **P0-2 corrigido: endpoints de rede (login/ONU/geolocalização) agora respeitam o
+  escopo regional do usuário** (2026-09-17, mesma sessão do P0-1, "continua com o
+  P0-2").
+  - **Escopo real maior que a auditoria original descreveu**: não são só as ~6
+    funções de `/operations/network/*` - são **11 funções em 5 arquivos**
+    (`login_geo_clusters.py`, `onu_signal_snapshot.py`, `login_search.py`,
+    `login_aggregate.py`, `coordinate_quality.py`), chamadas por **34 call
+    sites** no total: 11 rotas REST em `operations/router.py`, **11 rotas em
+    `ai/router.py` (`/api/ai/infra/*`) que a auditoria não tinha nem listado**,
+    11 tools MCP em `mcp_connector/server.py`, e 2 monitores de background do
+    `intelligence` (`collective_outage.py`, `rules_engine.py`).
+  - **Correção centralizada**: `regional_scope_or_deny(user)` novo em
+    `services/regional.py` - mesmo critério já usado em
+    `operations.queries._dimension_conditions` (regionais permitidas de
+    `effective_managed_regionals`; `regional_manager_viewer` sem nenhuma
+    configurada nega tudo, nunca "acesso amplo" por omissão). Todas as 11
+    funções passaram a exigir `user: User | None` e aplicar essa regra antes de
+    qualquer filtro vindo do cliente - o `regionals` que o chamador manda só
+    recorta DENTRO do escopo, nunca amplia.
+  - **`user=None` = acesso irrestrito DELIBERADO**, só pros 2 monitores de
+    background do `intelligence` (varrem o sistema inteiro atrás de outage
+    coletivo, sem usuário associado) - nunca usado em rota HTTP/MCP real, que
+    sempre tem um `user` autenticado. Em `/api/ai/infra/*` (chave de API,
+    identidade de máquina `role="ai_service"`) passa-se `user=context.user`
+    normalmente - como esse papel nunca tem `managed_regional`/
+    `managed_regionals` preenchido, o resultado já dá acesso irrestrito
+    corretamente, sem precisar de um caso especial ali.
+  - **Caso mais delicado**: `login_timeseries` roda sobre
+    `operations_login_status_snapshots`, que NÃO tem coluna própria de
+    regional (é contagem agregada do sistema inteiro) - precisou de uma
+    segunda versão da query SQL bruta com `LAG()`
+    (`_TIMESERIES_SQL_SCOPED`/`_BASELINE_EXISTS_SQL_SCOPED`, com `bindparam`
+    expanding), fazendo JOIN com `operations_login_current_status` só pelo
+    `login_id`, ativada só quando o escopo realmente restringe (evita o JOIN
+    extra pra quem já enxerga tudo).
+  - **11 testes novos** (`tests/test_network_regional_scope.py`): cada uma das
+    11 funções testada isoladamente (sem precisar do fluxo HTTP inteiro, com
+    `SimpleNamespace` fazendo de usuário fake) - escopo aplicado corretamente,
+    filtro do cliente não amplia o escopo, `regional_manager_viewer` sem
+    configuração nega tudo (`base_manager` não tem esse fallback, mesma
+    convenção já existente), `user=None` continua irrestrito, e o cluster
+    geográfico (DBSCAN) e a série temporal (JOIN) também respeitam o escopo.
+  - Suíte ampla rodada depois da mudança (operations, ai, mcp_connector,
+    intelligence, onu_signal, login_timeseries - 154+ testes): **zero `FAILED`
+    novo**, só o `ERROR` de teardown intermitente já conhecido.
 
 - **Auditoria completa da Gamificação Operacional + 2 bugs críticos corrigidos** (2026-09-15,
   usuário: "AUDITE 100% O MODULO DE GAMIFICAÇÃO PARA FAZER UMA REESTRUTURAÇÃO VISUAL DESSE MODULO E

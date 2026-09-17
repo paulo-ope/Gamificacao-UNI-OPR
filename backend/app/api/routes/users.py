@@ -3,7 +3,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.routes.auth import serialize_user
-from app.core.security import hash_password, require_permission
+from app.core.security import hash_password, require_any_permission
 from app.db.session import get_db
 from app.models import AccessProfile, AuditLog, Collaborator, User, UserAccessProfile
 from app.schemas import AdminForcePasswordResetOut, UserCreate, UserOut, UserUpdate
@@ -67,12 +67,12 @@ def _set_user_profiles(db: Session, user: User, profile_ids: list[int] | None) -
 
 
 @router.get("", response_model=list[UserOut])
-def list_users(db: Session = Depends(get_db), user: User = Depends(require_permission("users:manage"))):
+def list_users(db: Session = Depends(get_db), user: User = Depends(require_any_permission("users:manage", "admin:users:read"))):
     return [serialize_user(item) for item in db.scalars(select(User).order_by(User.name.asc())).all()]
 
 
 @router.post("", response_model=UserOut, status_code=201)
-def create_user(payload: UserCreate, db: Session = Depends(get_db), user: User = Depends(require_permission("users:manage"))):
+def create_user(payload: UserCreate, db: Session = Depends(get_db), user: User = Depends(require_any_permission("users:manage", "admin:users:write"))):
     if payload.role not in ALLOWED_ROLES:
         raise HTTPException(status_code=422, detail="Perfil inválido.")
     email = payload.email.strip().lower()
@@ -109,7 +109,7 @@ def update_user(
     user_id: int,
     payload: UserUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     item = db.get(User, user_id)
     if not item:
@@ -147,7 +147,7 @@ def update_user(
 def force_password_reset(
     user_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     """Fase 2B - reset administrativo (ver docs/portal-ciclo-vida-conta-colaborador.md seção 4).
     Gera uma senha temporária e força a troca no próximo login - não reabre a confirmação de
@@ -163,7 +163,7 @@ def force_password_reset(
 def force_first_access(
     user_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     """Fase 2B - reabre o primeiro acesso completo (CPF/contato + senha nova), não só a senha (ver
     docs/portal-ciclo-vida-conta-colaborador.md seção 4). Só se aplica a usuário vinculado a um
@@ -179,7 +179,7 @@ def force_first_access(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:delete")),
 ):
     item = db.get(User, user_id)
     if not item:

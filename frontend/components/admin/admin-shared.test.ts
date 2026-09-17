@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { workspaceModules } from "@/lib/module-registry";
 
-import { ADMIN_NAV_ITEMS, MODULE_PARAMETER_OWNERS, parameterModuleLinks, type VisibleModuleRow } from "./admin-shared";
+import type { AccessProfile, AuthUser } from "@/lib/types";
+
+import { ADMIN_NAV_ITEMS, MODULE_PARAMETER_OWNERS, parameterModuleLinks, profileNames, type VisibleModuleRow } from "./admin-shared";
 
 function row(overrides: Partial<VisibleModuleRow> & { key: string }): VisibleModuleRow {
   const registry = workspaceModules.find((module) => module.key === overrides.key);
@@ -56,6 +58,79 @@ describe("parameterModuleLinks", () => {
     const links = parameterModuleLinks([row({ key: "localiza", status: "disabled" })]);
 
     expect(links).toEqual([]);
+  });
+});
+
+function authUser(overrides: Partial<AuthUser> = {}): AuthUser {
+  return {
+    id: 1,
+    name: "Usuário Teste",
+    email: "teste@souuni.com",
+    role: "viewer",
+    active: true,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    permissions: [],
+    access_profile_ids: [],
+    access_profile_names: [],
+    collaborator_id: null,
+    collaborator_name: null,
+    managed_regional: null,
+    managed_regionals: [],
+    portal_first_access_required: false,
+    ...overrides,
+  };
+}
+
+function accessProfile(overrides: Partial<AccessProfile> = {}): AccessProfile {
+  return {
+    id: 1,
+    name: "Perfil Teste",
+    description: null,
+    legacy_role: null,
+    active: true,
+    is_system: false,
+    permission_keys: [],
+    user_count: 0,
+    delete_blocked_reason: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/**
+ * Bug confirmado na auditoria de frontend de 2026-09-14: um usuário criado sem nenhum perfil
+ * vinculado mostrava o código interno bruto do `role` legado (ex.: "workspace_restricted") na
+ * coluna "Perfis" da tabela de Administração - texto sem sentido para quem administra o
+ * ecossistema. A correção troca apenas a apresentação, nunca o valor armazenado em `role`.
+ */
+describe("profileNames", () => {
+  it("lista os nomes dos perfis vinculados", () => {
+    const user = authUser({ access_profile_ids: [1, 2] });
+    const profiles = [accessProfile({ id: 1, name: "Admin Ecossistema" }), accessProfile({ id: 2, name: "Operador Operacional" })];
+
+    expect(profileNames(user, profiles)).toBe("Admin Ecossistema, Operador Operacional");
+  });
+
+  it("mostra um rótulo amigável quando não há nenhum perfil vinculado, nunca o código interno de role", () => {
+    const user = authUser({ role: "viewer" as AuthUser["role"], access_profile_ids: [] });
+
+    expect(profileNames(user, [])).toBe("Sem perfil definido");
+  });
+
+  it("mostra o rótulo amigável mesmo quando o role bruto é um valor desconhecido do backend", () => {
+    // `workspace_restricted` não faz parte da união de `AuthUser["role"]" no frontend - é
+    // exatamente o caso real que vazava cru na tela antes da correção.
+    const user = authUser({ role: "workspace_restricted" as AuthUser["role"], access_profile_ids: [] });
+
+    expect(profileNames(user, [])).toBe("Sem perfil definido");
+  });
+
+  it("ignora IDs de perfil que não existem mais na lista carregada", () => {
+    const user = authUser({ access_profile_ids: [999] });
+
+    expect(profileNames(user, [])).toBe("Sem perfil definido");
   });
 });
 

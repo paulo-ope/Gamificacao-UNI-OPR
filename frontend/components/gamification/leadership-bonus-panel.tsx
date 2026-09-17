@@ -12,21 +12,21 @@ import {
   Trash2,
   Users2,
 } from "lucide-react";
-import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCheckbox } from "@/components/ui/checkbox";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { SummaryCard } from "@/components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RegionalMultiSelect, uniqueRegionals } from "@/components/gamification/config-ui";
 import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import { normalizeRegional, regionalName } from "@/lib/regional";
-import { cn } from "@/lib/utils";
 import type { LeadershipAverageSource, LeadershipProfile, LeadershipRoleProfile, LeadershipRoleType } from "@/lib/types";
 
 type DraftRoleProfile = {
@@ -51,11 +51,20 @@ type DraftLeader = {
   regional_names: string[];
 };
 
+type ConfirmOptions = {
+  title?: string;
+  description: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: "default" | "danger";
+};
+
 type Props = {
   roleProfiles: LeadershipRoleProfile[];
   profiles: LeadershipProfile[];
   regionalOptions: string[];
   readOnly?: boolean;
+  confirm: (options: ConfirmOptions) => Promise<boolean>;
   onCreateRoleProfile: (payload: DraftRoleProfile) => Promise<void>;
   onSaveRoleProfile: (payload: LeadershipRoleProfile) => Promise<void>;
   onDeleteRoleProfile: (payload: LeadershipRoleProfile) => Promise<void>;
@@ -135,43 +144,12 @@ function resolveRoleProfile(leader: LeadershipProfile, roleProfiles: LeadershipR
   return roleProfiles.find((item) => item.scope_type === leader.role_type) ?? null;
 }
 
-function SummaryCard({
-  icon,
-  label,
-  value,
-  hint,
-  accent = "default",
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  hint: string;
-  accent?: "default" | "highlight" | "warning";
-}) {
-  const accentClass =
-    accent === "highlight"
-      ? "text-uni-royal"
-      : accent === "warning"
-        ? "text-amber-700"
-        : "text-slate-950";
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-        {icon}
-        {label}
-      </div>
-      <div className={cn("mt-3 text-2xl font-semibold", accentClass)}>{value}</div>
-      <div className="mt-1 text-sm text-slate-500">{hint}</div>
-    </div>
-  );
-}
-
 export function LeadershipBonusPanel({
   roleProfiles,
   profiles,
   regionalOptions,
   readOnly = false,
+  confirm,
   onCreateRoleProfile,
   onSaveRoleProfile,
   onDeleteRoleProfile,
@@ -256,6 +234,26 @@ export function LeadershipBonusPanel({
       resetRoleDraft();
     }
     setRoleDrawerOpen(true);
+  };
+
+  const confirmDeleteRoleProfile = async (profile: LeadershipRoleProfile) => {
+    const confirmed = await confirm({
+      title: "Excluir perfil de liderança",
+      description: `Excluir o perfil "${profile.name}"? Líderes vinculados a ele perdem a herança do multiplicador padrão.`,
+      confirmLabel: "Excluir perfil",
+      tone: "danger",
+    });
+    if (confirmed) await onDeleteRoleProfile(profile);
+  };
+
+  const confirmDeleteLeader = async (leader: LeadershipProfile) => {
+    const confirmed = await confirm({
+      title: "Excluir líder",
+      description: `Excluir "${leader.name}"? As filiais vinculadas a ele deixam de ter liderança registrada.`,
+      confirmLabel: "Excluir líder",
+      tone: "danger",
+    });
+    if (confirmed) await onDelete(leader);
   };
 
   const openLeaderDrawer = (leader?: LeadershipProfile) => {
@@ -343,7 +341,7 @@ export function LeadershipBonusPanel({
         </div>
       ) : null}
 
-      <div className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
         <div className="border-b border-slate-200 px-5 py-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
@@ -374,7 +372,7 @@ export function LeadershipBonusPanel({
             </TabsList>
 
             <TabsContent value="role-profiles" className="mt-0">
-              <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                     <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -403,7 +401,7 @@ export function LeadershipBonusPanel({
                               <PenLine className="h-4 w-4" />
                               Editar
                             </Button>
-                            <Button type="button" size="sm" variant="destructive" onClick={() => void onDeleteRoleProfile(profile)} disabled={readOnly}>
+                            <Button type="button" size="sm" variant="destructive" onClick={() => void confirmDeleteRoleProfile(profile)} disabled={readOnly}>
                               <Trash2 className="h-4 w-4" />
                               Excluir
                             </Button>
@@ -413,8 +411,8 @@ export function LeadershipBonusPanel({
                     ))}
                     {roleProfiles.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="py-10 text-center text-sm text-slate-500">
-                          Nenhum perfil configurado até o momento.
+                        <TableCell colSpan={6}>
+                          <EmptyState variant="plain" title="Nenhum perfil configurado até o momento." />
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -424,7 +422,7 @@ export function LeadershipBonusPanel({
             </TabsContent>
 
             <TabsContent value="leaders" className="mt-0">
-              <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                     <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -479,7 +477,7 @@ export function LeadershipBonusPanel({
                                 <PenLine className="h-4 w-4" />
                                 Editar
                               </Button>
-                              <Button type="button" size="sm" variant="destructive" onClick={() => void onDelete(leader)} disabled={readOnly}>
+                              <Button type="button" size="sm" variant="destructive" onClick={() => void confirmDeleteLeader(leader)} disabled={readOnly}>
                                 <Trash2 className="h-4 w-4" />
                                 Excluir
                               </Button>
@@ -490,8 +488,8 @@ export function LeadershipBonusPanel({
                     })}
                     {profiles.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">
-                          Nenhum líder cadastrado até o momento.
+                        <TableCell colSpan={7}>
+                          <EmptyState variant="plain" title="Nenhum líder cadastrado até o momento." />
                         </TableCell>
                       </TableRow>
                     ) : null}
@@ -501,7 +499,7 @@ export function LeadershipBonusPanel({
             </TabsContent>
 
             <TabsContent value="branches" className="mt-0">
-              <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                     <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -647,16 +645,22 @@ export function LeadershipBonusPanel({
                       scope_type: roleDraft.scope_type,
                       default_multiplier: defaultMultiplier,
                       active: roleDraft.active,
-                    }).then(() => {
-                      setRoleDrawerOpen(false);
-                      resetRoleDraft();
-                    });
+                    })
+                      .then(() => {
+                        setRoleDrawerOpen(false);
+                        resetRoleDraft();
+                      })
+                      // Erro já foi exibido pelo `withFeedback` (rethrow: true) - aqui só evita que
+                      // o drawer feche e que a rejeição suba como "unhandled" no console.
+                      .catch(() => {});
                     return;
                   }
-                  void onCreateRoleProfile({ ...roleDraft, default_multiplier: defaultMultiplier }).then(() => {
-                    setRoleDrawerOpen(false);
-                    resetRoleDraft();
-                  });
+                  void onCreateRoleProfile({ ...roleDraft, default_multiplier: defaultMultiplier })
+                    .then(() => {
+                      setRoleDrawerOpen(false);
+                      resetRoleDraft();
+                    })
+                    .catch(() => {});
                 }}
               >
                 {editingRoleId ? "Salvar perfil" : "Criar perfil"}
@@ -875,16 +879,20 @@ export function LeadershipBonusPanel({
                       active: payload.active,
                       collaborator_id: payload.collaborator_id,
                       regional_names: payload.regional_names,
-                    }).then(() => {
-                      setLeaderDrawerOpen(false);
-                      resetLeaderDraft();
-                    });
+                    })
+                      .then(() => {
+                        setLeaderDrawerOpen(false);
+                        resetLeaderDraft();
+                      })
+                      .catch(() => {});
                     return;
                   }
-                  void onCreate(payload).then(() => {
-                    setLeaderDrawerOpen(false);
-                    resetLeaderDraft();
-                  });
+                  void onCreate(payload)
+                    .then(() => {
+                      setLeaderDrawerOpen(false);
+                      resetLeaderDraft();
+                    })
+                    .catch(() => {});
                 }}
               >
                 {editingLeaderId ? "Salvar líder" : "Criar líder"}

@@ -27,7 +27,7 @@ def test_login_timeseries_first_point_flags_missing_baseline(db_session):
     _snapshot(db_session, login_id=2, captured_at=since + timedelta(minutes=2), online="N")
     db_session.commit()
 
-    result = login_timeseries(db_session, since=since, until=since + timedelta(minutes=5))
+    result = login_timeseries(db_session, user=None, since=since, until=since + timedelta(minutes=5))
 
     assert result["data"][0]["baseline_available"] is False
     assert result["data"][0]["new_drops"] == 1  # login 1, sem "antes" pra comparar
@@ -46,7 +46,7 @@ def test_login_timeseries_with_prior_capture_has_no_warning(db_session):
     _snapshot(db_session, login_id=1, captured_at=since, online="N")
     db_session.commit()
 
-    result = login_timeseries(db_session, since=since, until=since + timedelta(minutes=1))
+    result = login_timeseries(db_session, user=None, since=since, until=since + timedelta(minutes=1))
 
     assert result["data"][0]["baseline_available"] is True
     assert result["data"][0]["new_drops"] == 1

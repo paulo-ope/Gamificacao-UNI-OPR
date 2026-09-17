@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -151,19 +152,29 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
   }
 
   const load = useCallback(() => {
-    if (!collaboratorId) return;
+    if (!collaboratorId) return () => {};
+    let cancelled = false;
     setLoading(true);
     setError(null);
     api
       .collaboratorPointBalance(collaboratorId)
-      .then(setData)
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
+      .then((payload) => {
+        if (!cancelled) setData(payload);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [collaboratorId]);
 
   useEffect(() => {
     if (!open || !collaboratorId) return;
-    load();
+    return load();
   }, [open, collaboratorId, load]);
 
   useEffect(() => {
@@ -306,7 +317,7 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
             </div>
           ) : null}
           {error ? (
-            <div className="mb-4 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               {error}
             </div>
@@ -365,7 +376,8 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
               </button>
             ) : null}
           </div>
-          <Table>
+          <div className="table-frame overflow-hidden rounded-lg border border-slate-200">
+            <Table>
             <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
               <TableRow className="border-slate-700 hover:bg-slate-900">
                 <TableHead>Status</TableHead>
@@ -437,15 +449,21 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
               ))}
               {!loading && visibleEntries.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={isAdmin ? 6 : 5} className="py-8 text-center text-sm text-slate-500">
-                    {allEntries.length === 0
-                      ? "Nenhum lançamento de saldo para este colaborador."
-                      : `Todos os ${revertedCount} lançamentos deste colaborador estão estornados.`}
+                  <TableCell colSpan={isAdmin ? 6 : 5}>
+                    <EmptyState
+                      variant="plain"
+                      title={
+                        allEntries.length === 0
+                          ? "Nenhum lançamento de saldo para este colaborador."
+                          : `Todos os ${revertedCount} lançamentos deste colaborador estão estornados.`
+                      }
+                    />
                   </TableCell>
                 </TableRow>
               ) : null}
             </TableBody>
           </Table>
+          </div>
         </div>
         <OrderAuditSheet
           order={auditOrder}

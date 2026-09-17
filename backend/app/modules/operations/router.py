@@ -160,15 +160,27 @@ ORDER_SUMMARY_FIELDS = [
 ]
 
 
-def _resolve_order_output_fields(policy, response_mode: str, fields: list[str] | None) -> list[str] | None:
-    """`None` = manter o comportamento de sempre (todo campo autorizado). Um `fields` explícito
-    sempre vence; sem ele, `response_mode=summary` recorta para um conjunto enxuto."""
+def _resolve_order_output_fields(
+    policy,
+    response_mode: str,
+    fields: list[str] | None,
+    *,
+    capability: str = "selectable",
+    all_fields=OperationOrderOut.model_fields,
+) -> list[str] | None:
+    """Um `fields` explícito sempre vence; sem ele, `response_mode=summary` recorta para um
+    conjunto enxuto e `response_mode="full"` (o padrão) devolve todo campo AUTORIZADO - nunca
+    `None` ("sem filtro"), que era o achado P0-3 da auditoria de 2026-09-15: desligar um campo
+    sensível em `AiFieldPermission` não tinha efeito nenhum na chamada mais comum (`full`, sem
+    `fields`). `capability`/`all_fields` diferem entre listagem (`selectable`,
+    `OperationOrderOut`) e detalhe (`detail_available`, `OperationOrderDetailOut`, que também
+    expõe `raw_payload`) - ver os dois call sites."""
     if fields is not None:
         return fields
     if response_mode == "summary":
         allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
         return [name for name in ORDER_SUMMARY_FIELDS if name in allowed]
-    return None
+    return [name for name in all_fields if policy.field_allowed_or_uncatalogued(ENTITY_OPERATION_ORDERS, name, capability)]
 
 
 def _serialize_order(order: OperationOrder, fields: list[str] | None) -> dict:
@@ -419,6 +431,7 @@ def _filter_params(
     team_models: list[str] = Query(default_factory=list),
     companies: list[str] = Query(default_factory=list),
     regionals: list[str] = Query(default_factory=list),
+    regional_groups: list[str] = Query(default_factory=list),
     states: list[str] = Query(default_factory=list),
     cities: list[str] = Query(default_factory=list),
     contract_types: list[str] = Query(default_factory=list),
@@ -451,6 +464,7 @@ def _filter_params(
         "team_models": team_models,
         "companies": companies,
         "regionals": regionals,
+        "regional_groups": regional_groups,
         "states": states,
         "cities": cities,
         "contract_types": contract_types,
@@ -855,7 +869,12 @@ OVERVIEW_VISIBLE_FILTERS_SETTING = "overview_visible_filters"
 # daqui, a tela desenha daqui, e o PUT só aceita chaves daqui. Ordem = ordem de exibição.
 OVERVIEW_FILTER_CATALOG: tuple[dict[str, str], ...] = (
     {"key": "team_models", "label": "Modelo de equipe", "group": "operations"},
-    {"key": "regionals", "label": "Filial", "group": "operations"},
+    # Pedido do usuário (2026-09-14): a Visão Geral usa só "Regional" (agrupado) - o filtro
+    # "Filial" (granular) continua existindo para a Operação Analítica e para o drill-through dos
+    # gráficos por filial desta tela (`OverviewShareDonut`/`OverviewRegionalTable`, que recorta por
+    # `regionals` ao clicar, sem depender deste catálogo), só não é mais oferecido como filtro
+    # selecionável na barra da Visão Geral.
+    {"key": "regional_groups", "label": "Regional", "group": "operations"},
     {"key": "sectors", "label": "Setor", "group": "operations"},
     {"key": "os_types", "label": "Tipo de O.S.", "group": "operations"},
     {"key": "responsibles", "label": "Colaborador", "group": "operations"},
@@ -873,6 +892,11 @@ OVERVIEW_DEFAULT_VISIBLE_FILTERS = tuple(
 def _overview_visible_filters_response(db: Session, user: User) -> dict:
     raw = (get_setting(db, OVERVIEW_VISIBLE_FILTERS_SETTING, "") or "").strip()
     stored = [key.strip() for key in raw.split(",") if key.strip()] if raw else []
+    # "regionals" (Filial) saiu do catálogo da Visão Geral (2026-09-14) - quem já tinha essa chave
+    # salva não pode simplesmente perder o filtro nessa migração: trata como o sucessor direto
+    # "regional_groups" (Regional), que cobre o mesmo papel na tela.
+    if "regionals" in stored and "regional_groups" not in stored:
+        stored.append("regional_groups")
     # Chave desconhecida gravada (catálogo mudou) é ignorada, não derruba a tela.
     visible = [key for key in OVERVIEW_FILTER_KEYS if key in stored] if stored else list(OVERVIEW_DEFAULT_VISIBLE_FILTERS)
     return {
@@ -1403,7 +1427,7 @@ def network_offline_login_clusters(
     relevante aqui, e os mesmos filtros do resto do módulo (que operam sobre O.S., não sobre
     login) não se aplicam a este dado."""
     return offline_login_clusters_response(
-        db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+        db, user=user, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
     )
 
 
@@ -1437,6 +1461,7 @@ def network_login_status(
         enforce_filter_field(policy, ENTITY_LOGIN_CURRENT_STATUS, "longitude", "filterable")
     return query_login_status(
         db,
+        user=user,
         logins=logins,
         online_statuses=online_statuses,
         regionals=regionals,
@@ -1469,6 +1494,7 @@ def network_onu_signal(
         enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "transmitter_id", "filterable")
     return query_onu_signal_status(
         db,
+        user=user,
         login_ids=login_ids,
         last_drop_causes=last_drop_causes,
         transmitter_ids=transmitter_ids,
@@ -1499,6 +1525,7 @@ def network_onu_signal_history(
         enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "onu_serial", "filterable")
     return query_onu_signal_history(
         db,
+        user=user,
         login_ids=login_ids,
         onu_serials=onu_serials,
         date_from=date_from,
@@ -1548,6 +1575,7 @@ def network_login_search(
         enforce_filter_field(policy, ENTITY_ONU_SIGNAL_CURRENT, "contract_id", "filterable")
     return search_logins(
         db,
+        user=user,
         logins=logins,
         login_query=login_query,
         login_ids=login_ids,
@@ -1580,7 +1608,7 @@ def network_login_detail(
     if login is None and login_id is None:
         raise HTTPException(status_code=422, detail="Informe login ou login_id.")
     enforce_ai_endpoint_for_user(db, user, "operations.network.login_detail", "api")
-    detail = get_login_detail(db, login=login, login_id=login_id, history_hours=history_hours)
+    detail = get_login_detail(db, user=user, login=login, login_id=login_id, history_hours=history_hours)
     if detail is None:
         raise HTTPException(status_code=404, detail="Login não encontrado.")
     return detail
@@ -1598,7 +1626,7 @@ def network_login_aggregate(
     offline por PON", "quantos por regional") sem baixar registro por registro."""
     enforce_ai_endpoint_for_user(db, user, "operations.network.login_aggregate", "api")
     try:
-        return login_aggregate(db, group_by=group_by, regionals=regionals, online_statuses=online_statuses)
+        return login_aggregate(db, user=user, group_by=group_by, regionals=regionals, online_statuses=online_statuses)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1616,7 +1644,7 @@ def network_login_outages(
     incidente coletivo quando concentrados na mesma regional/PON. Não pega quedas que já
     reconectaram (ver `opr_get_login_detail` para histórico completo de um login específico)."""
     enforce_ai_endpoint_for_user(db, user, "operations.network.login_outages", "api")
-    return login_outages(db, since=since, until=until, regionals=regionals, limit=limit)
+    return login_outages(db, user=user, since=since, until=until, regionals=regionals, limit=limit)
 
 
 @router.get("/network/login-timeseries", response_model=OperationLoginTimeseriesResponseOut)
@@ -1629,7 +1657,7 @@ def network_login_timeseries(
     """Série temporal de conectados/desconectados/quedas novas/reconexões novas - um ponto por
     captura real do snapshot periódico (a cada ~5-15min em produção)."""
     enforce_ai_endpoint_for_user(db, user, "operations.network.login_timeseries", "api")
-    return login_timeseries(db, since=since, until=until)
+    return login_timeseries(db, user=user, since=since, until=until)
 
 
 @router.get("/network/login-incident-analysis", response_model=OperationLoginIncidentAnalysisOut)
@@ -1646,7 +1674,7 @@ def network_login_incident_analysis(
     no backend, sem baixar registro por registro."""
     enforce_ai_endpoint_for_user(db, user, "operations.network.login_incident_analysis", "api")
     return login_incident_analysis(
-        db, window_minutes=window_minutes, regionals=regionals,
+        db, user=user, window_minutes=window_minutes, regionals=regionals,
         cluster_radius_meters=cluster_radius_meters, cluster_min_size=cluster_min_size,
     )
 
@@ -1664,7 +1692,7 @@ def network_coordinate_quality(
     usuário em 2026-08-15). Use antes de confiar em qualquer cluster geográfico."""
     enforce_ai_endpoint_for_user(db, user, "operations.network.coordinate_quality", "api")
     try:
-        return coordinate_quality_audit(db, entity=entity, outlier_km=outlier_km, duplicate_threshold=duplicate_threshold)
+        return coordinate_quality_audit(db, user=user, entity=entity, outlier_km=outlier_km, duplicate_threshold=duplicate_threshold)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1792,7 +1820,9 @@ def order_detail(
     # campos que só existem no detalhe (ex.: raw_payload redigido), consistente com o detalhe em
     # lote de `POST /ai/orders/details`.
     fields = enforce_requested_fields(policy, ENTITY_OPERATION_ORDERS, fields, "detail_available")
-    output_fields = _resolve_order_output_fields(policy, response_mode, fields)
+    output_fields = _resolve_order_output_fields(
+        policy, response_mode, fields, capability="detail_available", all_fields=OperationOrderDetailOut.model_fields
+    )
     detail = OperationOrderDetailOut.model_validate(order).model_dump()
     record_ai_access(
         db,

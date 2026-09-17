@@ -103,7 +103,7 @@ def test_aggregate_orders_groups_by_scheduled_after_sla(db_session, ai_user):
     result = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="scheduled_after_sla", metric="quantidade_fechada",
         date_from=DATE_FROM, date_to=DATE_TO,
-    )
+    )["data"]
     by_label = {item["label"]: item["quantity"] for item in result}
     assert by_label == {"Sim": 1, "Não": 1}
 
@@ -129,7 +129,7 @@ def test_aggregate_orders_groups_by_sla_expired_before_schedule_for_never_schedu
     result = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="sla_expired_before_schedule", metric="quantidade_fechada",
         date_from=DATE_FROM, date_to=DATE_TO,
-    )
+    )["data"]
     by_label = {item["label"]: item["quantity"] for item in result}
     assert by_label == {"Sim": 1, "Não": 1}
 
@@ -157,13 +157,13 @@ def test_aggregate_orders_filters_by_sla_stage_booleans(db_session, ai_user):
     only_late = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="regional", metric="quantidade_fechada",
         date_from=DATE_FROM, date_to=DATE_TO, scheduled_after_sla=True,
-    )
+    )["data"]
     assert sum(item["quantity"] for item in only_late) == 1
 
     only_on_time = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="regional", metric="quantidade_fechada",
         date_from=DATE_FROM, date_to=DATE_TO, scheduled_after_sla=False,
-    )
+    )["data"]
     assert sum(item["quantity"] for item in only_on_time) == 1
 
 
@@ -184,7 +184,7 @@ def test_aggregate_orders_computes_average_hours_per_sla_stage(db_session, ai_us
         result = ai_queries.aggregate_orders(
             db_session, ai_user, group_by="regional", metric=metric,
             date_from=DATE_FROM, date_to=DATE_TO,
-        )
+        )["data"]
         assert len(result) == 1
         return result[0]["metric_value"]
 

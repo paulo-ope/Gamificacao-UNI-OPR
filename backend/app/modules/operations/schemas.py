@@ -202,6 +202,9 @@ class OperationFilters(BaseModel):
     team_models: list[str] = Field(default_factory=list)
     companies: list[str] = Field(default_factory=list)
     regionals: list[str] = Field(default_factory=list)
+    # "Regional" agrupada (ex.: "UNI - ROLIM DE MOURA" já inclui São Felipe D'Oeste) - filtro
+    # adicional ao lado de `regionals` (granular), ver services/regional.py.
+    regional_groups: list[str] = Field(default_factory=list)
     states: list[str] = Field(default_factory=list)
     cities: list[str] = Field(default_factory=list)
     contract_types: list[str] = Field(default_factory=list)
@@ -227,6 +230,7 @@ class OperationSavedFilterValues(BaseModel):
     team_models: list[str] = Field(default_factory=list, max_length=100)
     companies: list[str] = Field(default_factory=list, max_length=100)
     regionals: list[str] = Field(default_factory=list, max_length=100)
+    regional_groups: list[str] = Field(default_factory=list, max_length=100)
     states: list[str] = Field(default_factory=list, max_length=100)
     cities: list[str] = Field(default_factory=list, max_length=100)
     contract_types: list[str] = Field(default_factory=list, max_length=100)
@@ -361,6 +365,7 @@ class OperationOverview(BaseModel):
     responsible_filter_active: bool
     completed: int
     in_progress: int
+    backlog_ignores_team_scope: bool = True
     opened_out_of_time: int
     completed_on_time: int
     completed_out_of_time: int
@@ -709,6 +714,7 @@ class OperationCalendarTeamModel(BaseModel):
     median_color: str
     good_color: str
     excellent_color: str
+    requires_justification: bool = True
     target_rules: list[OperationTeamTargetRuleOut] = Field(default_factory=list)
 
 
@@ -741,6 +747,7 @@ class OperationTeamModelValues(BaseModel):
     good_color: str = Field(default="#dcfce7", pattern=HEX_COLOR_PATTERN)
     excellent_color: str = Field(default="#dbeafe", pattern=HEX_COLOR_PATTERN)
     active: bool = True
+    requires_justification: bool = True
     target_rules: list[OperationTeamTargetRuleValues] = Field(default_factory=list)
 
 
@@ -758,6 +765,7 @@ class OperationTeamModelUpdate(BaseModel):
     good_color: str | None = Field(default=None, pattern=HEX_COLOR_PATTERN)
     excellent_color: str | None = Field(default=None, pattern=HEX_COLOR_PATTERN)
     active: bool | None = None
+    requires_justification: bool | None = None
     target_rules: list[OperationTeamTargetRuleValues] | None = None
 
 

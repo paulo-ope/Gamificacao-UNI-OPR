@@ -18,7 +18,7 @@ export const OVERVIEW_DEFAULT_DAYS = 30;
  * Só as dimensões de uso executivo - jogar os ~30 filtros do módulo na URL deixaria o link
  * ilegível sem ganho real.
  */
-export const OVERVIEW_LIST_KEYS = ["team_models", "regionals", "responsibles", "sectors", "os_types"] as const;
+export const OVERVIEW_LIST_KEYS = ["team_models", "regional_groups", "responsibles", "sectors", "os_types"] as const;
 
 /**
  * Filtros do SGP Suporte. São um universo à parte (atendimentos, não O.S.) - por isso ficam de

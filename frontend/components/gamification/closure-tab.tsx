@@ -20,7 +20,7 @@ import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AppMultiSelect } from "@/components/gamification/config-ui";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { DashboardCharts } from "@/components/gamification/dashboard-charts";
 import { DeferUntilVisible } from "@/components/ui/defer-until-visible";
 import { FinancialTable } from "@/components/gamification/financial-table";
@@ -171,7 +171,7 @@ export function ClosureTab({
 
   return (
     <div className="grid gap-4">
-      <section className="relative overflow-hidden rounded-[24px] border border-slate-200/80 bg-white shadow-sm">
+      <section className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
         <div className="uni-gradient h-[3px] w-full" />
         <div className="grid gap-5 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -301,7 +301,7 @@ export function ClosureTab({
               </div>
             </div>
 
-            <div className="divide-y divide-slate-100 rounded-[16px] border border-slate-100 bg-slate-50/60 px-4">
+            <div className="divide-y divide-slate-100 rounded-xl border border-slate-100 bg-slate-50/60 px-4">
               <div className="flex items-start justify-between gap-3 py-2.5 text-sm">
                 <span className="flex items-center gap-2 text-slate-500">
                   <ClipboardList className="h-3.5 w-3.5" />
@@ -362,7 +362,7 @@ export function ClosureTab({
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-5 py-4">
           <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-uni-royal">Conferência</p>
           <div className="mt-1 flex items-center gap-2">
@@ -413,7 +413,7 @@ export function ClosureTab({
                     return (
                       <button
                         key={item.label}
-                        className="rounded-[18px] border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-blue-300 hover:bg-blue-50/40"
+                        className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:border-blue-300 hover:bg-blue-50/40"
                         onClick={() => {
                           onActiveTabChange(item.tab);
                           if ("configSubTab" in item && item.configSubTab) onConfigTabChange(item.configSubTab);
@@ -460,13 +460,13 @@ export function ClosureTab({
                   ["Perfis ativos", `${formatNumber(summary.leadership_bonus?.results.length ?? 0)} líder(es)`],
                   ["Filiais cobertas", `${formatNumber(leadershipCoveredRegionals)} ${pluralizeFilial(leadershipCoveredRegionals)}`]
                 ].map(([label, value]) => (
-                  <div key={label} className="rounded-[18px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                  <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</div>
                     <div className="mt-2 text-xl font-semibold text-slate-950">{value}</div>
                   </div>
                 ))}
               </div>
-              <div className="mt-4 flex flex-col gap-3 rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:flex-row sm:items-center sm:justify-between">
+              <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-sm font-semibold text-slate-950">Ranking de liderança separado do fechamento</div>
                   <p className="mt-1 text-sm text-slate-500">
@@ -529,7 +529,7 @@ export function ClosureTab({
                 <InfoHint ariaLabel="Ajuda sobre Análise operacional e gráficos" description={SECTION_HELP.chartArea} />
                 <span className="text-sm text-slate-500">Análise operacional e gráficos</span>
               </div>
-              <div className="grid gap-4 rounded-[20px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] p-4 lg:grid-cols-[1fr_minmax(260px,360px)] lg:items-start">
+              <div className="grid gap-4 rounded-xl border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] p-4 lg:grid-cols-[1fr_minmax(260px,360px)] lg:items-start">
                 <div>
                   <Badge className="w-fit border-slate-200 bg-white text-slate-700">
                     <BarChart3 className="h-3.5 w-3.5" />
@@ -540,12 +540,13 @@ export function ClosureTab({
                     <InfoHint ariaLabel="Ajuda sobre Gráficos e indicadores filtrados" description={SECTION_HELP.filteredCharts} />
                   </div>
                 </div>
-                <AppMultiSelect
+                <MultiSelect
                   values={selectedRegionals}
                   onChange={onSelectedRegionalsChange}
-                  options={regionalOptions.map((regional) => ({ value: normalizeRegional(regional), label: regionalName(regional) }))}
+                  options={regionalOptions}
+                  getValue={normalizeRegional}
+                  formatOption={regionalName}
                   placeholder="Todas as filiais"
-                  searchPlaceholder="Buscar regional"
                   ariaLabel="Filtrar por regional"
                 />
               </div>

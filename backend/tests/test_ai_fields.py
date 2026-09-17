@@ -33,7 +33,13 @@ def test_available_fields_flags_known_exposed_and_not_exposed_columns():
     assert "latitude" in result["exposed_to_ai"]
     assert "longitude" in result["exposed_to_ai"]
 
-    # raw_payload e os identificadores de cliente nunca foram expostos como dimensão/filtro/texto
-    # de IA - devem aparecer como pendência, não somem silenciosamente.
-    for column in ("raw_payload", "customer_login", "customer_id"):
+    # customer_login (login PPPoE/fibra, identificador de conexão) passou a ser filtro exato de IA
+    # (AiOrderFilters.customer_logins) por pedido explícito do usuário em 2026-08-15 - fechar o
+    # fluxo "login caiu -> buscar O.S. do cliente" (ver commit 5aae3b9, operations/queries.py
+    # FILTER_COLUMNS["customer_logins"]). Não é senha/CPF/documento.
+    assert "customer_login" in result["exposed_to_ai"]
+
+    # raw_payload e customer_id (id interno do IXC, sem uso operacional direto pela IA) nunca foram
+    # expostos como dimensão/filtro/texto de IA - devem continuar aparecendo como pendência.
+    for column in ("raw_payload", "customer_id"):
         assert column in result["not_exposed"], column

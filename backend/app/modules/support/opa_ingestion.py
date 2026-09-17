@@ -1312,6 +1312,96 @@ def run_opa_import_background_job(run_id: int) -> None:
             )
 
 
+def pending_tmr_backfill_count(db: Session) -> int:
+    """Quantos atendimentos JÁ FECHADOS ainda não têm `tmr_all_responses_seconds` -
+    o que o backfill noturno de TMR histórico (`run_tmr_history_backfill`) ainda tem
+    pra processar. Só conta fechados: um atendimento aberto tende a ganhar o campo
+    naturalmente quando fechar e passar pela sincronização periódica normal."""
+    return (
+        db.scalar(
+            select(func.count(SupportOpaAttendance.id)).where(
+                SupportOpaAttendance.closed_at.isnot(None),
+                SupportOpaAttendance.tmr_all_responses_seconds.is_(None),
+            )
+        )
+        or 0
+    )
+
+
+def run_tmr_history_backfill(db: Session, client: OpaClient, *, limit: int) -> dict[str, Any]:
+    """Reprocessa TMR (humano e geral) de atendimentos históricos JÁ GRAVADOS cujo
+    `tmr_all_responses_seconds` ainda está `NULL` — cobre principalmente o histórico
+    anterior a 2026-08-20 (quando o campo entrou em produção) e qualquer atendimento
+    cuja busca de mensagens falhou na importação original. Reaproveita exatamente a
+    mesma lógica de cálculo do fluxo normal de importação
+    (`_human_response_metrics`/`_all_response_metrics`/`_classify_bot_human`/
+    `_message_attendant_summary`), com 1 chamada a `client.list_messages` por
+    atendimento — nunca busca a página de atendimentos de novo, só complementa quem
+    já está no banco.
+
+    Marca `tmr_backfill_attempted_at` em TODA tentativa (sucesso ou falha), pra o
+    próximo lote priorizar quem nunca foi tentado e não insistir sempre nos mesmos
+    registros quando a API não devolve mensagem pra uma conversa muito antiga.
+    Só sobrescreve campos quando a busca de mensagens devolve algo aproveitável -
+    igual ao fluxo normal, `tmr_seconds` só é sobrescrito se `avg_human_seconds` não
+    for `None` (preserva o valor vindo direto do payload do OPA quando existir)."""
+    now = datetime.now(timezone.utc)
+    attendant_types = _load_attendant_types(db)
+    human_attendant_ids = _human_attendant_ids(attendant_types)
+
+    candidates = db.scalars(
+        select(SupportOpaAttendance)
+        .where(
+            SupportOpaAttendance.closed_at.isnot(None),
+            SupportOpaAttendance.tmr_all_responses_seconds.is_(None),
+        )
+        .order_by(
+            SupportOpaAttendance.tmr_backfill_attempted_at.is_(None).desc(),
+            SupportOpaAttendance.tmr_backfill_attempted_at.asc(),
+            SupportOpaAttendance.opened_at.asc(),
+        )
+        .limit(limit)
+    ).all()
+
+    processed = 0
+    updated = 0
+    failed = 0
+    for attendance in candidates:
+        processed += 1
+        attendance.tmr_backfill_attempted_at = now
+        try:
+            messages = client.list_messages(attendance.source_id)
+        except Exception as exc:
+            failed += 1
+            logger.warning("falha_backfill_tmr source_id=%s erro=%s", attendance.source_id, exc)
+            continue
+
+        avg_all_seconds = _all_response_metrics(messages)
+        if avg_all_seconds is None:
+            # Mensagens indisponíveis (ou nenhuma resposta a um cliente ainda) - a
+            # tentativa já foi marcada acima, mas nada é sobrescrito com vazio.
+            continue
+
+        avg_human_seconds, first_human_response_at = _human_response_metrics(messages, human_attendant_ids)
+        handled_by_bot, reached_human, handoff = _classify_bot_human(messages, attendant_types)
+        summary = _message_attendant_summary(messages, attendant_types)
+
+        attendance.tmr_all_responses_seconds = avg_all_seconds
+        if avg_human_seconds is not None:
+            attendance.tmr_seconds = avg_human_seconds
+        if first_human_response_at is not None:
+            attendance.first_response_at = first_human_response_at
+        attendance.handled_by_bot = handled_by_bot
+        attendance.reached_human = reached_human
+        attendance.bot_to_human_handoff = handoff
+        for field_name, value in summary.items():
+            setattr(attendance, field_name, value)
+        updated += 1
+
+    db.flush()
+    return {"processed": processed, "updated": updated, "failed": failed}
+
+
 def import_months_status(db: Session, year_months: list[str]) -> dict[str, dict[str, Any]]:
     """Status de cada mês pedido (formato "AAAA-MM") - "missing" pra quem não tem
     nenhuma linha em `SupportOpaImportMonth` ainda (nunca uma run de mês inteiro

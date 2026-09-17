@@ -165,10 +165,10 @@ export function IxcCpfInvitePanel({ people, invites, onInviteCreated }: Props) {
         ) : null}
 
         {status === "found" && result ? (
-          <div className="grid gap-4 rounded-2xl border border-[#2d5fff]/20 bg-[#2d5fff]/5 p-5">
+          <div className="grid gap-4 rounded-2xl border border-uni-royal/20 bg-uni-royal/5 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-[#0028f3] shadow-sm">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-uni-impact shadow-sm">
                   <UserRound className="h-5 w-5" />
                 </div>
                 <div>
@@ -219,7 +219,7 @@ export function IxcCpfInvitePanel({ people, invites, onInviteCreated }: Props) {
               </div>
             ) : null}
 
-            <div className="grid gap-4 border-t border-[#2d5fff]/15 pt-4 sm:grid-cols-2">
+            <div className="grid gap-4 border-t border-uni-royal/15 pt-4 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label>Vincular ao colaborador</Label>
                 <select

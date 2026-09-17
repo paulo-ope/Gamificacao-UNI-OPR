@@ -115,7 +115,7 @@ def test_aggregate_orders_groups_by_geo_cluster(db_session, ai_user):
 
     result = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="geo_cluster", metric="quantidade_fechada", date_from=DATE_FROM, date_to=DATE_TO,
-    )
+    )["data"]
     by_label = {item["label"]: item["quantity"] for item in result}
 
     assert by_label.get("Sem coordenadas") == 1

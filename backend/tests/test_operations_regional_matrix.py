@@ -238,6 +238,33 @@ def test_items_are_alphabetical_and_include_regionals_that_only_have_backlog(cli
     assert "Não identificada" in labels
 
 
+def test_rows_group_sao_felipe_and_rolim_de_moura_together(client, db_session):
+    """Pedido do usuario (2026-09-14): a Visao Geral (este endpoint alimenta tanto o donut
+    "Finalizadas por regional" quanto a tabela) agrupa por REGIONAL, nao mais por filial granular -
+    Sao Felipe D'Oeste some como linha propria e soma dentro de "UNI - ROLIM DE MOURA", mesmo
+    criterio ja usado pela Gamificacao (`normalize_regional_grouped`)."""
+    _, date_to = current_month_bounds()
+    db_session.add_all(
+        [
+            _closed("rm-group-rolim", date_to, sla_status="on_time", regional="UNI - ROLIM DE MOURA"),
+            _closed("rm-group-sao-felipe", date_to, sla_status="on_time", regional="UNI - SAO FELIPE DOESTE"),
+            _closed("rm-group-sao-miguel", date_to, sla_status="on_time", regional="UNI - SAO MIGUEL DO GUAPORE"),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        ENDPOINT, params={"date_from": date_to.isoformat(), "date_to": date_to.isoformat()}
+    )
+
+    assert response.status_code == 200
+    items_by_regional = {item["regional"]: item for item in response.json()["items"]}
+    assert "UNI - SAO FELIPE DOESTE" not in items_by_regional
+    assert "UNI - SAO MIGUEL DO GUAPORE" not in items_by_regional
+    assert items_by_regional["UNI - ROLIM DE MOURA"]["completed"] == 2
+    assert items_by_regional["UNI - SAO FRANCISCO DO GUAPORE"]["completed"] == 1
+
+
 def test_sla_columns_are_blank_without_view_sla_permission(client, db_session):
     """A tela é compartilhada entre perfis: sem `operations:view_sla` o quadro continua vindo com
     os volumes, só as colunas de prazo ficam em branco."""

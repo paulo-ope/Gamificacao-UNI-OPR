@@ -499,6 +499,77 @@ def test_operations_overview_and_detail_are_limited_to_selected_current_period(c
     assert details.json()["items"][0]["order_code"] == "IXC-2"
 
 
+def test_overview_backlog_ignores_team_model_and_responsible_filters(client, db_session):
+    """Achado real (2026-09-16): `/operations/overview` era o único lugar do módulo que ainda
+    aplicava o filtro de modelo de equipe/responsável ao backlog - com o mesmo filtro, o card
+    desta tela mostrava um número e o quadro por filial (que já seguia `_backlog_filters`)
+    mostrava outro, maior. Backlog é estoque: uma O.S. ainda aberta não tem executor
+    definitivo, então o filtro de equipe/responsável não deve tirá-la da conta - mesma
+    convenção já testada em `test_operations_regional_matrix.py`."""
+    own = OperationTeamModel(name="EQUIPE PRÓPRIA", daily_target=5)
+    outsourced = OperationTeamModel(name="TERCEIRIZADA", daily_target=5)
+    db_session.add_all([own, outsourced])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OperationResponsibleAssignment(
+                responsible_name="Técnico Próprio", regional="UNI - JI PARANA", team_model_id=own.id
+            ),
+            OperationResponsibleAssignment(
+                responsible_name="Técnico Terceiro", regional="UNI - JI PARANA", team_model_id=outsourced.id
+            ),
+        ]
+    )
+    date_from, date_to = current_month_bounds()
+    db_session.add_all(
+        [
+            OperationOrder(
+                source="ixc",
+                source_order_id="bl-own",
+                order_code="IXC-BL-OWN",
+                regional="UNI - JI PARANA",
+                sector="Suporte Externo Fibra",
+                os_type="Manutenção",
+                os_subject="Reparo",
+                responsible="Técnico Próprio",
+                status="Aberta",
+                status_code="A",
+                is_closed=False,
+                sla_status="on_time",
+                opened_at=_utc_at(date_from, 8),
+                raw_payload={},
+            ),
+            OperationOrder(
+                source="ixc",
+                source_order_id="bl-outsourced",
+                order_code="IXC-BL-OUT",
+                regional="UNI - JI PARANA",
+                sector="Suporte Externo Fibra",
+                os_type="Manutenção",
+                os_subject="Reparo",
+                responsible="Técnico Terceiro",
+                status="Aberta",
+                status_code="A",
+                is_closed=False,
+                sla_status="out_of_time",
+                opened_at=_utc_at(date_from, 8),
+                raw_payload={},
+            ),
+        ]
+    )
+    db_session.flush()
+
+    query = f"date_from={date_from.isoformat()}&date_to={date_to.isoformat()}&team_models=EQUIPE%20PR%C3%93PRIA"
+    response = client.get(f"/api/operations/overview?{query}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    # As duas O.S. em aberto entram no backlog, mesmo a de outro modelo de equipe.
+    assert payload["in_progress"] == 2
+    assert payload["opened_out_of_time"] == 1
+    assert payload["backlog_ignores_team_scope"] is True
+
+
 def test_order_detail_exposes_new_fields_and_sanitizes_raw_payload(client, db_session):
     opened_at = _utc_at(current_month_bounds()[0], 8)
     db_session.add(
@@ -1059,6 +1130,120 @@ def test_operations_filters_orders_by_assigned_team_model(client, db_session):
     assert [item["order_code"] for item in response.json()["items"]] == ["TEAM-OWN"]
     assert options.status_code == 200
     assert "EQUIPE PRÓPRIA" in options.json()["team_models"]
+
+
+def test_operations_regional_group_filter_expands_to_granular_branches(client, db_session):
+    """Filtro "Regional" (agrupado, ver services/regional.py) - selecionar "UNI - ROLIM DE MOURA"
+    deve trazer tanto a propria Rolim de Moura quanto Sao Felipe D'Oeste (que a coluna
+    `OperationOrder.regional` guarda como filial granular separada), sem trazer outras filiais."""
+    date_from, date_to = current_month_bounds()
+    opened_at = _utc_at(date_from, 8)
+    db_session.add_all(
+        [
+            OperationOrder(
+                source="ixc", source_order_id="regional-group-rolim", order_code="RG-ROLIM",
+                regional="UNI - ROLIM DE MOURA", sector="Suporte Externo",
+                responsible="Técnico A", status="Aberta", status_code="A", is_closed=False,
+                sla_status="on_time", opened_at=opened_at, raw_payload={},
+            ),
+            OperationOrder(
+                source="ixc", source_order_id="regional-group-sao-felipe", order_code="RG-SAO-FELIPE",
+                regional="UNI - SAO FELIPE DOESTE", sector="Suporte Externo",
+                responsible="Técnico B", status="Aberta", status_code="A", is_closed=False,
+                sla_status="on_time", opened_at=opened_at, raw_payload={},
+            ),
+            OperationOrder(
+                source="ixc", source_order_id="regional-group-ji-parana", order_code="RG-JI-PARANA",
+                regional="UNI - JI PARANA", sector="Suporte Externo",
+                responsible="Técnico C", status="Aberta", status_code="A", is_closed=False,
+                sla_status="on_time", opened_at=opened_at, raw_payload={},
+            ),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        "/api/operations/orders",
+        params={
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "regional_groups": "UNI - ROLIM DE MOURA",
+        },
+    )
+    assert response.status_code == 200
+    assert {item["order_code"] for item in response.json()["items"]} == {"RG-ROLIM", "RG-SAO-FELIPE"}
+
+    options = client.get(
+        "/api/operations/filters",
+        params={"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
+    )
+    assert options.status_code == 200
+    assert "UNI - ROLIM DE MOURA" in options.json()["regional_groups"]
+    # Sao Felipe so aparece como filial (granular), nao como opcao propria do filtro agrupado.
+    assert "UNI - SAO FELIPE DOESTE" not in options.json()["regional_groups"]
+
+
+def test_operations_regional_group_selection_does_not_narrow_regional_options(client, db_session):
+    """Pedido do usuario: "Filial" (granular) foi movido pro filtro avancado, mas continua
+    listando TODAS as opcoes mesmo com "Regional" (agrupado) selecionado - os dois filtros
+    descrevem a mesma dimensao em granularidades diferentes e nao devem se restringir na
+    listagem de opcoes (a query de fato ainda combina os dois normalmente)."""
+    date_from, date_to = current_month_bounds()
+    opened_at = _utc_at(date_from, 8)
+    db_session.add_all(
+        [
+            OperationOrder(
+                source="ixc", source_order_id="regional-narrow-rolim", order_code="RN-ROLIM",
+                regional="UNI - ROLIM DE MOURA", sector="Suporte Externo",
+                responsible="Técnico A", status="Aberta", status_code="A", is_closed=False,
+                sla_status="on_time", opened_at=opened_at, raw_payload={},
+            ),
+            OperationOrder(
+                source="ixc", source_order_id="regional-narrow-ji-parana", order_code="RN-JI-PARANA",
+                regional="UNI - JI PARANA", sector="Suporte Externo",
+                responsible="Técnico B", status="Aberta", status_code="A", is_closed=False,
+                sla_status="on_time", opened_at=opened_at, raw_payload={},
+            ),
+        ]
+    )
+    db_session.flush()
+
+    options = client.get(
+        "/api/operations/filters",
+        params={
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "regional_groups": "UNI - ROLIM DE MOURA",
+        },
+    )
+    assert options.status_code == 200
+    assert {"UNI - ROLIM DE MOURA", "UNI - JI PARANA"} <= set(options.json()["regionals"])
+
+
+def test_operations_unknown_regional_group_returns_no_orders(client, db_session):
+    """Grupo desconhecido no filtro "Regional" nao pode virar "sem filtro" silencioso - deve
+    zerar o resultado, nao devolver todo o universo de O.S."""
+    date_from, date_to = current_month_bounds()
+    db_session.add(
+        OperationOrder(
+            source="ixc", source_order_id="regional-group-unknown", order_code="RG-UNKNOWN",
+            regional="UNI - JI PARANA", sector="Suporte Externo",
+            responsible="Técnico A", status="Aberta", status_code="A", is_closed=False,
+            sla_status="on_time", opened_at=_utc_at(date_from, 8), raw_payload={},
+        )
+    )
+    db_session.flush()
+
+    response = client.get(
+        "/api/operations/orders",
+        params={
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "regional_groups": "Regional Inexistente",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["items"] == []
 
 
 def test_ixc_responsible_options_respect_selected_team_model(client, db_session):
@@ -1803,6 +1988,7 @@ def test_ixc_analytics_import_queries_only_period_and_targeted_lookup_ids(db_ses
     assert result["created_count"] == 1
     imported = db_session.scalar(select(OperationOrder).where(OperationOrder.source_order_id == "123"))
     assert imported is not None
+    assert imported.ticket_id == "70"
     assert imported.regional == "UNI - JI PARANA"
     assert imported.city == "Ji-Paraná"
     assert imported.state == "RO"

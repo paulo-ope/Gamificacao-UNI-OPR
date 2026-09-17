@@ -24,14 +24,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SecondaryPill, StatusBadge } from "@/components/ui/status-badge";
 import { SummaryMetric } from "@/components/ui/summary-metric";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AppCombobox, Avatar } from "@/components/gamification/config-ui";
 import { OrderAuditSheet } from "@/components/gamification/order-audit-drawer";
 import { api } from "@/lib/api";
 import { formatAnnulledPoints, formatHours, formatInteger, formatMoney, formatPoints } from "@/lib/format";
+import { pointValueFromTotals } from "@/lib/gamificacao-helpers";
 import { recurrenceClassificationLabel, resolveRecurrenceDisplay } from "@/lib/recurrence-display";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import { scoringStatusEntry } from "@/lib/tones";
@@ -207,9 +211,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       });
   }, [filters]);
 
-  const pointValue = audit?.summary.final_points
-    ? audit.summary.estimated_payment / audit.summary.final_points
-    : 0;
+  const pointValue = pointValueFromTotals(audit?.summary.estimated_payment ?? 0, audit?.summary.final_points ?? 0) ?? 0;
   const visibleOrders = useMemo(() => {
     return (audit?.orders ?? []) as AuditOrder[];
   }, [audit]);
@@ -359,7 +361,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
   }
 
   return (
-    <section className="panel flex h-full min-h-0 flex-col">
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
       <div className="flex shrink-0 flex-col gap-3 border-b bg-white px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">
@@ -612,7 +614,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
         </div>
       ) : null}
 
-      {error ? <div className="mx-3 mt-2 shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
+      {error ? (
+        <div className="mx-3 mt-2 flex shrink-0 items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {error}
+        </div>
+      ) : null}
       {/* Loading sutil: a tabela anterior continua visível durante o refresh (nada de banner
           empurrando o layout) - só um spinner discreto quando ainda não há dado nenhum. */}
       {loading && !audit ? (
@@ -655,16 +662,17 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           </div>
 
           {visibleOrders.length === 0 && !loading ? (
-            <div className="m-3 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
-              <div className="flex items-center justify-center gap-2 text-sm font-semibold text-slate-950">
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
-                Nenhuma O.S encontrada com os filtros atuais.
-              </div>
-              <p className="mt-1 text-xs text-slate-500">A base não está zerada necessariamente; os filtros podem estar restringindo a auditoria.</p>
-              <Button className="mt-4" size="sm" variant="outline" onClick={clearFilters}>
-                Limpar filtros
-              </Button>
-            </div>
+            <EmptyState
+              className="m-3"
+              icon={<AlertTriangle className="h-6 w-6 text-amber-600" />}
+              title="Nenhuma O.S encontrada com os filtros atuais."
+              description="A base não está zerada necessariamente; os filtros podem estar restringindo a auditoria."
+              action={
+                <Button size="sm" variant="outline" onClick={clearFilters}>
+                  Limpar filtros
+                </Button>
+              }
+            />
           ) : null}
 
           {visibleOrders.length > 0 && activeGroup ? (
@@ -715,102 +723,100 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                 </div>
               </div>
 
-              <div className="mt-2 min-h-0 flex-1 overflow-hidden rounded-xl border bg-white">
-                <div className="audit-table-frame h-full">
-                  <table className="w-full table-fixed border-collapse text-xs">
-                    <thead className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm">
-                      <tr>
-                        {[
-                          ["O.S", "w-[76px]"],
-                          ["Colaborador", "w-[180px]"],
-                          ["Regional", "w-[110px]"],
-                          ["Cliente", "w-[160px]"],
-                          ["Assunto / diagnóstico", ""],
-                          ["Operação", "w-[160px]"],
-                          ["Pontos", "w-[95px]"],
-                          ["Valor", "w-[90px]"],
-                          ["Status", "w-[188px]"],
-                          ["Auditoria", "w-[90px]"]
-                        ].map(([label, width]) => (
-                          <th key={label} className={`${width} px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-200`}>
-                            {label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleOrders.map((order) => {
-                        const statusEntry = scoringStatusEntry(order.scoring_status);
-                        const recurrenceDisplay = resolveRecurrenceDisplay(order);
-                        return (
-                        <tr key={order.id} className="odd:bg-white even:bg-slate-50/70 hover:bg-blue-50/40 [&>td]:border-b [&>td]:px-2 [&>td]:py-1.5 [&>td]:align-middle [&>td]:leading-snug">
-                          <td className="font-semibold">{order.os_code}</td>
-                          <td title={order.collaborator_name}>
-                            <div className="flex min-w-0 items-center gap-2">
-                              <Avatar name={order.collaborator_name} size="sm" />
-                              <div className="line-clamp-2 min-w-0">{order.collaborator_name}</div>
-                            </div>
-                          </td>
-                          <td title={regionalName(order.regional)}>
-                            <div className="line-clamp-2">{regionalName(order.regional)}</div>
-                          </td>
-                          <td title={order.customer_name}>
-                            <div className="line-clamp-2">{order.customer_name}</div>
-                          </td>
-                          <td title={`${order.os_subject} - ${order.diagnosis}`}>
-                            <div className="line-clamp-1 font-semibold text-slate-950">{order.os_subject}</div>
-                            <div className="line-clamp-1 text-[11px] text-slate-500">{order.diagnosis || order.os_type}</div>
-                          </td>
-                          <td>
-                            <div className="line-clamp-1">{order.group_name ?? "Sem regra"}</div>
-                            <div className="line-clamp-1 text-[11px] text-slate-500">{order.sla_status} - {formatHours(order.closing_time_hours)}</div>
-                          </td>
-                          <td>
-                            <div className="font-semibold tabular-nums">{formatPoints(order.net_points)}</div>
-                            <div className={order.penalty_points > 0 ? "text-[11px] font-medium tabular-nums text-red-600" : "text-[11px] tabular-nums text-slate-500"}>
-                              {formatAnnulledPoints(order.penalty_points)}
-                            </div>
-                          </td>
-                          <td>
-                            <div className="font-semibold tabular-nums text-uni-royal">{formatMoney(order.net_points * pointValue)}</div>
-                          </td>
-                          <td>
-                            {/* Etiqueta única por O.S: 1 badge de status + no máximo 1 pill secundário
-                                (retorno > reagendada > pendência) - o restante fica na auditoria.
-                                Ponto sólido em vez de ícone (mais limpo em linha densa), texto em
-                                uma linha só com título completo no hover em vez de quebrar em duas
-                                linhas dentro do badge. */}
-                            <div className="flex flex-col items-start gap-1">
-                              <StatusBadge tone={statusEntry.tone} dot className="max-w-full" title={statusEntry.label}>
-                                <span className="truncate">{statusEntry.label}</span>
-                              </StatusBadge>
-                              {recurrenceDisplay ? (
-                                <SecondaryPill tone={recurrenceDisplay.tone} className="max-w-full" title={recurrenceDisplay.label}>
-                                  <span className="truncate">{recurrenceDisplay.label}</span>
-                                </SecondaryPill>
-                              ) : order.has_reschedule ? (
-                                <SecondaryPill tone="amber" icon={Repeat}>
-                                  Reagendada
-                                </SecondaryPill>
-                              ) : order.has_pending ? (
-                                <SecondaryPill tone="slate" icon={Clock}>
-                                  Pendência
-                                </SecondaryPill>
-                              ) : null}
-                            </div>
-                          </td>
-                          <td>
-                            <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => setSelectedAuditOrder(order)}>
-                              <FileSearch className="h-4 w-4" />
-                              Auditar
-                            </Button>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="table-frame mt-2 min-h-0 flex-1 overflow-auto rounded-xl border bg-white">
+                <Table className="table-fixed border-collapse text-xs">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                      {[
+                        ["O.S", "w-[76px]"],
+                        ["Colaborador", "w-[180px]"],
+                        ["Regional", "w-[110px]"],
+                        ["Cliente", "w-[160px]"],
+                        ["Assunto / diagnóstico", ""],
+                        ["Operação", "w-[160px]"],
+                        ["Pontos", "w-[95px]"],
+                        ["Valor", "w-[90px]"],
+                        ["Status", "w-[188px]"],
+                        ["Auditoria", "w-[90px]"]
+                      ].map(([label, width]) => (
+                        <TableHead key={label} className={`${width} h-auto px-2 py-2 text-[10px] tracking-wide text-slate-200`}>
+                          {label}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visibleOrders.map((order) => {
+                      const statusEntry = scoringStatusEntry(order.scoring_status);
+                      const recurrenceDisplay = resolveRecurrenceDisplay(order);
+                      return (
+                      <TableRow key={order.id} className="odd:bg-white even:bg-slate-50/70 hover:bg-blue-50/40 [&>td]:border-b [&>td]:px-2 [&>td]:py-1.5 [&>td]:align-middle [&>td]:leading-snug">
+                        <TableCell className="font-semibold">{order.os_code}</TableCell>
+                        <TableCell title={order.collaborator_name}>
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Avatar name={order.collaborator_name} size="sm" />
+                            <div className="line-clamp-2 min-w-0">{order.collaborator_name}</div>
+                          </div>
+                        </TableCell>
+                        <TableCell title={regionalName(order.regional)}>
+                          <div className="line-clamp-2">{regionalName(order.regional)}</div>
+                        </TableCell>
+                        <TableCell title={order.customer_name}>
+                          <div className="line-clamp-2">{order.customer_name}</div>
+                        </TableCell>
+                        <TableCell title={`${order.os_subject} - ${order.diagnosis}`}>
+                          <div className="line-clamp-1 font-semibold text-slate-950">{order.os_subject}</div>
+                          <div className="line-clamp-1 text-[11px] text-slate-500">{order.diagnosis || order.os_type}</div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="line-clamp-1">{order.group_name ?? "Sem regra"}</div>
+                          <div className="line-clamp-1 text-[11px] text-slate-500">{order.sla_status} - {formatHours(order.closing_time_hours)}</div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-semibold tabular-nums">{formatPoints(order.net_points)}</div>
+                          <div className={order.penalty_points > 0 ? "text-[11px] font-medium tabular-nums text-red-600" : "text-[11px] tabular-nums text-slate-500"}>
+                            {formatAnnulledPoints(order.penalty_points)}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-semibold tabular-nums text-uni-royal">{formatMoney(order.net_points * pointValue)}</div>
+                        </TableCell>
+                        <TableCell>
+                          {/* Etiqueta única por O.S: 1 badge de status + no máximo 1 pill secundário
+                              (retorno > reagendada > pendência) - o restante fica na auditoria.
+                              Ponto sólido em vez de ícone (mais limpo em linha densa), texto em
+                              uma linha só com título completo no hover em vez de quebrar em duas
+                              linhas dentro do badge. */}
+                          <div className="flex flex-col items-start gap-1">
+                            <StatusBadge tone={statusEntry.tone} dot className="max-w-full" title={statusEntry.label}>
+                              <span className="truncate">{statusEntry.label}</span>
+                            </StatusBadge>
+                            {recurrenceDisplay ? (
+                              <SecondaryPill tone={recurrenceDisplay.tone} className="max-w-full" title={recurrenceDisplay.label}>
+                                <span className="truncate">{recurrenceDisplay.label}</span>
+                              </SecondaryPill>
+                            ) : order.has_reschedule ? (
+                              <SecondaryPill tone="amber" icon={Repeat}>
+                                Reagendada
+                              </SecondaryPill>
+                            ) : order.has_pending ? (
+                              <SecondaryPill tone="slate" icon={Clock}>
+                                Pendência
+                              </SecondaryPill>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => setSelectedAuditOrder(order)}>
+                            <FileSearch className="h-4 w-4" />
+                            Auditar
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
               </div>
 
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-slate-50 px-3 py-2 text-xs text-slate-600">
@@ -860,7 +866,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
         }}
         calculationRunId={calculationRunId}
       />
-    </section>
+    </Card>
   );
 }
 

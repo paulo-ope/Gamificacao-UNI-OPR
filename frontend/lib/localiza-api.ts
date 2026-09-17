@@ -1,7 +1,7 @@
+import { getAuthToken, notifyUnauthorized } from "@/lib/auth-token";
 import type { DistanceClassification } from "@/lib/geo-distance";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
-const TOKEN_KEY = "gamification_auth_token";
 
 export type LocationRequestStatus = "pending" | "confirmed" | "invalidated" | "expired";
 
@@ -94,16 +94,24 @@ export type PublicLocationConfirmPayload = {
   adjusted_manually: boolean;
 };
 
-let authToken: string | null = typeof window !== "undefined" ? window.localStorage.getItem(TOKEN_KEY) : null;
-
 // O módulo interno reaproveita o MESMO token de sessão que o resto do ecossistema já guarda em
-// localStorage (`api.ts` também lê essa chave) - não é uma sessão própria, só evita importar o
-// arquivo monolítico `lib/api.ts` inteiro por causa de uma leitura de token.
+// localStorage, via lib/auth-token.ts - não é uma sessão própria, só evita importar o arquivo
+// monolítico `lib/api.ts` inteiro por causa de uma leitura de token.
+//
+// Achado da auditoria de 2026-09-14 (BUG CONFIRMADO, corrigido aqui): este arquivo antes cacheava
+// o token numa variável de módulo lida SÓ na primeira importação (`let authToken = ...
+// localStorage.getItem(...)`), sem jeito nenhum de ser atualizada depois - login/logout feito
+// DEPOIS que este módulo já tinha sido importado numa mesma sessão de navegação (ex.: usuário troca
+// de conta sem dar F5) continuava mandando o token antigo (ou nenhum) nas chamadas do Localiza,
+// possivelmente autenticando como o usuário ERRADO. `getAuthToken()` agora lê da mesma fonte única
+// compartilhada por todos os clients HTTP do app, sempre atualizada.
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
-  if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
+  const token = getAuthToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, { ...init, headers, cache: "no-store" });
+  if (response.status === 401 && token) notifyUnauthorized();
   if (!response.ok) {
     const body = await response.text();
     throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
@@ -157,7 +165,7 @@ export const localizaApi = {
     request<{ matches: IxcCustomerMatch[] }>(`/localiza/ixc/search?login=${encodeURIComponent(login)}`),
   searchIxcByCpf: (cpf: string) =>
     request<{ matches: IxcCustomerMatch[] }>(`/localiza/ixc/search?cpf=${encodeURIComponent(cpf)}`),
-  // Rotas públicas: chamadas pela página `/l/{token}`, sem token de sessão (`authToken` fica
+  // Rotas públicas: chamadas pela página `/l/{token}`, sem token de sessão (`getAuthToken()` volta
   // vazio nesse contexto - o navegador do cliente nunca teve login).
   publicStatus: (token: string) => request<PublicLocationStatus>(`/public/location/${encodeURIComponent(token)}`),
   publicConfirm: (token: string, payload: PublicLocationConfirmPayload) =>

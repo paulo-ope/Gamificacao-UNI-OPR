@@ -39,6 +39,15 @@ VALID_EFFECTS = ("grant", "deny")
 # As duas guardam o mesmo risco - o ecossistema ficar sem ninguém que administre acesso.
 ADMIN_GATEKEEPER_PERMISSION = "admin:users:write"
 
+# Achado da auditoria de 2026-09-15 (P0): as rotas REAIS de `/users`/`/invites`/`/access-requests`
+# sempre aceitaram o legado `users:manage`, uma família de permissão diferente de
+# `admin:users:write` que esta trava nunca considerava - dava pra negar/remover `users:manage` da
+# última pessoa que a tinha sem aviso nenhum, e ninguém mais conseguiria gerenciar usuário nenhum
+# (mesmo com `admin:users:write` intacto, que só abre a TELA de administração, não as rotas de
+# `/users` de verdade - ver `require_any_permission` em `core/security.py`). A trava agora olha as
+# DUAS permissões: perder uma só está seguro enquanto a outra continuar coberta por alguém ativo.
+USER_MANAGEMENT_GATEKEEPER_PERMISSIONS = (ADMIN_GATEKEEPER_PERMISSION, "users:manage")
+
 
 @dataclass(frozen=True)
 class OverrideEntry:
@@ -86,15 +95,19 @@ def overview(db: Session, user: User) -> UserPermissionOverview:
 
 def _would_orphan_admin_gatekeeper(db: Session, excluded_user_id: int) -> bool:
     """True se, sem contar o usuário informado, nenhuma outra pessoa ATIVA teria de verdade
-    `admin:users:write` - perfil e exceções individuais já aplicados, o mesmo cálculo do login.
+    `admin:users:write` OU `users:manage` - perfil e exceções individuais já aplicados, o mesmo
+    cálculo do login.
 
     Existe para o mesmo motivo do bloqueio equivalente em perfil (`_profile_delete_blocked_reason`
-    em admin/router.py): sem essa checagem, negar (ou remover a única concessão de) esta permissão
-    da última pessoa que a tem trancaria o ecossistema por fora - ninguém mais conseguiria
-    administrar acesso, nem para desfazer o próprio erro.
+    em admin/router.py): sem essa checagem, negar (ou remover a única concessão de) uma dessas
+    permissões da última pessoa que a tem trancaria o ecossistema por fora - ninguém mais
+    conseguiria administrar acesso, nem para desfazer o próprio erro. As duas contam porque
+    `require_any_permission` (core/security.py) aceita qualquer uma delas nas rotas reais de
+    `/users`/`/invites`/`/access-requests` - só ter `admin:users:write` sem `users:manage` (ou
+    vice-versa) já é suficiente pra pessoa gerenciar usuário de verdade.
     """
     return not any(
-        ADMIN_GATEKEEPER_PERMISSION in permissions_for_user(other)
+        set(USER_MANAGEMENT_GATEKEEPER_PERMISSIONS) & permissions_for_user(other)
         for other in db.scalars(select(User).where(User.active.is_(True), User.id != excluded_user_id))
     )
 
@@ -113,12 +126,13 @@ def set_override(
         raise PermissionValidationError(f"Permissão inválida: {permission}.")
     if (
         effect == "deny"
-        and permission == ADMIN_GATEKEEPER_PERMISSION
+        and permission in USER_MANAGEMENT_GATEKEEPER_PERMISSIONS
         and _would_orphan_admin_gatekeeper(db, target.id)
     ):
         raise PermissionValidationError(
             "Negar esta permissão deixaria o ecossistema sem ninguém que administre acessos "
-            f"({ADMIN_GATEKEEPER_PERMISSION}). Garanta que outra pessoa ativa a tenha antes de negar.",
+            f"({' ou '.join(USER_MANAGEMENT_GATEKEEPER_PERMISSIONS)}). Garanta que outra pessoa "
+            "ativa continue com pelo menos uma delas antes de negar.",
             status_code=409,
         )
 
@@ -147,18 +161,19 @@ def remove_override(db: Session, target: User, permission: str) -> None:
     if not existing:
         raise PermissionValidationError("Este usuário não tem uma exceção para esta permissão.", status_code=404)
 
-    # Remover uma CONCESSÃO individual que hoje é a única fonte de admin:users:write para esta
-    # pessoa (o perfil dela não concede) trancaria o ecossistema do mesmo jeito que negar -
+    # Remover uma CONCESSÃO individual que hoje é a única fonte de admin:users:write/users:manage
+    # para esta pessoa (o perfil dela não concede) trancaria o ecossistema do mesmo jeito que negar -
     # mesma checagem, só que olhando o estado ANTES de remover em vez do estado depois de negar.
     if (
         existing.effect == "grant"
-        and permission == ADMIN_GATEKEEPER_PERMISSION
-        and ADMIN_GATEKEEPER_PERMISSION not in base_permissions_for_user(target)
+        and permission in USER_MANAGEMENT_GATEKEEPER_PERMISSIONS
+        and permission not in base_permissions_for_user(target)
         and _would_orphan_admin_gatekeeper(db, target.id)
     ):
         raise PermissionValidationError(
             "Remover esta concessão deixaria o ecossistema sem ninguém que administre acessos "
-            f"({ADMIN_GATEKEEPER_PERMISSION}). Garanta que outra pessoa ativa a tenha antes de remover.",
+            f"({' ou '.join(USER_MANAGEMENT_GATEKEEPER_PERMISSIONS)}). Garanta que outra pessoa "
+            "ativa continue com pelo menos uma delas antes de remover.",
             status_code=409,
         )
 

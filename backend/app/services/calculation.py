@@ -257,6 +257,11 @@ def calculate_scores(
     pending_entries_by_collaborator = point_balance.pending_entries_by_collaborator_batch(
         db, [collaborator.id for collaborator in collaborators]
     )
+    # Multiplicador de saude efetivamente usado no pagamento de cada colaborador (mesmo que
+    # `summarize_details` aplica em `final_points`/`estimated_payment`) - guardado aqui para que o
+    # card "lost_payment" (dinheiro que a penalidade tirou) use o MESMO multiplicador, em vez de
+    # tratar todo ponto anulado como se valesse 1x em qualquer regional.
+    collaborator_multipliers: dict[int, float] = {}
 
     for collaborator in collaborators:
         collaborator_details = details_by_collaborator.get(collaborator.id, [])
@@ -270,6 +275,7 @@ def calculate_scores(
             health = health_by_regional[official_regional]
             effective_regional = official_regional
         multiplier = float(health.get("multiplier", 0.0))
+        collaborator_multipliers[collaborator.id] = multiplier
         summary = scoring_detail.summarize_details(
             collaborator_details,
             multiplier,
@@ -396,8 +402,19 @@ def calculate_scores(
         "final_points": round(float(result_summary["final_points"]), 2),
         "estimated_payment": round(float(result_summary["estimated_payment"]), 2),
         "lost_points": round(sum(float(item["penalty_points"]) for item in order_details), 2),
+        # Aplica o MESMO multiplicador de saude que reduz/aumenta o pagamento do colaborador
+        # (`summarize_details`) - sem isso este card tratava todo ponto anulado como se valesse 1x
+        # em qualquer regional, divergindo do "final_points"/"estimated_payment" reais. So conta
+        # colaborador identificado e cadastrado, pelo mesmo motivo que o pagamento so existe pra
+        # esse recorte (nao-cadastrado nunca gera valor a pagar, entao tambem nao "perde" valor).
         "lost_payment": round(
-            sum(float(item["penalty_points"]) * float(item.get("point_value", value_per_point)) for item in order_details),
+            sum(
+                float(item["penalty_points"])
+                * float(item.get("point_value", value_per_point))
+                * collaborator_multipliers.get(int(item["collaborator_id"]), 0.0)
+                for item in order_details
+                if scoring_detail.is_identified_collaborator_detail(item) and item.get("collaborator_is_registered")
+            ),
             2,
         ),
         "unscored_estimated_payment": round(sum(average_points for item in order_details if item["is_unscored"]) * float(value_per_point), 2),

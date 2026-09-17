@@ -3,6 +3,8 @@
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { pointValueFromTotals } from "@/lib/gamificacao-helpers";
 import { regionalName } from "@/lib/regional";
 import type { CollaboratorScore } from "@/lib/types";
 
@@ -37,7 +39,7 @@ function formatAnnulled(value: number) {
 }
 
 function averagePointValue(score: CollaboratorScore) {
-  return score.final_points > 0 ? score.estimated_payment / score.final_points : 0;
+  return pointValueFromTotals(score.estimated_payment, score.final_points) ?? 0;
 }
 
 function finalPointsFormula(score: CollaboratorScore) {
@@ -85,11 +87,7 @@ type RankingTableProps = {
 
 export function RankingTable({ data, onViewOrders }: RankingTableProps) {
   if (!data.length) {
-    return (
-      <div className="m-3 rounded-lg border border-dashed bg-slate-50 p-6 text-sm text-slate-500">
-        Nenhum colaborador encontrado para o período atual.
-      </div>
-    );
+    return <EmptyState variant="card" className="m-3" title="Nenhum colaborador encontrado para o período atual." />;
   }
 
   return (

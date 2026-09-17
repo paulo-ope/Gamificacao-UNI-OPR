@@ -1,3 +1,5 @@
+import { getAuthToken, notifyUnauthorized } from "@/lib/auth-token";
+
 export type OperationPeriod = {
   date_from: string;
   date_to: string;
@@ -10,6 +12,7 @@ export type OperationFilters = {
   team_models: string[];
   companies: string[];
   regionals: string[];
+  regional_groups: string[];
   states: string[];
   cities: string[];
   contract_types: string[];
@@ -36,6 +39,7 @@ export type OperationOverview = {
   responsible_filter_active: boolean;
   completed: number;
   in_progress: number;
+  backlog_ignores_team_scope: boolean;
   opened_out_of_time: number;
   completed_on_time: number;
   completed_out_of_time: number;
@@ -378,6 +382,7 @@ export type OperationCalendarTeamModel = {
   median_color: string;
   good_color: string;
   excellent_color: string;
+  requires_justification: boolean;
   target_rules: OperationTeamTargetRule[];
 };
 
@@ -640,6 +645,7 @@ export type OperationFilterState = {
   team_models?: string[];
   companies?: string[];
   regionals?: string[];
+  regional_groups?: string[];
   states?: string[];
   cities?: string[];
   contract_types?: string[];
@@ -857,7 +863,7 @@ export type OperationOverviewDefaultFilter = {
 
 export type OperationOverviewFilterKey =
   | "team_models"
-  | "regionals"
+  | "regional_groups"
   | "sectors"
   | "os_types"
   | "responsibles"
@@ -885,23 +891,19 @@ export type OperationOfflineLoginClusters = {
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
-const TOKEN_KEY = "gamification_auth_token";
-
-function authToken() {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
-  const token = authToken();
+  const token = getAuthToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers,
     cache: "no-store",
   });
+  // Sessão caiu no meio do uso - achado da auditoria de 2026-09-14, ver lib/auth-token.ts.
+  if (response.status === 401 && token) notifyUnauthorized();
   if (!response.ok) {
     const text = await response.text();
     let message = text || `Erro HTTP ${response.status}`;

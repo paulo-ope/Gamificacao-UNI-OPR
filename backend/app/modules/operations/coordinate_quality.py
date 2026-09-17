@@ -26,7 +26,9 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models import User
 from app.modules.ai_governance.response_meta import build_meta
+from app.services.regional import regional_scope_or_deny
 
 from .models import OperationLoginCurrentStatus, OperationOnuSignalCurrent, OperationOrder
 
@@ -51,22 +53,30 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return EARTH_RADIUS_KM * math.acos(cos_angle)
 
 
-def _load_records(db: Session, entity: CoordinateEntity) -> list[_Record]:
+def _load_records(db: Session, entity: CoordinateEntity, *, allowed_regionals: list[str]) -> list[_Record]:
+    order_regional = OperationOrder.regional
+    login_regional = OperationLoginCurrentStatus.regional
     if entity == "operations_orders":
-        rows = db.execute(select(OperationOrder.regional, OperationOrder.latitude, OperationOrder.longitude)).all()
+        conditions = [order_regional.in_(allowed_regionals)] if allowed_regionals else []
+        rows = db.execute(
+            select(order_regional, OperationOrder.latitude, OperationOrder.longitude).where(*conditions)
+        ).all()
         return [_Record(regional=r[0], latitude=r[1], longitude=r[2]) for r in rows]
     if entity == "operations_login_current_status":
+        conditions = [login_regional.in_(allowed_regionals)] if allowed_regionals else []
         rows = db.execute(
-            select(OperationLoginCurrentStatus.regional, OperationLoginCurrentStatus.latitude, OperationLoginCurrentStatus.longitude)
+            select(login_regional, OperationLoginCurrentStatus.latitude, OperationLoginCurrentStatus.longitude).where(*conditions)
         ).all()
         return [_Record(regional=r[0], latitude=r[1], longitude=r[2]) for r in rows]
     if entity == "operations_onu_signal_current":
         # Sem coluna própria de regional - join com login_current_status (mesmo padrão já usado em
         # login_search.py/login_aggregate.py) pra poder quebrar por regional também aqui.
+        conditions = [login_regional.in_(allowed_regionals)] if allowed_regionals else []
         rows = db.execute(
-            select(OperationLoginCurrentStatus.regional, OperationOnuSignalCurrent.latitude, OperationOnuSignalCurrent.longitude)
+            select(login_regional, OperationOnuSignalCurrent.latitude, OperationOnuSignalCurrent.longitude)
             .select_from(OperationOnuSignalCurrent)
             .join(OperationLoginCurrentStatus, OperationLoginCurrentStatus.login_id == OperationOnuSignalCurrent.login_id)
+            .where(*conditions)
         ).all()
         return [_Record(regional=r[0], latitude=r[1], longitude=r[2]) for r in rows]
     raise ValueError(
@@ -78,6 +88,7 @@ def _load_records(db: Session, entity: CoordinateEntity) -> list[_Record]:
 def coordinate_quality_audit(
     db: Session,
     *,
+    user: User | None,
     entity: CoordinateEntity,
     outlier_km: float = DEFAULT_OUTLIER_KM,
     duplicate_threshold: int = DEFAULT_DUPLICATE_THRESHOLD,
@@ -89,8 +100,16 @@ def coordinate_quality_audit(
     compartilhando a mesma coordenada exata (~1m) fazem ela ser "suspeita de valor chumbado".
 
     Retorna {"meta": {...}, "data": [...]} (envelope padrão da Fase 1, item 1 - ver
-    `app.modules.ai_governance.response_meta`), um item de `data` por regional."""
-    records = _load_records(db, entity)
+    `app.modules.ai_governance.response_meta`), um item de `data` por regional. Sempre aplica o
+    escopo regional de `user` (achado P0-2 da auditoria de 2026-09-15) - sem isso, um gestor
+    regional restrito auditava a qualidade de coordenada de QUALQUER regional."""
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return {
+            "meta": build_meta(applied_filters={"entity": entity, "outlier_km": outlier_km, "duplicate_threshold": duplicate_threshold}),
+            "data": [],
+        }
+    records = _load_records(db, entity, allowed_regionals=allowed_regionals)
 
     by_regional: dict[str, list[_Record]] = defaultdict(list)
     for record in records:

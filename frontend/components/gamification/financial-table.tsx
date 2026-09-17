@@ -3,6 +3,7 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { MetricCard } from "@/components/gamification/config-ui";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -23,7 +24,7 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
   const totalPayment = rows.reduce((total, row) => total + Number(row.estimated_payment ?? 0), 0);
 
   return (
-    <div className="overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
       <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-4 py-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -80,8 +81,8 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
               ))}
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="py-6 text-center text-sm text-slate-500">
-                    Nenhum dado para os filtros atuais.
+                  <TableCell colSpan={3}>
+                    <EmptyState variant="plain" title="Nenhum dado para os filtros atuais." />
                   </TableCell>
                 </TableRow>
               ) : null}

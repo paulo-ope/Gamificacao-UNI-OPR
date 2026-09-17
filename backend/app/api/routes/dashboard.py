@@ -68,6 +68,19 @@ def _remember(cache: dict, key, value: dict) -> dict:
     return value
 
 
+def invalidate_filtered_breakdowns_cache(run_id: int) -> None:
+    """Limpa as entradas de `FILTERED_BREAKDOWNS_CACHE` (uma por combinacao de regionais) de um
+    run especifico. Precisa ser chamada sempre que o `run` mudar por baixo do mesmo `run.id" -
+    hoje, na transicao para "paid" (`_apply_point_balance_after_payment` recompoe
+    `final_points`/`estimated_payment` no lugar). Sem isto, quem ja tinha aberto o filtro por
+    regional antes do pagamento continuava vendo os valores de rascunho para sempre (o cache vive
+    pelo tempo de vida do processo, ao contrario do `run.result_summary`, que ja e corrigido por
+    `refresh_run_breakdowns`)."""
+    stale_keys = [key for key in FILTERED_BREAKDOWNS_CACHE if key[0] == run_id]
+    for key in stale_keys:
+        FILTERED_BREAKDOWNS_CACHE.pop(key, None)
+
+
 def _empty_dashboard_summary(point_value: float) -> dict:
     return {
         "run": None,
