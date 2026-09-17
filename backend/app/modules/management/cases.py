@@ -23,6 +23,7 @@ de `due_date` vs hoje. Gravar exigiria uma varredura periódica que ficaria erra
 from __future__ import annotations
 
 import calendar as calendar_module
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
@@ -47,7 +48,7 @@ from app.modules.operations.models import OperationOrder, OperationTeamModel
 # duas verdades sobre "que dia essa O.S. fechou" - exatamente o tipo de divergência que faria o caso
 # gerado não bater com o calendário que o supervisor acessa para conferir.
 from app.modules.operations.queries import _local_closed_date
-from app.services.regional import effective_managed_regionals, normalize_regional
+from app.services.regional import effective_managed_regionals, normalize_key, normalize_regional
 
 CASE_TYPE_PRODUCTIVITY = "productivity_below_target"
 METRIC_DAILY_AVERAGE = "Média diária de O.S. concluídas"
@@ -128,7 +129,39 @@ def seed_default_reasons(db: Session) -> int:
 
 
 def _norm(value: str | None) -> str:
-    return " ".join((value or "").strip().casefold().split())
+    """Chave de identidade de nome de pessoa (responsável/supervisor): maiúscula/minúscula,
+    espaço nas pontas/duplicado E acento não podem fazer a mesma pessoa virar duas no agrupamento
+    por responsável (geração de caso, bucket de pendência, filtro exato).
+
+    Achado real (2026-09-16, IA relatando casos pendentes de forma imprecisa): esta função
+    ignorava acento - "José Souza" e "Jose Souza" (variação real de digitação/importação do IXC
+    entre lotes) viravam duas pessoas diferentes em toda esta engine. `regional.normalize_key`
+    já resolve exatamente esse problema (usa `unicodedata` pra tirar acento) para nome de
+    regional desde sempre; reaproveitado aqui em vez de duplicar o algoritmo."""
+    return normalize_key(value)
+
+
+def names_matching(db: Session, column, target: str | None) -> list[str]:
+    """Resolve, em Python (não em SQL), quais valores DISTINTOS de `column` (uma coluna de nome
+    de pessoa em texto livre) são a MESMA pessoa que `target` sob `_norm` - maiúscula/minúscula,
+    espaço e acento ignorados.
+
+    Existe porque não dá pra fazer esse casamento dentro da query: `unicodedata` (usado por
+    `normalize_key`/`_norm` para tirar acento) não roda em SQL, e a alternativa óbvia - uma cadeia
+    de `func.replace` por par acentuado/ASCII - baixa em `RecursionError` no compilador do
+    SQLAlchemy com a lista de acentos de nome de pessoa (achado real, 2026-09-16). O volume de
+    nomes distintos é pequeno (nunca mais que alguns milhares, mesmo racional já usado em
+    `case_diagnostics`), então resolver em memória é seguro e simples. Devolve `[]` quando nenhum
+    valor bate - o chamador deve tratar isso como "nenhuma linha corresponde", não como "sem
+    filtro" (nunca devolver `column.in_([])` como se fosse ausência de condição)."""
+    normalized_target = _norm(target)
+    if not normalized_target:
+        return []
+    return [
+        name
+        for (name,) in db.execute(select(column).distinct().where(column.is_not(None)))
+        if _norm(name) == normalized_target
+    ]
 
 
 def _as_date(value) -> date | None:
@@ -242,7 +275,7 @@ def generate_performance_cases(
 
     for member in members:
         model = team_models.get(member.team_model_id)
-        if model is None or not model.median_from_quantity:
+        if model is None or not model.median_from_quantity or not model.requires_justification:
             continue
         key = (_norm(member.responsible_name), _norm(member.regional))
         bucket = produced.get(key)
@@ -307,7 +340,12 @@ def generate_performance_cases(
     }
 
 
-def _resolve_member_for_case(db: Session, responsible_name: str) -> ManagementOperationalMember | None:
+def _resolve_member_for_case(
+    db: Session,
+    responsible_name: str,
+    *,
+    members: Sequence[ManagementOperationalMember] | None = None,
+) -> ManagementOperationalMember | None:
     """Acha o `ManagementOperationalMember` de uma pessoa só pelo NOME - não pela regional que a
     tela de origem (calendário) estava mostrando no momento do clique. Achado real da auditoria de
     2026-08-21: casar por (nome, regional recebida) fazia o caso nascer sem member/collaborator_id/
@@ -317,13 +355,16 @@ def _resolve_member_for_case(db: Session, responsible_name: str) -> ManagementOp
     Uma pessoa pode ter mais de uma linha (uma por regional em que teve cadastro/atividade, ver
     `resolve_responsible_regional_candidates`) - entre elas, prioriza a que vem de cadastro manual
     (`source="assignment"`) sobre a inferida por histórico de O.S.; entre iguais, a mais recente
-    por `last_order_at`."""
+    por `last_order_at`.
+
+    `members`, quando informado, evita reconsultar a tabela inteira a cada chamada - achado da
+    auditoria de 2026-09-14: `refresh_pending_cases` chamava esta função uma vez por caso pendente
+    dentro de um loop, cada chamada disparando um `SELECT * FROM management_operational_members`
+    sem filtro (N+1 real). Chamadores que resolvem UM responsável isolado (`get_or_create_daily_case`/
+    `get_or_create_monthly_case`) continuam sem passar `members` e mantêm o comportamento antigo."""
     normalized_name = _norm(responsible_name)
-    candidates = [
-        candidate
-        for candidate in db.scalars(select(ManagementOperationalMember)).all()
-        if _norm(candidate.responsible_name) == normalized_name
-    ]
+    pool = members if members is not None else db.scalars(select(ManagementOperationalMember)).all()
+    candidates = [candidate for candidate in pool if _norm(candidate.responsible_name) == normalized_name]
     if not candidates:
         return None
 
@@ -334,6 +375,21 @@ def _resolve_member_for_case(db: Session, responsible_name: str) -> ManagementOp
 
     candidates.sort(key=sort_key)
     return candidates[0]
+
+
+def team_model_requires_justification(db: Session, responsible_name: str) -> bool:
+    """`False` só quando o colaborador tem membro/modelo de equipe resolvido e esse modelo
+    explicitamente desligou `requires_justification` - usado pela abertura MANUAL de caso
+    (`POST /cases/daily` e `/cases/monthly`) pra recusar o pedido do supervisor com uma mensagem
+    clara, em vez de abrir um caso que a geração automática nunca teria criado. Sem membro/modelo
+    resolvido, mantém o comportamento anterior (permite abrir) - não há modelo pra consultar."""
+    member = _resolve_member_for_case(db, responsible_name)
+    if member is None or member.team_model_id is None:
+        return True
+    model = db.get(OperationTeamModel, member.team_model_id)
+    if model is None:
+        return True
+    return model.requires_justification
 
 
 # Nota gravada (como justificativa + comentário) quando um caso automático é resolvido sozinho
@@ -353,6 +409,15 @@ CASE_AUTO_REFRESHED_RESOLVED_NOTE = (
 CASE_NOT_A_WORKDAY_NOTE = (
     "Resolvido automaticamente: esta data não é mais um dia de trabalho esperado pela escala "
     "alternada (12x36) configurada para este colaborador - não há desvio a justificar."
+)
+
+# Nota gravada quando um caso "pending" (diário ou mensal) é resolvido sozinho porque o modelo de
+# equipe do colaborador deixou de exigir justificativa (`OperationTeamModel.requires_justification`
+# desligado) depois de o caso já ter sido aberto - o dia/mês continua abaixo da meta, mas ninguém
+# precisa mais explicar o motivo.
+CASE_JUSTIFICATION_NOT_REQUIRED_NOTE = (
+    "Resolvido automaticamente: o modelo de equipe deste colaborador não exige mais justificativa "
+    "para produção abaixo da meta mínima."
 )
 
 
@@ -533,6 +598,7 @@ def _team_model_dict(model: OperationTeamModel) -> dict:
         "daily_target": model.daily_target,
         "median_from_quantity": model.median_from_quantity,
         "good_from_quantity": model.good_from_quantity,
+        "requires_justification": model.requires_justification,
         "target_rules": [
             {
                 "period_type": rule.period_type,
@@ -782,7 +848,7 @@ def generate_daily_cases_for_date(
         if not is_scheduled_workday(member, day):
             continue
         model = team_models.get(member.team_model_id)
-        if model is None:
+        if model is None or not model.requires_justification:
             continue
         model_dict = _team_model_dict(model)
         rule = _rule_for_day(model_dict, day)
@@ -833,6 +899,10 @@ def refresh_pending_cases(db: Session) -> dict:
     rejeitado é histórico e nunca é reescrito aqui (mesma regra de `_refresh_pending_case`)."""
     settings = load_settings(db)
     team_models = {model.id: model for model in db.scalars(select(OperationTeamModel)).all()}
+    # Carregado uma vez fora do loop de casos (mesmo padrão de `team_models` acima) - achado da
+    # auditoria de 2026-09-14: sem isso, `_resolve_member_for_case` reconsultava esta tabela
+    # inteira a cada caso pendente processado (N+1 real, um SELECT sem filtro por caso).
+    all_members = db.scalars(select(ManagementOperationalMember)).all()
     closed_day = _local_closed_date(db)
     counts = {"daily_refreshed": 0, "daily_resolved": 0, "monthly_refreshed": 0, "monthly_resolved": 0}
 
@@ -868,7 +938,7 @@ def refresh_pending_cases(db: Session) -> dict:
             # A escala alternada (12x36 etc.) pode ter sido configurada DEPOIS do caso já aberto -
             # achado real de 2026-08-21: um caso de produção zero num dia que passou a ser folga
             # não vira desvio nenhum só porque foi aberto antes da escala existir no cadastro.
-            member = _resolve_member_for_case(db, case.responsible_name)
+            member = _resolve_member_for_case(db, case.responsible_name, members=all_members)
             if member is not None and not is_scheduled_workday(member, day):
                 case.status = "resolved"
                 case.justification_text = CASE_NOT_A_WORKDAY_NOTE
@@ -878,6 +948,14 @@ def refresh_pending_cases(db: Session) -> dict:
                 continue
 
             model = team_models.get(case.team_model_id)
+            if model is not None and not model.requires_justification:
+                case.status = "resolved"
+                case.justification_text = CASE_JUSTIFICATION_NOT_REQUIRED_NOTE
+                case.justified_at = datetime.now(timezone.utc)
+                db.add(ManagementCaseComment(case_id=case.id, user_id=None, comment=CASE_JUSTIFICATION_NOT_REQUIRED_NOTE))
+                counts["daily_resolved"] += 1
+                continue
+
             expected_value = case.expected_value
             if model is not None:
                 rule = _rule_for_day(_team_model_dict(model), day)
@@ -929,6 +1007,14 @@ def refresh_pending_cases(db: Session) -> dict:
                 # média pra zero, só preserva o que já foi cobrado até haver dado novo.
                 continue
             model = team_models.get(case.team_model_id)
+            if model is not None and not model.requires_justification:
+                case.status = "resolved"
+                case.justification_text = CASE_JUSTIFICATION_NOT_REQUIRED_NOTE
+                case.justified_at = datetime.now(timezone.utc)
+                db.add(ManagementCaseComment(case_id=case.id, user_id=None, comment=CASE_JUSTIFICATION_NOT_REQUIRED_NOTE))
+                counts["monthly_resolved"] += 1
+                continue
+
             expected_value = float(model.median_from_quantity) if model and model.median_from_quantity else case.expected_value
             actual_value = round(bucket["total"] / bucket["days"], 2)
             _refresh_pending_case(db, case, expected_value=round(expected_value, 2) if expected_value else expected_value, actual_value=actual_value, settings=settings)
@@ -1013,7 +1099,7 @@ class ManagementCaseFilters:
     min_days_pending: int | None = None
 
 
-def case_filter_conditions(filters: ManagementCaseFilters) -> list:
+def case_filter_conditions(db: Session, filters: ManagementCaseFilters) -> list:
     if filters.status and filters.statuses and filters.status not in filters.statuses:
         # status="resolved"/"rejected" + only_open=true (que popula `statuses` com os status
         # abertos) é uma contradição lógica: o AND das duas condições é sempre vazio. Sem esse
@@ -1096,11 +1182,12 @@ def case_filter_conditions(filters: ManagementCaseFilters) -> list:
         )
     if filters.responsible_name:
         # Casamento EXATO da pessoa, ao contrário de `search` (ILIKE em OR sobre 3 colunas).
-        # `lower(trim(...))` é o análogo em SQL do `_norm` usado no Python daqui - cobre
-        # maiúscula/minúscula e espaço nas pontas; espaço duplo NO MEIO do nome não é coberto (não
-        # dá pra colapsar isso em SQL portável entre PostgreSQL e SQLite), e nunca apareceu no
-        # dado real vindo do IXC.
-        conditions.append(func.lower(func.trim(ManagementCase.responsible_name)) == _norm(filters.responsible_name))
+        # `names_matching` resolve em Python (via `_norm`) quais grafias distintas gravadas no
+        # banco são a MESMA pessoa - maiúscula/minúscula, espaço E ACENTO ignorados (achado
+        # 2026-09-16: antes só cobria maiúscula/minúscula, e "José"/"Jose" nunca casavam).
+        conditions.append(
+            ManagementCase.responsible_name.in_(names_matching(db, ManagementCase.responsible_name, filters.responsible_name))
+        )
     if filters.collaborator_id:
         conditions.append(ManagementCase.collaborator_id == filters.collaborator_id)
     if filters.reference_date_from:

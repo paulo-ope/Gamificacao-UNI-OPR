@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Collaborator, User
@@ -12,14 +12,11 @@ from app.modules.management.models import (
     ManagementCase,
     ManagementOperationalMember,
 )
+from app.modules.management.cases import names_matching
 from app.modules.management.schemas import ManagementOperationalMemberOut, ManagementSummaryOut
 from app.modules.operations.models import OperationTeamModel
 from app.modules.operations.responsible_regional import resolve_responsible_regional_candidates
-from app.services.regional import normalize_regional
-
-
-def _norm_name(value: str | None) -> str:
-    return " ".join((value or "").strip().casefold().split())
+from app.services.regional import normalize_key, normalize_regional
 
 
 def _member_status(member: ManagementOperationalMember, collaborator: Collaborator | None) -> str:
@@ -54,10 +51,17 @@ def _find_collaborator(db: Session, responsible_name: str, ixc_employee_id: int 
         collaborator = db.scalar(select(Collaborator).where(Collaborator.ixc_employee_id == ixc_employee_id))
         if collaborator:
             return collaborator
-    normalized = _norm_name(responsible_name)
-    if not normalized:
+    if not normalize_key(responsible_name):
         return None
-    return db.scalar(select(Collaborator).where(func.lower(Collaborator.name) == normalized))
+    # `names_matching` (não `func.lower`) - achado 2026-09-16: um técnico importado do IXC como
+    # "José Souza" nunca casava com o `Collaborator.name` cadastrado como "Jose Souza" (ou
+    # vice-versa), então o membro operacional ficava com o alerta "Sem cadastro na Gamificação"
+    # mesmo quando o cadastro existia - a causa real de casos de gestão/pendência aparecendo sob
+    # uma identidade quando deveriam estar sob a outra.
+    matching_names = names_matching(db, Collaborator.name, responsible_name)
+    if not matching_names:
+        return None
+    return db.scalar(select(Collaborator).where(Collaborator.name.in_(matching_names)))
 
 
 def default_shift_pattern_for_team_model(team_model: OperationTeamModel | None) -> tuple[str, int, int] | None:

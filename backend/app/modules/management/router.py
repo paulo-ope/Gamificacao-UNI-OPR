@@ -338,7 +338,7 @@ def list_cases(
     user: User = Depends(require_permission("management:read")),
 ):
     try:
-        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(db, filters)]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     total = db.scalar(select(func.count(ManagementCase.id)).where(*conditions)) or 0
@@ -380,7 +380,7 @@ def export_cases(
     import io
 
     try:
-        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(db, filters)]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     rows = db.scalars(
@@ -436,7 +436,7 @@ def case_diagnostics(
     """Diagnóstico agregado (quem mais falha, por regional/responsável/motivo) do MESMO recorte
     filtrado na tela - pedido do usuário em 2026-08-20 pra não precisar contar caso por caso."""
     try:
-        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(db, filters)]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ManagementCaseDiagnosticsOut(**cases_engine.case_diagnostics(db, conditions))
@@ -459,7 +459,7 @@ def pending_by_collaborator(
     com `reference_date_from`/`reference_date_to` para recortar por dia/semana. Escopo de
     visibilidade igual ao da tela."""
     try:
-        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(db, filters)]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ManagementPendingByCollaboratorOut(
@@ -472,7 +472,7 @@ def list_justifications(
     filters: cases_engine.ManagementCaseFilters = Depends(case_filters_query),
     include_comments: bool = Query(default=False, description="Traz também a thread de comentários de cada caso."),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+    page_size: int = Query(default=50, ge=1, le=1000),
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("management:read")),
 ):
@@ -482,9 +482,15 @@ def list_justifications(
 
     Use `responsible_name` (nome exato) + `reference_date_from`/`reference_date_to` para o recorte
     pedido; `has_justification=true` limita ao que já tem texto escrito. Escopo de visibilidade
-    igual ao da tela."""
+    igual ao da tela.
+
+    `page_size` vai até 1000 (mesmo teto de `pending-by-collaborator`, pedido do usuário em
+    2026-09-16: ler um mês inteiro de justificativas sem paginar manualmente) - o volume total de
+    casos do sistema nunca passou de alguns milhares (ver `case_diagnostics`), então uma página
+    de 1000 cobre a esmagadora maioria dos recortes por período/regional numa única chamada;
+    `total` no retorno confirma se ainda sobrou mais."""
     try:
-        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(filters)]
+        conditions = [*cases_engine.case_scope_conditions(user), *cases_engine.case_filter_conditions(db, filters)]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ManagementJustificationPage(
@@ -559,6 +565,11 @@ def open_daily_case(
     """Abre (ou devolve) o caso do dia vermelho clicado no drill do calendário - o mesmo permissao
     de quem justifica (não exige `management:review`, ao contrário da criação manual de caso via
     POST /cases): o supervisor pode abrir a justificativa do próprio dia sem depender da matriz."""
+    if not cases_engine.team_model_requires_justification(db, payload.responsible_name):
+        raise HTTPException(
+            status_code=409,
+            detail="O modelo de equipe deste colaborador não exige justificativa para dias abaixo da meta.",
+        )
     item, was_created = cases_engine.get_or_create_daily_case(
         db,
         responsible_name=payload.responsible_name,
@@ -596,6 +607,11 @@ def open_monthly_case(
         raise HTTPException(
             status_code=400,
             detail="Só é possível justificar um mês já fechado - o mês corrente ainda está em andamento.",
+        )
+    if not cases_engine.team_model_requires_justification(db, payload.responsible_name):
+        raise HTTPException(
+            status_code=409,
+            detail="O modelo de equipe deste colaborador não exige justificativa para produção abaixo da meta.",
         )
     item, was_created = cases_engine.get_or_create_monthly_case(
         db,

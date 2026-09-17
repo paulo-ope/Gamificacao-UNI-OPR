@@ -41,8 +41,8 @@ def _make_case(db_session, **overrides) -> ManagementCase:
     return item
 
 
-def _conditions(**kwargs) -> list:
-    return cases_engine.case_filter_conditions(cases_engine.ManagementCaseFilters(**kwargs))
+def _conditions(db, **kwargs) -> list:
+    return cases_engine.case_filter_conditions(db, cases_engine.ManagementCaseFilters(**kwargs))
 
 
 # --- filtros novos no motor ---------------------------------------------------------------------
@@ -56,14 +56,50 @@ def test_responsible_name_casa_a_pessoa_exata_enquanto_search_casa_parcial(db_se
     db_session.commit()
 
     exatos = db_session.scalars(
-        cases_engine.select(ManagementCase).where(*_conditions(responsible_name="ana souza"))
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, responsible_name="ana souza"))
     ).all()
     assert [item.id for item in exatos] == [ana.id]
 
     parciais = db_session.scalars(
-        cases_engine.select(ManagementCase).where(*_conditions(search="ana"))
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, search="ana"))
     ).all()
     assert len(parciais) == 2  # "Ana Souza" e "Mariana Lima" - o problema que o filtro exato resolve
+
+
+def test_responsible_name_ignora_acento_dos_dois_lados(db_session):
+    """Regressão (2026-09-16, IA relatando casos pendentes de forma imprecisa): o mesmo técnico
+    aparece no IXC ora como "José Souza", ora como "Jose Souza" (variação real de digitação entre
+    lotes de importação) - antes disso ser corrigido, essas duas grafias eram tratadas como duas
+    pessoas diferentes em toda a engine, e filtrar por uma grafia nunca trazia os casos gravados
+    sob a outra."""
+    com_acento = _make_case(db_session, responsible_name="José Souza")
+    _make_case(db_session, responsible_name="Outra Pessoa")
+    db_session.commit()
+
+    filtrando_sem_acento = db_session.scalars(
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, responsible_name="Jose Souza"))
+    ).all()
+    assert [item.id for item in filtrando_sem_acento] == [com_acento.id]
+
+    filtrando_com_acento_e_caixa_diferente = db_session.scalars(
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, responsible_name="JOSÉ SOUZA"))
+    ).all()
+    assert [item.id for item in filtrando_com_acento_e_caixa_diferente] == [com_acento.id]
+
+
+def test_pendencias_por_colaborador_nao_duplicam_a_pessoa_por_variacao_de_acento(db_session):
+    """Mesmo achado do teste acima, mas na agregação por colaborador (`pending_justifications_by_
+    collaborator`, o que a IA lê quando pergunta "quem está devendo justificativa") - as duas
+    grafias devem virar UMA linha, não duas linhas parciais cada uma escondendo metade da
+    pendência real da mesma pessoa."""
+    _make_case(db_session, responsible_name="José Souza", regional="UNI JARU", status="pending")
+    _make_case(db_session, responsible_name="Jose Souza", regional="UNI JARU", status="pending")
+    db_session.commit()
+
+    result = cases_engine.pending_justifications_by_collaborator(db_session, [])
+
+    assert result["total_collaborators"] == 1
+    assert result["items"][0]["pending_cases"] == 2
 
 
 def test_faixa_de_reference_date_recorta_por_dia(db_session):
@@ -73,7 +109,7 @@ def test_faixa_de_reference_date_recorta_por_dia(db_session):
 
     rows = db_session.scalars(
         cases_engine.select(ManagementCase).where(
-            *_conditions(reference_date_from=date(2026, 9, 1), reference_date_to=date(2026, 9, 5))
+            *_conditions(db_session, reference_date_from=date(2026, 9, 1), reference_date_to=date(2026, 9, 5))
         )
     ).all()
     assert [item.id for item in rows] == [dentro.id]
@@ -86,7 +122,7 @@ def test_faixa_de_reference_date_e_inclusiva_nas_duas_pontas(db_session):
 
     rows = db_session.scalars(
         cases_engine.select(ManagementCase).where(
-            *_conditions(reference_date_from=date(2026, 9, 1), reference_date_to=date(2026, 9, 5))
+            *_conditions(db_session, reference_date_from=date(2026, 9, 1), reference_date_to=date(2026, 9, 5))
         )
     ).all()
     assert {item.id for item in rows} == {inicio.id, fim.id}
@@ -98,12 +134,12 @@ def test_pending_justification_e_awaiting_review_separam_os_dois_estados(db_sess
     db_session.commit()
 
     so_pendente = db_session.scalars(
-        cases_engine.select(ManagementCase).where(*_conditions(pending_justification=True))
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, pending_justification=True))
     ).all()
     assert [item.id for item in so_pendente] == [pendente.id]
 
     so_aguardando = db_session.scalars(
-        cases_engine.select(ManagementCase).where(*_conditions(awaiting_review=True))
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, awaiting_review=True))
     ).all()
     assert [item.id for item in so_aguardando] == [justificado.id]
 
@@ -117,12 +153,12 @@ def test_has_justification_trata_texto_vazio_como_ausencia(db_session):
     db_session.commit()
 
     com = db_session.scalars(
-        cases_engine.select(ManagementCase).where(*_conditions(has_justification=True))
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, has_justification=True))
     ).all()
     assert [item.id for item in com] == [com_texto.id]
 
     sem = db_session.scalars(
-        cases_engine.select(ManagementCase).where(*_conditions(has_justification=False))
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, has_justification=False))
     ).all()
     assert len(sem) == 2
 
@@ -136,7 +172,7 @@ def test_min_days_pending_ignora_caso_encerrado(db_session):
     db_session.commit()
 
     rows = db_session.scalars(
-        cases_engine.select(ManagementCase).where(*_conditions(min_days_pending=10))
+        cases_engine.select(ManagementCase).where(*_conditions(db_session, min_days_pending=10))
     ).all()
     assert [item.id for item in rows] == [velho_aberto.id]
 
@@ -158,12 +194,12 @@ def test_min_days_pending_ignora_caso_encerrado(db_session):
         ),
     ],
 )
-def test_filtro_contraditorio_erra_em_vez_de_devolver_lista_vazia(kwargs, trecho):
+def test_filtro_contraditorio_erra_em_vez_de_devolver_lista_vazia(kwargs, trecho, db_session):
     """Mesmo racional do aviso que já existia para status + only_open: uma combinação impossível
     que "tem sucesso" com 0 resultados é lida por quem chamou - IA inclusive - como "não há
     pendência", que é o oposto da verdade."""
     with pytest.raises(ValueError) as exc:
-        _conditions(**kwargs)
+        _conditions(db_session, **kwargs)
     assert trecho in str(exc.value)
 
 
@@ -256,7 +292,7 @@ def test_pendencias_respeitam_o_recorte_de_filtro(db_session):
     _make_case(db_session, responsible_name="De Outro Dia", reference_date=date(2026, 9, 20))
     db_session.commit()
 
-    conditions = _conditions(reference_date_from=date(2026, 9, 1), reference_date_to=date(2026, 9, 5))
+    conditions = _conditions(db_session, reference_date_from=date(2026, 9, 1), reference_date_to=date(2026, 9, 5))
     result = cases_engine.pending_justifications_by_collaborator(db_session, conditions)
 
     assert [item["responsible_name"] for item in result["items"]] == ["Do Dia"]

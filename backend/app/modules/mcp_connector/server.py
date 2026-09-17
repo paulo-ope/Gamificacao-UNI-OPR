@@ -52,7 +52,7 @@ from app.modules.operations.onu_signal_snapshot import (
     query_onu_signal_history,
     query_onu_signal_status,
 )
-from app.modules.support import opa_overview_service, router as support_router
+from app.modules.support import ixc_ticket_intelligence, opa_overview_service, router as support_router
 from app.modules.support.opa_filters import DATE_BASIS_COLUMNS, OpaAttendanceFilters, validate_opa_period
 from app.modules.operations import queries as operations_queries
 from app.modules.operations.queries import (
@@ -72,6 +72,10 @@ Chaves aceitas em `filters` (todas opcionais; listas vazias/None = sem filtro):
 - team_models, companies, regionals, states, cities, contract_types, person_types, os_types,
   subjects, diagnoses, departments, sectors, priorities, creators, responsibles, statuses,
   sla_statuses, projects, pops: list[str] - filtro exato (valor precisa bater igual).
+- regional_groups: list[str] - "Regional" agrupada (ex.: "UNI - ROLIM DE MOURA" já cobre a
+  filial "UNI - SAO FELIPE DOESTE"; "UNI - SAO FRANCISCO DO GUAPORE" cobre São Miguel do
+  Guaporé e Seringueiras) - use `opr_filter_options` para ver a lista fechada de grupos. Filtro
+  ADICIONAL a `regionals` (granular, uma filial real por vez) - os dois podem ser combinados.
 - text_filters: list[{"field": ..., "operator": "contains"|"starts_with"|"ends_with"|"not_equals",
   "value": str}] - "field" aceita: sector, subject, diagnosis, responsible, city, department,
   service_description (descrição de abertura da O.S.), neighborhood (bairro).
@@ -328,6 +332,49 @@ Returns:
 """
 
 
+IXC_BRIEF_DESCRIPTION = """Resumo do estado atual do Atendimento IXC (`su_ticket`) - indicador ANTECIPADO de incidente
+(NÃO substitui a O.S., ver docs/STATUS.md). Combina, pra um escopo (a operação inteira ou
+uma regional), o desvio dos últimos 7 dias vs. o período anterior de mesma duração, o
+motivo que mais contribuiu pro excesso, abrangência/reincidência de clientes, tendência
+recente (momentum) e picos intra-dia ativos (burst).
+
+Primeira chamada recomendada de qualquer análise sobre este indicador - decide se vale a
+pena aprofundar. Pra ver TODAS as regionais com algum sinal de uma vez, use
+opr_ixc_signals; pra decompor por cidade/bairro/motivo dentro de uma regional específica,
+use opr_support_breakdowns... (na verdade o drill deste indicador é feito pela tela
+/suporte?tab=ixc_tickets - não há tool de drill ainda).
+
+Args:
+    regional: nome exato da regional (ex.: "UNI - ROLIM DE MOURA"). Omitido = operação
+        inteira.
+
+Returns:
+    JSON {generated_at, period, scope, status (severidade: critico/dentro_da_curva/
+    em_melhora/sem_dado), ticket_count, deviation_pct, top_driver (motivo com maior
+    excesso vs. período anterior, ou null), reach (clientes únicos/reincidentes),
+    momentum (tendência dos últimos dias), bursts (lista de janelas 1h/2h com
+    observado/esperado/ativo)}. `deviation_pct`/campos de `bursts` vêm `null` quando não
+    há amostra suficiente (`basis`/ausência de baseline calculado) - não confundir com
+    "sem desvio".
+"""
+
+IXC_SIGNALS_DESCRIPTION = """Lista as regionais do Atendimento IXC com algum sinal disparado agora (severidade crítica
+ou em melhora, tendência sustentada de piora/melhora, ou pico intra-dia ativo) -
+regional "dentro da curva" e sem nada acontecendo não aparece na lista. Para o resumo
+detalhado de UMA regional específica (ou da operação inteira), use opr_ixc_brief.
+
+Args: nenhum.
+
+Returns:
+    JSON {"signals": [{scope, severity, deviation_pct, top_driver, momentum_trend,
+    consecutive_days_above_expected, burst_active, reason_codes}]}, ordenado por
+    severidade (crítico primeiro) e depois pela magnitude do desvio. `reason_codes` é uma
+    lista de códigos estáveis (ex.: HIGH_DEVIATION, MOMENTUM_ACCELERATING, BURST_ACTIVE) -
+    a linguagem natural é responsabilidade de quem consome, o backend nunca gera texto
+    narrativo aqui.
+"""
+
+
 def _support_user():
     """Usuário autenticado da chamada, checado contra `support:read` - a MESMA permissão que o
     router do módulo exige em todas as rotas (`dependencies=[require_permission("support:read")]`).
@@ -396,6 +443,7 @@ _OPERATIONS_NOW_LIST_FILTERS = frozenset(
     {
         *OPERATIONS_FILTER_COLUMNS.keys(),
         "team_models",
+        "regional_groups",
         "opened_weekdays",
         "closed_weekdays",
         "custom_window_basis",
@@ -1306,7 +1354,7 @@ def build_mcp_server() -> FastMCP:
             )
             conditions = [
                 *management_cases_engine.case_scope_conditions(user),
-                *management_cases_engine.case_filter_conditions(filters),
+                *management_cases_engine.case_filter_conditions(db, filters),
             ]
             return _dump(management_cases_engine.case_diagnostics(db, conditions))
 
@@ -2016,7 +2064,7 @@ def build_mcp_server() -> FastMCP:
         )
         with SessionLocal() as db:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.management_cases", "mcp")
-            conditions = [*management_cases.case_scope_conditions(user), *management_cases.case_filter_conditions(filters)]
+            conditions = [*management_cases.case_scope_conditions(user), *management_cases.case_filter_conditions(db, filters)]
             total = db.scalar(select(func.count(ManagementCase.id)).where(*conditions)) or 0
             rows = db.scalars(
                 select(ManagementCase)
@@ -2128,7 +2176,7 @@ def build_mcp_server() -> FastMCP:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.management_pending_justifications", "mcp")
             conditions = [
                 *management_cases_engine.case_scope_conditions(user),
-                *management_cases_engine.case_filter_conditions(filters),
+                *management_cases_engine.case_filter_conditions(db, filters),
             ]
             return _dump(
                 management_cases_engine.pending_justifications_by_collaborator(db, conditions, limit=limit)
@@ -2183,7 +2231,10 @@ def build_mcp_server() -> FastMCP:
             has_justification: true = só o que já tem texto escrito (o caso de uso normal aqui).
             min_days_pending: só casos abertos há pelo menos N dias corridos.
             include_comments: traz também a thread de comentários de cada caso.
-            page, page_size: paginação (page_size máximo 200).
+            page, page_size: paginação (page_size máximo 1000 - o volume total de casos do sistema
+                nunca passou de alguns milhares, então uma página de 1000 já cobre a esmagadora
+                maioria dos recortes por período/regional numa única chamada, sem precisar paginar
+                manualmente; confira `total` no retorno para saber se ainda sobrou mais).
 
         Returns:
             JSON {"total", "page", "page_size", "items": [{case_id, reference_date, regional,
@@ -2195,8 +2246,8 @@ def build_mcp_server() -> FastMCP:
         user = _management_user()
         if page < 1:
             raise ValueError("page deve ser >= 1.")
-        if not 1 <= page_size <= 200:
-            raise ValueError("page_size deve estar entre 1 e 200.")
+        if not 1 <= page_size <= 1000:
+            raise ValueError("page_size deve estar entre 1 e 1000.")
         filters = _management_case_filters(
             status=status,
             severity=severity,
@@ -2222,7 +2273,7 @@ def build_mcp_server() -> FastMCP:
             _enforce(enforce_ai_endpoint_for_user, db, user, "ai.management_justifications", "mcp")
             conditions = [
                 *management_cases_engine.case_scope_conditions(user),
-                *management_cases_engine.case_filter_conditions(filters),
+                *management_cases_engine.case_filter_conditions(db, filters),
             ]
             return _dump(
                 management_cases_engine.justification_rows(
@@ -2344,6 +2395,34 @@ def build_mcp_server() -> FastMCP:
                     "points": points,
                 }
             )
+
+    @mcp.tool(
+        name="opr_ixc_brief",
+        description=IXC_BRIEF_DESCRIPTION,
+        annotations={"title": "Resumo do Atendimento IXC", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_ixc_brief(regional: str | None = None) -> str:
+        """Resumo do estado atual do Atendimento IXC (indicador antecipado de incidente). Ver
+        IXC_BRIEF_DESCRIPTION - docstring montada por concatenação não vira __doc__ (fica None)."""
+
+        user = _support_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.ixc_brief", "mcp")
+            return _dump_iso(ixc_ticket_intelligence.build_brief(db, regional=regional))
+
+    @mcp.tool(
+        name="opr_ixc_signals",
+        description=IXC_SIGNALS_DESCRIPTION,
+        annotations={"title": "Sinais do Atendimento IXC", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    )
+    def opr_ixc_signals() -> str:
+        """Regionais do Atendimento IXC com algum sinal disparado. Ver IXC_SIGNALS_DESCRIPTION -
+        docstring montada por concatenação não vira __doc__ (fica None)."""
+
+        user = _support_user()
+        with SessionLocal() as db:
+            _enforce(enforce_ai_endpoint_for_user, db, user, "ai.ixc_signals", "mcp")
+            return _dump_iso({"signals": ixc_ticket_intelligence.list_signals(db)})
 
     @mcp.tool(
         name="opr_get_cockpit_context",

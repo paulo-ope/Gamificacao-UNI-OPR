@@ -13,9 +13,408 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-10** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-16** — branch `claude/suporte-sync-backfill-madrugada`
+
+**Estado do checkout, importante pra quem entrar agora**: este working tree é
+compartilhado por várias sessões rodando em paralelo no mesmo dia (2026-09-15) -
+`git status` mostra ~145 arquivos modificados/novos, **nada commitado, nada
+enviado ao remoto** (`git status --branch` sem `[ahead]`). Antes de rodar qualquer
+comando destrutivo (`git checkout .`, `git reset --hard`, `git clean`), leia esta
+seção inteira - o trabalho de outra sessão pode estar exatamente nesses arquivos
+"soltos". As frentes simultâneas de hoje, todas já registradas abaixo com detalhe:
+(1) auditoria + 2 bugs críticos + 6 altos corrigidos na Gamificação Operacional;
+(2) filtro "Regional" (agrupado) implementado e validado na Operação
+Analítica/Visão Geral/IA; (3) auditoria técnica geral do sistema inteiro
+(diagnóstico, `docs/auditoria-tecnica-geral-2026-09-15.md`, nada corrigido ainda).
+Rodar a suíte de testes já confirmou 1340 passed/0 failures numa rodada completa
+(ver checkpoint abaixo) - o erro de ambiente do SQLite-em-thread é intermitente,
+não indica regressão.
 
 ## O que foi feito recentemente
+
+- **Fase 5 (estrutura) da Gamificação — 2 itens feitos em 2026-09-17** (usuário pediu
+  ritmo mais rápido, "não corrigir um bug por vez e sim vários, o que preciso mais rápido
+  é a padronização no frontend" — lote validado com `tsc`/`vitest` a cada bloco e visual
+  só no final, combinado com o usuário). Detalhe completo em
+  `docs/plano-gamificacao-reestruturacao.md`; resumo:
+  - **`SummaryCard` triplicado consolidado**: 3 cópias quase idênticas
+    (`collaborator-registry-panel.tsx`, `leadership-bonus-panel.tsx`,
+    `user-management-panel.tsx`) viraram um componente novo,
+    `components/ui/stat-card.tsx`, removendo ~90 linhas duplicadas + imports mortos
+    (`ReactNode`, `cn`) que sobraram nos 3 arquivos. Os 2 blocos inline de `page.tsx`
+    (tiles com ícone em badge colorido) foram DELIBERADAMENTE deixados de fora — têm
+    tratamento visual genuinamente diferente, forçar a consolidação ali seria regressão
+    visual, não padronização. Tipos redeclarados localmente (`CreatePayload`/`EditDraft`,
+    `UserPayload`, `DiagnosisDraft`) foram investigados e são estados de formulário
+    legítimos, propositalmente mais estreitos que os tipos de API/entidade (ex.:
+    `UserPayload` não tem `access_profile_ids` porque esta tela não gerencia perfil de
+    acesso, isso é do Admin) — nenhum bug real, nada mudado aí.
+  - **Autenticação duplicada removida**: `GamificacaoPageContent` passou a receber
+    `user: AuthUser` da `WorkspaceAppShell` (mesmo padrão de `app/suporte/page.tsx`) em
+    vez de refazer `api.me()`/manter `currentUser`/`authChecked`/tela de login própria.
+    17 pontos que usavam `currentUser?.` viraram `user.`, incluindo
+    `hooks/use-closure-actions.ts`. ~75 linhas de login duplicado removidas. Achado real:
+    o efeito de bootstrap original desestruturava um `user` local de
+    `Promise.all([api.me(), ...])` que sombreava silenciosamente o prop `user` novo —
+    resolvido reescrevendo sem essa colisão, preservando a sequência de carregamento
+    (summary pré-buscado em paralelo, período de análise do bootstrap antes do primeiro
+    `loadAll`).
+  - `tsc --noEmit`/`vitest run` limpos (83/83) a cada bloco. Validado ao vivo (login real,
+    após uma instabilidade temporária do backend por reload de OUTRA sessão editando
+    `operations/`/`management/` no mesmo checkout — não relacionada): Fechamento, aba
+    Usuários (`SummaryCard` + permissão `users:manage` juntos) e Saldo de pontos
+    (`isAdmin` de `user.role` + `EmptyState` nos 3 buckets vazios) — todas corretas.
+  - **Próximo passo natural**: restante da Fase 5 (regra de negócio no frontend, quebra de
+    `logic-configuration-panel.tsx` em seções) — maior risco, convém não apressar.
+
+- **Fase 3 (fundação visual) da Gamificação — iniciada, 3 dos 5 itens de 3.1 feitos**
+  (2026-09-16, usuário: "quero atacar a parte das melhorias do layout, ler a auditoria
+  feita pra eu ir resolvendo" — seguindo `docs/plano-gamificacao-reestruturacao.md`, ordem
+  de segurança já definida na auditoria de 2026-09-15). Detalhe completo no próprio plano
+  (seção 3.1); resumo:
+  - `ErrorState` (código morto, sem consumidor) removido de `config-ui.tsx`.
+  - `AppModal`/`AppDrawer` avaliados: já compõem `ui/dialog`/`ui/sheet` por baixo, migrar
+    os 3-4 consumidores pro primitivo cru só duplicaria boilerplate — mantidos como estão.
+  - `AppMultiSelect` migrado pro `ui/multi-select.tsx` compartilhado em `closure-tab.tsx`
+    e `ranking-tab.tsx` (duplicação byte-a-byte identificada na auditoria), depois
+    removido de `config-ui.tsx` (ficou sem consumidor). Validado visualmente ao vivo
+    (login real, abas Fechamento→Análise e Ranking) — dropdown, busca, seleção e contador
+    de filiais idênticos ao componente antigo.
+  - Item 4: investigação mostrou que só `AppSwitch` vazava por import cruzado de verdade
+    (`overview-screen.tsx`, `ixc-sync-settings-card.tsx`) — `MetricCard` não tinha esse
+    problema, `operations-openings-analytics.tsx` só tem uma implementação LOCAL de
+    mesmo nome (duplicação, não import). `AppSwitch` movido pra `components/ui/switch.tsx`
+    (config-ui.tsx reexporta, mesmo padrão de `AppCheckbox`, sem quebrar os 5 consumidores
+    internos); os 2 consumidores externos passaram a importar direto do novo local.
+    `MetricCard` fica pra Fase 5 (consolidação com `SummaryCard`/`StatStrip`). Validado
+    visualmente ao vivo nas duas telas externas (`/visao-geral`, Admin → Integrações).
+  - Item 5: deferido pra Fase 5 pelo próprio plano (8 exports usados só por
+    `logic-configuration-panel.tsx`, que vai ser quebrado em seções lá).
+  - **Seção 3.1 completa.** `tsc --noEmit` limpo, `vitest run` 83/83 em cada passo.
+  - **Seção 3.2 também completa** (mesma sessão, usuário pediu pra seguir): levantamento
+    prévio mostrou a lista original do item desatualizada
+    (`point-balance-panel.tsx` já não usa `.panel` há commits) — uso real era 10 arquivos,
+    2 deferidos (mesmo motivo do item 3.1.5: `logic-configuration-panel.tsx` e o `PageHeader`
+    que só ele consome). Migrados pra `ui/card` os 8 restantes:
+    `closure-history-panel.tsx`, `governance-rules-panel.tsx`, `ranking-tab.tsx`,
+    `unmapped-diagnoses-panel.tsx`, `unmapped-subjects-panel.tsx`, `dashboard-charts.tsx`
+    (5 cards), `upvalue-import-panel.tsx`, `audit-panel.tsx`, mais o wrapper de
+    `AuditTrailPanel` em `page.tsx`. Os 12 estados de "Carregando..." que também usam
+    `.panel` em `page.tsx` foram DELIBERADAMENTE deixados de fora - são o alvo do item 3.4
+    (trocar por `<Loading />`), mexer neles agora seria trabalho jogado fora. `tsc`/`vitest`
+    limpos a cada arquivo, validação visual ao vivo em 5 telas (Pendências, Auditoria →
+    Pontuação/Trilha, Período, Configuração → Governança).
+  - **Item 3.3 também completo** (mesma sessão, usuário pediu pra seguir): 30 ocorrências
+    de raio arbitrário (`rounded-[14px]` a `rounded-[24px]`, 6 valores) em 12 arquivos,
+    consolidadas em 2 níveis usando só a escala padrão do Tailwind — `rounded-2xl` (16px)
+    pra container de topo (mesmo valor de `.panel`/`ui/card`), `rounded-xl` (12px) pra
+    elemento aninhado — mesmo padrão de 2 níveis que `components/operations/` já usa.
+    Única exceção deliberada: `AppModal` vira `rounded-3xl` (preserva o visual
+    "mais arredondado" documentado no próprio componente). Zero `rounded-[` restante no
+    módulo (conferido por grep). `tsc`/`vitest` limpos, validação visual ao vivo no
+    Fechamento (hero card, Liderança, Análise/gráficos).
+  - **Item 3.4 também completo** (mesma sessão): os 12 "Carregando..." de `page.tsx`
+    viraram `<Card><Loading /></Card>`; ~15 formatos de "vazio" espalhados convertidos pro
+    `EmptyState` COMPARTILHADO (`components/ui/empty-state.tsx`) — achado real:
+    `config-ui.tsx` tinha um `EmptyState` local duplicado (a colisão de nome já flagada na
+    3.1), usado só por `logic-configuration-panel.tsx`, resolvido apontando pro
+    compartilhado e apagando o duplicado morto; a afirmação do plano de que "nenhum painel
+    tem erro próprio" também estava desatualizada — `audit-panel`, `point-balance-panel`,
+    `upvalue-import-panel` e `collaborator-balance-history-sheet` já tinham banner de erro
+    próprio, só com 3 estilos ligeiramente diferentes, agora unificados num só. `tsc`/
+    `vitest` limpos, `EmptyState` forçado e validado ao vivo (filtro sem resultado em
+    Pendências).
+  - **Item 3.5 também completo** (mesma sessão): 6 das 12 tabelas listadas já tinham
+    `table-frame` (herdado das Fases 3.2/3.4); as outras 6 ganharam a classe, mais 2 fora
+    da lista original que tinham o mesmo problema (`collaborator-orders-sheet.tsx`, 2ª
+    tabela de `collaborator-balance-history-sheet.tsx`). A tabela crua da Auditoria
+    (`audit-panel.tsx`) foi migrada pro `ui/table` compartilhado preservando larguras
+    fixas/header sticky/zebra striping - achado real: o `Table` compartilhado já embrulha
+    a si mesmo em scroll E adiciona sozinho gradientes de "tem mais coluna" nas bordas, um
+    ganho de UX que a tabela crua não tinha. `.audit-table-frame` (CSS só dessa tabela)
+    removido do `globals.css` por ficar sem consumidor. `tsc`/`vitest` limpos, validado ao
+    vivo (header sticky confirmado rolando a tabela pra cima e pra baixo).
+  - **Item 3.6 também completo** (mesma sessão): levantamento mostrou só 2 usos reais de
+    azul de marca como série de dado em `dashboard-charts.tsx` (não os "~20 pontos"
+    estimados na auditoria original) — `healthOption` (SLA/Reincidência, 2 séries) e
+    `healthScatterOption` (Dispersão saúde x pontuação, série única), ambos trocados pra
+    `CATEGORICAL_SLOTS` de `lib/chart-palette.ts`. Mantido de propósito: o gradiente
+    royal→turquoise do bar chart de ranking (elemento de interface de série única, já
+    estava certo) e a cor de texto `UNI_MIDNIGHT`. Validado ao vivo nos dois gráficos.
+    `tsc`/`vitest` limpos.
+  - **Fase 3 (fundação visual) com os 6 itens (3.1-3.6) endereçados.** Uma exceção
+    documentada fica de fora por decisão deliberada: `logic-configuration-panel.tsx`
+    (`PageHeader`/`.panel-header`) segue deferido pra Fase 5, junto da quebra do arquivo
+    em seções. Falta uma passada dedicada de validação visual nos 4 breakpoints x 8 abas
+    do critério de pronto (feita ao vivo por navegação real a cada mudança até aqui, não
+    por captura sistemática) antes de considerar a fase formalmente encerrada.
+
+- **Gestão: identidade de pessoa (responsável/supervisor) ignorava acento — casos pendentes
+  apareciam duplicados, sumiam ou sob a pessoa errada** (2026-09-16, usuário: "quando eu peço
+  para ver os casos pendentes ele não consegue validar de forma precisa e cirúrgica"). Causa
+  raiz: `_norm` (`cases.py`) e `_norm_name` (`services.py`, cópia duplicada da mesma função)
+  normalizavam nome de pessoa só com `casefold` + colapsa espaço - nunca removiam acento,
+  diferente de `regional.normalize_key`, que já resolvia exatamente esse problema para nome de
+  regional desde sempre. O mesmo técnico importado do IXC ora como "José Souza", ora como "Jose
+  Souza" (variação real de digitação entre lotes) virava DUAS pessoas diferentes em toda a
+  engine: geração de caso (`generate_performance_cases`), agregação "quem está devendo
+  justificativa" (`pending_justifications_by_collaborator`) e o filtro exato por nome
+  (`responsible_name`) - explica os três sintomas relatados juntos (falso positivo, falso
+  negativo, pessoa/regional errada).
+  - Corrigido reaproveitando `regional.normalize_key` em `_norm` (em vez de duplicar um
+    algoritmo mais fraco); `_norm_name` removido, tudo delega na mesma função agora.
+  - Filtro exato por nome em SQL (`case_filter_conditions`, `responsible_name`) não dava pra
+    corrigir só trocando `func.lower` por uma versão que tira acento - uma cadeia de
+    `func.replace` por par acentuado/ASCII (a tentativa óbvia) estourou `RecursionError` no
+    compilador do SQLAlchemy. Resolvido com `names_matching(db, coluna, alvo)`: resolve a
+    comparação em PYTHON (`unicodedata` não roda em SQL) sobre os valores distintos da coluna,
+    devolvendo a lista de grafias que são a mesma pessoa para um `.in_(...)`. Mesma função
+    reaproveitada em `services._find_collaborator` (liga o técnico do IXC ao cadastro da
+    Gamificação - tinha o mesmo bug: cadastro com acento nunca casava com histórico de O.S. sem
+    acento, e o membro operacional ficava "sem cadastro" à toa).
+  - `case_filter_conditions` passou a exigir `db` (precisa dele pra `names_matching`) - as 11
+    chamadas existentes (router, MCP, rota de IA) atualizadas.
+  - Testes novos provando o bug e a correção: filtro exato ignora acento nos dois sentidos,
+    agregação por colaborador não duplica a pessoa por variação de grafia, vínculo automático
+    colaborador↔membro funciona com acento divergente entre cadastro e O.S.
+  - Validado: 174 testes passando no módulo de gestão (cases, pending justifications, structure
+    audit, module, claim member, endpoints de IA, shift pattern, case reports/scheduler); a
+    única falha e os ~49 erros restantes no lote são o problema de ambiente pré-existente
+    (thread do SQLite no teardown do `TestClient`, Python 3.14) - confirmado com `git stash` que
+    reproduz idêntico sem esta mudança, não é regressão.
+  - **Não fiz** (fora do escopo pedido): endpoint de "resumo/insight agregado" das justificativas
+    (a IA lendo o texto e resumindo os temas mais comuns das desculpas) - o usuário confirmou que
+    o que faltava era só a precisão da identidade, não um resumo novo. `page_size` de
+    `/cases/justifications` e `opr_management_justifications` (MCP) também subiu de 200 para
+    1000 na mesma sessão, antes deste achado (pedido do usuário: ler um mês inteiro de
+    justificativas sem paginar manualmente) - já eram os endpoints certos, só faltava o teto.
+
+- **Backfill noturno de TMR histórico do SGP Suporte, implementado (nasce
+  DESLIGADO por padrão)** (2026-09-16, branch `claude/suporte-sync-backfill-madrugada`,
+  usuário: "implementa o backfill de TMR histórico rodando de madrugada" —
+  seguindo o gap real encontrado ao investigar o estado da sincronização/backfill
+  do módulo: 45.060 de 55.925 atendimentos (81%) sem `tmr_all_responses_seconds`,
+  sem nenhum mecanismo pra preencher retroativamente). Reaproveita a mesma lógica
+  de cálculo de TMR do fluxo normal de importação
+  (`_human_response_metrics`/`_all_response_metrics`/`_classify_bot_human`/
+  `_message_attendant_summary` em `opa_ingestion.py`), só que sobre atendimentos
+  JÁ FECHADOS e já gravados — nunca busca página de atendimentos de novo, 1
+  chamada a `client.list_messages` por atendimento pendente.
+  - `backend/app/modules/support/models.py` + migration
+    `20260916_0100_support_opa_tmr_backfill.py`: nova coluna
+    `tmr_backfill_attempted_at` (marca toda tentativa, sucesso ou falha, pra
+    priorizar quem nunca foi tentado e não insistir nos mesmos registros com
+    mensagem indisponível na API) + índice composto
+    (`closed_at`, `tmr_all_responses_seconds`, `tmr_backfill_attempted_at`).
+  - `backend/app/modules/support/opa_ingestion.py`: `pending_tmr_backfill_count`
+    (contagem ao vivo) e `run_tmr_history_backfill` (processa um lote).
+  - `backend/app/services/opa_scheduler.py`: `run_opa_tmr_backfill_once`, chamado
+    a cada iteração de `run_opa_sync_loop` — só age dentro de uma janela noturna
+    configurável (padrão 1h-6h, fuso `America/Porto_Velho`) e respeita uma cota
+    diária (padrão **5.000 atendimentos/noite**, decidida com o usuário — ~9
+    noites pra zerar a fila atual). Usa o mesmo lock consultivo do Postgres da
+    importação normal (`_support_opa_import_lock`), nunca escreve em cima de uma
+    sincronização periódica concorrente.
+  - `backend/app/modules/support/schemas.py` + `router.py`: 4 campos novos em
+    `SupportOpaSyncSettings` (`tmr_backfill_enabled/run_hour/run_until_hour/
+    daily_limit`, expostos em `GET`/`PUT /opa-sync-settings`) e 5 campos de
+    status em `SupportOpaSyncStatus` (`GET /opa-sync-status`), incluindo
+    `tmr_backfill_pending_count` (contagem ao vivo, não cache).
+  - `frontend/lib/types.ts` +
+    `frontend/app/suporte/_components/opa-module-components.tsx`: nova seção
+    "Backfill de TMR histórico (madrugada)" no painel de sincronização,
+    espelhando a seção já existente do backfill de meses.
+  - **Decisão explícita do usuário**: nasce **desligado** por padrão (custo de 1
+    chamada extra à API do OPA Suite por atendimento) — alguém liga manualmente
+    via `PUT /opa-sync-settings` quando decidir arcar com o custo. Diferente do
+    backfill de meses (`support_opa_backfill_enabled`), que já nasceu ligado por
+    ser dado novo, não reprocessamento em massa de histórico.
+  - 8 testes novos em `backend/tests/test_opa_tmr_backfill.py` (contagem
+    pendente, preenchimento a partir de mensagens, marcação de tentativa mesmo
+    sem mensagem, prioridade de quem nunca foi tentado, janela noturna, cota
+    diária). Suíte do módulo suporte/OPA rodada (`pytest -k "opa or support"`):
+    só os erros de ambiente SQLite-thread já documentados abaixo (pré-existentes,
+    confirmados também sem esta mudança).
+
+- **Documentação de API completa do backend, greenfield (10 arquivos novos em
+  `docs/`, ~3.170 linhas)** (2026-09-16, usuário pediu documentação da API
+  porque o time do "Portal de Resultados" — cubo de dados da empresa (RH,
+  Financeiro, Comercial, Operação, Tecnologia) — vai integrar este sistema
+  como fonte). Cobre os **374 endpoints REST** de todos os módulos + as
+  **38 ferramentas MCP `opr_*`** do conector (`backend/app/modules/mcp_connector/server.py`).
+  Não existia nenhuma documentação de API antes (`docs/contratos_modulos.md`
+  cobre outra coisa: contratos de dado entre módulos, não endpoints). Gerada
+  lendo o código-fonte real (router + schemas de cada módulo) via 10
+  subagentes em paralelo, um por módulo — nenhum arquivo de código foi
+  alterado nesta frente.
+  - `docs/api-mcp-connector.md` (38 tools, maior prioridade por já ser
+    consumido por agente externo), `docs/api-operacao-analitica.md` (67),
+    `docs/api-gamificacao.md` (133), `docs/api-suporte.md` (37),
+    `docs/api-admin.md` (33, Admin + AI Governance), `docs/api-gestao.md`
+    (29), `docs/api-agendamento.md` (26), `docs/api-ai.md` (27),
+    `docs/api-intelligence.md` (23), `docs/api-localiza.md` (11). Índice
+    atualizado em `docs/00-TRILHA-0.md`.
+  - **Achados reais no código, não corrigidos ainda (fora do escopo pedido,
+    só documentação)**: (1) MCP connector serializa data/hora de duas formas
+    diferentes entre tools (`_dump` vs `_dump_iso`) — pode quebrar parsing de
+    quem consumir mais de uma tool; (2) `/api/ai` é inconsistente em
+    governança — `aggregate-orders`, `orders-timeseries`, `backlog-aging`,
+    `backlog-history`, `filter-options`, `warranty-analytics`,
+    `team-targets`/`team-target-performance` só exigem a permissão genérica
+    `ai:query`, sem escopo de token nem auditoria (`record_ai_access`),
+    enquanto o resto do módulo aplica escopo + governança de campo + log;
+    (3) `PATCH /management/members/{id}` sempre retorna `{"status": "ok"}`,
+    nunca o objeto atualizado, apesar do `response_model` declarado.
+  - **Escopo NÃO coberto**: não foi adicionado `summary=`/`description=` nas
+    rotas do FastAPI (decisão explícita do usuário — só Markdown por agora).
+    O `/docs` gerado automaticamente continua raso (poucas rotas com
+    docstring) e só fica acessível fora de produção (`APP_ENV != "production"`,
+    decisão de segurança pré-existente). Os `.md` novos são a única fonte de
+    referência de API hoje.
+- **Auditoria técnica geral do sistema inteiro (diagnóstico, NADA foi corrigido
+  ainda)** (2026-09-15, usuário pediu uma auditoria ampla: bugs, código morto,
+  segurança, performance, testes ausentes, prontidão de IA/MCP). Relatório completo
+  em **`docs/auditoria-tecnica-geral-2026-09-15.md`** (8 seções: mapa do sistema,
+  achados P0-P3 com evidência de `arquivo:linha`, quick wins, melhorias
+  estruturais, oportunidades de produto, tabela de IA/MCP, código obsoleto, plano
+  em 4 fases) - leia esse arquivo antes de trabalhar em qualquer um dos itens
+  abaixo, ele tem o "porquê" e a evidência completa que não cabe aqui.
+  - Rodada com 7 investigações paralelas (subagentes), cada uma lendo código real
+    e citando linha exata - não é achado por inspeção superficial.
+  - **4 achados P0 (crítico), nenhum corrigido ainda**, na ordem que o relatório
+    recomenda: (1) tela de Administração quebra para perfil montado só com
+    permissões `admin:*` (o backend real exige `users:manage`/`audit:read`,
+    família de permissão diferente da que o catálogo do módulo Admin declara -
+    `frontend/app/admin/page.tsx:109` vs. `backend/app/api/routes/users.py:69-71`;
+    a trava "não remova o último admin" também não cobre `users:manage`, risco de
+    lockout total); (2) `/operations/network/*` (login, ONU, geolocalização) não
+    aplica o escopo regional do gestor - usuário restrito a uma filial consegue
+    consultar dado de rede de qualquer regional (`operations/router.py:1402-1666`,
+    funções chamadas não recebem `user`); (3) governança de campo da IA
+    (`AiFieldPermission`) não tem efeito na chamada padrão de
+    `opr_order_details`/`opr_search_orders` (`response_mode="full"`, o modo mais
+    comum) - desligar um campo sensível na tela de administração da IA não
+    protege nada nesse caminho; (4) `POST /calculation-runs/calculate` cria
+    rascunho de fechamento sem lock/dedup - já causou 1.106 fechamentos
+    duplicados/225 mil linhas em produção, documentado no próprio comentário do
+    código (`calculation.py:854-858`).
+  - Achados P1 relevantes (ver relatório para lista completa): FKs sem `ondelete`
+    quebram exclusão de colaborador líder/com saldo de garantia; campos
+    financeiros em `Float` (ligado ao incidente de R$1.291,08 já registrado
+    abaixo); bug em `intelligence` onde o contador de confirmação de alerta nunca
+    reseta (mais falso positivo que o configurado); `management/cases.py`
+    reimplementa a regra de meta diária com divergência ADMITIDA no próprio
+    comentário; 33 das 35 tools MCP não geram nenhum log de auditoria; backfill de
+    O.S. sem teto de dias nem trava de concorrência (suporte já tem, operations
+    não); `service_orders.py`/`imports.py`/`rules.py` sem nenhum teste (o primeiro
+    inclui um endpoint destrutivo de exclusão em massa).
+  - **Próximo passo natural**: decidir com o usuário quais dos 4 P0 corrigir
+    primeiro (não foi pedido pra implementar nesta rodada, só diagnosticar) - não
+    reabrir a investigação, o relatório já tem tudo levantado com evidência.
+
+- **Auditoria completa da Gamificação Operacional + 2 bugs críticos corrigidos** (2026-09-15,
+  usuário: "AUDITE 100% O MODULO DE GAMIFICAÇÃO PARA FAZER UMA REESTRUTURAÇÃO VISUAL DESSE MODULO E
+  PADRONIZAR OTIMIZAR E CORRIGIR BUGS"). Auditoria em 4 eixos (visual/UX, bugs, performance,
+  estrutura) rodada sobre `app/gamificacao/page.tsx` (2.064 linhas) e os 22 arquivos de
+  `components/gamification/` (14.831 linhas no total) — achados completos não estão neste arquivo
+  (fica grande demais pra um log de curto prazo), mas os 2 bugs de maior risco já foram corrigidos
+  nesta sessão; os demais (visual, performance, estrutura) ficam como próximos passos abaixo.
+  - **Débito de garantia em dobro** (`services/point_balance.py`) — `db.add(entry)` roda dentro do
+    laço de `detect_post_payment_warranty_debits`, mas `db.flush()` só acontece depois do laço
+    inteiro, e `SessionLocal` tem `autoflush=False`. As duas guardas anti-duplicidade
+    (`_existing_entry`, `_original_already_debited`) são `SELECT` puro — não enxergavam o que tinha
+    sido adicionado numa iteração anterior do MESMO lote. Como toda chamada de produção
+    (`ixc_importer.py`, `operations_sync.py`, `upvalue_importer.py`, `calculation.py`) passa o lote
+    inteiro de uma vez, duas O.S. de garantia contra a mesma O.S. original no mesmo lote geravam
+    **dois débitos** — exatamente a regressão que o docstring de `_original_already_debited` já
+    documentava como corrigida antes ("uma chegou a 12 débitos, −72 pontos só dela"), só que pro caso
+    de chamadas SEPARADAS; o caso de chamada única com vários retornos continuava aberto. Corrigido
+    com um `set` em memória (`debited_original_keys`) que acompanha o lote corrente, além das duas
+    guardas de banco. Teste de regressão novo:
+    `test_only_one_debit_per_original_within_the_same_import_batch` (o teste antigo,
+    `test_only_one_debit_per_original_even_with_many_near_simultaneous_later_returns`, chamava a
+    função uma vez por retorno com `commit()` entre chamadas — não reproduzia o bug real, que só
+    aparece com todos os retornos no mesmo lote/chamada).
+  - **`POST /service-orders/delete-period` apagava fechamento pago** (`api/routes/service_orders.py`)
+    — a rota exige só `orders:import` (permissão do perfil `operator`) e não checava
+    `CalculationRun.status`. Achado mais grave: `operator` tem `orders:import` mas **não** tem
+    `calculation:run` (a permissão pra marcar um fechamento como pago) — ou seja, o perfil que não
+    pode criar um pagamento podia apagar um. Havia uma guarda parcial (bloqueia se houver lançamento
+    de garantia vinculado ao run), mas um fechamento pago sem lançamento vinculado passava direto.
+    Corrigido com bloqueio incondicional: qualquer `CalculationRun` com `status="paid"` no período
+    (com ou sem regional no filtro) agora recusa a exclusão com 409, apontando o(s) número(s) do(s)
+    fechamento(s). Testes novos em `tests/test_service_orders_delete_period.py` (recusa quando há
+    fechamento pago; continua funcionando normalmente pra período em rascunho).
+  - **Erro meu, corrigido nesta sessão**: a rodada anterior (2026-09-14) criou
+    `lib/charts/chart-palette.ts` para centralizar os hexadecimais de marca usados no ECharts da
+    Gamificação, sem checar que já existia `lib/chart-palette.ts` — uma paleta categórica validada
+    contra daltonismo/contraste (2026-09-03) que documenta explicitamente que os azuis de marca
+    "ficam para a interface, não para dados". Não mudou nenhuma cor na tela (só centralizou o que já
+    estava lá), mas criou um segundo módulo de paleta contradizendo o oficial. **Resolvido em sessão
+    posterior no mesmo dia** (ver item abaixo).
+  - **Os 6 itens de gravidade ALTA/dados financeiros ficaram pendentes desta rodada e foram
+    corrigidos numa sessão seguinte, ainda em 2026-09-15**: (1) corrida sem guarda `cancelled` nos
+    `useEffect` de `collaborator-orders-sheet.tsx` e `collaborator-balance-history-sheet.tsx`
+    (resposta fora de ordem podia sobrescrever uma mais nova ao trocar filtro rápido) — corrigido
+    com o mesmo padrão já usado nos efeitos vizinhos desses arquivos; (2) exclusão de perfil de
+    liderança e de líder em `leadership-bonus-panel.tsx` sem confirmação — agora usa o `useConfirm`
+    já padrão no resto do módulo (`confirm` passado como prop); (3) `withFeedback` fechava o
+    drawer mesmo quando a ação falhava, porque a Promise nunca rejeita (só devolve `undefined` e
+    mostra o erro) e o filho encadeava `.then(() => close())` — `withFeedback` ganhou a opção
+    `{ rethrow: true }`, usada nos 4 fluxos de liderança (criar/salvar perfil, criar/salvar líder)
+    que dependiam de fechar só em sucesso; (4) card `lost_payment` (dinheiro que a penalidade
+    tirou) somava `penalty_points * point_value` direto, sem aplicar o multiplicador de saúde da
+    regional do colaborador — ao contrário de `final_points`/`estimated_payment`, que sempre usam
+    esse multiplicador (`scoring_detail.summarize_details`); numa regional com multiplicador 0.5 o
+    card mostrava o DOBRO do valor real. Corrigido em `services/calculation.py` guardando o
+    multiplicador de cada colaborador durante o laço de cálculo e aplicando-o também no
+    `lost_payment`; teste novo
+    `test_lost_payment_card_applies_the_same_health_multiplier_as_the_real_payment` em
+    `tests/test_calculation_closure.py`; (5) `FILTERED_BREAKDOWNS_CACHE` (`api/routes/dashboard.py`),
+    usado pelo filtro por regional do dashboard, nunca invalidava quando um `CalculationRun` mudava
+    de rascunho pra pago (mesmo `run.id`, `_apply_point_balance_after_payment` recompõe
+    `final_points`/`estimated_payment` no lugar) — ao contrário do `run.result_summary` sem filtro,
+    que `refresh_run_breakdowns` já corrigia; quem tinha aberto o filtro antes do pagamento
+    continuava vendo os valores de rascunho pelo tempo de vida do processo. Corrigido com
+    `invalidate_filtered_breakdowns_cache(run_id)`, chamada em `calculation_runs.py` logo após
+    `refresh_run_breakdowns` na transição para "paid"; (6) a duplicação
+    `lib/charts/chart-palette.ts` vs `lib/chart-palette.ts` (item acima) foi resolvida movendo as 4
+    constantes de marca (`UNI_ROYAL`, `UNI_TURQUOISE`, `UNI_IMPACT`, `UNI_MIDNIGHT`) para dentro de
+    `lib/chart-palette.ts` e apagando o módulo duplicado.
+    Validado com `tsc --noEmit` limpo, `vitest run` 83/83, e os testes de backend relevantes
+    passando (a suíte de fundo continua com o erro de ambiente pré-existente descrito abaixo,
+    reproduzido também num teste antigo intocado — não é regressão desta mudança).
+  - **Ainda pendente, não feito nesta rodada** (registrado pra não repetir a auditoria):
+    reestruturação visual (o módulo tem design system próprio em `config-ui.tsx` que diverge do
+    resto do sistema — sem `ui/card`, raio de borda em 6 escalas diferentes, 12 das 14 tabelas sem
+    scroll container, nenhum painel com estado de erro); otimizações de performance
+    (`/collaborators/registry` varre a tabela de O.S. inteira sem filtro, `/dashboard/summary`
+    devolve a lista de scores duas vezes, `/audit/service-orders` reprocessa o mês inteiro a cada
+    página, fotos de colaborador buscadas em loop sequencial, falta índice em `closed_at`/`opened_at`/
+    `collaborator_id`); reestruturação (autenticação duplicada entre `GamificacaoPageContent` e
+    `WorkspaceAppShell`, `SummaryCard` triplicado, cálculo de negócio na tela em ~12 pontos, 2 abas
+    inalcançáveis pela navegação).
+  - **Checkpoint de verificação, sessão seguinte ainda em 2026-09-15**: a sessão anterior foi
+    reiniciada no meio da rodada de fundo `python -m pytest` (sem `--timeout`, suíte inteira) e o
+    notificador de tarefa em segundo plano marcou como "stopped" por não achar o registro de
+    conclusão — mas o arquivo de saída já tinha o resultado completo:
+    **1340 passed, 0 failures, 264 warnings, 4h02min**, incluindo os 2 testes novos de
+    `tests/test_service_orders_delete_period.py`. Ou seja, hoje a suíte inteira passou 100% verde,
+    mesmo com o erro de ambiente pré-existente do SQLite-em-thread registrado em "Frentes em
+    andamento" (~101 falhas/~203 erros em outras rodadas) — reforça que aquele erro é intermitente
+    por ambiente, não uma regressão de código; não virou critério de "está tudo bem" sozinho.
+    Conferido nesta sessão que todos os arquivos que os itens acima dizem ter mudado realmente
+    estão no disco como modificados/novos (`git status`): `backend/app/api/routes/dashboard.py`,
+    `backend/app/api/routes/service_orders.py`, `backend/app/services/calculation.py`,
+    `backend/app/services/point_balance.py`, `backend/tests/test_point_balance.py`,
+    `backend/tests/test_calculation_closure.py`, `backend/tests/test_service_orders_delete_period.py`
+    (novo), `frontend/lib/chart-palette.ts`, `frontend/app/gamificacao/page.tsx` e os 8 componentes
+    de `components/gamification/` citados acima. Nada foi perdido no reinício da sessão.
+    **Onde retomar**: os 2 críticos e os 6 altos estão corrigidos e testados; falta a fase visual
+    (Fase 3 do plano original) e depois navegação/estrutura (Fases 4-5) — nenhuma delas foi
+    iniciada. Plano completo, com ação concreta por item e critério de pronto por fase, agora em
+    `docs/plano-gamificacao-reestruturacao.md` (linkado em `docs/00-TRILHA-0.md`) — comece por lá,
+    não repita a auditoria.
 
 - **1º pacote de expansão da exposição MCP: frescor do dado, "agora" da operação e SGP Suporte**
   (2026-09-10, usuário: "quais endpoints novos podemos disponibilizar para facilitar minha vida" →
@@ -3447,25 +3846,95 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Frentes em andamento / conhecidas
 
-- **Backlog tem DUAS convenções no backend e a divergência está visível — decisão
-  pendente do usuário**: `in_progress` de `/operations/overview` aplica TODOS os
-  filtros ao estoque (inclusive modelo de equipe), enquanto `openings_analytics` e o
-  novo `regional_matrix` usam `_backlog_filters`, que ignora modelo de equipe e
-  responsável. Com o mesmo filtro, o card da Visão Geral mostrava 23 e o total da
-  tabela logo abaixo, 45. A Visão Geral foi resolvida usando uma fonte só (a do
-  quadro por filial), mas a tela da Operação Analítica segue mostrando o outro
-  número. Decidir qual convenção vale antes de mexer.
+- **Filtro "Regional" (agrupado) sobre o filtro "Filial" — IMPLEMENTADO, testado e
+  validado ao vivo** (2026-09-14/15, usuário: "Tenho já o filtro por filial, agora
+  preciso agrupar para um filtro de regional... ex Rolim de Moura e São Felipe como
+  regional de Rolim de Moura"). Frente concluída, nada pendente aqui.
+  - Novo filtro `regional_groups` reaproveitando `normalize_regional_grouped`/
+    `REGIONAL_GROUP_ALIASES` já existentes em `backend/app/services/regional.py`
+    (São Felipe D'Oeste entra em "UNI - ROLIM DE MOURA"; São Miguel do Guaporé +
+    Seringueiras entram em "UNI - SAO FRANCISCO DO GUAPORE") — sem migration, tudo
+    resolvido com um `case()` SQL (`GROUPED_TO_GRANULAR`,
+    `granular_regionals_for_group`) por cima do `regionals` granular ("Filial") que
+    já existia.
+  - **Escopo final, decidido passo a passo com o usuário ao longo da sessão**:
+    Operação Analítica ficou com os DOIS filtros - "Regional" no painel principal,
+    "Filial" movido pro avançado (grupo "Localização") - e um não restringe as
+    opções do outro (`operations/queries.py:_dimension_conditions`, o
+    `exclude_filter` cobre o par `regional_groups`/`regionals` junto). Visão Geral
+    ficou só com "Regional" (removida do `OVERVIEW_FILTER_CATALOG`). Os dois
+    widgets que agrupavam por filial na Visão Geral (donut "Finalizadas por
+    filial"→"por regional" e a tabela "Operação por filial"→"por regional", os
+    dois lidos do mesmo `regional_matrix`) passaram a agrupar por Regional
+    (`_REGIONAL_MATRIX_GROUP_WHENS`), com o drill-through corrigido de `regionals`
+    para `regional_groups` (sem isso, clicar numa fatia perderia as O.S. de São
+    Felipe/São Miguel/Seringueiras do grupo). MCP/IA (`AiOrderFilters`,
+    `opr_filter_options` e quem mais usa `_dimension_conditions`) ganhou o mesmo
+    filtro de graça.
+  - **Achado real durante a validação, corrigido**: um ambiente que já tinha
+    "regionals" salvo em "filtros visíveis da Visão Geral" (setting
+    `overview_visible_filters`) ficou SEM nenhum filtro de regional depois da troca
+    de catálogo (chave antiga virou desconhecida, e "regional_groups" nunca tinha
+    sido salvo). `_overview_visible_filters_response` (`operations/router.py`)
+    agora trata "regionals" salvo como alias de "regional_groups" - sem isso,
+    qualquer instalação com essa config já salva perderia o filtro em silêncio ao
+    subir a mudança.
+  - Validado ao vivo (rebuild em modo dev + navegador, não só teste automatizado):
+    dropdown "Regional" lista as 10 regionais agrupadas; filtrar por
+    "UNI - ROLIM DE MOURA" traz O.S. de Rolim E São Felipe juntas; grupo
+    desconhecido zera o resultado (não vira "sem filtro" silencioso); "Filial"
+    continua listando as 15 opções mesmo com "Regional" selecionado. Testes novos
+    em `test_regional.py`, `test_operations_module.py`,
+    `test_operations_regional_matrix.py`, `test_operations_overview_visible_filters.py`.
+
+- **Convenção única de backlog — DECIDIDO e CORRIGIDO em 2026-09-16**: `in_progress`
+  de `/operations/overview` era o único lugar do módulo que ainda aplicava TODOS os
+  filtros ao estoque (inclusive modelo de equipe/responsável), enquanto
+  `openings_analytics` e `regional_matrix` já usavam e documentavam `_backlog_filters`
+  como a convenção estabelecida (backlog é estoque atual, sem executor definitivo —
+  filtrar por quem executa esconderia demanda real). Com o mesmo filtro, o card da
+  tela `/operacao` mostrava 23 e o quadro por filial logo abaixo, 45; a tela
+  `/visao-geral` só não tinha esse sintoma porque contornava o bug lendo o backlog
+  direto do quadro por filial em vez de `overview.in_progress` (comentário em
+  `overview-kpi-strip.tsx` já documentava a divergência exata). Decisão: alinhar
+  `overview()` à convenção já em vigor no resto do módulo, não o contrário.
+  - `backend/app/modules/operations/queries.py`: `overview()` agora usa
+    `_backlog_filters(filters)` pro cálculo de `in_progress`/`opened_out_of_time`,
+    igual `regional_matrix`/`openings_analytics`. Resposta ganhou
+    `backlog_ignores_team_scope: true` (mesma flag de rótulo já usada em
+    `regional_matrix`).
+  - `backend/app/modules/operations/schemas.py` + `frontend/lib/operations-api.ts`:
+    campo novo propagado no contrato.
+  - `frontend/app/operacao/page.tsx`: o card "Backlog atual" agora explica o recorte
+    ("qualquer equipe") quando o filtro de modelo de equipe/responsável está ativo,
+    mesmo padrão do card "Abertas no período" (`responsible_filter_active`) — sem
+    isso a tela criaria a mesma confusão de novo (número não muda com o filtro,
+    sem explicação visível).
+  - Teste novo `test_overview_backlog_ignores_team_model_and_responsible_filters`
+    em `test_operations_module.py`, mesmo padrão dos testes de
+    `test_operations_regional_matrix.py`. Rodado isolado (`1 passed`) — só o erro
+    de ambiente SQLite-thread já documentado abaixo no teardown, não relacionado.
+  - Tela `/visao-geral` não foi tocada: continua lendo o backlog do quadro por
+    filial, o que já era e continua correto (agora os dois números batem de
+    qualquer forma).
 - **Gamificação tem tela de login própria, duplicada**: mesma sessão e mesma API do
   resto (`api.login`/`setAuthToken`/`api.me`), mas implementação separada
   (`currentUser`/`authChecked`, usados em ~15 pontos da página). A página foi
   envolvida na casca sem desmontar esse miolo — na prática a casca já garante a
   sessão antes, então aquela tela não aparece. Unificar é frente própria.
-- **Suspeita de custo no `/operations/overview`, NÃO medida**: ele traz 4 colunas de
-  timestamp de TODA O.S. finalizada no período para calcular médias em Python
-  (`timeline_rows`). Num período de 30 dias da empresa inteira são milhares de linhas
-  por request. É pré-existente e a Visão Geral também consome. Antes de otimizar,
-  medir contra o banco real — mover as médias para SQL preserva o resultado, mas não
-  vale mexer no que serve a dois módulos sem número na mão.
+- **Custo do `/operations/overview` (`timeline_rows`) — MEDIDO em 2026-09-16 contra
+  o Postgres real (`operations_orders`, 107.970 O.S., container
+  `opr-gamification-db`), decisão: NÃO otimizar agora.** `EXPLAIN ANALYZE` direto no
+  banco (empresa inteira, sem filtro de regional/equipe): 30 dias → 14.388 linhas,
+  **73 ms** (usa o índice `ix_operations_orders_closed_at`, bitmap scan); 90 dias →
+  43.440 linhas, **162 ms** com cache aquecido, mas o planner troca pra *seq scan*
+  (90d já é ~40% da tabela) e chega a **1,99 s** com cache FRIO (primeira leitura do
+  dia). O lado Python (`wait_minutes`/`cycle_minutes`) só faz `sum()/len()` sem sort
+  nem percentil — irrelevante mesmo em dezenas de milhares de linhas. Conclusão: bem
+  dentro de um orçamento normal de latência de API até 90 dias com cache quente; o
+  risco real é cache frio em período largo (≥90 dias, empresa inteira) — não urgente
+  o bastante pra mover as médias pra SQL agora, revisitar se algum dia virar
+  reclamação real de lentidão.
 - **Suite de testes do backend está quebrada NO AMBIENTE, não no código**: rodando
   tudo dão ~101 falhas e ~203 erros com
   `sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in
@@ -3506,12 +3975,9 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Próximos passos sugeridos
 
-- Decidir a convenção única de backlog (ver "Frentes em andamento") e alinhar
-  `/operations/overview` ou o `regional_matrix`, com teste que trave a escolha.
 - Definir a visão global que será o filtro padrão da Visão Geral (botão "Definir como
   padrão" na própria tela, exige `operations:views:update_global`). Sem isso a tela
   abre sem pré-set de modelo de equipe.
-- Medir `/operations/overview` contra o banco real antes de otimizar `timeline_rows`.
 - Comparar TMR humano e TMR geral (ambos disponíveis agora) contra o painel
   oficial do OPA pra descobrir qual fórmula ele usa — última decisão em
   aberto da auditoria de divergência.
@@ -3519,16 +3985,14 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   (exige a permissão granular `support:view_conversation`, ainda não
   implementada) e/ou análise de conversa por IA (Fase 6, bloqueada por
   decisão de infra/autorização).
-- Decidir se compensa fazer backfill do TMR geral histórico — cobertura agora
-  visível na própria UI (Bloco B1, item acima), medida em 2026-08-26 contra o
-  banco real: **45.060 de 55.925** atendimentos (81%) ainda sem
-  `tmr_all_responses_seconds`, cobertura cai a 0% antes de 2026-08-20 (corte
-  exato do dia em que o campo entrou em produção — é o comportamento esperado
-  de "só dado novo", não bug). Classificação bot/humano já está quase
-  completa (190 de 55.925 sem classificar, 0,3%) — não precisa de backfill.
-  Custo do backfill de TMR: 1 chamada extra à API do OPA Suite por
-  atendimento — hoje descartado por custo, mas o número
-  real agora permite decidir com base em dado, não estimativa.
+- **Backfill do TMR geral histórico — IMPLEMENTADO em 2026-09-16 (ver item
+  acima), mas continua DESLIGADO em produção** até alguém decidir arcar com o
+  custo (1 chamada extra à API do OPA Suite por atendimento pendente, ~45 mil no
+  lançamento). Ligar via `PUT /api/support/opa-sync-settings`
+  (`tmr_backfill_enabled: true`) ou pela nova seção "Backfill de TMR histórico
+  (madrugada)" no painel de sincronização do `/suporte`. Classificação
+  bot/humano já está quase completa (190 de 55.925 sem classificar, 0,3%) — não
+  precisa de backfill próprio.
 - Seguir consolidando o contrato de filtros único (`proposta-filter-contract-v1.md`)
   entre Operação Analítica, Agendamento e Gestão — agora com a seção 3 de
   `docs/normas-qualidade-dados-metricas.md` como norma de referência.

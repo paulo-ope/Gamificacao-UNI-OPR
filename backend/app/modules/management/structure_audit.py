@@ -20,10 +20,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import Collaborator
 from app.modules.management.models import ManagementOperationalMember
 from app.modules.management.schemas import StructureAuditFinding, StructureAuditOut, StructureAuditSummary
-from app.modules.management.services import _find_collaborator, _norm_name
+from app.modules.management.services import _find_collaborator
 from app.modules.operations.models import OperationBranchCapacity, OperationOrder, OperationResponsibleAssignment, OperationTeamModel
 from app.modules.operations.responsible_regional import resolve_responsible_regional_candidates
-from app.services.regional import normalize_regional
+from app.services.regional import normalize_key, normalize_regional
 
 # Membro com produção dentro desta janela e ainda com estrutura pendente é o achado mais
 # acionável (achado #13) - 30 dias é "produção do mês corrente", consistente com o ciclo mensal
@@ -174,7 +174,7 @@ def _audit_responsibles(db: Session, collaborators: list[Collaborator]) -> list[
     # atribuiria a mesma pessoa duas vezes (ou de forma ambígua) sem uma decisão explícita.
     candidates_by_name: dict[str, list] = defaultdict(list)
     for candidate in candidates:
-        candidates_by_name[_norm_name(candidate.responsible_name)].append(candidate)
+        candidates_by_name[normalize_key(candidate.responsible_name)].append(candidate)
     for group in candidates_by_name.values():
         distinct_regionals = sorted({normalize_regional(item.regional) for item in group})
         if len(distinct_regionals) > 1:

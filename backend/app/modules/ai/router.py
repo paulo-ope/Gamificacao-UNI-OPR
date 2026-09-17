@@ -600,7 +600,7 @@ def onu_signal_history_route(
     return results
 
 
-def _management_case_conditions(payload) -> list:
+def _management_case_conditions(db: Session, payload) -> list:
     """Traduz o recorte pedido (`AiManagementCaseFiltersRequest` ou subclasse) nas condições SQL do
     motor de casos, com o MESMO tratamento de filtro contraditório da tela (422 com a mensagem
     acionável, em vez de 200 com lista vazia).
@@ -635,7 +635,7 @@ def _management_case_conditions(payload) -> list:
         min_days_pending=payload.min_days_pending,
     )
     try:
-        return management_cases_engine.case_filter_conditions(filters)
+        return management_cases_engine.case_filter_conditions(db, filters)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -653,7 +653,7 @@ def management_cases_diagnostics_route(
     started_at = perf_counter()
     enforce_token_scope(context, "management.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.management_cases_diagnostics", "api")
-    conditions = _management_case_conditions(payload)
+    conditions = _management_case_conditions(db, payload)
     result = management_cases_engine.case_diagnostics(db, conditions)
     record_ai_access(
         db,
@@ -684,7 +684,7 @@ def management_pending_by_collaborator_route(
     started_at = perf_counter()
     enforce_token_scope(context, "management.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.management_pending_justifications", "api")
-    conditions = _management_case_conditions(payload)
+    conditions = _management_case_conditions(db, payload)
     result = management_cases_engine.pending_justifications_by_collaborator(db, conditions, limit=payload.limit)
     record_ai_access(
         db,
@@ -715,7 +715,7 @@ def management_justifications_route(
     started_at = perf_counter()
     enforce_token_scope(context, "management.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.management_justifications", "api")
-    conditions = _management_case_conditions(payload)
+    conditions = _management_case_conditions(db, payload)
     result = management_cases_engine.justification_rows(
         db,
         conditions,
@@ -749,7 +749,7 @@ def management_cases_route(
     started_at = perf_counter()
     enforce_token_scope(context, "management.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.management_cases", "api")
-    conditions = _management_case_conditions(payload)
+    conditions = _management_case_conditions(db, payload)
     total = db.scalar(select(func.count(ManagementCase.id)).where(*conditions)) or 0
     rows = db.scalars(
         select(ManagementCase)

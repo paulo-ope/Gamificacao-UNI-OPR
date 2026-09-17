@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from app.core.security import get_current_user
 from app.db.session import get_db
@@ -338,20 +339,20 @@ def test_admin_sees_every_regional(client, db_session, operation_setup):
     assert [item["severity"] for item in body["items"]] == ["high", "low"]
 
 
-def test_filter_conditions_reject_terminal_status_with_only_open():
+def test_filter_conditions_reject_terminal_status_with_only_open(db_session):
     """status="resolved"/"rejected" + only_open=true é uma contradição lógica (only_open só
     aceita pending/justified/in_progress): antes, isso passava batido e devolvia 0 casos em
     silêncio, mesmo com casos "resolved" reais no banco. Agora deve levantar um erro claro em vez
     de fingir sucesso."""
     filters = cases_engine.ManagementCaseFilters(status="resolved", statuses=list(cases_engine.OPEN_CASE_STATUSES))
     with pytest.raises(ValueError, match="resolved"):
-        cases_engine.case_filter_conditions(filters)
+        cases_engine.case_filter_conditions(db_session, filters)
 
 
-def test_filter_conditions_allow_open_status_with_only_open():
+def test_filter_conditions_allow_open_status_with_only_open(db_session):
     """Um status que já é aberto (ex.: pending) não conflita com only_open - continua funcionando."""
     filters = cases_engine.ManagementCaseFilters(status="pending", statuses=list(cases_engine.OPEN_CASE_STATUSES))
-    conditions = cases_engine.case_filter_conditions(filters)
+    conditions = cases_engine.case_filter_conditions(db_session, filters)
     assert len(conditions) == 2
 
 
@@ -685,6 +686,40 @@ def test_refresh_pending_cases_does_not_touch_a_resolved_case(db_session, operat
     db_session.refresh(case)
     assert case.actual_value == 1.0
     assert case.status == "resolved"
+
+
+def test_refresh_pending_cases_resolves_member_lookup_in_a_constant_number_of_queries(db_session, operation_setup):
+    """Achado da auditoria de 2026-09-14 (N+1 CONFIRMADO, corrigido em `refresh_pending_cases`):
+    `_resolve_member_for_case` fazia um `SELECT * FROM management_operational_members` sem filtro
+    a CADA caso pendente processado dentro do loop. Corrigido carregando os membros uma vez fora
+    do loop (mesmo padrão já usado ali para `team_models`). Aqui, vários casos pendentes em dias
+    diferentes precisam gerar o MESMO número de consultas a essa tabela que um único caso geraria -
+    não um número que cresce junto com a quantidade de casos."""
+    for day in (13, 14, 15, 16, 17):
+        _make_case(
+            db_session,
+            case_type=cases_engine.CASE_TYPE_DAILY_BELOW,
+            metric_name=cases_engine.METRIC_DAILY_COUNT,
+            reference_date=date(2026, 7, day),
+            expected_value=5.0,
+            actual_value=0.0,
+        )
+    db_session.commit()
+
+    statements = []
+
+    def capture_statement(*args):
+        statements.append(str(args[2]))
+
+    event.listen(db_session.bind, "before_cursor_execute", capture_statement)
+    try:
+        result = cases_engine.refresh_pending_cases(db_session)
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture_statement)
+
+    member_queries = [s for s in statements if "management_operational_members" in s.lower()]
+    assert len(member_queries) == 1
+    assert result["daily_refreshed"] + result["daily_resolved"] == 5
 
 
 def test_monthly_case_endpoint_rejects_the_current_month(client, db_session, operation_setup):
