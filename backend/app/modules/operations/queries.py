@@ -15,6 +15,7 @@ from app.services.regional import GROUPED_TO_GRANULAR, effective_managed_regiona
 from .models import OperationBacklogSnapshot, OperationBranchCapacity, OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE, OPERATIONS_TIMEZONE_NAME, local_period_utc_bounds, operations_period_bounds
 from .scope import ALL_SECTOR_NAMES
+from .technology_group import OTHER_TECHNOLOGY_GROUP, RAW_SUBJECT_TECHNOLOGY_GROUP
 
 
 # Colunas ordenáveis do detalhamento de O.S. (ver `order_page`/`opening_order_page`/
@@ -1082,9 +1083,20 @@ def sla_breakdown(db: Session, date_from: date, date_to: date, user: User, group
         "department": OperationOrder.department,
         "sector": OperationOrder.sector,
     }
-    field = allowed_groups.get(group_by, OperationOrder.os_type)
     conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
-    label = func.coalesce(field, "Não identificado")
+    if group_by == "technology_group":
+        # Rollup por tecnologia/categoria (Ativação/Suporte x Fibra Urbana/Fibra Rural/Rádio) por
+        # cima do assunto granular - precisa ser um `case()` avaliado no próprio GROUP BY (não um
+        # remapeamento em Python depois), senão vários assuntos que caem no mesmo grupo apareceriam
+        # como linhas separadas em vez de somadas. Mesmo padrão de `regional.py` (regional agrupada
+        # por cima da regional granular), aplicado aqui ao assunto.
+        label = case(
+            *[(OperationOrder.os_subject == subject, group) for subject, group in RAW_SUBJECT_TECHNOLOGY_GROUP.items()],
+            else_=OTHER_TECHNOLOGY_GROUP,
+        )
+    else:
+        field = allowed_groups.get(group_by, OperationOrder.os_type)
+        label = func.coalesce(field, "Não identificado")
     elapsed = OperationOrder.elapsed_hours
     rows = db.execute(
         select(

@@ -499,6 +499,67 @@ def test_operations_overview_and_detail_are_limited_to_selected_current_period(c
     assert details.json()["items"][0]["order_code"] == "IXC-2"
 
 
+def test_sla_technology_group_rolls_up_subjects_and_sums_matching_groups(client, db_session):
+    """Pedido do usuário em 2026-09-17: reproduzir o "SLA por tecnologia" (Fibra Urbana/Fibra
+    Rural/Rádio, Ativação x Suporte) de um painel executivo externo, usando o mesmo assunto
+    granular (`os_subject`) que a Operação Analítica já importa - sem precisar de campo novo.
+    Dois assuntos diferentes que caem no mesmo grupo ("Instalação Fibra Urbana" e "Retorno de
+    Instalação Fibra Urbana") precisam somar no mesmo bucket, não aparecer como linhas
+    separadas - é exatamente o risco do `case()` SQL não estar bem construído."""
+    date_from, date_to = current_month_bounds()
+    opened_at = _utc_at(date_from, 8)
+    closed_at = _utc_at(date_from, 10)
+
+    def _order(order_id: str, subject: str, sla_status: str) -> OperationOrder:
+        return OperationOrder(
+            source="ixc",
+            source_order_id=order_id,
+            order_code=f"IXC-{order_id}",
+            regional="UNI - JI PARANA",
+            sector="Suporte Externo Fibra",
+            os_type="Ativação" if "Instal" in subject else "Manutenção",
+            os_subject=subject,
+            responsible="Técnico 1",
+            status="Finalizada",
+            status_code="F",
+            is_closed=True,
+            sla_status=sla_status,
+            sla_target_hours=24,
+            elapsed_hours=2,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            raw_payload={},
+        )
+
+    db_session.add_all(
+        [
+            _order("tech-1", "Instalação Fibra Urbana", "on_time"),
+            _order("tech-2", "Retorno de Instalação Fibra Urbana", "out_of_time"),
+            _order("tech-3", "Suporte Externo Rádio", "on_time"),
+            _order("tech-4", "Viabilidade", "on_time"),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        "/api/operations/sla",
+        params={
+            "date_from": date_from.isoformat(),
+            "date_to": date_to.isoformat(),
+            "group_by": "technology_group",
+        },
+    )
+    assert response.status_code == 200
+    by_label = {item["label"]: item for item in response.json()}
+
+    assert by_label["Ativação Fibra Urbana"]["completed"] == 2
+    assert by_label["Ativação Fibra Urbana"]["sla_rate"] == 50.0
+    assert by_label["Suporte Rádio"]["completed"] == 1
+    assert by_label["Suporte Rádio"]["sla_rate"] == 100.0
+    assert by_label["Outros"]["completed"] == 1
+    assert "Ativação Fibra Rural" not in by_label
+
+
 def test_overview_backlog_ignores_team_model_and_responsible_filters(client, db_session):
     """Achado real (2026-09-16): `/operations/overview` era o único lugar do módulo que ainda
     aplicava o filtro de modelo de equipe/responsável ao backlog - com o mesmo filtro, o card

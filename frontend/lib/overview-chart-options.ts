@@ -2,7 +2,8 @@ import type { EChartsOption } from "echarts";
 
 import { CHART_INK, CHART_SURFACE } from "@/lib/chart-palette";
 import { dateLabel, openingAnomalyThreshold, trendPointLabel } from "@/lib/operations-chart-options";
-import type { OperationBacklogTrend, OperationTrendSeries } from "@/lib/operations-api";
+import type { OperationBacklogTrend, OperationSlaItem, OperationTrendSeries } from "@/lib/operations-api";
+import { slaTone } from "@/lib/operations-sla";
 import type { ShareSlice } from "@/lib/share-breakdown";
 
 const numberFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 });
@@ -456,5 +457,83 @@ export function buildShareDonutOption(slices: readonly ShareSlice[], options: { 
         data: slices.map((slice) => ({ name: slice.label, value: slice.value, itemStyle: { color: slice.color } })),
       },
     ],
+  };
+}
+
+/** Mesma paleta de `slaTone`/`slaSystemTone` (lib/operations-sla.ts), em hex - ECharts não lê
+ * classe Tailwind. Mantém os três limiares (≥80 verde, ≥60 âmbar, abaixo vermelho) e o cinza de
+ * "sem dado" idênticos ao badge de SLA que o resto da tela já usa - o gauge não pode inventar um
+ * quarto critério de cor. */
+const SLA_GAUGE_TONE_COLOR: Record<ReturnType<typeof slaTone>, string> = {
+  success: "#16a34a",
+  warning: "#f59e0b",
+  danger: "#ef4444",
+  neutral: "#94a3b8",
+};
+
+/**
+ * Três gauges de SLA lado a lado (uma tecnologia cada: Fibra Urbana, Fibra Rural, Rádio),
+ * pedido do usuário em 2026-09-17 pra reproduzir na Visão Geral o "Painel do CEO" que ele
+ * recebe de outro sistema. Uma única instância de ECharts com 3 séries `gauge` independentes
+ * (uma por `center` horizontal) - não 3 componentes separados, para o card não desalinhar em
+ * telas estreitas (o grid do ECharts distribui os 3 centros em % da MESMA largura).
+ *
+ * `items` já vem de `GET /operations/sla?group_by=technology_group` (`operationsApi.sla`) -
+ * este builder só escolhe, para cada rótulo em `groups`, o item cujo `label` bate; um grupo sem
+ * O.S. no período (ex.: nenhuma Ativação Rádio no mês) desenha um gauge zerado, não desaparece -
+ * sumir sem aviso pareceria bug de filtro, não ausência real de volume.
+ */
+export function buildSlaTechnologyGaugeOption(
+  items: readonly OperationSlaItem[],
+  groups: readonly string[],
+  options: { meta?: number } = {},
+): EChartsOption {
+  const meta = options.meta ?? 80;
+  const byLabel = new Map(items.map((item) => [item.label, item]));
+  const slotWidth = 100 / groups.length;
+
+  return {
+    animationDuration: 350,
+    series: groups.map((group, index) => {
+      const item = byLabel.get(group) ?? null;
+      const rate = item?.sla_rate ?? null;
+      const tone = slaTone(rate);
+      const color = SLA_GAUGE_TONE_COLOR[tone];
+      const centerX = slotWidth * index + slotWidth / 2;
+      return {
+        type: "gauge",
+        center: [`${centerX}%`, "58%"],
+        radius: "82%",
+        startAngle: 210,
+        endAngle: -30,
+        min: 0,
+        max: 100,
+        splitNumber: 5,
+        progress: { show: true, width: 10, itemStyle: { color } },
+        axisLine: { lineStyle: { width: 10, color: [[1, CHART_INK.gridline]] } },
+        pointer: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { show: false },
+        anchor: { show: false },
+        title: {
+          show: true,
+          offsetCenter: [0, "78%"],
+          fontSize: 11,
+          fontWeight: 600,
+          color: CHART_INK.secondary,
+        },
+        detail: {
+          show: true,
+          valueAnimation: true,
+          offsetCenter: [0, "6%"],
+          formatter: (value: number) => (rate === null ? "-" : `${value}%`),
+          fontSize: 20,
+          fontWeight: 700,
+          color: CHART_INK.primary,
+        },
+        data: [{ value: rate ?? 0, name: `${group}${item ? ` · ${item.completed}` : ""}` }],
+      };
+    }),
   };
 }

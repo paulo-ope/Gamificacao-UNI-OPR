@@ -166,20 +166,25 @@ def _resolve_order_output_fields(
     fields: list[str] | None,
     *,
     capability: str = "selectable",
-    all_fields=OperationOrderOut.model_fields,
+    schema: type = OperationOrderOut,
 ) -> list[str] | None:
     """Um `fields` explícito sempre vence; sem ele, `response_mode=summary` recorta para um
     conjunto enxuto e `response_mode="full"` (o padrão) devolve todo campo AUTORIZADO - nunca
     `None` ("sem filtro"), que era o achado P0-3 da auditoria de 2026-09-15: desligar um campo
     sensível em `AiFieldPermission` não tinha efeito nenhum na chamada mais comum (`full`, sem
-    `fields`). `capability`/`all_fields` diferem entre listagem (`selectable`,
-    `OperationOrderOut`) e detalhe (`detail_available`, `OperationOrderDetailOut`, que também
-    expõe `raw_payload`) - ver os dois call sites."""
+    `fields`). `capability`/`schema` diferem entre listagem (`selectable`, `OperationOrderOut`) e
+    detalhe (`detail_available`, `OperationOrderDetailOut`, que também expõe `raw_payload`) - ver
+    os dois call sites. `schema.model_fields | schema.model_computed_fields` porque
+    `service_description`/`technical_report`/`service_address`/`address_is_structured` são
+    `@computed_field` (Pydantic) - `model_dump()` os inclui, mas `model_fields` sozinho NÃO
+    (achado real ao testar esta correção: sem isso, esses 4 campos somem do modo "full" mesmo
+    autorizados, porque nunca entravam na lista de "todo campo" pra começo de conversa)."""
     if fields is not None:
         return fields
     if response_mode == "summary":
         allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
         return [name for name in ORDER_SUMMARY_FIELDS if name in allowed]
+    all_fields = set(schema.model_fields) | set(schema.model_computed_fields)
     return [name for name in all_fields if policy.field_allowed_or_uncatalogued(ENTITY_OPERATION_ORDERS, name, capability)]
 
 
@@ -1154,7 +1159,7 @@ def operations_data_freshness(
 def sla(
     date_from: date,
     date_to: date,
-    group_by: Literal["os_type", "subject", "diagnosis", "department", "sector"] = "os_type",
+    group_by: Literal["os_type", "subject", "diagnosis", "department", "sector", "technology_group"] = "os_type",
     selected_filters: dict = Depends(_filter_params),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -1821,7 +1826,7 @@ def order_detail(
     # lote de `POST /ai/orders/details`.
     fields = enforce_requested_fields(policy, ENTITY_OPERATION_ORDERS, fields, "detail_available")
     output_fields = _resolve_order_output_fields(
-        policy, response_mode, fields, capability="detail_available", all_fields=OperationOrderDetailOut.model_fields
+        policy, response_mode, fields, capability="detail_available", schema=OperationOrderDetailOut
     )
     detail = OperationOrderDetailOut.model_validate(order).model_dump()
     record_ai_access(

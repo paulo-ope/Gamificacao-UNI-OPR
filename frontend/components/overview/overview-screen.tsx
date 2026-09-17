@@ -10,6 +10,7 @@ import { OverviewGamificationCard } from "@/components/overview/overview-gamific
 import { OverviewKpiStrip } from "@/components/overview/overview-kpi-strip";
 import { OverviewRegionalTable } from "@/components/overview/overview-regional-table";
 import { OverviewShareDonut } from "@/components/overview/overview-share-donut";
+import { OverviewSlaTechnologyGauges } from "@/components/overview/overview-sla-technology-gauges";
 import { OverviewSupportCard } from "@/components/overview/overview-support-card";
 import { OperationsTrendChart } from "@/components/operations/operations-trend-chart";
 import { StatusToast } from "@/components/ui/status-toast";
@@ -31,6 +32,8 @@ import {
 } from "@/lib/overview-chart-options";
 import {
   operationsApi,
+  SLA_ACTIVATION_TECHNOLOGY_GROUPS,
+  SLA_SUPPORT_TECHNOLOGY_GROUPS,
   type OperationFilterState,
   type OperationOverviewDefaultFilter,
   type OperationOverviewFilterKey,
@@ -158,6 +161,13 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const trends = useBlockQuery(() => operationsApi.overviewTrends(opFilters!, "day"), [filterKey], {
     enabled: ready,
     fallbackError: "Não foi possível carregar a série diária.",
+  });
+  // "SLA por tecnologia" (pedido do usuário, 2026-09-17, reproduzindo o painel executivo de
+  // outro sistema) - mesmo endpoint de SLA, só um `group_by` novo; os dois gauges (Ativação e
+  // Suporte) leem da mesma resposta, não fazem uma chamada cada.
+  const slaTechnology = useBlockQuery(() => operationsApi.sla(opFilters!, "technology_group"), [filterKey], {
+    enabled: ready && canSeeSla,
+    fallbackError: "Não foi possível carregar o SLA por tecnologia.",
   });
   // Mesma janela que já alimenta o card de comparação do topo (`previousOverview`) - aqui vira
   // uma linha no gráfico, não só um número agregado.
@@ -514,6 +524,25 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           />
         ) : null}
       </div>
+
+      {canSeeSla ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <OverviewSlaTechnologyGauges
+            eyebrow="SLA por tecnologia"
+            title="SLA de Ativação"
+            groups={SLA_ACTIVATION_TECHNOLOGY_GROUPS}
+            items={slaTechnology.error ? null : slaTechnology.data}
+            state={{ loading: slaTechnology.loading, error: slaTechnology.error }}
+          />
+          <OverviewSlaTechnologyGauges
+            eyebrow="SLA por tecnologia"
+            title="SLA de Suporte"
+            groups={SLA_SUPPORT_TECHNOLOGY_GROUPS}
+            items={slaTechnology.error ? null : slaTechnology.data}
+            state={{ loading: slaTechnology.loading, error: slaTechnology.error }}
+          />
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-3">
         <OverviewShareDonut

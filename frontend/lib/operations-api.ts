@@ -298,6 +298,15 @@ export type OperationSlaItem = {
   average_closing_hours: number | null;
 };
 
+/** Rótulos de `group_by=technology_group` (`GET /operations/sla`) - espelham exatamente
+ * `ACTIVATION_TECHNOLOGY_GROUPS`/`SUPPORT_TECHNOLOGY_GROUPS` de
+ * `backend/app/modules/operations/technology_group.py`. Não há endpoint de catálogo para essas 6
+ * strings (são fixas, definidas pelo painel executivo que este agrupamento reproduz - ver
+ * `docs/integracao-uni/regras-agrupamento-sla-tecnologia.json`), então ficam hardcoded aqui; se o
+ * backend renomear um grupo, este array precisa acompanhar. */
+export const SLA_ACTIVATION_TECHNOLOGY_GROUPS = ["Ativação Fibra Urbana", "Ativação Fibra Rural", "Ativação Rádio"] as const;
+export const SLA_SUPPORT_TECHNOLOGY_GROUPS = ["Suporte Fibra Urbana", "Suporte Fibra Rural", "Suporte Rádio"] as const;
+
 export type OperationSlaHierarchyLevel = "os_type" | "subject" | "diagnosis";
 
 export type OperationSlaHierarchyItem = {
