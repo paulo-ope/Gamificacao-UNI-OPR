@@ -11,6 +11,7 @@ import {
   Loader2,
   MapPin,
   ShieldAlert,
+  ShieldOff,
   Target,
   UserRound,
 } from "lucide-react";
@@ -19,6 +20,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Sheet,
   SheetContent,
@@ -1165,7 +1167,8 @@ export function OperationsMonthlyCalendar({
                                       aria-hidden="true"
                                       title={DAILY_CASE_STATUS_LABEL[dailyCaseStatus] ?? dailyCaseStatus}
                                     />
-                                  ) : (dailyCaseStatus === "pending" || (canJustifyManagement && performance === "below")) ? (
+                                  ) : (collaborator.team_model?.requires_justification !== false) &&
+                                    (dailyCaseStatus === "pending" || (canJustifyManagement && performance === "below")) ? (
                                     // Mesmo visual pra "caso aberto mas ainda não justificado" e
                                     // "abaixo da meta, nenhum caso aberto ainda" - pra quem olha o
                                     // calendário, as duas significam a mesma coisa: falta
@@ -1285,8 +1288,9 @@ export function OperationsMonthlyCalendar({
                                 );
                               }
                               if (
-                                monthlyCaseStatus === "pending" ||
-                                (canJustifyManagement && collaborator.monthly_performance === "below")
+                                collaborator.team_model?.requires_justification !== false &&
+                                (monthlyCaseStatus === "pending" ||
+                                  (canJustifyManagement && collaborator.monthly_performance === "below"))
                               ) {
                                 return (
                                   <span
@@ -1310,16 +1314,11 @@ export function OperationsMonthlyCalendar({
         : null}
 
       {!isLoading && !data.regionals.length ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center shadow-sm">
-          <CalendarDays className="mx-auto h-9 w-9 text-slate-300" />
-          <h3 className="mt-3 font-semibold text-slate-800">
-            Nenhuma produção nesta competência
-          </h3>
-          <p className="mt-1 text-sm text-slate-500">
-            Ajuste os filtros ou atualize a base IXC para visualizar O.S.
-            finalizadas.
-          </p>
-        </div>
+        <EmptyState
+          icon={<CalendarDays className="h-9 w-9" />}
+          title="Nenhuma produção nesta competência"
+          description="Ajuste os filtros ou atualize a base IXC para visualizar O.S. finalizadas."
+        />
       ) : null}
 
       <Sheet
@@ -1414,6 +1413,7 @@ export function OperationsMonthlyCalendar({
           (selected.performance === "below" || selected.dailyCaseStatus === "pending") &&
           selected.responsible !== ALL_RESPONSIBLES &&
           (!selected.periodEnd || selected.periodEnd === selected.day) &&
+          selected.teamModel?.requires_justification !== false &&
           canJustifyManagement ? (
             <div className="flex flex-col gap-2 border-b border-red-100 bg-red-50/60 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-4">
               <p className="text-xs text-red-800">
@@ -1434,6 +1434,18 @@ export function OperationsMonthlyCalendar({
                 )}
                 Justificar dia
               </Button>
+            </div>
+          ) : selected &&
+            selected.performance === "below" &&
+            selected.responsible !== ALL_RESPONSIBLES &&
+            (!selected.periodEnd || selected.periodEnd === selected.day) &&
+            selected.teamModel?.requires_justification === false &&
+            canJustifyManagement ? (
+            <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2.5 sm:px-4">
+              <ShieldOff className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <p className="text-xs text-slate-600">
+                Dia abaixo da meta, mas o modelo de equipe deste colaborador não exige justificativa.
+              </p>
             </div>
           ) : null}
           {openCaseError ? (
@@ -1544,15 +1556,14 @@ export function OperationsMonthlyCalendar({
                   </button>
                 ))}
                 {!orders.items.length ? (
-                  <div className="py-14 text-center">
-                    <UserRound className="mx-auto h-8 w-8 text-slate-300" />
-                    <p className="mt-2 text-sm font-medium text-slate-700">
-                      Nenhuma O.S. neste dia
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      A célula registra ausência de produção no recorte atual.
-                    </p>
-                  </div>
+                  <EmptyState
+                    variant="plain"
+                    icon={<UserRound className="h-8 w-8" />}
+                    title="Nenhuma O.S. neste dia"
+                    description="A célula registra ausência de produção no recorte atual."
+                    titleClassName="mt-2 text-sm font-medium text-slate-700"
+                    descriptionClassName="text-xs text-slate-500"
+                  />
                 ) : null}
               </div>
             ) : null}
@@ -1705,6 +1716,7 @@ export function OperationsMonthlyCalendar({
               {selectedMonthly.performance === "below" &&
               selectedMonthly.responsible !== ALL_RESPONSIBLES &&
               competenceIsClosed &&
+              selectedMonthly.teamModel?.requires_justification !== false &&
               canJustifyManagement ? (
                 <div className="flex flex-col gap-2 border-b border-red-100 bg-red-50/60 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-4">
                   <p className="text-xs text-red-800">
@@ -1725,6 +1737,17 @@ export function OperationsMonthlyCalendar({
                     )}
                     Justificar mês
                   </Button>
+                </div>
+              ) : selectedMonthly.performance === "below" &&
+                selectedMonthly.responsible !== ALL_RESPONSIBLES &&
+                competenceIsClosed &&
+                selectedMonthly.teamModel?.requires_justification === false &&
+                canJustifyManagement ? (
+                <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2.5 sm:px-4">
+                  <ShieldOff className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  <p className="text-xs text-slate-600">
+                    Mês abaixo da meta, mas o modelo de equipe deste colaborador não exige justificativa.
+                  </p>
                 </div>
               ) : null}
               {openMonthlyCaseError ? (

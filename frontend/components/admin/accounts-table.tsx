@@ -124,7 +124,15 @@ export function AccountsTable({
                       </Button>
                     ) : null}
                     {canDeleteUsers ? (
-                      <Button type="button" size="sm" variant="outline" className="text-red-600" onClick={() => onDelete(row)}>
+                      <Button
+                        aria-label={`Excluir acesso de ${row.name}`}
+                        title="Excluir acesso"
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600"
+                        onClick={() => onDelete(row)}
+                      >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     ) : null}

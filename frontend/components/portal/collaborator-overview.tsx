@@ -37,7 +37,7 @@ export function CollaboratorOverview({ audit, summary, onOpenOrders }: Props) {
           <h2 className="mt-1 break-words text-xl font-semibold leading-tight sm:text-2xl">Olá, {collaborator?.name?.split(" ")[0] ?? summary.user.name.split(" ")[0]}</h2>
           <p className="mt-1 text-sm text-slate-600">Aqui está sua leitura do fechamento atual, sem mistério.</p>
         </div>
-        <Badge className="border-[#2d5fff]/25 bg-[#2d5fff]/10 px-3 py-1 text-[#0028f3]">Atualizado no fechamento</Badge>
+        <Badge className="border-uni-royal/25 bg-uni-royal/10 px-3 py-1 text-uni-impact">Atualizado no fechamento</Badge>
       </div>
 
       <ScoreTransparencyPanel audit={audit} summary={summary} onOpenOrders={onOpenOrders} />

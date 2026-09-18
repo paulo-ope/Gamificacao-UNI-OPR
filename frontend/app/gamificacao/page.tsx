@@ -1,23 +1,12 @@
 ﻿"use client";
 
 import {
-  AlertTriangle,
-  CalendarDays,
   ClipboardList,
-  History,
   HelpCircle,
-  Home,
-  Loader2,
-  LockKeyhole,
-  LogOut,
-  Mail,
   RefreshCw,
   Settings2,
-  ShieldAlert,
-  Trophy,
-  Wallet
+  ShieldAlert
 } from "lucide-react";
-import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -40,15 +29,17 @@ import { UpvalueImportPanel } from "@/components/gamification/upvalue-import-pan
 import { UserManagementPanel } from "@/components/gamification/user-management-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Card } from "@/components/ui/card";
+import { Loading } from "@/components/ui/loading";
+import { SummaryCard } from "@/components/ui/stat-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusToast } from "@/components/ui/status-toast";
-import { api, setAuthToken } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useClosureActions } from "@/hooks/use-closure-actions";
 import { useClosureData } from "@/hooks/use-closure-data";
 import { useConfirm } from "@/hooks/use-confirm";
-import { formatMoney, formatNumber, formatPoints, leadershipAverageSourceLabel, leadershipRoleLabel, pluralizeFilial } from "@/lib/gamificacao-helpers";
+import { formatMoney, formatNumber, formatPoints, leadershipAverageSourceLabel, leadershipRoleLabel } from "@/lib/gamificacao-helpers";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type {
   CalculationRunHistory,
@@ -103,25 +94,32 @@ export default function GamificacaoPage() {
       title="Gamificação Operacional"
       subtitle="Remuneração variável, fechamento e auditoria de produtividade"
     >
-      <Suspense
-        fallback={
-          <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
-            Carregando Gamificação...
-          </p>
-        }
-      >
-        <GamificacaoPageContent />
-      </Suspense>
+      {(user) => (
+        <Suspense
+          fallback={
+            <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
+              Carregando Gamificação...
+            </p>
+          }
+        >
+          <GamificacaoPageContent user={user} />
+        </Suspense>
+      )}
     </WorkspaceAppShell>
   );
 }
 
-function GamificacaoPageContent() {
+// A casca (`WorkspaceAppShell`) resolve autenticação, cabeçalho, sino, sair e o menu lateral -
+// aqui só chega o usuário pronto (mesmo padrão de app/suporte/page.tsx). Achado real da auditoria
+// de layout (2026-09-17): esta tela refazia a própria autenticação (`api.me()`, estado
+// `currentUser`/`authChecked`, tela de login própria) por cima da que a casca já fazia - a duplicação
+// nunca aparecia (a casca sempre resolve primeiro), mas 17 pontos do arquivo dependiam de
+// `currentUser?.` por causa disso.
+function GamificacaoPageContent({ user }: { user: AuthUser }) {
   const { confirm, ConfirmDialog } = useConfirm();
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [authChecked, setAuthChecked] = useState(false);
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
+  // Não é mais sobre autenticação (a casca já garante isso) - só sinaliza que o bootstrap inicial
+  // (dashboard + período de referência) terminou, pra não disparar o primeiro `loadAll` cedo demais.
+  const [bootstrapReady, setBootstrapReady] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [bootstrap, setBootstrap] = useState<DashboardBootstrap | null>(null);
   const [calculationRuns, setCalculationRuns] = useState<CalculationRunHistory[]>([]);
@@ -146,7 +144,6 @@ function GamificacaoPageContent() {
   const [slaRules, setSlaRules] = useState<SlaPenaltyRule[]>([]);
   const [pointValue, setPointValue] = useState("");
   const [loading, setLoading] = useState(true);
-  const [summaryLoading, setSummaryLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,7 +192,7 @@ function GamificacaoPageContent() {
   const calculationInFlightRef = useRef(false);
   const [tabLoading, setTabLoading] = useState<Record<string, boolean>>({});
 
-  const can = useCallback((permission: string) => Boolean(currentUser?.permissions.some((item) => item === permission)), [currentUser]);
+  const can = useCallback((permission: string) => user.permissions.some((item) => item === permission), [user]);
 
   const setTabBusy = useCallback((key: string, value: boolean) => {
     setTabLoading((current) => ({ ...current, [key]: value }));
@@ -376,7 +373,7 @@ function GamificacaoPageContent() {
   }, [leadershipProfilesLoaded, setTabBusy]);
 
   const loadUsersData = useCallback(async () => {
-    if (!currentUser?.permissions.includes("users:manage") || usersLoaded) return;
+    if (!user.permissions.includes("users:manage") || usersLoaded) return;
     setTabBusy("users", true);
     try {
       setUsers(await api.users());
@@ -385,7 +382,7 @@ function GamificacaoPageContent() {
     } finally {
       setTabBusy("users", false);
     }
-  }, [currentUser?.permissions, setTabBusy, usersLoaded]);
+  }, [user.permissions, setTabBusy, usersLoaded]);
 
   const refreshRulesConfigData = useCallback(async (runId?: number) => {
     const [groupData, subjectRuleData, recurrenceRuleData, slaData, healthData, settingsData] = await Promise.all([
@@ -445,17 +442,15 @@ function GamificacaoPageContent() {
     period: AnalysisPeriod = analysisPeriod,
     options: { refreshRuleBasics?: boolean; prefetchedSummary?: ReturnType<typeof api.summary> } = {},
   ) => {
-    if (!currentUser) return;
     const refreshRuleBasics = options.refreshRuleBasics ?? true;
     const loadKey = `${period.reference_month ?? ""}:${period.reference_year ?? ""}:${period.regional ?? ""}:${refreshRuleBasics}`;
     if (loadAllKeyRef.current === loadKey) return;
     loadAllKeyRef.current = loadKey;
     setError(null);
-    setSummaryLoading(true);
     resetLazyData();
     try {
-      // `prefetchedSummary` é o pedido disparado na montagem, em paralelo com `me`/`bootstrap` -
-      // usar a mesma promessa evita um segundo GET idêntico logo em seguida.
+      // `prefetchedSummary` é o pedido disparado na montagem, em paralelo com o bootstrap - usar a
+      // mesma promessa evita um segundo GET idêntico logo em seguida.
       const summaryData = await (options.prefetchedSummary ?? api.summary(period));
       setSummary(summaryData);
       setPointValue(String(summaryData.point_value ?? ""));
@@ -470,15 +465,14 @@ function GamificacaoPageContent() {
       }
     } finally {
       loadAllKeyRef.current = null;
-      setSummaryLoading(false);
       setLoading(false);
     }
-  }, [analysisPeriod, currentUser, resetLazyData]);
+  }, [analysisPeriod, resetLazyData]);
 
-  // Summary do último fechamento pedido JÁ na montagem, em paralelo com `me` + `bootstrap`.
-  // Sem parâmetro, `/dashboard/summary` resolve o mesmo `latest_run` que o `bootstrap`, então
-  // esperar o bootstrap terminar para só então pedir o summary era uma ida-e-volta inteira de
-  // espera gratuita - e o summary é o único pedido pesado da tela (achado da Fase 1, 2026-09-03).
+  // Summary do último fechamento pedido JÁ na montagem, em paralelo com o `bootstrap`. Sem
+  // parâmetro, `/dashboard/summary` resolve o mesmo `latest_run` que o `bootstrap`, então esperar
+  // o bootstrap terminar para só então pedir o summary era uma ida-e-volta inteira de espera
+  // gratuita - e o summary é o único pedido pesado da tela (achado da Fase 1, 2026-09-03).
   const prefetchedSummaryRef = useRef<ReturnType<typeof api.summary> | null>(null);
 
   useEffect(() => {
@@ -487,9 +481,9 @@ function GamificacaoPageContent() {
     prefetchedSummaryRef.current = api.summary({});
     // Erro aqui é tratado por quem consumir a promessa (`loadAll`); só evita "unhandled rejection".
     prefetchedSummaryRef.current.catch(() => undefined);
-    Promise.all([api.me(), api.dashboardBootstrap().catch(() => null)])
-      .then(([user, bootstrapData]) => {
-        setCurrentUser(user);
+    api.dashboardBootstrap()
+      .catch(() => null)
+      .then((bootstrapData) => {
         setBootstrap(bootstrapData);
         if (bootstrapData?.reference_month && bootstrapData?.reference_year) {
           setAnalysisPeriod({
@@ -498,13 +492,8 @@ function GamificacaoPageContent() {
             regional: bootstrapData.regional ?? null
           });
         }
-      })
-      .catch(() => {
-        setAuthToken(null);
-        setCurrentUser(null);
-        setBootstrap(null);
-      })
-      .finally(() => setAuthChecked(true));
+        setBootstrapReady(true);
+      });
   }, []);
 
   // Recalcular a bonificação é efeito colateral de salvar/remover uma liderança - o salvamento em
@@ -514,17 +503,14 @@ function GamificacaoPageContent() {
   const refreshLeadershipBonusForCurrentRun = useCallback(async () => {
     const runId = summary?.run?.id;
     const runStatus = summary?.run?.status;
-    if (!runId || !can("calculation:run") || currentUser?.role !== "admin") return;
+    if (!runId || !can("calculation:run") || user.role !== "admin") return;
     if (runStatus === "paid" || runStatus === "cancelled") return;
     await api.calculateLeadershipBonus(runId);
     await loadAll(analysisPeriod);
-  }, [analysisPeriod, can, currentUser?.role, loadAll, summary?.run?.id, summary?.run?.status]);
+  }, [analysisPeriod, can, user.role, loadAll, summary?.run?.id, summary?.run?.status]);
 
   useEffect(() => {
-    if (!authChecked || !currentUser) {
-      setLoading(false);
-      return;
-    }
+    if (!bootstrapReady) return;
     if (initialLoadRef.current) return;
     initialLoadRef.current = true;
     setLoading(true);
@@ -533,7 +519,7 @@ function GamificacaoPageContent() {
     loadAll(undefined, { prefetchedSummary })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [authChecked, currentUser, loadAll]);
+  }, [bootstrapReady, loadAll]);
 
   useEffect(() => {
     if ((summary || bootstrap) && loading) {
@@ -542,8 +528,6 @@ function GamificacaoPageContent() {
   }, [bootstrap, loading, summary]);
 
   useEffect(() => {
-    if (!currentUser) return;
-
     if (activeTab === "history") {
       void loadHistoryData().catch((err: Error) => setError(err.message));
       return;
@@ -590,7 +574,6 @@ function GamificacaoPageContent() {
   }, [
     activeTab,
     configTab,
-    currentUser,
     loadCollaboratorRegistryData,
     loadHistoryData,
     loadLeadershipProfilesData,
@@ -843,7 +826,15 @@ function GamificacaoPageContent() {
     setSelectedRegionals(values.map((value) => normalizeRegional(value)).filter(Boolean));
   }
 
-  async function withFeedback<T>(action: () => Promise<T>, success: string | (() => string)): Promise<T | undefined> {
+  // `rethrow: true` propaga o erro depois de exibi-lo (em vez de engolir e devolver `undefined`),
+  // para chamadores que encadeiam `.then()` para fechar um drawer/modal só em caso de sucesso -
+  // sem isso o `.then()` sempre disparava, fechando a tela mesmo quando a ação tinha falhado
+  // (achado da auditoria: acontecia nos 4 fluxos de liderança que usam esse padrão).
+  async function withFeedback<T>(
+    action: () => Promise<T>,
+    success: string | (() => string),
+    options?: { rethrow?: boolean }
+  ): Promise<T | undefined> {
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -853,6 +844,7 @@ function GamificacaoPageContent() {
       return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro inesperado.");
+      if (options?.rethrow) throw err;
       return undefined;
     } finally {
       setBusy(false);
@@ -867,7 +859,7 @@ function GamificacaoPageContent() {
 
   const { advanceRunStatus, exportPaymentWorkbook } = useClosureActions({
     summary,
-    currentUser,
+    currentUser: user,
     selectedRegionals,
     confirm,
     withFeedback,
@@ -997,90 +989,6 @@ function GamificacaoPageContent() {
     }, "Período de análise alterado.");
   }
 
-  async function login() {
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await api.login(loginEmail, loginPassword);
-      setAuthToken(result.access_token);
-      setCurrentUser(result.user);
-      setLoginPassword("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Não foi possível entrar.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function logout() {
-    setAuthToken(null);
-    setCurrentUser(null);
-    setSummary(null);
-    setActiveTab("closure");
-  }
-
-  if (!authChecked) {
-    return <main className="h-dvh bg-slate-50 p-6 text-sm text-slate-500">Verificando acesso...</main>;
-  }
-
-  if (!currentUser) {
-    return (
-      <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 py-8">
-        <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white px-6 py-8 shadow-xl shadow-slate-200/70 sm:px-8">
-          <div className="flex flex-col items-center text-center">
-            <img src="/brand/uni-logo.png" alt="UNI Internet" className="h-16 w-auto object-contain" />
-            <h1 className="mt-6 text-2xl font-semibold tracking-normal text-slate-950">Gamificação UNI OPR</h1>
-            <p className="mt-2 text-sm text-slate-500">Acesse sua conta para continuar.</p>
-          </div>
-
-          <div className="mt-8 grid gap-4">
-            <label className="grid gap-2 text-sm font-medium text-slate-700">
-              E-mail
-              <div className="relative">
-                <Mail className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <Input
-                  placeholder="Digite seu e-mail"
-                  value={loginEmail}
-                  onChange={(event) => setLoginEmail(event.target.value)}
-                  className="h-11 rounded-lg border-slate-200 bg-slate-50 pl-10 shadow-sm transition focus-visible:bg-white focus-visible:ring-blue-500"
-                />
-              </div>
-            </label>
-            <label className="grid gap-2 text-sm font-medium text-slate-700">
-              Senha
-              <div className="relative">
-                <LockKeyhole className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <Input
-                  placeholder="Digite sua senha"
-                  type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") void login();
-                  }}
-                  className="h-11 rounded-lg border-slate-200 bg-slate-50 pl-10 shadow-sm transition focus-visible:bg-white focus-visible:ring-blue-500"
-                />
-              </div>
-            </label>
-            {error ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-                {error}
-              </div>
-            ) : null}
-            <Button
-              onClick={login}
-              disabled={busy || !loginEmail.trim() || !loginPassword.trim()}
-              className="h-11 rounded-lg bg-primary font-semibold text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:bg-slate-300"
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {busy ? "Entrando..." : "Entrar"}
-            </Button>
-          </div>
-        </section>
-      </main>
-    );
-  }
-
   const visibleTabs = new Set<string>(["closure", "ranking", "audit", "balance", "history", "import"]);
   if (can("orders:import") || can("scoring:write")) visibleTabs.add("pending");
   if (can("scoring:write")) visibleTabs.add("config");
@@ -1114,7 +1022,7 @@ function GamificacaoPageContent() {
       <div className="flex w-full flex-col gap-4">
 
         {loading && !bootstrap ? (
-          <section className="overflow-hidden rounded-[24px] border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-5 py-5">
               <div className="flex flex-col gap-2">
                 <div className="h-3 w-32 animate-pulse rounded-full bg-slate-200" />
@@ -1126,7 +1034,7 @@ function GamificacaoPageContent() {
             <div className="grid gap-4 p-5">
               <div className="grid gap-3 lg:grid-cols-3">
                 {[0, 1, 2].map((item) => (
-                  <div key={item} className="rounded-[22px] border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                  <div key={item} className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                     <div className="h-3 w-24 animate-pulse rounded-full bg-slate-200" />
                     <div className="mt-4 h-9 w-40 animate-pulse rounded-full bg-slate-200" />
                     <div className="mt-3 h-4 w-48 animate-pulse rounded-full bg-slate-100" />
@@ -1136,14 +1044,14 @@ function GamificacaoPageContent() {
 
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {[0, 1, 2, 3].map((item) => (
-                  <div key={item} className="rounded-[20px] border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+                  <div key={item} className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
                     <div className="h-3 w-20 animate-pulse rounded-full bg-slate-200" />
                     <div className="mt-4 h-8 w-28 animate-pulse rounded-full bg-slate-200" />
                   </div>
                 ))}
               </div>
 
-              <div className="rounded-[20px] border border-dashed border-slate-200 bg-slate-50/70 px-4 py-4 text-sm text-slate-500">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-4 text-sm text-slate-500">
                 Carregando motor de remuneração...
               </div>
             </div>
@@ -1153,11 +1061,13 @@ function GamificacaoPageContent() {
             <TabsContent value="closure" className="mt-0 flex-1 pr-1">
               {activeTab === "closure" ? (
                 !summary ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo executivo e indicadores do fechamento...</div>
+                  <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                    <Loading label="Carregando resumo executivo e indicadores do fechamento..." />
+                  </Card>
                 ) : (
                   <ClosureTab
                     summary={summary}
-                    currentUser={currentUser}
+                    currentUser={user}
                     can={can}
                     busy={busy}
                     closure={closure}
@@ -1187,9 +1097,13 @@ function GamificacaoPageContent() {
             <TabsContent value="ranking" className="mt-0 flex-1 overflow-visible">
               {activeTab === "ranking" ? (
                 !summary ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado para montar o ranking...</div>
+                  <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                    <Loading label="Carregando resumo consolidado para montar o ranking..." />
+                  </Card>
                 ) : !serviceOrdersLoaded && tabLoading.serviceOrders ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando base detalhada do ranking...</div>
+                  <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                    <Loading label="Carregando base detalhada do ranking..." />
+                  </Card>
                 ) : (
                   <RankingTab
                     summary={summary}
@@ -1237,9 +1151,13 @@ function GamificacaoPageContent() {
             <TabsContent value="pending" className="mt-0 flex-1 pr-1">
               {activeTab === "pending" ? (
                 !summary ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado antes de abrir as pendências...</div>
+                  <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                    <Loading label="Carregando resumo consolidado antes de abrir as pendências..." />
+                  </Card>
                 ) : !pendingDataLoaded && tabLoading.pending ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando assuntos e diagnósticos pendentes...</div>
+                  <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                    <Loading label="Carregando assuntos e diagnósticos pendentes..." />
+                  </Card>
                 ) : (
                 <div className="grid gap-4">
                   <section className="overflow-hidden rounded-lg border border-amber-200 bg-white shadow-sm">
@@ -1381,7 +1299,7 @@ function GamificacaoPageContent() {
             <TabsContent value="config" className="mt-0 flex-1 pr-1">
               {activeTab === "config" ? (
                 <Tabs value={configTab} onValueChange={setConfigTab} className="grid gap-4">
-                  <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
                     <TabsList
                       className={`grid h-auto gap-2 rounded-2xl bg-slate-50 p-1 ${
                         can("users:manage") ? "md:grid-cols-4" : "md:grid-cols-3"
@@ -1396,7 +1314,9 @@ function GamificacaoPageContent() {
 
                   <TabsContent value="rules" className="mt-0">
                     {!rulesSupportLoaded && tabLoading.configRules ? (
-                      <div className="panel p-8 text-sm text-slate-500">Carregando regras, assuntos e diagnósticos...</div>
+                      <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                        <Loading label="Carregando regras, assuntos e diagnósticos..." />
+                      </Card>
                     ) : (
                     <LogicConfigurationPanel
                     groups={groups}
@@ -1581,7 +1501,9 @@ function GamificacaoPageContent() {
 
                   <TabsContent value="collaborators" className="mt-0">
                     {!collaboratorRegistryEverLoadedRef.current && tabLoading.collaborators ? (
-                      <div className="panel p-8 text-sm text-slate-500">Carregando cadastro de colaboradores...</div>
+                      <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                        <Loading label="Carregando cadastro de colaboradores..." />
+                      </Card>
                     ) : (
                     <CollaboratorRegistryPanel
                       registry={collaboratorRegistry}
@@ -1674,18 +1596,21 @@ function GamificacaoPageContent() {
                   </TabsContent>
                   <TabsContent value="leadership" className="mt-0">
                     {!leadershipProfilesEverLoadedRef.current && tabLoading.leadership ? (
-                      <div className="panel p-8 text-sm text-slate-500">Carregando liderança e bonificação...</div>
+                      <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                        <Loading label="Carregando liderança e bonificação..." />
+                      </Card>
                     ) : (
                       <LeadershipBonusPanel
                         roleProfiles={leadershipRoleProfiles}
                         profiles={leadershipProfiles}
                         regionalOptions={collaboratorRegionalOptions}
                         readOnly={!can("scoring:write")}
+                        confirm={confirm}
                         onCreateRoleProfile={(payload) =>
                           withFeedback(async () => {
                             const created = await api.createLeadershipRoleProfile(payload);
                             setLeadershipRoleProfiles((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
-                          }, "Perfil de liderança criado.")
+                          }, "Perfil de liderança criado.", { rethrow: true })
                         }
                         onSaveRoleProfile={(roleProfile) =>
                           withFeedback(async () => {
@@ -1694,7 +1619,7 @@ function GamificacaoPageContent() {
                             const leaders = await api.leadershipProfiles();
                             setLeadershipProfiles(leaders);
                             await refreshLeadershipBonusForCurrentRun();
-                          }, "Perfil de liderança salvo.")
+                          }, "Perfil de liderança salvo.", { rethrow: true })
                         }
                         onDeleteRoleProfile={(roleProfile) =>
                           withFeedback(async () => {
@@ -1707,7 +1632,7 @@ function GamificacaoPageContent() {
                             const created = await api.createLeadershipProfile(payload);
                             setLeadershipProfiles((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name, "pt-BR")));
                             await refreshLeadershipBonusForCurrentRun();
-                          }, "Liderança cadastrada e bonificação atualizada.")
+                          }, "Liderança cadastrada e bonificação atualizada.", { rethrow: true })
                         }
                         onSave={(profile) =>
                           withFeedback(async () => {
@@ -1725,7 +1650,7 @@ function GamificacaoPageContent() {
                             });
                             setLeadershipProfiles((current) => replaceById(current, profile.id, saved));
                             await refreshLeadershipBonusForCurrentRun();
-                          }, "Liderança salva e bonificação atualizada.")
+                          }, "Liderança salva e bonificação atualizada.", { rethrow: true })
                         }
                         onDelete={(profile) =>
                           withFeedback(async () => {
@@ -1740,7 +1665,9 @@ function GamificacaoPageContent() {
                   {can("users:manage") ? (
                     <TabsContent value="users" className="mt-0">
                       {!usersEverLoadedRef.current && tabLoading.users ? (
-                        <div className="panel p-8 text-sm text-slate-500">Carregando usuários...</div>
+                        <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                          <Loading label="Carregando usuários..." />
+                        </Card>
                       ) : (
                       <UserManagementPanel
                         users={users}
@@ -1857,9 +1784,13 @@ function GamificacaoPageContent() {
                   </TabsList>
                   <TabsContent value="scoring" className="mt-0 flex min-h-0 flex-1 flex-col">
                     {!summary ? (
-                      <div className="panel p-8 text-sm text-slate-500">Carregando resumo consolidado para habilitar a auditoria...</div>
+                      <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                        <Loading label="Carregando resumo consolidado para habilitar a auditoria..." />
+                      </Card>
                     ) : !serviceOrdersLoaded && tabLoading.serviceOrders ? (
-                      <div className="panel p-8 text-sm text-slate-500">Carregando filtros detalhados da auditoria...</div>
+                      <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                        <Loading label="Carregando filtros detalhados da auditoria..." />
+                      </Card>
                     ) : (
                       <AuditPanel
                         calculationRunId={summary?.run?.id}
@@ -1871,9 +1802,9 @@ function GamificacaoPageContent() {
                     )}
                   </TabsContent>
                   <TabsContent value="trail" className="mt-0 min-h-0 flex-1 overflow-auto">
-                    <div className="panel p-4">
+                    <Card className="rounded-2xl border-slate-200 bg-white p-4 shadow-sm">
                       <AuditTrailPanel />
-                    </div>
+                    </Card>
                   </TabsContent>
                 </Tabs>
               ) : null}
@@ -1882,7 +1813,7 @@ function GamificacaoPageContent() {
             <TabsContent value="balance" className="mt-0 flex-1 pr-1">
               {activeTab === "balance" ? (
                 <PointBalancePanel
-                  isAdmin={currentUser?.role === "admin"}
+                  isAdmin={user.role === "admin"}
                   calculationRunId={summary?.run?.id}
                   referenceMonth={summary?.run?.reference_month ?? analysisPeriod.reference_month}
                   referenceYear={summary?.run?.reference_year ?? analysisPeriod.reference_year}
@@ -1894,7 +1825,9 @@ function GamificacaoPageContent() {
             <TabsContent value="history" className="mt-0 flex flex-1 flex-col pr-1">
               {activeTab === "history" ? (
                 !historyLoaded && tabLoading.history ? (
-                  <div className="panel p-8 text-sm text-slate-500">Carregando histórico de apurações...</div>
+                  <Card className="rounded-2xl border-slate-200 bg-white p-8 shadow-sm">
+                    <Loading label="Carregando histórico de apurações..." />
+                  </Card>
                 ) : (
                   <div className="space-y-4">
                     <ClosureHistoryPanel runs={calculationRuns} />
@@ -1921,9 +1854,9 @@ function GamificacaoPageContent() {
         rulesVersionId={summary?.run?.rules_version_id ?? null}
         runStatus={summary?.run?.status ?? null}
         canEmitStatement={
-          currentUser?.role === "admin" ||
+          user.role === "admin" ||
           can("admin:users:write") ||
-          (currentUser?.collaborator_id != null && currentUser.collaborator_id === selectedScore?.collaborator_id)
+          (user.collaborator_id != null && user.collaborator_id === selectedScore?.collaborator_id)
         }
         rankingPosition={
           selectedScore
@@ -1944,31 +1877,32 @@ function GamificacaoPageContent() {
         {selectedLeadershipResult ? (
           <>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Pessoas na base</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatNumber(leadershipAudit.collaborators.length)}</div>
-                <div className="mt-1 text-sm text-slate-500">Entraram na média deste líder.</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Soma dos pontos finais</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatNumber(leadershipAudit.totalFinalPoints)}</div>
-                <div className="mt-1 text-sm text-slate-500">Total antes de dividir pela base.</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Média final</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatPoints(selectedLeadershipResult.average_final_points)}</div>
-                <div className="mt-1 text-sm text-slate-500">Soma dos pontos finais / base.</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Base financeira</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-950">{formatMoney(selectedLeadershipResult.base_amount)}</div>
-                <div className="mt-1 text-sm text-slate-500">{formatMoney(selectedLeadershipResult.point_value)}/pt aplicado sobre a média.</div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Valor a pagar</div>
-                <div className="mt-2 text-2xl font-semibold text-uni-royal">{formatMoney(selectedLeadershipResult.bonus_amount)}</div>
-                <div className="mt-1 text-sm text-slate-500">Base x multiplicador {formatNumber(selectedLeadershipResult.multiplier)}x.</div>
-              </div>
+              <SummaryCard
+                label="Pessoas na base"
+                value={formatNumber(leadershipAudit.collaborators.length)}
+                hint="Entraram na média deste líder."
+              />
+              <SummaryCard
+                label="Soma dos pontos finais"
+                value={formatNumber(leadershipAudit.totalFinalPoints)}
+                hint="Total antes de dividir pela base."
+              />
+              <SummaryCard
+                label="Média final"
+                value={formatPoints(selectedLeadershipResult.average_final_points)}
+                hint="Soma dos pontos finais / base."
+              />
+              <SummaryCard
+                label="Base financeira"
+                value={formatMoney(selectedLeadershipResult.base_amount)}
+                hint={`${formatMoney(selectedLeadershipResult.point_value)}/pt aplicado sobre a média.`}
+              />
+              <SummaryCard
+                label="Valor a pagar"
+                value={formatMoney(selectedLeadershipResult.bonus_amount)}
+                hint={`Base x multiplicador ${formatNumber(selectedLeadershipResult.multiplier)}x.`}
+                accent="highlight"
+              />
             </div>
 
             <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-slate-700">

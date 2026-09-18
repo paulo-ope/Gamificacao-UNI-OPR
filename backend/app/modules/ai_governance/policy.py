@@ -82,6 +82,28 @@ class EffectivePolicy:
             return False
         return effective.allows(capability)
 
+    def field_allowed_or_uncatalogued(self, entity: str, field_name: str, capability: FieldCapability) -> bool:
+        """Mesmo que `field_allowed`, mas um campo NÃO catalogado conta como PERMITIDO, não negado.
+
+        Existe só para reconstruir a lista completa de campos do modo `response_mode="full"`
+        (`resolve_*_output_fields`/`_resolve_order_output_fields`) sem quebrar campos calculados em
+        Python que nunca tiveram entrada em `field_registry.py` (ex.: `distance_km`, `sla_risk`,
+        `team_model` em `ai/queries.py::AI_SEARCH_ITEM_FIELDS` - "ficam fora da governança de
+        campos, sempre disponíveis, como já é hoje"). `field_allowed` nega por padrão porque seu
+        uso é validar um PEDIDO EXPLÍCITO de nome (`fields=[...]`, onde um nome desconhecido deve
+        ser rejeitado, não silenciosamente aceito) - aqui o objetivo é o oposto: reconstruir o
+        conjunto default de tudo que já é sempre devolvido, sem tirar nada que nunca dependeu do
+        catálogo pra aparecer.
+
+        Achado P0-3 da auditoria de 2026-09-15: sem isto, `response_mode="full"` (o modo PADRÃO)
+        não tinha como respeitar `AiFieldPermission` sem também esconder por engano todo campo
+        calculado - a correção real do achado é usar isto, não voltar a aceitar `None`/"sem
+        filtro" (que é o próprio bug: a governança nunca se aplicava no caminho mais comum)."""
+        effective = self.fields.get((entity, field_name))
+        if effective is None:
+            return True
+        return effective.allows(capability)
+
     def selectable_fields(self, entity: str) -> list[str]:
         return sorted(
             field_name

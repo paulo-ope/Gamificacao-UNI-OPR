@@ -3,7 +3,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.models import AppSetting, CalculationRun, CollaboratorScore, HealthRule, ScoringGroup, ScoringSubjectRule, ServiceOrder
+from app.models import (
+    AppSetting,
+    CalculationRun,
+    CollaboratorScore,
+    HealthRule,
+    ScoringGroup,
+    ScoringSubjectRule,
+    ServiceOrder,
+    SlaPenaltyRule,
+)
 from app.services.calculation_closure import ensure_status_transition_allowed, pick_run_by_status_priority, update_run_status
 from sqlalchemy import select
 
@@ -212,6 +221,53 @@ def test_calculate_scores_populates_financial_breakdowns_from_cached_score_conte
     assert summary["cost_by_regional"] == [{"regional": "UNI SUL", "orders": 1, "estimated_payment": 20.0}]
     assert summary["cost_by_group"][0]["estimated_payment"] == 20.0
     assert summary["cost_by_collaborator"][0]["collaborator_id"] == collaborator.id
+
+
+def test_lost_payment_card_applies_the_same_health_multiplier_as_the_real_payment(client, db_session, make_collaborator):
+    """Regression (auditoria 2026-09-15): o card 'lost_payment' (dinheiro que a penalidade tirou)
+    somava `penalty_points * point_value` direto, sem aplicar o multiplicador de saude da regional -
+    ao contrario de `final_points`/`estimated_payment`, que sempre usam esse multiplicador
+    (`scoring_detail.summarize_details`). Numa regional com multiplicador 0.5, o card mostrava o
+    DOBRO do valor que a penalidade de fato tirou do pagamento."""
+    collaborator = make_collaborator(name="Tecnico Penalizado", regional="UNI SUL", registered=True)
+    group = ScoringGroup(name="Manutencao", default_points=15.0, active=True)
+    db_session.add(group)
+    db_session.flush()
+    db_session.add(ScoringSubjectRule(group_id=group.id, os_type="Manutencao", os_subject="Reparo", use_group_default=True, active=True))
+    db_session.add(AppSetting(key="point_value", value="2.00"))
+    # Unica regra de saude, com piso 0: aplica o mesmo multiplicador (0.5) para qualquer taxa de SLA
+    # da regional, eliminando qualquer dependencia da matematica de saude neste teste.
+    db_session.add(HealthRule(name="Media", min_sla=0, max_recurrence_rate=100, multiplier=0.5, active=True))
+    db_session.add(
+        SlaPenaltyRule(name="SLA fora do prazo", condition_type="status_sla_out_of_time", penalty_type="subtract_points", penalty_value=3, active=True)
+    )
+    db_session.add(
+        ServiceOrder(
+            os_code="OS-PENALTY-1", contract_id="C-1", customer_login="cli.pen", customer_name="Cliente Pen",
+            collaborator_id=collaborator.id, regional="UNI SUL", os_type="Manutencao", os_subject="Reparo",
+            diagnosis="Falha", status="Concluida", sla_status="Fora do prazo",
+            opened_at=datetime(2026, 6, 5, tzinfo=timezone.utc), closed_at=datetime(2026, 6, 5, tzinfo=timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    resp = client.post(
+        "/api/calculation-runs/calculate",
+        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True},
+    )
+    assert resp.status_code == 200, resp.text
+    result = resp.json()
+
+    score = next(s for s in result["scores"] if s["collaborator_id"] == collaborator.id)
+    assert score["health_multiplier"] == 0.5
+    penalty_points = score["gross_points"] - score["net_points"]
+    assert penalty_points == 3.0, "sanity: a regra de SLA deve ter cortado 3 pontos"
+
+    cards = result["result_summary"]["cards"]
+    assert cards["lost_points"] == 3.0
+    assert cards["lost_payment"] == round(3.0 * 2.00 * 0.5, 2), (
+        "lost_payment deve usar o multiplicador de saude do colaborador (0.5), nao tratar a penalidade como se valesse 1x"
+    )
 
 
 def test_marking_run_as_paid_is_blocked_while_unregistered_collaborator_has_payable_amount(db_session, admin_user, make_collaborator):

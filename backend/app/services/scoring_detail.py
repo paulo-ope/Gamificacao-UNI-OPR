@@ -1436,8 +1436,16 @@ def summarize_audit_details(
     gross = round(sum(float(item["base_points"]) for item in details), 2)
     penalty = round(sum(float(item["penalty_points"]) for item in details), 2)
     net = round(sum(float(item["net_points"]) for item in details), 2)
+    registered = sum(
+        1 for item in details if is_identified_collaborator_detail(item) and item.get("collaborator_is_registered")
+    )
     return {
         "total_service_orders": len(details),
+        # Recorte que a gamificacao remunera, dentro do que sobrou dos filtros aplicados. Com
+        # `only_registered` ligado, `registered_service_orders == total_service_orders`; o
+        # tamanho do que ficou de fora vem em `registration_scope`, no nivel do periodo.
+        "registered_service_orders": registered,
+        "unregistered_service_orders": len(details) - registered,
         "scored_service_orders": sum(1 for item in details if item["is_scored"]),
         "unscored_service_orders": sum(1 for item in details if item["is_unscored"]),
         "penalized_service_orders": sum(1 for item in details if item["is_penalized"]),
@@ -1616,8 +1624,16 @@ def filter_details(
     group_id: int | None = None,
     collaborator_id: int | None = None,
     regional: str | None = None,
+    only_registered: bool = False,
 ) -> list[dict[str, Any]]:
     filtered = details
+    if only_registered:
+        # Mesma regra do ranking e do pagamento: so O.S. de executante com cadastro concluido.
+        filtered = [
+            item
+            for item in filtered
+            if is_identified_collaborator_detail(item) and item.get("collaborator_is_registered")
+        ]
     if collaborator_id:
         filtered = [item for item in filtered if int(item["collaborator_id"]) == collaborator_id]
     if regional:
@@ -1771,6 +1787,7 @@ def get_period_audit(
     point_value: float | None = None,
     page: int = 1,
     page_size: int = 100,
+    only_registered: bool = True,
 ) -> dict[str, Any]:
     with performance_step("audit.get_period_audit", "load_period_orders"):
         period_base_orders = period_orders(db, reference_month, reference_year, regional)
@@ -1809,6 +1826,7 @@ def get_period_audit(
             group_id=group_id,
             collaborator_id=collaborator_id,
             regional=regional,
+            only_registered=only_registered,
         )
     requested_group_mode = audit_group_mode if audit_group_mode in {"group", "subject", "regional", "collaborator", "status"} else "group"
     with performance_step("audit.get_period_audit", "group_summaries"):
@@ -1832,11 +1850,22 @@ def get_period_audit(
     paginated = filtered[start : start + page_size]
     with performance_step("audit.get_period_audit", "summarize"):
         summary = summarize_audit_details(db, filtered, period_base_orders, value_per_point)
+    # Recorte de cadastro do PERIODO, independente dos filtros aplicados: e o que permite a tela
+    # dizer "X O.S. de tecnico sem cadastro ficaram fora" mesmo com `only_registered` ligado.
+    period_registered = sum(
+        1 for order in period_base_orders if order.collaborator and order.collaborator.is_registered
+    )
     return {
         "period": {
             "reference_month": reference_month,
             "reference_year": reference_year,
             "regional": regional,
+        },
+        "registration_scope": {
+            "only_registered": bool(only_registered),
+            "period_total_service_orders": len(period_base_orders),
+            "period_registered_service_orders": period_registered,
+            "period_unregistered_service_orders": len(period_base_orders) - period_registered,
         },
         "summary": summary,
         "orders": paginated,

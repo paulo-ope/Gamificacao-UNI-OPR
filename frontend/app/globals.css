@@ -32,6 +32,17 @@
     --border: 222 56% 87%;
     --input: 222 56% 87%;
     --ring: 179 100% 50%;
+
+    /* Altura real do <header> fixo de `WorkspaceAppShell` (components/workspace/app-shell.tsx) -
+       fonte ÚNICA para qualquer elemento sticky que precise começar logo abaixo dele (barra de
+       filtros, avisos de drill-down etc). O valor aqui é só o fallback pré-medição (evita "pulo"
+       antes do primeiro layout); o app-shell mede a altura real via ResizeObserver e sobrescreve
+       esta variável no <html> a cada render - se o header mudar de altura por qualquer motivo
+       (padding, quebra de linha, nova ação no cabeçalho), todo consumidor se ajusta sozinho.
+       Achado real, 2026-09-14: `top-[65px]`/`top-[79px]` copiados à mão em 3 arquivos diferentes
+       causaram sobreposição visual real em /operacao quando o número não batia com a altura
+       verdadeira do header. */
+    --workspace-header-height: 79px;
   }
 
   * {
@@ -56,20 +67,6 @@
     background: linear-gradient(135deg, var(--uni-midnight) 0%, var(--uni-impact) 52%, var(--uni-turquoise) 100%);
   }
 
-  .uni-gradient-soft {
-    background: linear-gradient(135deg, rgba(45, 95, 255, 0.12) 0%, rgba(39, 217, 191, 0.16) 100%);
-  }
-
-  .uni-surface {
-    @apply border bg-white shadow-sm;
-    border-color: rgba(45, 95, 255, 0.16);
-  }
-
-  .uni-focus {
-    @apply outline-none ring-2 ring-offset-2;
-    --tw-ring-color: var(--uni-cyan);
-  }
-
   .panel {
     @apply overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm;
   }
@@ -88,13 +85,5 @@
 
   .table-frame {
     @apply w-full overflow-x-auto;
-  }
-
-  .erp-control {
-    @apply h-10 rounded-md border border-input bg-white px-3 text-sm;
-  }
-
-  .audit-table-frame {
-    @apply max-h-full min-h-0 overflow-auto bg-white;
   }
 }

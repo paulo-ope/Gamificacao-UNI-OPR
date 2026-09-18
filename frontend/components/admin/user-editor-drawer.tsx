@@ -1,6 +1,6 @@
 "use client";
 
-import { Save } from "lucide-react";
+import { KeyRound, Save } from "lucide-react";
 
 import { AppCheckbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -19,13 +19,32 @@ type Props = {
   onChange: (patch: Partial<UserDraft>) => void;
   onCancel: () => void;
   onSave: () => void;
+  /** Ausente (ou usuário ainda não salvo) esconde o botão - exceção individual precisa de um
+   *  usuário já existente para ter um `id` de destino. */
+  onOpenPermissionOverrides?: () => void;
 };
 
-export function UserEditorDrawer({ userDraft, profiles, operationRegionals, saving, onChange, onCancel, onSave }: Props) {
+export function UserEditorDrawer({
+  userDraft,
+  profiles,
+  operationRegionals,
+  saving,
+  onChange,
+  onCancel,
+  onSave,
+  onOpenPermissionOverrides,
+}: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/30 p-4">
       <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
-        <h3 className="text-lg font-semibold text-slate-950">{userDraft.id === "new" ? "Novo usuário" : "Editar usuário"}</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-lg font-semibold text-slate-950">{userDraft.id === "new" ? "Novo usuário" : "Editar usuário"}</h3>
+          {userDraft.id !== "new" && onOpenPermissionOverrides ? (
+            <Button type="button" size="sm" variant="outline" onClick={onOpenPermissionOverrides}>
+              <KeyRound className="h-3.5 w-3.5" /> Permissões individuais
+            </Button>
+          ) : null}
+        </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <div className="grid gap-2 md:col-span-2">
             <Label>Nome</Label>

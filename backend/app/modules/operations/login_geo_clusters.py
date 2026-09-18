@@ -7,7 +7,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
+from app.models import User
 from app.modules.ai_governance.response_meta import build_meta
+from app.services.regional import regional_scope_or_deny
 
 from .models import OperationLoginCurrentStatus
 
@@ -48,7 +50,7 @@ class OfflineLoginCluster:
         return len(self.logins)
 
 
-def _fetch_recent_disconnections(db: Session, *, window_minutes: int) -> list[OfflineLoginPoint]:
+def _fetch_recent_disconnections(db: Session, *, window_minutes: int, user: User) -> list[OfflineLoginPoint]:
     """Logins que estão 'N' agora E cuja mudança pra 'N' aconteceu dentro de `window_minutes` -
     consulta direta em `operations_login_current_status` (1 linha por login, sempre em dia), não no
     histórico completo. `status_changed_at` já é mantido pelo upsert (`upsert_login_current_status`)
@@ -57,14 +59,18 @@ def _fetch_recent_disconnections(db: Session, *, window_minutes: int) -> list[Of
     motivo de essa tabela existir: a versão anterior desta função escaneava o histórico inteiro e
     levava ~11s com poucas horas de dados de teste)."""
     window_start = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
-    rows = db.execute(
-        select(OperationLoginCurrentStatus).where(
-            OperationLoginCurrentStatus.online == _DISCONNECTED_VALUE,
-            OperationLoginCurrentStatus.status_changed_at >= window_start,
-            OperationLoginCurrentStatus.latitude.is_not(None),
-            OperationLoginCurrentStatus.longitude.is_not(None),
-        )
-    ).scalars().all()
+    conditions = [
+        OperationLoginCurrentStatus.online == _DISCONNECTED_VALUE,
+        OperationLoginCurrentStatus.status_changed_at >= window_start,
+        OperationLoginCurrentStatus.latitude.is_not(None),
+        OperationLoginCurrentStatus.longitude.is_not(None),
+    ]
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return []
+    if allowed_regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
+    rows = db.execute(select(OperationLoginCurrentStatus).where(*conditions)).scalars().all()
     return [
         OfflineLoginPoint(
             login_id=row.login_id,
@@ -205,6 +211,7 @@ MAX_LOGIN_STATUS_RESULTS = 500
 def query_login_status(
     db: Session,
     *,
+    user: User | None,
     logins: list[str] | None = None,
     online_statuses: list[str] | None = None,
     regionals: list[str] | None = None,
@@ -215,8 +222,14 @@ def query_login_status(
 ) -> list[OperationLoginCurrentStatus]:
     """Consulta individual de status de conectividade por login/regional/geografia - sem filtro
     nenhum, limita a `limit` (até `MAX_LOGIN_STATUS_RESULTS`) para nunca devolver a base inteira de
-    logins de uma vez só."""
+    logins de uma vez só. Sempre aplica o escopo regional de `user` (achado P0-2 da auditoria de
+    2026-09-15) - o filtro `regionals` do chamador só recorta DENTRO desse escopo, nunca amplia."""
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return []
     conditions = []
+    if allowed_regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
     if logins:
         conditions.append(OperationLoginCurrentStatus.login.in_(logins))
     if online_statuses:
@@ -241,6 +254,7 @@ def query_login_status(
 def find_offline_login_clusters(
     db: Session,
     *,
+    user: User | None,
     radius_meters: float = 300.0,
     min_cluster_size: int = 3,
     window_minutes: int = 30,
@@ -251,8 +265,11 @@ def find_offline_login_clusters(
     sinal (ver `_DISCONNECTED_VALUE`, motivo de não usar o status estático). `min_cluster_size`
     também é usado como limiar de densidade do DBSCAN (mínimo de vizinhos diretos pra um ponto
     "puxar" um cluster). Retorna só os grupos com `min_cluster_size` ou mais logins, ordenados do
-    maior pro menor."""
-    points = _fetch_recent_disconnections(db, window_minutes=window_minutes)
+    maior pro menor. Não recebe filtro de regional do CLIENTE de propósito (proximidade geográfica
+    é a única dimensão relevante pra detectar rompimento físico) - mas sempre aplica o escopo
+    regional de `user` (achado P0-2 da auditoria de 2026-09-15), senão um gestor regional enxerga
+    cluster de qualquer regional."""
+    points = _fetch_recent_disconnections(db, window_minutes=window_minutes, user=user)
     groups = _cluster_points(points, radius_meters=radius_meters, min_samples=min_cluster_size)
 
     clusters = [
@@ -272,6 +289,7 @@ def find_offline_login_clusters(
 def offline_login_clusters_response(
     db: Session,
     *,
+    user: User | None,
     radius_meters: float = 300.0,
     min_cluster_size: int = 3,
     window_minutes: int = 30,
@@ -281,7 +299,7 @@ def offline_login_clusters_response(
     item 1 do plano de confiabilidade de dado). `find_offline_login_clusters` continua existindo à
     parte porque `login_incident_analysis` a usa direto sobre os dataclasses, sem passar por JSON."""
     clusters = find_offline_login_clusters(
-        db, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
+        db, user=user, radius_meters=radius_meters, min_cluster_size=min_cluster_size, window_minutes=window_minutes
     )
     return {
         "radius_meters": radius_meters,

@@ -5,6 +5,7 @@ import { MANAGEMENT_NAV_ITEMS } from "@/components/management/management-module-
 import { OPERATION_NAV_ITEMS } from "@/components/operations/operations-module-sidebar";
 import { SCHEDULING_NAV_ITEMS } from "@/components/scheduling/scheduling-module-sidebar";
 import { ADMIN_NAV_ITEMS } from "@/components/admin/admin-shared";
+import { LOCALIZA_NAV_ITEMS } from "@/components/localiza/localiza-nav-items";
 import { OPA_NAV_ITEMS, ACTIVE_OPA_TABS } from "@/app/suporte/_components/opa-module-components";
 import type { Permission } from "@/lib/types";
 import type { WorkspaceModule } from "@/lib/module-registry";
@@ -84,6 +85,7 @@ const MANAGEMENT_SCREEN_PERMISSIONS: ScreenPermissionMap = {
 
 const ADMIN_SCREEN_PERMISSIONS: ScreenPermissionMap = {
   profiles: ["admin:roles:read"],
+  permissions: ["admin:permissions:read"],
   modules: ["admin:modules:read"],
   audit: ["admin:audit:read"],
 };
@@ -126,6 +128,11 @@ export function moduleScreens(moduleKey: WorkspaceModule["key"], icon: LucideIco
   }
   if (moduleKey === "admin") {
     return withPermissions(ADMIN_NAV_ITEMS, ADMIN_SCREEN_PERMISSIONS);
+  }
+  if (moduleKey === "localiza") {
+    // As duas telas exigem só `localiza:read` (a permissão do próprio módulo): quem entra no
+    // módulo vê a lista e o mapa; `localiza:manage` controla ações dentro delas, não o acesso.
+    return withPermissions(LOCALIZA_NAV_ITEMS, {});
   }
   if (moduleKey === "intelligence") {
     return INTELLIGENCE_SCREENS.map((screen) => ({

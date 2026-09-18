@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user, permissions_for_user
 from app.db.session import get_db
 from app.models import User, WorkspaceModuleVisibility
+from app.modules.admin.modules_service import effective_modules
 from app.modules.admin.schemas import WorkspaceVisibleModuleOut
-from app.modules.registry import list_modules
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
@@ -36,8 +36,11 @@ def visible_modules(
         for item in db.scalars(select(WorkspaceModuleVisibility).where(WorkspaceModuleVisibility.user_id == user.id))
     }
 
+    # `effective_modules` aplica os ajustes do admin (nome, descrição, status e ordem, ver
+    # `admin/modules_service.py`) - a navegação do usuário e a tela de Administração leem a MESMA
+    # fonte, então não existe módulo "desativado na Administração e visível na barra lateral".
     visible = []
-    for module in list_modules():
+    for module in effective_modules(db):
         if module.status != "active" or module.required_permission not in permissions:
             continue
         if module.key in user_overrides:

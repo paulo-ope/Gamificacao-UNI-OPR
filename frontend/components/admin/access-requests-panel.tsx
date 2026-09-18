@@ -74,7 +74,7 @@ export function AccessRequestsPanel({
                   {item.status === "pending" && canWriteUsers ? (
                     <div className="flex flex-col items-end gap-2">
                       {item.suggested_collaborator_id && item.suggested_collaborator_name ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-[#2d5fff]/25 bg-[#2d5fff]/10 px-2.5 py-1 text-[11px] font-medium text-[#0028f3]">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-uni-royal/25 bg-uni-royal/10 px-2.5 py-1 text-[11px] font-medium text-uni-impact">
                           <IdCard className="h-3 w-3" aria-hidden="true" />
                           Sugestão por CPF/IXC: {item.suggested_collaborator_name}
                         </span>

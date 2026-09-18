@@ -6,8 +6,6 @@ import {
   ArrowUp,
   BellRing,
   ExternalLink,
-  Home,
-  LogOut,
   MonitorCog,
   Newspaper,
   Radar,
@@ -18,6 +16,8 @@ import {
 } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+
+import { useConfirm } from "@/hooks/use-confirm";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { MultiSelect } from "@/components/ui/multi-select";
-import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceAppShell } from "@/components/workspace/app-shell";
 import type { AuthUser } from "@/lib/types";
 import { configuredCockpitWidgetSize } from "@/lib/intelligence-cockpit-layout";
@@ -1255,6 +1254,7 @@ function AlertRulesTab({
   const [newKey, setNewKey] = useState("");
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState("");
+  const { confirm, ConfirmDialog } = useConfirm();
 
   async function loadAll() {
     setLoading(true);
@@ -1345,9 +1345,12 @@ function AlertRulesTab({
 
   async function deleteRule() {
     if (!draft) return;
-    const confirmed = window.confirm(
-      `Excluir a regra "${draft.name}"? Os alertas ativos criados por ela serão encerrados e essa ação não pode ser desfeita.`,
-    );
+    const confirmed = await confirm({
+      title: "Excluir regra",
+      description: `Excluir a regra "${draft.name}"? Os alertas ativos criados por ela serão encerrados e essa ação não pode ser desfeita.`,
+      confirmLabel: "Excluir",
+      tone: "danger",
+    });
     if (!confirmed) return;
 
     setDeleting(true);
@@ -1418,6 +1421,7 @@ function AlertRulesTab({
 
   return (
     <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+      {ConfirmDialog}
       <SectionCard eyebrow="UNI Intelligence" title="Regras de Alertas" subtitle={loading ? "Carregando..." : `${rules.length} regra(s)`}>
         <div className="grid gap-2">
           {rules.map((rule) => (

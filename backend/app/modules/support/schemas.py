@@ -25,6 +25,14 @@ class SupportOpaSyncSettings(BaseModel):
     # 2026-08-27: rodava em toda sincronização, e o cadastro de clientes sozinho (100 mil+
     # registros na base real) media mais de 100s por ciclo. Ver opa_ingestion._sync_opa_dimensions.
     dimensions_refresh_hours: int = Field(default=24, ge=1, le=168)
+    # Backfill noturno de TMR HISTÓRICO (reprocessa tmr_all_responses_seconds de
+    # atendimentos já fechados, diferente do backfill de meses acima) - nasce
+    # DESLIGADO por padrão, 1 chamada extra à API do OPA Suite por atendimento. Ver
+    # app/services/opa_scheduler.py::run_opa_tmr_backfill_once.
+    tmr_backfill_enabled: bool = False
+    tmr_backfill_run_hour: int = Field(default=1, ge=0, le=23)
+    tmr_backfill_run_until_hour: int = Field(default=6, ge=0, le=23)
+    tmr_backfill_daily_limit: int = Field(default=5000, ge=100, le=20000)
 
 
 class SupportOpaSyncSettingsUpdate(BaseModel):
@@ -35,6 +43,10 @@ class SupportOpaSyncSettingsUpdate(BaseModel):
     backfill_run_hour: int | None = Field(default=None, ge=0, le=23)
     backfill_lookback_months: int | None = Field(default=None, ge=1, le=24)
     dimensions_refresh_hours: int | None = Field(default=None, ge=1, le=168)
+    tmr_backfill_enabled: bool | None = None
+    tmr_backfill_run_hour: int | None = Field(default=None, ge=0, le=23)
+    tmr_backfill_run_until_hour: int | None = Field(default=None, ge=0, le=23)
+    tmr_backfill_daily_limit: int | None = Field(default=None, ge=100, le=20000)
 
 
 class SupportOpaImportMonthOut(BaseModel):
@@ -53,6 +65,10 @@ class SupportOpaSyncStatus(BaseModel):
     backfill_run_hour: int = 3
     backfill_lookback_months: int = 3
     dimensions_refresh_hours: int = 24
+    tmr_backfill_enabled: bool = False
+    tmr_backfill_run_hour: int = 1
+    tmr_backfill_run_until_hour: int = 6
+    tmr_backfill_daily_limit: int = 5000
     last_success_at: datetime | None = None
     last_attempt_at: datetime | None = None
     next_allowed_at: datetime | None = None
@@ -65,6 +81,13 @@ class SupportOpaSyncStatus(BaseModel):
     active_run_mode: str | None = None
     active_run_started_at: datetime | None = None
     next_window_delayed: bool = False
+    # Estado do backfill de TMR histórico - `pending_count` é uma contagem AO VIVO
+    # (não um cache), sempre atual na hora que a tela carrega.
+    tmr_backfill_pending_count: int = 0
+    tmr_backfill_processed_today: int = 0
+    tmr_backfill_last_success_at: datetime | None = None
+    tmr_backfill_last_error: str | None = None
+    tmr_backfill_last_error_at: datetime | None = None
 
 
 class SupportOpaAttendantOverride(BaseModel):
@@ -341,6 +364,254 @@ class SupportOpaBreakdowns(BaseModel):
     dimension: str
     total: int
     items: list[SupportOpaBreakdownItem] = Field(default_factory=list)
+
+
+class SupportIxcTicketBreakdownItem(BaseModel):
+    """Um nó do drill-down regional -> cidade -> bairro -> motivo do atendimento IXC (`su_ticket`).
+    `contract_count`/`tickets_per_1000_contracts` só vêm preenchidos nos níveis "regional" e
+    "city" (onde existe base de clientes cadastrada em `OperationCustomerContract`) - `None` nos
+    demais níveis, nunca zero (ver docs/normas-qualidade-dados-metricas.md: não calcular quando
+    faltar dado)."""
+
+    key: str
+    label: str
+    ticket_count: int
+    contract_count: int | None = None
+    tickets_per_1000_contracts: float | None = None
+    # % dos contratos ativos da REGIONAL inteira com cidade resolvida - só preenchido no nível
+    # "city" (ver MIN_CITY_COVERAGE_PCT em ixc_ticket_queries.py). Cobertura baixa é o motivo de
+    # `tickets_per_1000_contracts` vir None mesmo com `contract_count` preenchido - a tela precisa
+    # mostrar "base insuficiente", não um número que parece preciso e não é.
+    coverage_pct: float | None = None
+    # Desvio vs. a janela IMEDIATAMENTE ANTERIOR de mesmo tamanho em dias (pedido do usuário,
+    # 2026-09-12: "no drill ainda está sem dados de desvio") - o drill-down usa um período livre,
+    # não mês-calendário, então o "histórico" comparável aqui é diferente do usado na Visão Geral
+    # (que compara contra os N meses anteriores no mesmo corte de dia). `deviation_pct` vem `None`
+    # quando `previous_ticket_count` está abaixo de MIN_DEVIATION_SAMPLE - sinal insuficiente, não
+    # "sem mudança".
+    previous_ticket_count: int = 0
+    deviation_pct: float | None = None
+
+
+class SupportIxcTicketBreakdown(BaseModel):
+    level: str
+    regional: str | None = None
+    city: str | None = None
+    neighborhood: str | None = None
+    items: list[SupportIxcTicketBreakdownItem] = Field(default_factory=list)
+
+
+class SupportIxcTicketOut(BaseModel):
+    id: int
+    source_id: str
+    protocol: str | None = None
+    customer_name: str | None = None
+    regional: str | None = None
+    city: str | None = None
+    neighborhood: str | None = None
+    locality_type: str | None = None
+    subject_id: str | None = None
+    subject_name: str | None = None
+    sector_id: str | None = None
+    sector_name: str | None = None
+    status: str | None = None
+    sub_status: str | None = None
+    title: str | None = None
+    report: str | None = None
+    created_at: datetime | None = None
+    # Taxonomia (tema/categoria) e risco (ICC) do motivo - pedido do usuário (2026-09-15):
+    # combina o peso-base do TEMA (`SupportIxcTaxonomyMapping.risk_weight`) com o sinal textual do
+    # `report` (`ixc_ticket_text_signal.py`) - um "Registro de Atendimento Operacional" com relato
+    # de queda de conexão sobe de risco mesmo sendo um motivo genérico. `None` quando o motivo
+    # ainda não está mapeado (NAO_MAPEADO).
+    theme_id: str | None = None
+    theme_label: str | None = None
+    category_id: str | None = None
+    category_label: str | None = None
+    risk_score: int | None = None
+    subtema_inferido: str | None = None
+
+
+class SupportIxcTicketOverviewKpis(BaseModel):
+    month: str
+    cutoff_day: int
+    incidencia_parcial: float | None = None
+    ticket_count: int
+    media_historica: float | None = None
+    history_months_used: int
+    desvio_pct: float | None = None
+    severity: str
+    contract_count: int
+    coverage_pct: float | None = None
+    # % dos atendimentos do recorte com tema de taxonomia mapeado (item 8 do plano de evolução
+    # analítica) - None só quando não há nenhum atendimento no recorte, nunca 0% escondido.
+    taxonomy_coverage_pct: float | None = None
+
+
+class SupportIxcTicketDailyPoint(BaseModel):
+    day: int
+    current: int | None = None
+    previous_month: int | None = None
+    historical_avg: float | None = None
+    moving_avg_7d: float | None = None
+
+
+class SupportIxcTicketPriorityItem(BaseModel):
+    regional: str
+    category: str
+    incidencia_parcial: float | None = None
+    historical_deviation_pct: float | None = None
+    peers_deviation_pct: float | None = None
+    severity: str
+    # Qual comparação decidiu `severity`: "historical" (padrão), "peers" (fallback quando o
+    # histórico não tem amostra suficiente - ver MIN_HISTORICAL_SAMPLE) ou "none" (nenhuma base
+    # comparável). O frontend usa isso pra rotular certo o desvio mostrado.
+    severity_basis: str
+
+
+class SupportIxcTicketCityPriorityItem(BaseModel):
+    """Mesma forma de `SupportIxcTicketPriorityItem`, mas por CIDADE - pares são todas as cidades
+    do sistema com base ativa suficiente, independente de regional (decisão do usuário,
+    2026-09-11)."""
+
+    city: str
+    category: str
+    incidencia_parcial: float | None = None
+    historical_deviation_pct: float | None = None
+    peers_deviation_pct: float | None = None
+    severity: str
+    severity_basis: str
+
+
+class SupportIxcTicketPage(BaseModel):
+    total: int
+    items: list[SupportIxcTicketOut] = Field(default_factory=list)
+
+
+class SupportIxcTicketBurstWindow(BaseModel):
+    """Uma janela de detecção de `ixc_ticket_baseline.detect_bursts` (Fase 4, `BURST_V1`)."""
+
+    window: str
+    observed: int
+    expected: float | None = None
+    upper_limit: float | None = None
+    ratio: float | None = None
+    active: bool
+    basis: str
+
+
+class SupportIxcTicketMomentum(BaseModel):
+    """`ixc_ticket_momentum.daily_momentum` (Fase 4, `MOMENTUM_V1`)."""
+
+    recent_avg: float
+    previous_avg: float
+    change_pct: float | None = None
+    consecutive_days_above_expected: int
+    trend: str
+
+
+class SupportIxcTicketOsConversion(BaseModel):
+    """`ixc_ticket_os_conversion.os_conversion_rate` (Fase 6, `OS_CONVERSION_V1`)."""
+
+    sample: int
+    median_lead_minutes: float | None = None
+    classification: str
+    conversions: dict[str, float | None] = Field(default_factory=dict)
+
+
+class SupportIxcTaxonomyMappingOut(BaseModel):
+    """Uma linha de `support_ixc_taxonomy_mappings` - Fase 0 do plano de evolução analítica
+    (2026-09-14). A tabela nasce vazia; este schema só formaliza o contrato de leitura antes de
+    haver qualquer linha popular pra listar."""
+
+    subject_id: str
+    theme_id: str
+    theme_label: str
+    category_id: str
+    category_label: str
+    version: int
+    effective_from: date
+    risk_weight: int = 0
+
+
+class SupportIxcTicketSavedFilterValues(BaseModel):
+    """Só as duas dimensões que `IxcTicketFiltersBar` controla hoje - ver docstring de
+    `SupportIxcTicketSavedFilter` (models.py)."""
+
+    subject_ids: list[str] = Field(default_factory=list)
+    sector_ids: list[str] = Field(default_factory=list)
+
+
+class SupportIxcTicketSavedFilterOut(BaseModel):
+    id: int
+    name: str
+    filters: SupportIxcTicketSavedFilterValues
+    is_default: bool
+    updated_at: datetime
+
+
+class SupportIxcTicketSavedFilterCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    filters: SupportIxcTicketSavedFilterValues
+    is_default: bool = False
+
+
+class SupportIxcTicketSavedFilterUpdate(BaseModel):
+    is_default: bool
+
+
+class SupportIxcAnalyticsReach(BaseModel):
+    """Abrangência/reincidência do escopo (Fase 1) - ver `ixc_ticket_reach.reach_summary`."""
+
+    unique_customers: int
+    tickets_per_customer: float | None = None
+    repeat_customers: int
+    repeat_contact: dict[str, int] = Field(default_factory=dict)
+
+
+class SupportIxcAnalyticsDriverItem(BaseModel):
+    subject_name: str
+    current: int
+    expected: int
+    excess: int
+    contribution_pct: float
+
+
+class SupportIxcAnalyticsContextOut(BaseModel):
+    """Fase 2 do plano de evolução analítica (2026-09-14): resumo executivo de um escopo
+    qualquer (regional/cidade/bairro + motivo/setor), no modelo de período livre unificado
+    (`date_from`/`date_to` + janela anterior de mesmo tamanho) - ver `ixc_ticket_context.py`."""
+
+    regional: str | None = None
+    city: str | None = None
+    neighborhood: str | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    ticket_count: int
+    contract_count: int | None = None
+    tickets_per_1000_contracts: float | None = None
+    previous_ticket_count: int = 0
+    deviation_pct: float | None = None
+    severity: str
+    next_dimension: str | None = None
+    reach: SupportIxcAnalyticsReach
+    top_driver: SupportIxcAnalyticsDriverItem | None = None
+
+
+class SupportIxcAnalyticsPriorityItem(BaseModel):
+    """Um item do ranking do PRÓXIMO NÍVEL (`dimension`) - mesma forma de
+    `SupportIxcTicketBreakdownItem`, acrescida de `dimension`/`severity`."""
+
+    key: str
+    label: str
+    dimension: str
+    ticket_count: int
+    contract_count: int | None = None
+    tickets_per_1000_contracts: float | None = None
+    coverage_pct: float | None = None
+    previous_ticket_count: int = 0
+    deviation_pct: float | None = None
+    severity: str
 
 
 class SupportOpaAttendanceDetailData(BaseModel):

@@ -475,6 +475,166 @@ def fetch_clientes_by_ids(client: IxcClient, cliente_ids: list[int], *, rp: int 
     yield from client.list_all("cliente", grid_param=grid_param, rp=rp, sortname="cliente.id")
 
 
+def _build_ticket_grid_param(
+    *,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    filial_ids: list[str] | None = None,
+    id_after: int | None = None,
+    id_before: int | None = None,
+) -> list[dict[str, str]]:
+    grid_param: list[dict[str, str]] = []
+    if created_after:
+        grid_param.append({"TB": "su_ticket.data_criacao", "OP": ">=", "P": created_after})
+    if created_before:
+        grid_param.append({"TB": "su_ticket.data_criacao", "OP": "<=", "P": created_before})
+    if updated_after:
+        grid_param.append({"TB": "su_ticket.data_ultima_alteracao", "OP": ">=", "P": updated_after})
+    if updated_before:
+        grid_param.append({"TB": "su_ticket.data_ultima_alteracao", "OP": "<=", "P": updated_before})
+    if filial_ids:
+        grid_param.append({
+            "TB": "su_ticket.id_filial",
+            "OP": "=" if len(filial_ids) == 1 else "IN",
+            "P": filial_ids[0] if len(filial_ids) == 1 else ",".join(filial_ids),
+        })
+    if id_after is not None:
+        grid_param.append({"TB": "su_ticket.id", "OP": ">=", "P": str(id_after)})
+    if id_before is not None:
+        grid_param.append({"TB": "su_ticket.id", "OP": "<=", "P": str(id_before)})
+    return grid_param
+
+
+def fetch_tickets(
+    client: IxcClient,
+    *,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    updated_after: str | None = None,
+    updated_before: str | None = None,
+    filial_ids: list[str] | None = None,
+    id_after: int | None = None,
+    id_before: int | None = None,
+    rp: int = 200,
+    max_records: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Busca o atendimento real do IXC (tabela `su_ticket`) - o protocolo que o time abre na aba
+    Atendimentos e que dispara a abertura de O.S.; `su_oss_chamado.id_ticket` referencia de volta
+    este registro (achado por sondagem manual em 2026-09-11, confirmado contra a API real: 552 mil
+    registros hoje). Traz `id_filial` direto no próprio ticket (a regional de quem atendeu, sem
+    precisar herdar de outra tabela) e `id_cliente`/`id_contrato`/`id_assunto` para juntar com
+    `cliente` (cidade/bairro estruturados - ver `fetch_clientes_by_ids`) e `su_oss_assunto` (motivo,
+    mesma tabela que a O.S. já usa). O campo `endereco` do próprio ticket é texto livre formatado
+    ("LOGRADOURO, NUMERO - BAIRRO CIDADE UF - CEP") e não deve ser parseado para extrair bairro/cidade
+    - usar sempre o cadastro estruturado do cliente.
+
+    Mesmo padrão de filtro incremental de `fetch_service_orders`: `updated_after`/`updated_before`
+    para sincronização (pega ticket novo e ticket que mudou de status/estágio), `created_after`/
+    `created_before` para backfill de um período fechado. `id_after`/`id_before` servem só para
+    particionar uma consulta grande demais em fatias menores, nunca como filtro de negócio.
+    """
+    grid_param = _build_ticket_grid_param(
+        created_after=created_after,
+        created_before=created_before,
+        updated_after=updated_after,
+        updated_before=updated_before,
+        filial_ids=filial_ids,
+        id_after=id_after,
+        id_before=id_before,
+    )
+    yield from client.list_all(
+        "su_ticket",
+        grid_param=grid_param or None,
+        rp=rp,
+        sortname="su_ticket.id",
+        sortorder="asc",
+        max_records=max_records,
+    )
+
+
+def fetch_ticket_id_bounds(
+    client: IxcClient,
+    *,
+    filial_ids: list[str] | None = None,
+) -> tuple[int, int] | None:
+    """Descobre o menor e o maior `su_ticket.id` que satisfazem o filtro passado (mesmo propósito de
+    `fetch_service_order_id_bounds`: bissectar um backfill grande por faixa de id sem conhecer o
+    total antecipadamente). Retorna `None` quando o filtro não encontra nenhum registro."""
+    grid_param = _build_ticket_grid_param(filial_ids=filial_ids)
+    first_page = client.list(
+        "su_ticket", grid_param=grid_param or None, page=1, rp=1,
+        sortname="su_ticket.id", sortorder="asc",
+    )
+    if not first_page.records:
+        return None
+    last_page = client.list(
+        "su_ticket", grid_param=grid_param or None, page=1, rp=1,
+        sortname="su_ticket.id", sortorder="desc",
+    )
+    try:
+        min_id = int(first_page.records[0]["id"])
+        max_id = int(last_page.records[0]["id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (min_id, max_id)
+
+
+def fetch_customer_contracts(
+    client: IxcClient,
+    *,
+    filial_ids: list[str] | None = None,
+    statuses: list[str] | None = None,
+    rp: int = 200,
+    max_records: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Busca contratos de cliente do IXC (tabela `cliente_contrato`, 116 mil registros hoje,
+    confirmado contra a API real em 2026-09-11) - é a base de clientes por filial, usada como
+    denominador de qualquer métrica normalizada "por mil clientes". Cada contrato traz `id_filial`,
+    `id_cliente`, `cidade` e dois campos de status (`status`, `status_internet`) cujo enum ainda não
+    foi confirmado (valores vistos numa amostra pequena: "P" e "AA") - não assumir que um valor
+    específico significa "ativo" sem validar contra uma amostra maior antes de usar isto como fonte
+    de verdade em métrica publicada."""
+    grid_param: list[dict[str, str]] = []
+    if filial_ids:
+        grid_param.append({
+            "TB": "cliente_contrato.id_filial",
+            "OP": "=" if len(filial_ids) == 1 else "IN",
+            "P": filial_ids[0] if len(filial_ids) == 1 else ",".join(filial_ids),
+        })
+    if statuses:
+        grid_param.append({
+            "TB": "cliente_contrato.status",
+            "OP": "=" if len(statuses) == 1 else "IN",
+            "P": statuses[0] if len(statuses) == 1 else ",".join(statuses),
+        })
+    yield from client.list_all(
+        "cliente_contrato",
+        grid_param=grid_param or None,
+        rp=rp,
+        sortname="cliente_contrato.id",
+        sortorder="asc",
+        max_records=max_records,
+    )
+
+
+def fetch_customer_contracts_by_customer_ids(
+    client: IxcClient, customer_ids: list[int], *, rp: int = 200
+) -> Iterator[dict[str, Any]]:
+    """Resolve `id_cliente` -> contrato(s) do cliente (tabela `cliente_contrato`, mesmo campo de
+    `fetch_customer_contracts`) - usado como FALLBACK de regional/cidade/bairro do atendimento IXC
+    quando `su_ticket.id_filial` não resolve pra uma regional válida (achado real 2026-09-11: o
+    atendimento é protocolado no cadastro do cliente, e o CONTRATO dele tem `id_filial` e `bairro`
+    próprios, `cliente_contrato.bairro` confirmado como campo de texto livre, não FK). Um cliente
+    pode ter mais de um contrato; a escolha de qual usar é responsabilidade do chamador (ver
+    `ixc_ticket_ingestion._pick_fallback_contract`), não deste fetcher."""
+    if not customer_ids:
+        return
+    grid_param = [{"TB": "cliente_contrato.id_cliente", "OP": "IN", "P": ",".join(str(cid) for cid in customer_ids)}]
+    yield from client.list_all("cliente_contrato", grid_param=grid_param, rp=rp, sortname="cliente_contrato.id")
+
+
 def fetch_usuarios_by_ids(client: IxcClient, usuario_ids: list[int], *, rp: int = 200) -> Iterator[dict[str, Any]]:
     """Resolve `id_operador` (login interno do sistema IXC, tabela `usuarios`) para nome/e-mail.
 

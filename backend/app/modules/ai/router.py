@@ -4,7 +4,8 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import get_db
 from app.models import User
@@ -33,7 +34,14 @@ from app.modules.ai_governance.gate import (
 from app.modules.ai_governance.policy import EffectivePolicy
 from app.modules.management import cases as management_cases_engine
 from app.modules.management.models import OPEN_CASE_STATUSES as MANAGEMENT_OPEN_CASE_STATUSES
-from app.modules.management.schemas import ManagementCaseDiagnosticsOut
+from app.modules.management.models import ManagementCase
+from app.modules.management.schemas import (
+    ManagementCaseDiagnosticsOut,
+    ManagementCasePage,
+    ManagementCaseSummaryOut,
+    ManagementJustificationPage,
+    ManagementPendingByCollaboratorOut,
+)
 from app.modules.operations.coordinate_quality import coordinate_quality_audit
 from app.modules.operations.login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
 from app.modules.operations.login_geo_clusters import offline_login_clusters_response, query_login_status
@@ -56,6 +64,9 @@ from app.modules.ai.schemas import (
     AiLoginStatusRequest,
     AiLoginTimeseriesRequest,
     AiManagementCaseDiagnosticsRequest,
+    AiManagementCasesRequest,
+    AiManagementJustificationsRequest,
+    AiManagementPendingByCollaboratorRequest,
     AiSearchLoginsRequest,
     AiOfflineLoginClustersRequest,
     AiOnuSignalRequest,
@@ -151,15 +162,25 @@ def validate_ai_search_fields(policy: EffectivePolicy, fields: list[str] | None)
 
 
 def resolve_ai_search_output_fields(policy: EffectivePolicy, response_mode: str, fields: list[str] | None) -> list[str] | None:
+    """Achado P0-3 da auditoria de 2026-09-15: `response_mode="full"` (o padrão) devolvia `None`
+    ("sem filtro") quando `fields` não vinha explícito - a governança de campo
+    (`AiFieldPermission`) nunca se aplicava no caminho mais comum. Agora "full" também recorta
+    pelo que a política autoriza, só que sobre TODOS os campos (`AI_SEARCH_ITEM_FIELDS`) em vez do
+    conjunto enxuto de "summary" - nomes fora de `AI_SEARCH_GOVERNED_FIELDS` (calculados, ex.
+    `distance_km`) não são catalogados e continuam sempre disponíveis (`field_allowed_or_uncatalogued`)."""
     if fields is not None:
         return fields
-    if response_mode != "summary":
-        return None
     allowed_entity_fields = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
+    if response_mode == "summary":
+        return [
+            name
+            for name in AI_SEARCH_SUMMARY_FIELDS
+            if AI_SEARCH_GOVERNED_FIELDS.get(name, name) in allowed_entity_fields
+        ]
     return [
         name
-        for name in AI_SEARCH_SUMMARY_FIELDS
-        if AI_SEARCH_GOVERNED_FIELDS.get(name, name) in allowed_entity_fields
+        for name in sorted(AI_SEARCH_ITEM_FIELDS)
+        if policy.field_allowed_or_uncatalogued(ENTITY_OPERATION_ORDERS, AI_SEARCH_GOVERNED_FIELDS.get(name, name), "selectable")
     ]
 
 
@@ -214,12 +235,20 @@ AI_ORDER_DETAIL_SUMMARY_FIELDS = [
 
 
 def resolve_ai_order_details_output_fields(policy: EffectivePolicy, response_mode: str, fields: list[str] | None) -> list[str] | None:
+    """Mesmo achado P0-3 de `resolve_ai_search_output_fields` - "full" (padrão) agora recorta pelo
+    que a política autoriza (capacidade `detail_available`, igual ao resto do detalhe) sobre TODOS
+    os campos de `OperationOrderDetailOut` (inclui `raw_payload`, que só existe no detalhe), em vez
+    de devolver tudo sem checagem nenhuma."""
     if fields is not None:
         return fields
-    if response_mode != "summary":
-        return None
-    allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
-    return [name for name in AI_ORDER_DETAIL_SUMMARY_FIELDS if name in allowed]
+    if response_mode == "summary":
+        allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
+        return [name for name in AI_ORDER_DETAIL_SUMMARY_FIELDS if name in allowed]
+    return [
+        name
+        for name in OperationOrderDetailOut.model_fields
+        if policy.field_allowed_or_uncatalogued(ENTITY_OPERATION_ORDERS, name, "detail_available")
+    ]
 
 
 @router.post("/orders/details", response_model=AiOrderDetailsResponse)
@@ -287,6 +316,7 @@ def offline_login_clusters_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.offline_login_clusters", "api")
     result = offline_login_clusters_response(
         db,
+        user=context.user,
         radius_meters=payload.radius_meters,
         min_cluster_size=payload.min_cluster_size,
         window_minutes=payload.window_minutes,
@@ -318,6 +348,7 @@ def login_status_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_status", "api")
     results = query_login_status(
         db,
+        user=context.user,
         logins=payload.logins,
         online_statuses=payload.online_statuses,
         regionals=payload.regionals,
@@ -353,6 +384,7 @@ def search_logins_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.search_logins", "api")
     result = search_logins(
         db,
+        user=context.user,
         logins=payload.logins,
         login_query=payload.login_query,
         login_ids=payload.login_ids,
@@ -396,7 +428,7 @@ def login_detail_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_detail", "api")
-    detail = get_login_detail(db, login=payload.login, login_id=payload.login_id, history_hours=payload.history_hours)
+    detail = get_login_detail(db, user=context.user, login=payload.login, login_id=payload.login_id, history_hours=payload.history_hours)
     if detail is None:
         raise HTTPException(status_code=404, detail="Login não encontrado.")
     record_ai_access(
@@ -424,7 +456,7 @@ def login_aggregate_route(
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_aggregate", "api")
     try:
-        result = login_aggregate(db, group_by=payload.group_by, regionals=payload.regionals, online_statuses=payload.online_statuses)
+        result = login_aggregate(db, user=context.user, group_by=payload.group_by, regionals=payload.regionals, online_statuses=payload.online_statuses)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     record_ai_access(
@@ -446,7 +478,7 @@ def login_outages_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_outages", "api")
-    result = login_outages(db, since=payload.since, until=payload.until, regionals=payload.regionals, limit=payload.limit)
+    result = login_outages(db, user=context.user, since=payload.since, until=payload.until, regionals=payload.regionals, limit=payload.limit)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_outages", user=context.user, token_id=context.token_id,
         filters={"since": payload.since, "regionals": payload.regionals}, result_count=len(result["data"]),
@@ -466,7 +498,7 @@ def login_timeseries_route(
     started_at = perf_counter()
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_timeseries", "api")
-    result = login_timeseries(db, since=payload.since, until=payload.until)
+    result = login_timeseries(db, user=context.user, since=payload.since, until=payload.until)
     record_ai_access(
         db, origin="api", endpoint_key="ai.login_timeseries", user=context.user, token_id=context.token_id,
         filters={"since": payload.since}, result_count=len(result["data"]),
@@ -488,7 +520,7 @@ def login_incident_analysis_route(
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.login_incident_analysis", "api")
     result = login_incident_analysis(
-        db, window_minutes=payload.window_minutes, regionals=payload.regionals,
+        db, user=context.user, window_minutes=payload.window_minutes, regionals=payload.regionals,
         cluster_radius_meters=payload.cluster_radius_meters, cluster_min_size=payload.cluster_min_size,
     )
     record_ai_access(
@@ -512,7 +544,7 @@ def coordinate_quality_route(
     enforce_token_scope(context, "infra.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.coordinate_quality", "api")
     result = coordinate_quality_audit(
-        db, entity=payload.entity, outlier_km=payload.outlier_km, duplicate_threshold=payload.duplicate_threshold
+        db, user=context.user, entity=payload.entity, outlier_km=payload.outlier_km, duplicate_threshold=payload.duplicate_threshold
     )
     record_ai_access(
         db, origin="api", endpoint_key="ai.coordinate_quality", user=context.user, token_id=context.token_id,
@@ -536,6 +568,7 @@ def onu_signal_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.onu_signal", "api")
     results = query_onu_signal_status(
         db,
+        user=context.user,
         login_ids=payload.login_ids,
         last_drop_causes=payload.last_drop_causes,
         transmitter_ids=payload.transmitter_ids,
@@ -570,6 +603,7 @@ def onu_signal_history_route(
     enforce_ai_endpoint_for_user(db, context.user, "ai.onu_signal_history", "api")
     results = query_onu_signal_history(
         db,
+        user=context.user,
         login_ids=payload.login_ids,
         onu_serials=payload.onu_serials,
         date_from=payload.date_from,
@@ -589,6 +623,46 @@ def onu_signal_history_route(
     return results
 
 
+def _management_case_conditions(db: Session, payload) -> list:
+    """Traduz o recorte pedido (`AiManagementCaseFiltersRequest` ou subclasse) nas condições SQL do
+    motor de casos, com o MESMO tratamento de filtro contraditório da tela (422 com a mensagem
+    acionável, em vez de 200 com lista vazia).
+
+    Sem escopo de supervisor de propósito: quem chama aqui é a identidade de máquina da chave de
+    API (`role="ai_service"`, permissões `{"ai:query"}` - ver `core/security.py`), que não é
+    supervisor de ninguém nem tem regionais atribuídas. Aplicar `case_scope_conditions` a ela
+    resultaria em `supervisor_user_id == <usuário de serviço>`, ou seja, ZERO caso sempre. O
+    controle nesta superfície é o escopo do token (`management.read`) mais a chave de governança
+    de IA, que o admin pode desligar; para recortar por pessoa/regional existem os filtros
+    explícitos `supervisor_user_id` e `regional`. No conector MCP, onde o chamador é um usuário
+    OAuth de verdade, o escopo por supervisor/regional CONTINUA sendo aplicado."""
+    filters = management_cases_engine.ManagementCaseFilters(
+        status=payload.status,
+        severity=payload.severity,
+        regional=payload.regional,
+        supervisor_user_id=payload.supervisor_user_id,
+        case_type=payload.case_type,
+        reference_year=payload.reference_year,
+        reference_month=payload.reference_month,
+        only_overdue=payload.only_overdue,
+        search=payload.search,
+        statuses=list(MANAGEMENT_OPEN_CASE_STATUSES) if payload.only_open else [],
+        responsible_name=payload.responsible_name,
+        collaborator_id=payload.collaborator_id,
+        reference_date_from=payload.reference_date_from,
+        reference_date_to=payload.reference_date_to,
+        reason_id=payload.reason_id,
+        pending_justification=payload.pending_justification,
+        awaiting_review=payload.awaiting_review,
+        has_justification=payload.has_justification,
+        min_days_pending=payload.min_days_pending,
+    )
+    try:
+        return management_cases_engine.case_filter_conditions(db, filters)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/management/cases-diagnostics", response_model=ManagementCaseDiagnosticsOut)
 def management_cases_diagnostics_route(
     payload: AiManagementCaseDiagnosticsRequest,
@@ -602,21 +676,7 @@ def management_cases_diagnostics_route(
     started_at = perf_counter()
     enforce_token_scope(context, "management.read")
     enforce_ai_endpoint_for_user(db, context.user, "ai.management_cases_diagnostics", "api")
-    filters = management_cases_engine.ManagementCaseFilters(
-        status=payload.status,
-        severity=payload.severity,
-        regional=payload.regional,
-        case_type=payload.case_type,
-        reference_year=payload.reference_year,
-        reference_month=payload.reference_month,
-        only_overdue=payload.only_overdue,
-        search=payload.search,
-        statuses=list(MANAGEMENT_OPEN_CASE_STATUSES) if payload.only_open else [],
-    )
-    try:
-        conditions = management_cases_engine.case_filter_conditions(filters)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    conditions = _management_case_conditions(db, payload)
     result = management_cases_engine.case_diagnostics(db, conditions)
     record_ai_access(
         db,
@@ -626,6 +686,123 @@ def management_cases_diagnostics_route(
         token_id=context.token_id,
         filters=payload.model_dump(exclude_none=True),
         result_count=result["total_cases"],
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/management/pending-by-collaborator", response_model=ManagementPendingByCollaboratorOut)
+def management_pending_by_collaborator_route(
+    payload: AiManagementPendingByCollaboratorRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> dict:
+    """"Quem está devendo justificativa" - uma linha por colaborador x regional, com a idade da
+    pendência e os ids dos casos abertos. Pedido do usuário em 2026-09-10, pra encontrar o
+    colaborador com justificativa pendente sem varrer a lista de casos.
+
+    Combine com `pending_justification=true` (ainda não justificou nada) ou
+    `reference_date_from`/`reference_date_to` (recorte por dia/semana). Visão de matriz, mesmo
+    racional de `/management/cases-diagnostics` - ver `_management_case_conditions`."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "management.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.management_pending_justifications", "api")
+    conditions = _management_case_conditions(db, payload)
+    result = management_cases_engine.pending_justifications_by_collaborator(db, conditions, limit=payload.limit)
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.management_pending_justifications",
+        user=context.user,
+        token_id=context.token_id,
+        filters=payload.model_dump(exclude_none=True),
+        result_count=result["total_collaborators"],
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/management/justifications", response_model=ManagementJustificationPage)
+def management_justifications_route(
+    payload: AiManagementJustificationsRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> dict:
+    """Leitura das justificativas escritas pelos supervisores (texto, motivo, plano de ação e
+    decisão da matriz), por regional / colaborador / data - pedido do usuário em 2026-09-10.
+
+    Use `responsible_name` (nome exato) e `reference_date_from`/`reference_date_to` para o recorte;
+    `include_comments=true` traz também a thread de comentários do caso. Paginado de verdade
+    (`total` sempre presente) - não confunda uma página com o universo. Visão de matriz, mesmo
+    racional de `/management/cases-diagnostics`."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "management.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.management_justifications", "api")
+    conditions = _management_case_conditions(db, payload)
+    result = management_cases_engine.justification_rows(
+        db,
+        conditions,
+        page=payload.page,
+        page_size=payload.page_size,
+        include_comments=payload.include_comments,
+    )
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.management_justifications",
+        user=context.user,
+        token_id=context.token_id,
+        filters=payload.model_dump(exclude_none=True),
+        result_count=len(result["items"]),
+        duration_ms=round((perf_counter() - started_at) * 1000),
+    )
+    return result
+
+
+@router.post("/management/cases", response_model=ManagementCasePage)
+def management_cases_route(
+    payload: AiManagementCasesRequest,
+    db: Session = Depends(get_db),
+    context: ApiKeyContext = Depends(require_api_key_context),
+) -> ManagementCasePage:
+    """Listagem paginada dos casos de Gestão Integrada (payload completo do caso, não só a
+    justificativa) - o equivalente por chave de API do que a tela lista e do que a tool MCP
+    `opr_management_cases` já entregava. Visão de matriz, mesmo racional de
+    `/management/cases-diagnostics`."""
+    started_at = perf_counter()
+    enforce_token_scope(context, "management.read")
+    enforce_ai_endpoint_for_user(db, context.user, "ai.management_cases", "api")
+    conditions = _management_case_conditions(db, payload)
+    total = db.scalar(select(func.count(ManagementCase.id)).where(*conditions)) or 0
+    rows = db.scalars(
+        select(ManagementCase)
+        .options(
+            selectinload(ManagementCase.collaborator),
+            selectinload(ManagementCase.supervisor),
+            selectinload(ManagementCase.team_model),
+            selectinload(ManagementCase.reason),
+        )
+        .where(*conditions)
+        .order_by(ManagementCase.reference_date.desc().nulls_last(), ManagementCase.id.desc())
+        .offset((payload.page - 1) * payload.page_size)
+        .limit(payload.page_size)
+    ).all()
+    counts = management_cases_engine.comment_counts(db, [item.id for item in rows])
+    result = ManagementCasePage(
+        items=[management_cases_engine.case_out(item, comment_count=counts.get(item.id, 0)) for item in rows],
+        summary=ManagementCaseSummaryOut(**management_cases_engine.summarize_cases(db, conditions)),
+        total=total,
+        page=payload.page,
+        page_size=payload.page_size,
+    )
+    record_ai_access(
+        db,
+        origin="api",
+        endpoint_key="ai.management_cases",
+        user=context.user,
+        token_id=context.token_id,
+        filters=payload.model_dump(exclude_none=True),
+        result_count=len(result.items),
         duration_ms=round((perf_counter() - started_at) * 1000),
     )
     return result

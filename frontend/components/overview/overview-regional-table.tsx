@@ -24,7 +24,7 @@ const COLUMNS: Array<{
   scope: string;
   align: "left" | "right";
 }> = [
-  { key: "regional", label: "Filial", scope: "", align: "left" },
+  { key: "regional", label: "Regional", scope: "", align: "left" },
   { key: "opened", label: "Abertas no período", scope: "todo o período, qualquer equipe", align: "right" },
   { key: "backlog", label: "Em aberto", scope: "estoque de agora, qualquer equipe", align: "right" },
   { key: "completed", label: "Finalizadas", scope: "com os filtros aplicados", align: "right" },
@@ -97,8 +97,8 @@ export function OverviewRegionalTable({
 
   return (
     <OverviewBlock
-      eyebrow="Operação por filial"
-      title="Quadro geral das filiais"
+      eyebrow="Operação por regional"
+      title="Quadro geral das regionais"
       subtitle="Cada coluna obedece a um recorte diferente - o rótulo abaixo do título diz qual."
       badge={data && !data.sla_available ? "SLA restrito" : undefined}
       state={{ ...state, empty: !state?.loading && !state?.error && !items.length }}

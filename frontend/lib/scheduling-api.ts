@@ -1,3 +1,5 @@
+import { getAuthToken, notifyUnauthorized } from "@/lib/auth-token";
+
 export type SchedulingCountMode = "all_events" | "distinct_orders";
 
 export type SchedulingStats = {
@@ -328,19 +330,15 @@ export type SchedulingOrderSortKey =
 export type SchedulingOrderSort = { key: SchedulingOrderSortKey; direction: "asc" | "desc" };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
-const TOKEN_KEY = "gamification_auth_token";
-
-function authToken() {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
-  const token = authToken();
+  const token = getAuthToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, { ...init, headers, cache: "no-store" });
+  // Sessão caiu no meio do uso - achado da auditoria de 2026-09-14, ver lib/auth-token.ts.
+  if (response.status === 401 && token) notifyUnauthorized();
   if (!response.ok) {
     const text = await response.text();
     let message = text || `Erro HTTP ${response.status}`;

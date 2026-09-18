@@ -79,7 +79,7 @@ def test_ai_aggregate_orders_groups_by_neighborhood(db_session, ai_user):
 
     result = ai_queries.aggregate_orders(
         db_session, ai_user, group_by="neighborhood", metric="quantidade_fechada", date_from=DATE_FROM, date_to=DATE_TO,
-    )
+    )["data"]
     by_label = {item["label"]: item["quantity"] for item in result}
     assert by_label == {"Centro": 1, "Nova Brasília": 1}
 

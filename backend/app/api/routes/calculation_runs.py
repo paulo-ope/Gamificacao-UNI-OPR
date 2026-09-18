@@ -14,6 +14,7 @@ from app.schemas import (
     CalculationRunSnapshotOut,
     CalculationRunStatusUpdate,
 )
+from app.api.routes.dashboard import invalidate_filtered_breakdowns_cache
 from app.services import point_balance
 from app.services.calculation import (
     calculate_scores,
@@ -366,6 +367,7 @@ def change_calculation_run_status(
         # a mesma tela mostrava "Total a pagar" corrigido e "por regional" desatualizado (C1).
         # O bonus roda depois pra somar sobre a base ja atualizada; agora e idempotente (C2).
         refresh_run_breakdowns(db, run)
+        invalidate_filtered_breakdowns_cache(run.id)
         calculate_and_store_leadership_bonus(db, run)
         _refresh_stale_draft_previews(db, {score.collaborator_id for score in run.scores}, exclude_run_id=run.id)
     record_audit_log(db, user, "update_status", "calculation_runs", run.id, before, {"status": run.status, "note": payload.note})

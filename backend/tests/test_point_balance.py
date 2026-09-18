@@ -479,6 +479,34 @@ def test_only_one_debit_per_original_even_with_many_near_simultaneous_later_retu
     assert created_total[0].original_os_code == "OS-JUL-ORIG"
 
 
+def test_only_one_debit_per_original_within_the_same_import_batch(
+    db_session, make_collaborator, paid_july_run, recurrence_setup
+):
+    """Regressão real (auditoria 2026-09-15), diferente do teste acima: aqui os vários retornos
+    chegam no MESMO lote (um único `detect_post_payment_warranty_debits(db, touched_orders, ...)`),
+    exatamente como toda chamada de produção faz (`ixc_importer.py`, `operations_sync.py`,
+    `upvalue_importer.py`, `calculation.py` sempre passam o lote inteiro de uma vez, nunca um por
+    vez com commit entre chamadas). `_original_already_debited` é um SELECT simples e `db.add(entry)`
+    só é persistido no `db.flush()` de FORA do loop (`SessionLocal` tem `autoflush=False`) - sem uma
+    guarda em memória para o lote corrente, cada `later` do mesmo lote via a original como "ainda não
+    debitada" e cada um criava seu próprio débito contra a MESMA original."""
+    collaborator = make_collaborator()
+    original = _os(collaborator, "OS-JUL-ORIG-BATCH", datetime(2026, 7, 25, 10, 0, tzinfo=timezone.utc))
+    laters = [
+        _os(collaborator, f"OS-JUL-BATCHDUP-{i}", datetime(2026, 7, 25, 10, i, tzinfo=timezone.utc))
+        for i in range(1, 6)
+    ]
+    db_session.add(original)
+    db_session.add_all(laters)
+    db_session.flush()
+
+    created = point_balance.detect_post_payment_warranty_debits(db_session, laters)
+    db_session.commit()
+
+    assert len(created) == 1, "o lote inteiro so pode gerar um debito contra a mesma O.S original"
+    assert created[0].original_os_code == "OS-JUL-ORIG-BATCH"
+
+
 def _months_before(reference: datetime, months: int) -> tuple[int, int]:
     month = reference.month - months
     year = reference.year

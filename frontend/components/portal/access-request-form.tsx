@@ -215,7 +215,7 @@ export function AccessRequestForm() {
                   <IdCard className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={cpfId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     inputMode="numeric"
                     placeholder="000.000.000-00"
                     value={cpf}
@@ -244,8 +244,8 @@ export function AccessRequestForm() {
 
           {step === "confirm_identity" ? (
             <div className="grid gap-5">
-              <div className="rounded-xl border border-[#2d5fff]/20 bg-[#2d5fff]/5 p-5 text-center">
-                <UserIcon className="mx-auto h-6 w-6 text-[#0028f3]" aria-hidden="true" />
+              <div className="rounded-xl border border-uni-royal/20 bg-uni-royal/5 p-5 text-center">
+                <UserIcon className="mx-auto h-6 w-6 text-uni-impact" aria-hidden="true" />
                 <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">É você?</p>
                 <p className="mt-1 text-lg font-semibold text-slate-950">{foundName}</p>
               </div>
@@ -262,8 +262,8 @@ export function AccessRequestForm() {
 
           {step === "confirm_phone" ? (
             <div className="grid gap-5">
-              <div className="rounded-xl border border-[#2d5fff]/20 bg-[#2d5fff]/5 p-5 text-center">
-                <Phone className="mx-auto h-6 w-6 text-[#0028f3]" aria-hidden="true" />
+              <div className="rounded-xl border border-uni-royal/20 bg-uni-royal/5 p-5 text-center">
+                <Phone className="mx-auto h-6 w-6 text-uni-impact" aria-hidden="true" />
                 <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Este é o seu telefone?</p>
                 <p className="mt-1 text-lg font-semibold text-slate-950">{foundPhoneMasked || "Não cadastrado"}</p>
               </div>
@@ -287,7 +287,7 @@ export function AccessRequestForm() {
                   <Phone className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={correctedPhoneId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     inputMode="tel"
                     placeholder="(00) 00000-0000"
                     value={correctedPhone}
@@ -322,7 +322,7 @@ export function AccessRequestForm() {
                   <Mail className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={emailId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     type="email"
                     placeholder={`voce${CORPORATE_EMAIL_SUFFIX}`}
                     value={email}
@@ -342,7 +342,7 @@ export function AccessRequestForm() {
                   <KeyRound className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={newPasswordId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     type="password"
                     autoComplete="new-password"
                     value={newPassword}
@@ -356,7 +356,7 @@ export function AccessRequestForm() {
                   <KeyRound className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={confirmPasswordId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     type="password"
                     autoComplete="new-password"
                     value={confirmPassword}
@@ -385,7 +385,7 @@ export function AccessRequestForm() {
                 <Label htmlFor={manualNameId}>Nome completo</Label>
                 <div className="relative">
                   <UserIcon className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
-                  <Input id={manualNameId} className="pl-9 focus-visible:ring-[#2d5fff]" value={manualName} onChange={(event) => setManualName(event.target.value)} autoFocus />
+                  <Input id={manualNameId} className="pl-9 focus-visible:ring-uni-royal" value={manualName} onChange={(event) => setManualName(event.target.value)} autoFocus />
                 </div>
                 {manualErrors.name ? <p className="text-xs text-rose-600">{manualErrors.name}</p> : null}
               </div>
@@ -395,7 +395,7 @@ export function AccessRequestForm() {
                   <Phone className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={manualPhoneId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     inputMode="tel"
                     placeholder="(00) 00000-0000"
                     value={manualPhone}
@@ -410,7 +410,7 @@ export function AccessRequestForm() {
                   <Mail className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={emailId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     type="email"
                     placeholder={`voce${CORPORATE_EMAIL_SUFFIX}`}
                     value={email}
@@ -429,7 +429,7 @@ export function AccessRequestForm() {
                   <KeyRound className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={newPasswordId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     type="password"
                     autoComplete="new-password"
                     value={newPassword}
@@ -443,7 +443,7 @@ export function AccessRequestForm() {
                   <KeyRound className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                   <Input
                     id={confirmPasswordId}
-                    className="pl-9 focus-visible:ring-[#2d5fff]"
+                    className="pl-9 focus-visible:ring-uni-royal"
                     type="password"
                     autoComplete="new-password"
                     value={confirmPassword}

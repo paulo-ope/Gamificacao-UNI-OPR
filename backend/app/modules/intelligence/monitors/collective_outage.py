@@ -82,7 +82,9 @@ def _coverage_for_regional(db: Session, regional: str | None) -> dict:
     cobertura de coordenadas daquela regional sustenta."""
     if not regional:
         return {}
-    audit = coordinate_quality_audit(db, entity="operations_login_current_status")
+    # `user=None`: monitor de sistema, sem usuário associado - varre o sistema inteiro de
+    # propósito, não o escopo de ninguém (ver `regional_scope_or_deny`).
+    audit = coordinate_quality_audit(db, user=None, entity="operations_login_current_status")
     row = next((item for item in audit.get("data", []) if item.get("regional") == regional), None)
     if not row:
         return {}
@@ -93,8 +95,11 @@ def _coverage_for_regional(db: Session, regional: str | None) -> dict:
 
 
 def run_collective_outage_monitor(db: Session) -> MonitorRunResult:
+    # `user=None`: monitor de sistema, sem usuário associado - varre o sistema inteiro de
+    # propósito (detecção de outage coletivo não pode ficar restrita a uma regional).
     analysis = login_incident_analysis(
         db,
+        user=None,
         window_minutes=WINDOW_MINUTES,
         regionals=None,
         cluster_radius_meters=CLUSTER_RADIUS_METERS,

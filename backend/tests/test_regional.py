@@ -2,8 +2,10 @@
 from app.services.regional import (
     ROLIM_REGIONAL,
     SAO_FRANCISCO_REGIONAL,
+    granular_regionals_for_group,
     normalize_regional,
     normalize_regional_grouped,
+    regional_group_options,
 )
 
 
@@ -41,6 +43,26 @@ def test_non_numeric_unmapped_value_still_passes_through():
     assert normalize_regional("UNI - JI PARANA") == "UNI - JI PARANA"
 
 
+def test_ji_parana_hyphen_alias_normalizes_to_canonical_spelling():
+    """Bug confirmado na auditoria de frontend de 2026-09-14: `operations_responsible_assignments`
+    (atribuicao manual de responsavel/regional) tinha 36 registros gravados como
+    "UNI - JI-PARANA" (hifen), nunca passados por REGIONAL_CODE_MAP (que so normaliza id_filial
+    numerico) - apareciam como uma segunda opcao no filtro de regional da Gestao Integrada, a
+    mesma filial (Ji-Parana/RO) com grafia divergente. Case/acento tambem devem cair no alias,
+    ja que o alias e resolvido via normalize_key()."""
+    assert normalize_regional("UNI - JI-PARANA") == "UNI - JI PARANA"
+    assert normalize_regional("uni - ji-parana") == "UNI - JI PARANA"
+    assert normalize_regional("  UNI - JI-PARANA  ") == "UNI - JI PARANA"
+
+
+def test_ji_parana_alias_does_not_affect_other_regionals():
+    """O alias e explicito e restrito - nao pode virar normalizacao generica que junte
+    regionais diferentes por engano."""
+    assert normalize_regional("UNI - JARU") == "UNI - JARU"
+    assert normalize_regional("UNI - MACHADINHO DOESTE") == "UNI - MACHADINHO DOESTE"
+    assert normalize_regional("UNI - JI PARANA-CENTRO") == "UNI - JI PARANA-CENTRO"
+
+
 def test_sao_francisco_grouping_still_works_after_adding_rolim_alias():
     """Sanity check: adicionar o agrupamento de Sao Felipe/Rolim nao pode ter quebrado o
     agrupamento existente de Sao Francisco (Sao Miguel + Seringueiras + Sao Francisco do
@@ -49,3 +71,38 @@ def test_sao_francisco_grouping_still_works_after_adding_rolim_alias():
     assert normalize_regional_grouped("UNI - SERINGUEIRAS") == SAO_FRANCISCO_REGIONAL
     assert normalize_regional_grouped("16") == SAO_FRANCISCO_REGIONAL
     assert normalize_regional_grouped("17") == SAO_FRANCISCO_REGIONAL
+
+
+def test_granular_regionals_for_group_expands_rolim_to_include_sao_felipe():
+    """Novo filtro "Regional" (agrupado) da Operacao Analitica/Visao Geral/IA: selecionar
+    "UNI - ROLIM DE MOURA" deve trazer a propria Rolim de Moura E a filial granular de Sao
+    Felipe D'Oeste, que a coluna `OperationOrder.regional` guarda separada."""
+    expanded = granular_regionals_for_group(ROLIM_REGIONAL)
+    assert ROLIM_REGIONAL in expanded
+    assert "UNI - SAO FELIPE DOESTE" in expanded
+
+
+def test_granular_regionals_for_group_expands_sao_francisco_to_all_three():
+    expanded = granular_regionals_for_group(SAO_FRANCISCO_REGIONAL)
+    assert set(expanded) == {
+        "UNI - SAO FRANCISCO DO GUAPORE",
+        "UNI - SAO MIGUEL DO GUAPORE",
+        "UNI - SERINGUEIRAS",
+    }
+
+
+def test_granular_regionals_for_group_unknown_group_returns_empty():
+    """Grupo desconhecido nao pode expandir pra "todas as filiais" nem ser ignorado - o
+    chamador (operations.queries) trata lista vazia como "nenhuma O.S. corresponde"."""
+    assert granular_regionals_for_group("Regional Inexistente") == []
+
+
+def test_regional_group_options_lists_distinct_groups_without_duplicating_members():
+    options = regional_group_options()
+    assert ROLIM_REGIONAL in options
+    assert SAO_FRANCISCO_REGIONAL in options
+    # As filiais que so existem agrupadas (Sao Felipe, Sao Miguel, Seringueiras) nao devem
+    # aparecer como opcao propria do filtro "Regional" - so o nome do grupo aparece.
+    assert "UNI - SAO FELIPE DOESTE" not in options
+    assert "UNI - SAO MIGUEL DO GUAPORE" not in options
+    assert "UNI - SERINGUEIRAS" not in options

@@ -1,3 +1,5 @@
+import { getAuthToken, notifyUnauthorized } from "@/lib/auth-token";
+
 export type OperationPeriod = {
   date_from: string;
   date_to: string;
@@ -10,6 +12,7 @@ export type OperationFilters = {
   team_models: string[];
   companies: string[];
   regionals: string[];
+  regional_groups: string[];
   states: string[];
   cities: string[];
   contract_types: string[];
@@ -36,6 +39,7 @@ export type OperationOverview = {
   responsible_filter_active: boolean;
   completed: number;
   in_progress: number;
+  backlog_ignores_team_scope: boolean;
   opened_out_of_time: number;
   completed_on_time: number;
   completed_out_of_time: number;
@@ -294,6 +298,15 @@ export type OperationSlaItem = {
   average_closing_hours: number | null;
 };
 
+/** Rótulos de `group_by=technology_group` (`GET /operations/sla`) - espelham exatamente
+ * `ACTIVATION_TECHNOLOGY_GROUPS`/`SUPPORT_TECHNOLOGY_GROUPS` de
+ * `backend/app/modules/operations/technology_group.py`. Não há endpoint de catálogo para essas 6
+ * strings (são fixas, definidas pelo painel executivo que este agrupamento reproduz - ver
+ * `docs/integracao-uni/regras-agrupamento-sla-tecnologia.json`), então ficam hardcoded aqui; se o
+ * backend renomear um grupo, este array precisa acompanhar. */
+export const SLA_ACTIVATION_TECHNOLOGY_GROUPS = ["Ativação Fibra Urbana", "Ativação Fibra Rural", "Ativação Rádio"] as const;
+export const SLA_SUPPORT_TECHNOLOGY_GROUPS = ["Suporte Fibra Urbana", "Suporte Fibra Rural", "Suporte Rádio"] as const;
+
 export type OperationSlaHierarchyLevel = "os_type" | "subject" | "diagnosis";
 
 export type OperationSlaHierarchyItem = {
@@ -378,6 +391,7 @@ export type OperationCalendarTeamModel = {
   median_color: string;
   good_color: string;
   excellent_color: string;
+  requires_justification: boolean;
   target_rules: OperationTeamTargetRule[];
 };
 
@@ -640,6 +654,7 @@ export type OperationFilterState = {
   team_models?: string[];
   companies?: string[];
   regionals?: string[];
+  regional_groups?: string[];
   states?: string[];
   cities?: string[];
   contract_types?: string[];
@@ -831,17 +846,33 @@ export type OperationRegionalMatrix = {
   total: OperationRegionalMatrixItem;
 };
 
+/**
+ * Finalizadas por técnico no recorte atual (segundo nível do donut de modelo de equipe). Só nome e
+ * contagem de propósito - ver `queries.overview_collaborator_production` no backend: a rota de SLA
+ * por colaborador devolve 15 campos e ~11x mais bytes pra desenhar o mesmo donut.
+ */
+export type OperationOverviewCollaboratorProduction = {
+  date_from: string;
+  date_to: string;
+  items: Array<{ responsible: string; completed: number }>;
+};
+
+export type OverviewSupportFilterValues = {
+  support_department: string[];
+  support_channel: string[];
+  support_reason: string[];
+};
+
 export type OperationOverviewDefaultFilter = {
   available: boolean;
-  saved_filter_id: number | null;
-  name: string | null;
   filters: OperationSavedFilterValues | null;
+  support_filters: OverviewSupportFilterValues | null;
   can_manage: boolean;
 };
 
 export type OperationOverviewFilterKey =
   | "team_models"
-  | "regionals"
+  | "regional_groups"
   | "sectors"
   | "os_types"
   | "responsibles"
@@ -869,23 +900,19 @@ export type OperationOfflineLoginClusters = {
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
-const TOKEN_KEY = "gamification_auth_token";
-
-function authToken() {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
-  const token = authToken();
+  const token = getAuthToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers,
     cache: "no-store",
   });
+  // Sessão caiu no meio do uso - achado da auditoria de 2026-09-14, ver lib/auth-token.ts.
+  if (response.status === 401 && token) notifyUnauthorized();
   if (!response.ok) {
     const text = await response.text();
     let message = text || `Erro HTTP ${response.status}`;
@@ -987,12 +1014,19 @@ export const operationsApi = {
     request<OperationRegionalMatrix>(
       `/operations/overview/regional-matrix?${query(filters)}`,
     ),
+  overviewCollaboratorProduction: (filters: OperationFilterState) =>
+    request<OperationOverviewCollaboratorProduction>(
+      `/operations/overview/collaborator-production?${query(filters)}`,
+    ),
   overviewDefaultFilter: () =>
     request<OperationOverviewDefaultFilter>("/operations/overview/default-filter"),
-  updateOverviewDefaultFilter: (savedFilterId: number | null) =>
+  updateOverviewDefaultFilter: (
+    filters: OperationSavedFilterValues | null,
+    supportFilters?: OverviewSupportFilterValues,
+  ) =>
     request<OperationOverviewDefaultFilter>("/operations/overview/default-filter", {
       method: "PUT",
-      body: JSON.stringify({ saved_filter_id: savedFilterId }),
+      body: JSON.stringify({ filters, support_filters: filters ? supportFilters ?? null : null }),
     }),
   overviewVisibleFilters: () =>
     request<OperationOverviewVisibleFilters>("/operations/overview/visible-filters"),

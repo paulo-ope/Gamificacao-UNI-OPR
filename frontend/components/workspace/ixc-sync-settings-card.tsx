@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MultiSelect } from "@/components/ui/multi-select";
-import { AppSwitch } from "@/components/gamification/config-ui";
+import { AppSwitch } from "@/components/ui/switch";
 import type { OperationIxcSyncSettings } from "@/lib/operations-api";
 
 type IxcSyncSettingsPatch = Partial<Omit<OperationIxcSyncSettings, "available_sectors" | "sector_scope_label">>;

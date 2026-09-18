@@ -94,6 +94,10 @@ arquivos antes de continuar o trabalho.
 - `plano-integracao-ixc.md` / `plano-integracao-opa-suite.md` — planos de integração externa.
 - `plano-analise-opa-suite-atendimentos.md` — plano de evolução do módulo SGP em análise completa de atendimentos (visão geral, individual, histórico/timeline, metas, IA).
 - `plano-ux-visual-sgp-suporte-fase-4a.md` — planejamento da fase visual/UX do SGP Suporte após as fases estruturais da OPA Suite.
+- `plano-gamificacao-reestruturacao.md` — auditoria completa (visual, bugs, performance,
+  estrutura) da Gamificação Operacional e plano de reestruturação em fases. Os bugs
+  críticos e altos já foram corrigidos (ver `docs/STATUS.md`); a fase visual, navegação e
+  estrutura ainda não foram iniciadas — leia antes de mexer neste módulo.
 - `portal-ciclo-vida-conta-colaborador.md` — planejamento da Fase 2 do Portal do
   Colaborador (ciclo de vida da conta após o primeiro acesso da Fase 1): troca de
   senha pelo próprio usuário, reset administrativo, convite com token, solicitação de
@@ -107,7 +111,24 @@ arquivos antes de continuar o trabalho.
 - `estudo-kpis-agendamento.md` — KPIs do módulo de Agendamento.
 - `spec-saldo-pontos-garantia-pos-pagamento.md` — regra de saldo/garantia da Gamificação.
 - `audit-findings-2026-07-24.md` / `auditoria-evolucao-opa-suite-2026-08-16.md` — auditorias pontuais, valor histórico.
+- `auditoria-tecnica-geral-2026-09-15.md` — auditoria técnica de todo o sistema
+  (segurança, bugs, código morto, performance, testes ausentes, prontidão de
+  IA/MCP), com achados priorizados P0-P3 e evidência de `arquivo:linha`. Nenhuma
+  correção foi feita ainda — ver `docs/STATUS.md` para o que já foi corrigido
+  depois desta auditoria e o que continua pendente.
 - `manual_programacao_senior.md` / `manual_frontend_senior.md` / `code_review.md` — manuais de padrão de código.
+- **`api-completa.md` — documento único com toda a referência de API (374 endpoints REST +
+  38 tools MCP `opr_*`), pronto pra compartilhar com outro time (ex.: Portal de
+  Resultados).** Consolida os arquivos abaixo com sumário e âncoras por módulo.
+- `api-mcp-connector.md` — catálogo das 38 ferramentas `opr_*` expostas pelo conector MCP
+  (integração externa, ex.: time do Portal de Resultados), autenticação OAuth e exemplos.
+- `api-operacao-analitica.md` / `api-suporte.md` / `api-gestao.md` / `api-agendamento.md` /
+  `api-admin.md` / `api-intelligence.md` / `api-localiza.md` / `api-ai.md` /
+  `api-gamificacao.md` — referência REST completa de cada módulo (endpoint, permissão
+  exigida, formato de resposta e exemplos), uma por módulo/prefixo de API — mesmo conteúdo
+  de `api-completa.md`, separado por módulo pra consulta isolada. Geradas em 2026-09-16 a
+  partir da leitura direta do código-fonte (routers/schemas); revisar contra o código se o
+  router correspondente mudar.
 
 Documentos de estudo/proposta antigos permanecem como histórico de decisão, não como
 verdade atual — se um deles conflitar com o código, o código vence.

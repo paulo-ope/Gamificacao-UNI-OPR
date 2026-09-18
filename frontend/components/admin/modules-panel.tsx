@@ -1,11 +1,26 @@
 "use client";
 
+import { Settings2 } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ModuleUserVisibilityEditor } from "@/components/workspace/module-user-visibility-editor";
 import type { AuthUser } from "@/lib/types";
 
 import type { VisibleModuleRow } from "./admin-shared";
+
+const STATUS_LABELS: Record<string, string> = {
+  active: "Ativo",
+  planned: "Planejado",
+  disabled: "Desativado",
+};
+
+const STATUS_BADGE: Record<string, string> = {
+  active: "bg-emerald-50 text-emerald-700",
+  planned: "bg-blue-50 text-blue-700",
+  disabled: "bg-slate-100 text-slate-600",
+};
 
 type Props = {
   visibleModuleRows: VisibleModuleRow[];
@@ -15,6 +30,7 @@ type Props = {
   onUpdateModuleVisibility: (moduleKey: string, profileId: number, visible: boolean) => void;
   onAddModuleUserOverride: (moduleKey: string, userId: number, visible: boolean) => void;
   onRemoveModuleUserOverride: (moduleKey: string, userId: number) => void;
+  onOpenModuleSettings: (module: VisibleModuleRow) => void;
 };
 
 export function ModulesPanel({
@@ -25,15 +41,24 @@ export function ModulesPanel({
   onUpdateModuleVisibility,
   onAddModuleUserOverride,
   onRemoveModuleUserOverride,
+  onOpenModuleSettings,
 }: Props) {
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-5">
-        <h3 className="text-lg font-semibold text-slate-950">Módulos do ecossistema</h3>
-        <Badge className="bg-emerald-50 text-emerald-700">{visibleModuleRows.filter((item) => item.status === "active").length} ativos</Badge>
+    <div className="min-w-0 rounded-3xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-2 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-slate-950">Módulos do ecossistema</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Nome, descrição, status e ordem são parametrizáveis. Rota, prefixo de API e permissão mínima
+            vêm do código — mudá-los aqui deixaria o módulo visível para quem as rotas dele recusam.
+          </p>
+        </div>
+        <Badge className="shrink-0 bg-emerald-50 text-emerald-700">
+          {visibleModuleRows.filter((item) => item.status === "active").length} ativos
+        </Badge>
       </div>
       <div className="overflow-x-auto p-5">
-        <Table>
+        <Table className="min-w-[1000px]">
           <TableHeader>
             <TableRow>
               <TableHead>Módulo</TableHead>
@@ -41,14 +66,28 @@ export function ModulesPanel({
               <TableHead>Permissão mínima</TableHead>
               <TableHead>Visibilidade por perfil</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead className="text-right">Parametrizar</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {visibleModuleRows.map((module) => (
               <TableRow key={module.key}>
                 <TableCell>
-                  <div className="font-medium text-slate-950">{module.name}</div>
+                  <div className="flex items-center gap-1.5 font-medium text-slate-950">
+                    {module.name}
+                    {module.customized ? (
+                      <span
+                        className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700"
+                        title={`Ajustado pela tela. Padrão do código: ${module.default_name}`}
+                      >
+                        Ajustado
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="text-xs text-slate-500">{module.description}</div>
+                  <div className="mt-0.5 text-[11px] text-slate-400">
+                    {module.key} · ordem {module.sort_order}
+                  </div>
                 </TableCell>
                 <TableCell className="text-sm text-slate-600">{module.web_path}</TableCell>
                 <TableCell className="text-xs text-slate-500">{module.required_permission}</TableCell>
@@ -82,9 +121,25 @@ export function ModulesPanel({
                   />
                 </TableCell>
                 <TableCell>
-                  <Badge className={module.status === "active" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}>
-                    {module.status === "active" ? "Ativo" : module.status}
+                  <Badge className={STATUS_BADGE[module.status] || "bg-slate-100 text-slate-600"}>
+                    {STATUS_LABELS[module.status] || module.status}
                   </Badge>
+                  {module.status !== module.default_status ? (
+                    <div className="mt-1 text-[11px] text-slate-400">
+                      padrão: {STATUS_LABELS[module.default_status] || module.default_status}
+                    </div>
+                  ) : null}
+                </TableCell>
+                <TableCell>
+                  <div className="flex justify-end">
+                    {canWriteModules ? (
+                      <Button type="button" size="sm" variant="outline" disabled={saving} onClick={() => onOpenModuleSettings(module)}>
+                        <Settings2 className="h-3.5 w-3.5" /> Editar
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-slate-400">sem permissão</span>
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
             ))}

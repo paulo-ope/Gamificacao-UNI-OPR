@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.core.security import require_permission
+from app.core.security import require_any_permission
 from app.db.session import get_db
 from app.models import PortalAccessRequest, User
 from app.schemas import (
@@ -90,7 +90,7 @@ def submit_access_request_route(payload: PortalAccessRequestCreate, request: Req
 
 
 @router.get("", response_model=list[PortalAccessRequestOut])
-def list_access_requests_route(db: Session = Depends(get_db), user: User = Depends(require_permission("users:manage"))):
+def list_access_requests_route(db: Session = Depends(get_db), user: User = Depends(require_any_permission("users:manage", "admin:users:read"))):
     return list_access_requests(db)
 
 
@@ -106,7 +106,7 @@ def approve_access_request_route(
     request_id: int,
     payload: PortalAccessRequestApprove,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     """Aprovar cria a conta direto, com a senha que a pessoa já escolheu ao solicitar (2026-08-29) -
     `collaborator_id` é exigido explicitamente no corpo, mesmo quando bate com
@@ -120,7 +120,7 @@ def reject_access_request_route(
     request_id: int,
     payload: PortalAccessRequestReject,
     db: Session = Depends(get_db),
-    user: User = Depends(require_permission("users:manage")),
+    user: User = Depends(require_any_permission("users:manage", "admin:users:write")),
 ):
     item = _get_request_or_404(db, request_id)
     return reject_access_request(db, user, item, decision_reason=payload.decision_reason)

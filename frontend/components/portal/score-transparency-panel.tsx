@@ -32,7 +32,7 @@ function cpkBadgeClass(status: string | null | undefined) {
 
 function stepBarClass(kind: string, value: number) {
   if (kind === "negative" || value < 0) return "bg-rose-500";
-  if (kind === "total") return "bg-[#0028f3]";
+  if (kind === "total") return "bg-uni-impact";
   if (kind === "subtotal") return "bg-cyan-600";
   return "bg-emerald-500";
 }
@@ -86,10 +86,10 @@ function GroupBars({ groups }: { groups: PortalAudit["groups"] }) {
                 <p className="truncate text-sm font-semibold text-slate-950">{group.label}</p>
                 <p className="text-xs text-slate-500">{group.service_orders} O.S. · base {formatPoints(group.base_points)}</p>
               </div>
-              <p className="shrink-0 text-sm font-bold text-[#0028f3]">{formatPoints(group.net_points)}</p>
+              <p className="shrink-0 text-sm font-bold text-uni-impact">{formatPoints(group.net_points)}</p>
             </div>
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-gradient-to-r from-[#2d5fff] to-[#27d9bf]" style={{ width: `${width}%` }} />
+              <div className="h-full rounded-full bg-gradient-to-r from-uni-royal to-uni-turquoise" style={{ width: `${width}%` }} />
             </div>
           </div>
         );
@@ -109,7 +109,7 @@ function HistoryList({ history }: { history: PortalAudit["history"] }) {
             <p className="text-sm font-semibold text-slate-950">{String(item.reference_month).padStart(2, "0")}/{item.reference_year}</p>
             <p className="text-xs text-slate-500">{item.service_orders_count} O.S. · {moneyFormat.format(item.estimated_payment)}</p>
           </div>
-          <p className="text-sm font-bold text-[#0028f3]">{formatPoints(item.final_points)}</p>
+          <p className="text-sm font-bold text-uni-impact">{formatPoints(item.final_points)}</p>
         </div>
       ))}
     </div>
@@ -179,20 +179,20 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
         <div className="grid divide-y lg:grid-cols-[1.35fr_0.65fr] lg:divide-x lg:divide-y-0">
           <div className="p-3 sm:p-5">
             <div className="flex items-center gap-2 px-1">
-              <BarChart3 className="h-4 w-4 text-[#0028f3]" />
+              <BarChart3 className="h-4 w-4 text-uni-impact" />
               <h4 className="font-semibold text-slate-950">Composição do cálculo</h4>
             </div>
             <StepBars steps={visibleScoreSteps} />
           </div>
           <div className="p-5">
             <div className="flex items-center gap-2">
-              <Gauge className="h-4 w-4 text-[#0028f3]" />
+              <Gauge className="h-4 w-4 text-uni-impact" />
               <h4 className="font-semibold text-slate-950">CPK da regional</h4>
             </div>
             <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Badge className={cpkBadgeClass(audit.cpk?.status)}>{audit.cpk?.status_label ?? "CPK não sincronizado"}</Badge>
-                <span className={audit.cpk?.adjustment && audit.cpk.adjustment !== 0 ? "text-sm font-semibold text-[#0028f3]" : "text-sm font-semibold text-slate-500"}>
+                <span className={audit.cpk?.adjustment && audit.cpk.adjustment !== 0 ? "text-sm font-semibold text-uni-impact" : "text-sm font-semibold text-slate-500"}>
                   {formatMultiplier(audit.cpk?.adjustment)}
                 </span>
               </div>
@@ -211,9 +211,9 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
                 {audit.cpk?.mes_fechado ? "Snapshot de mês fechado." : "Snapshot parcial ou ainda não fechado."}
               </p>
             </div>
-            <div className="mt-4 rounded-2xl border border-[#2d5fff]/15 bg-[#2d5fff]/5 p-4 text-sm text-slate-700">
+            <div className="mt-4 rounded-2xl border border-uni-royal/15 bg-uni-royal/5 p-4 text-sm text-slate-700">
               <div className="flex items-center gap-2 font-semibold text-slate-950">
-                <ShieldCheck className="h-4 w-4 text-[#0028f3]" />
+                <ShieldCheck className="h-4 w-4 text-uni-impact" />
                 Transparência do multiplicador
               </div>
               <p className="mt-2">
@@ -227,7 +227,7 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
       <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-2xl border bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-[#0028f3]" />
+              <BarChart3 className="h-4 w-4 text-uni-impact" />
               <h4 className="font-semibold text-slate-950">Onde seus pontos nasceram</h4>
             </div>
             {groupData.length ? (
@@ -238,7 +238,7 @@ export function ScoreTransparencyPanel({ audit, summary, onOpenOrders }: Props) 
           </div>
           <div className="rounded-2xl border bg-white p-5 shadow-sm">
             <div className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-[#0028f3]" />
+              <BarChart3 className="h-4 w-4 text-uni-impact" />
               <h4 className="font-semibold text-slate-950">Evolução dos fechamentos</h4>
             </div>
             {audit.history.length ? (

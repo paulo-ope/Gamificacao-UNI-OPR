@@ -52,8 +52,10 @@ def test_field_catalog_reflects_capabilities_dynamically(db_session, admin_user)
     assert by_key[("operations_orders", "raw_payload")]["selectable"] is False
     assert by_key[("operations_orders", "raw_payload")]["detail_available"] is True
     assert by_key[("operations_orders", "service_description")]["text_filterable"] is True
-    # Capacidade nova (item 26) entra desabilitada por padrão.
-    assert by_key[("operations_login_current_status", "login")]["enabled_for_api"] is False
+    # default_enabled=True desde 2026-08-15 (pedido explícito do usuário, commit 5aae3b9) - o
+    # endpoint continua controlando o acesso de fato (ai_governance/field_registry.py), então
+    # habilitar o campo aqui não expõe nada sozinho sem o endpoint também estar ligado.
+    assert by_key[("operations_login_current_status", "login")]["enabled_for_api"] is True
 
 
 def test_order_details_finds_by_order_code_and_reports_missing(db_session, admin_user):

@@ -139,6 +139,57 @@ def test_generate_daily_cases_still_evaluates_a_scheduled_workday_for_an_alterna
     assert case.reference_date == MONDAY
 
 
+# --- requires_justification (meta mínima parametrizável) -----------------------------------------
+
+
+def test_generate_daily_cases_skips_model_that_does_not_require_justification(db_session):
+    """Modelo com `requires_justification=False`: dia abaixo da meta continua sem produção
+    suficiente, mas nenhum caso automático nasce - pedido do usuário em 2026-09-17."""
+    model = OperationTeamModel(
+        name="Suporte Flex", daily_target=5, median_from_quantity=3, good_from_quantity=4,
+        active=True, requires_justification=False,
+    )
+    db_session.add(model)
+    db_session.flush()
+    db_session.add(_member(team_model_id=model.id))
+    db_session.commit()
+
+    result = cases_engine.generate_daily_cases_for_date(db_session, day=MONDAY)
+
+    assert result["created_cases"] == 0
+    assert result["evaluated_members"] == 0
+    assert db_session.query(ManagementCase).count() == 0
+
+
+def test_refresh_pending_cases_resolves_daily_case_when_model_stops_requiring_justification(db_session):
+    """Um caso diário já aberto vira órfão se o modelo deixar de exigir justificativa depois -
+    `refresh_pending_cases` (rodado diariamente pelo scheduler) precisa fechar sozinho, com uma
+    nota clara, em vez de deixar o supervisor devendo uma justificativa que não é mais exigida."""
+    model = OperationTeamModel(
+        name="Suporte Flex", daily_target=5, median_from_quantity=3, good_from_quantity=4,
+        active=True, requires_justification=True,
+    )
+    db_session.add(model)
+    db_session.flush()
+    db_session.add(_member(team_model_id=model.id))
+    db_session.commit()
+
+    result = cases_engine.generate_daily_cases_for_date(db_session, day=MONDAY)
+    assert result["created_cases"] == 1
+    db_session.commit()
+
+    model.requires_justification = False
+    db_session.commit()
+
+    refreshed = cases_engine.refresh_pending_cases(db_session)
+    db_session.commit()
+
+    assert refreshed["daily_resolved"] == 1
+    case = db_session.query(ManagementCase).one()
+    assert case.status == "resolved"
+    assert case.justification_text == cases_engine.CASE_JUSTIFICATION_NOT_REQUIRED_NOTE
+
+
 # --- Endpoint de atualização (PATCH /members/{id}) ----------------------------------------------
 
 

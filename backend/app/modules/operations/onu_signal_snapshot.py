@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.models import User
 from app.services.calculation import get_setting
 from app.services.ixc_client import IxcClient, fetch_onu_signal_by_login_ids, fetch_radios_by_ids, get_ixc_client
+from app.services.regional import regional_scope_or_deny
 
 from .models import OperationLoginCurrentStatus, OperationOnuSignalCurrent, OperationOnuSignalSnapshot
 from .period import parse_ixc_local_datetime
@@ -177,6 +180,7 @@ MAX_ONU_SIGNAL_RESULTS = 500
 def query_onu_signal_status(
     db: Session,
     *,
+    user: User | None,
     login_ids: list[int] | None = None,
     last_drop_causes: list[str] | None = None,
     transmitter_ids: list[str] | None = None,
@@ -184,8 +188,15 @@ def query_onu_signal_status(
 ) -> list[dict]:
     """Consulta individual de telemetria óptica/ONU, já com o nome do login (join com
     `OperationLoginCurrentStatus`) - sem filtro nenhum, limita a `limit` (até
-    `MAX_ONU_SIGNAL_RESULTS`) para nunca devolver a base inteira de logins monitorados de vez."""
+    `MAX_ONU_SIGNAL_RESULTS`) para nunca devolver a base inteira de logins monitorados de vez.
+    Sempre aplica o escopo regional de `user` (achado P0-2 da auditoria de 2026-09-15) via o
+    próprio join com `OperationLoginCurrentStatus` que a consulta já fazia."""
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
+        return []
     conditions = []
+    if allowed_regionals:
+        conditions.append(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
     if login_ids:
         conditions.append(OperationOnuSignalCurrent.login_id.in_(login_ids))
     if last_drop_causes:
@@ -264,6 +275,7 @@ MAX_ONU_SIGNAL_HISTORY_RESULTS = 2000
 def query_onu_signal_history(
     db: Session,
     *,
+    user: User | None,
     login_ids: list[int] | None = None,
     onu_serials: list[str] | None = None,
     date_from: datetime | None = None,
@@ -279,8 +291,15 @@ def query_onu_signal_history(
     Cobertura parcial por desenho (ver docstring de `OperationOnuSignalSnapshot`): só existem
     pontos para os momentos em que o login estava na fila de diagnóstico daquele ciclo - um login
     saudável e estável por semanas pode não ter captura nova nesse intervalo. Ausência de pontos
-    num período não significa "sinal bom o tempo todo", significa "não foi medido nesse período"."""
+    num período não significa "sinal bom o tempo todo", significa "não foi medido nesse período".
+
+    `OperationOnuSignalSnapshot` não tem coluna própria de regional - aplica o escopo de `user`
+    (achado P0-2 da auditoria de 2026-09-15) via JOIN com `OperationLoginCurrentStatus`, só quando
+    o escopo realmente restringe (evita o JOIN extra pra quem enxerga tudo)."""
     if not login_ids and not onu_serials:
+        return []
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    if deny_all:
         return []
     conditions = []
     if login_ids:
@@ -292,9 +311,13 @@ def query_onu_signal_history(
     if date_to:
         conditions.append(OperationOnuSignalSnapshot.captured_at <= date_to)
 
+    stmt = select(OperationOnuSignalSnapshot)
+    if allowed_regionals:
+        stmt = stmt.join(
+            OperationLoginCurrentStatus, OperationLoginCurrentStatus.login_id == OperationOnuSignalSnapshot.login_id
+        ).where(OperationLoginCurrentStatus.regional.in_(allowed_regionals))
     stmt = (
-        select(OperationOnuSignalSnapshot)
-        .where(*conditions)
+        stmt.where(*conditions)
         .order_by(OperationOnuSignalSnapshot.captured_at.asc())
         .limit(min(limit, MAX_ONU_SIGNAL_HISTORY_RESULTS))
     )
@@ -376,3 +399,91 @@ async def run_onu_signal_snapshot_loop() -> None:
         except Exception:
             logger.exception("Falha ao capturar snapshot de sinal ONU.")
         await asyncio.sleep(_current_onu_signal_interval_seconds())
+
+
+# Mesmo desenho de `login_status_snapshot.OperationLoginStatusSnapshot` (append-only, sem
+# retenção) e mesmo risco de crescimento sem limite - hoje bem menor (1,5GB, porque só cobre a
+# "fila de diagnóstico", não a base inteira) mas com a VM sem margem de disco (incidente de
+# 12 e 17/09/2026, disco de 97GB sem possibilidade de expansão) não dá pra esperar essa tabela
+# virar um problema antes de tratar. Ligada por padrão, mesmo racional de
+# `LOGIN_STATUS_RETENTION_ENABLED_KEY`. Retenção mais longa que a de login status (30 dias, não
+# 7) porque o volume por dia é bem menor (só watchlist) e o histórico aqui é usado para
+# diagnóstico de equipamento ao longo de mais tempo (ver `query_onu_signal_history`).
+ONU_SIGNAL_RETENTION_ENABLED_KEY = "onu_signal_retention_enabled"
+ONU_SIGNAL_RETENTION_DAYS_KEY = "onu_signal_retention_days"
+ONU_SIGNAL_RETENTION_DEFAULT_DAYS = 30
+ONU_SIGNAL_RETENTION_MIN_DAYS = 7
+ONU_SIGNAL_RETENTION_MAX_DAYS = 365
+ONU_SIGNAL_RETENTION_INTERVAL_SECONDS = 6 * 60 * 60
+_ONU_SIGNAL_RETENTION_BATCH_SIZE = 20_000
+_ONU_SIGNAL_RETENTION_BATCH_PAUSE_SECONDS = 0.2
+
+
+def _current_onu_signal_retention_days() -> int:
+    with SessionLocal() as db:
+        raw = get_setting(db, ONU_SIGNAL_RETENTION_DAYS_KEY, "")
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        days = ONU_SIGNAL_RETENTION_DEFAULT_DAYS
+    return min(max(days, ONU_SIGNAL_RETENTION_MIN_DAYS), ONU_SIGNAL_RETENTION_MAX_DAYS)
+
+
+def _onu_signal_retention_enabled(default: bool) -> bool:
+    with SessionLocal() as db:
+        raw = get_setting(db, ONU_SIGNAL_RETENTION_ENABLED_KEY, "")
+    if not raw:
+        return default
+    return raw.strip().lower() in {"true", "1", "sim", "yes"}
+
+
+def purge_old_onu_signal_snapshots(
+    db: Session, *, retention_days: int, batch_size: int = _ONU_SIGNAL_RETENTION_BATCH_SIZE
+) -> int:
+    """Apaga em lotes linhas de `operations_onu_signal_snapshots` com `captured_at` mais antigo
+    que `retention_days`. Mesma técnica de `login_status_snapshot.purge_old_login_status_snapshots`
+    (commit por lote, não uma transação só) - motivo idêntico: VM sem margem de disco, um DELETE
+    gigante de uma vez arrisca gerar WAL demais e derrubar o Postgres. Retorna o total de linhas
+    removidas."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    total_deleted = 0
+    while True:
+        batch_ids = db.scalars(
+            select(OperationOnuSignalSnapshot.id)
+            .where(OperationOnuSignalSnapshot.captured_at < cutoff)
+            .limit(batch_size)
+        ).all()
+        if not batch_ids:
+            break
+        db.execute(delete(OperationOnuSignalSnapshot).where(OperationOnuSignalSnapshot.id.in_(batch_ids)))
+        db.commit()
+        total_deleted += len(batch_ids)
+        if len(batch_ids) < batch_size:
+            break
+        time.sleep(_ONU_SIGNAL_RETENTION_BATCH_PAUSE_SECONDS)
+    return total_deleted
+
+
+async def run_onu_signal_snapshot_purge_loop() -> None:
+    """Loop infinito, roda a cada `ONU_SIGNAL_RETENTION_INTERVAL_SECONDS`: purga snapshots de
+    sinal ONU mais antigos que `ONU_SIGNAL_RETENTION_DAYS_KEY` dias. Independe de configuração do
+    IXC (só limpa histórico já gravado, não chama a API externa). Liga/desliga e o número de dias
+    são configuráveis por AppSetting, lidos a cada ciclo. Uma falha numa rodada não derruba o
+    loop, só é logada."""
+    while True:
+        try:
+            if _onu_signal_retention_enabled(default=True):
+                retention_days = _current_onu_signal_retention_days()
+                with SessionLocal() as db:
+                    deleted = await asyncio.to_thread(
+                        purge_old_onu_signal_snapshots, db, retention_days=retention_days
+                    )
+                if deleted:
+                    logger.info(
+                        "Purga de snapshots de sinal ONU: %d linhas removidas (retenção de %d dias).",
+                        deleted,
+                        retention_days,
+                    )
+        except Exception:
+            logger.exception("Falha ao purgar snapshots antigos de sinal ONU.")
+        await asyncio.sleep(ONU_SIGNAL_RETENTION_INTERVAL_SECONDS)

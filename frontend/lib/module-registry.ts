@@ -1,9 +1,9 @@
-import type { Permission } from "@/lib/types";
+import type { Permission, WorkspaceModuleKey } from "@/lib/types";
 
 export type WorkspaceModuleStatus = "active" | "planned" | "disabled";
 
 export type WorkspaceModule = {
-  key: "gamification" | "operations" | "scheduling" | "support" | "management" | "admin" | "intelligence" | "localiza";
+  key: WorkspaceModuleKey;
   name: string;
   description: string;
   webPath: string;

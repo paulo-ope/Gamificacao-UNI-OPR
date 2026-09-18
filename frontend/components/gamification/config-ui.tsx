@@ -1,6 +1,5 @@
 "use client";
 
-import * as Dialog from "@radix-ui/react-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import { Check, ChevronDown, MoreHorizontal, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -9,12 +8,13 @@ import type { HTMLAttributes, ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input, type InputProps } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import { cn } from "@/lib/utils";
 
-export const configSectionClass = "rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]";
+export const configSectionClass = "rounded-2xl border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]";
 export const configCardClass = "rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]";
 export const configSoftCardClass = "rounded-2xl border border-slate-200 bg-slate-50 p-4";
 export const configSelectClass = "h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -64,47 +64,11 @@ export function MetricCard({
   );
 }
 
-export function AppSwitch({
-  checked,
-  onCheckedChange,
-  label,
-}: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  label?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onCheckedChange(!checked)}
-      className={cn(
-        "inline-flex items-center gap-2 rounded-full border px-2 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        checked ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-600"
-      )}
-    >
-      <span
-        className={cn(
-          "relative flex h-5 w-9 items-center rounded-full transition",
-          checked ? "bg-emerald-500" : "bg-slate-300"
-        )}
-      >
-        <span
-          className={cn(
-            "absolute h-4 w-4 rounded-full bg-white shadow-sm transition",
-            checked ? "left-4" : "left-0.5"
-          )}
-        />
-      </span>
-      <span>{label ?? (checked ? "Ativo" : "Inativo")}</span>
-    </button>
-  );
-}
-
-// Reexportado do local compartilhado (components/ui/checkbox.tsx) - outros módulos (operações,
-// admin) importam de lá diretamente; mantido aqui também para não quebrar imports existentes.
+// Reexportados do local compartilhado - outros módulos (operações, admin, visão geral) importam
+// de lá diretamente; mantidos aqui também para não quebrar os consumidores internos da
+// Gamificação (migração de rodada anterior/2026-09-16, ver docs/plano-gamificacao-reestruturacao.md).
 export { AppCheckbox } from "@/components/ui/checkbox";
+export { AppSwitch } from "@/components/ui/switch";
 
 export function AppCombobox({
   value,
@@ -237,119 +201,6 @@ export function AppCombobox({
               })}
               {filtered.length === 0 ? <div className="px-3 py-6 text-center text-sm text-slate-500">{emptyLabel}</div> : null}
             </CommandList>
-          </Command>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
-  );
-}
-
-export function AppMultiSelect({
-  values,
-  onChange,
-  options,
-  placeholder,
-  searchPlaceholder = "Pesquisar...",
-  emptyLabel = "Nenhuma opção encontrada.",
-  ariaLabel,
-  className,
-}: {
-  values: string[];
-  onChange: (values: string[]) => void;
-  options: Array<{ value: string; label: string }>;
-  placeholder: string;
-  searchPlaceholder?: string;
-  emptyLabel?: string;
-  ariaLabel?: string;
-  className?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-
-  const filtered = useMemo(() => {
-    const normalized = search.trim().toLowerCase();
-    return options.filter((option) => option.label.toLowerCase().includes(normalized));
-  }, [options, search]);
-
-  const summary =
-    values.length === 0
-      ? placeholder
-      : values.length === 1
-        ? options.find((option) => option.value === values[0])?.label ?? placeholder
-        : `${values.length} selecionadas`;
-
-  function toggle(value: string) {
-    onChange(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
-  }
-
-  return (
-    <Popover.Root
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setSearch("");
-      }}
-    >
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          aria-label={ariaLabel ?? placeholder}
-          className={cn(configSelectClass, "flex items-center justify-between gap-2 text-left", className)}
-        >
-          <span className={values.length ? "truncate text-slate-900" : "truncate text-slate-500"}>{summary}</span>
-          <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" />
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          side="bottom"
-          align="start"
-          sideOffset={8}
-          avoidCollisions
-          collisionPadding={12}
-          style={{ width: "max(18rem, var(--radix-popover-trigger-width))", pointerEvents: "auto" }}
-          className="z-[90] flex max-h-[min(24rem,var(--radix-popover-content-available-height))] max-w-[var(--radix-popover-content-available-width)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_18px_48px_rgba(15,23,42,0.14)]"
-        >
-          <Command className="flex min-h-0 flex-1 flex-col border-0 shadow-none">
-            <CommandInput value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} className="h-10 shrink-0" />
-            <CommandList
-              className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto"
-              onWheel={(event) => {
-                event.currentTarget.scrollTop += event.deltaY;
-              }}
-            >
-              {filtered.map((option) => {
-                const checked = values.includes(option.value);
-                return (
-                  <CommandItem
-                    key={option.value}
-                    onClick={() => toggle(option.value)}
-                    className="flex items-center justify-between rounded-xl border border-transparent px-3 py-2.5 hover:border-slate-200 hover:bg-slate-50"
-                  >
-                    <span className="truncate text-sm font-medium text-slate-800">{option.label}</span>
-                    <span
-                      className={cn(
-                        "ml-3 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                        checked ? "border-[var(--uni-royal)] bg-[var(--uni-royal)] text-white" : "border-slate-300 bg-white text-transparent"
-                      )}
-                    >
-                      <Check className="h-3 w-3" />
-                    </span>
-                  </CommandItem>
-                );
-              })}
-              {filtered.length === 0 ? <div className="px-3 py-6 text-center text-sm text-slate-500">{emptyLabel}</div> : null}
-            </CommandList>
-            {values.length > 0 ? (
-              <div className="mt-2 flex shrink-0 items-center justify-between border-t border-slate-100 pt-2">
-                <span className="text-xs text-slate-500">
-                  {values.length} selecionada{values.length > 1 ? "s" : ""}
-                </span>
-                <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onChange([])}>
-                  Limpar
-                </Button>
-              </div>
-            ) : null}
           </Command>
         </Popover.Content>
       </Popover.Portal>
@@ -506,28 +357,6 @@ export function ToolbarCount({ children }: { children: ReactNode }) {
 
 export function DataTableFrame({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("overflow-hidden rounded-b-[24px] border-t border-slate-200", className)} {...props} />;
-}
-
-export function StatusBadge({
-  tone = "neutral",
-  children,
-  className,
-}: {
-  tone?: "success" | "warning" | "danger" | "info" | "neutral";
-  children: ReactNode;
-  className?: string;
-}) {
-  const toneClass =
-    tone === "success"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-      : tone === "warning"
-        ? "border-amber-200 bg-amber-50 text-amber-800"
-        : tone === "danger"
-          ? "border-red-200 bg-red-50 text-red-700"
-          : tone === "info"
-            ? "border-blue-200 bg-blue-50 text-uni-royal"
-            : "border-slate-200 bg-slate-50 text-slate-700";
-  return <Badge className={cn(toneClass, className)}>{children}</Badge>;
 }
 
 // Substitui as versões duplicadas de "iniciais em círculo colorido" que existiam soltas em
@@ -728,40 +557,6 @@ export function RegionalMultiSelect({
   );
 }
 
-export function EmptyState({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center">
-      <div className="text-sm font-semibold text-slate-900">{title}</div>
-      <div className="mt-1 text-sm text-slate-500">{description}</div>
-    </div>
-  );
-}
-
-export function LoadingState({ children }: { children: ReactNode }) {
-  return <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-500">{children}</div>;
-}
-
-export function ErrorState({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-8 text-center">
-      <div className="text-sm font-semibold text-red-900">{title}</div>
-      <div className="mt-1 text-sm text-red-700">{description}</div>
-    </div>
-  );
-}
-
 export function AppModal({
   open,
   onOpenChange,
@@ -781,29 +576,28 @@ export function AppModal({
 }) {
   const sizeClass = size === "sm" ? "sm:max-w-md" : size === "lg" ? "sm:max-w-3xl" : "sm:max-w-xl";
 
+  // Compõe o `Dialog`/`DialogContent` compartilhado (mesma base que `AppDrawer` já usa via
+  // `Sheet`/`SheetContent`) em vez de montar Overlay/Content direto do Radix - achado de auditoria
+  // (2026-09-14): a versão anterior duplicava overlay/close/z-index do zero, criando uma pilha de
+  // z-index paralela à de `ui/dialog.tsx`. O `className` abaixo só recria a aparência específica do
+  // AppModal (cantos mais arredondados, sombra maior, header/footer com borda, corpo rolável,
+  // z-[80] para ficar acima de Dialog/Sheet comuns) por cima do `DialogContent` de base.
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/35" />
-        <Dialog.Content
-          className={cn(
-            "fixed left-1/2 top-1/2 z-[80] w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-[24px] border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.2)] outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            sizeClass
-          )}
-        >
-          <div className="border-b px-6 py-5 pr-14">
-            <Dialog.Title className="text-lg font-semibold text-slate-950">{title}</Dialog.Title>
-            {description ? <Dialog.Description className="mt-1 text-sm text-slate-500">{description}</Dialog.Description> : null}
-          </div>
-          <div className="max-h-[70vh] overflow-auto px-6 py-5">{children}</div>
-          {footer ? <div className="flex flex-wrap justify-end gap-2 border-t px-6 py-4">{footer}</div> : null}
-          <Dialog.Close className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <X className="h-5 w-5" />
-            <span className="sr-only">Fechar</span>
-          </Dialog.Close>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className={cn(
+          "z-[80] w-[calc(100vw-2rem)] max-w-none gap-0 rounded-3xl p-0 shadow-[0_24px_80px_rgba(15,23,42,0.2)]",
+          sizeClass
+        )}
+      >
+        <DialogHeader className="border-b px-6 py-5 pr-8 text-left">
+          <DialogTitle className="text-lg">{title}</DialogTitle>
+          {description ? <DialogDescription>{description}</DialogDescription> : null}
+        </DialogHeader>
+        <div className="max-h-[70vh] overflow-auto px-6 py-5">{children}</div>
+        {footer ? <div className="flex flex-wrap justify-end gap-2 border-t px-6 py-4">{footer}</div> : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -133,7 +133,7 @@ export function InviteAccept({ token, onAccepted }: Props) {
                       <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                       <Input
                         id={newPasswordId}
-                        className="px-9 focus-visible:ring-[#2d5fff]"
+                        className="px-9 focus-visible:ring-uni-royal"
                         type={showPassword ? "text" : "password"}
                         autoComplete="new-password"
                         value={newPassword}
@@ -161,7 +161,7 @@ export function InviteAccept({ token, onAccepted }: Props) {
                       <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
                       <Input
                         id={confirmPasswordId}
-                        className="pl-9 focus-visible:ring-[#2d5fff]"
+                        className="pl-9 focus-visible:ring-uni-royal"
                         type={showPassword ? "text" : "password"}
                         autoComplete="new-password"
                         value={confirmPassword}

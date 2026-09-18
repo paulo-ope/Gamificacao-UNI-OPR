@@ -66,6 +66,7 @@ export type OpaModuleTab =
   | "attendants"
   | "data"
   | "sync"
+  | "ixc_tickets"
   | "operation"
   | "queues"
   | "agents"
@@ -87,6 +88,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "attendants", label: "Atendentes", description: "Volume por atendente", icon: Users },
   { value: "data", label: "Dados", description: "Tabela analítica", icon: Database },
   { value: "sync", label: "Sincronização", description: "Status do OPA", icon: RefreshCw },
+  { value: "ixc_tickets", label: "Atendimento IXC", description: "Indicador antecipado", icon: TriangleAlert },
   { value: "operation", label: "Operação", description: "Planejado", icon: BarChart3 },
   { value: "queues", label: "Filas", description: "Planejado", icon: GitBranch },
   { value: "reasons", label: "Motivos", description: "Planejado", icon: ListFilter },
@@ -94,7 +96,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "history", label: "Histórico", description: "Planejado", icon: History },
 ];
 
-export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "attendants", "data", "sync"];
+export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "attendants", "data", "sync", "ixc_tickets"];
 
 const OPA_STATUS_LABELS: Record<string, string> = {
   AG: "Aguardando atendimento",
@@ -487,7 +489,12 @@ export function OpaGlobalFilters({
         ) : null}
       </div>
 
-      <div className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-65px)] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[65px] md:z-20 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-[14rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]`}>
+      {/* `top-[var(--workspace-header-height)]`: mesma correção aplicada em
+          `operations-filter-panel.tsx` (achado real, 2026-09-14) - o valor fixo antigo (65px) não
+          batia com a altura real do header (79px), sobrepondo o subtítulo da tela ao rolar a
+          página. A variável é medida ao vivo pelo `WorkspaceAppShell` (ver
+          `--workspace-header-height` em app/globals.css), não é mais um número copiado à mão. */}
+      <div className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-var(--workspace-header-height))] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[var(--workspace-header-height)] md:z-40 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-[14rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]`}>
         <div className="min-w-0">
           <DateRangePicker
             dateFrom={period.date_from}
@@ -1303,6 +1310,9 @@ export function OpaSyncPanel({
   const [runHourDraft, setRunHourDraft] = useNumberDraft(settings?.backfill_run_hour, 3);
   const [backfillMonthsDraft, setBackfillMonthsDraft] = useNumberDraft(settings?.backfill_lookback_months, 3);
   const [dimensionsRefreshDraft, setDimensionsRefreshDraft] = useNumberDraft(settings?.dimensions_refresh_hours, 24);
+  const [tmrRunHourDraft, setTmrRunHourDraft] = useNumberDraft(settings?.tmr_backfill_run_hour, 1);
+  const [tmrRunUntilHourDraft, setTmrRunUntilHourDraft] = useNumberDraft(settings?.tmr_backfill_run_until_hour, 6);
+  const [tmrDailyLimitDraft, setTmrDailyLimitDraft] = useNumberDraft(settings?.tmr_backfill_daily_limit, 5000);
 
   function commit(draft: string, min: number, max: number, fallback: number, apply: (value: number) => void) {
     const parsed = Number(draft);
@@ -1445,6 +1455,77 @@ export function OpaSyncPanel({
             disabled={savingSettings || !settings}
             onChange={(event) => setBackfillMonthsDraft(event.target.value)}
             onBlur={() => commit(backfillMonthsDraft, 1, 24, 3, (value) => onSaveSettings({ backfill_lookback_months: value }))}
+          />
+        </label>
+      </div>
+      <div className="mt-4 flex items-center gap-2 text-slate-800">
+        <Clock3 className="h-4 w-4" />
+        <h4 className="text-sm font-semibold">Backfill de TMR histórico (madrugada)</h4>
+        <InfoHint
+          ariaLabel="Ajuda sobre o backfill de TMR histórico"
+          side="bottom"
+          title="Reprocessa atendimentos antigos, aos poucos"
+          description="Recalcula o TMR (humano e geral) de atendimentos já fechados que ainda não têm esse dado — principalmente histórico anterior a 20/08/2026, quando o campo entrou em produção. Cada atendimento custa 1 chamada extra à API do OPA Suite, por isso roda só dentro de uma janela noturna configurável e com um teto por noite, até zerar a fila."
+        />
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        {(syncStatus?.tmr_backfill_pending_count ?? 0).toLocaleString("pt-BR")} atendimento(s) ainda sem TMR histórico
+        {syncStatus?.tmr_backfill_enabled
+          ? ` · ${(syncStatus?.tmr_backfill_processed_today ?? 0).toLocaleString("pt-BR")} processado(s) esta noite`
+          : " · backfill desligado"}
+      </p>
+      {syncStatus?.tmr_backfill_last_error ? (
+        <p className="mt-1 text-xs text-red-700">Última falha: {syncStatus.tmr_backfill_last_error}</p>
+      ) : null}
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <label className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm">
+          <span className="font-medium text-slate-700">Ligado</span>
+          <input
+            type="checkbox"
+            checked={Boolean(settings?.tmr_backfill_enabled)}
+            disabled={savingSettings || !settings}
+            onChange={(event) => onSaveSettings({ tmr_backfill_enabled: event.target.checked })}
+            className="h-4 w-4 rounded border-slate-300"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Janela abre (0-23h)</span>
+          <Input
+            type="number"
+            min={0}
+            max={23}
+            value={tmrRunHourDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setTmrRunHourDraft(event.target.value)}
+            onBlur={() => commit(tmrRunHourDraft, 0, 23, 1, (value) => onSaveSettings({ tmr_backfill_run_hour: value }))}
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Janela fecha (0-23h)</span>
+          <Input
+            type="number"
+            min={0}
+            max={23}
+            value={tmrRunUntilHourDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setTmrRunUntilHourDraft(event.target.value)}
+            onBlur={() =>
+              commit(tmrRunUntilHourDraft, 0, 23, 6, (value) => onSaveSettings({ tmr_backfill_run_until_hour: value }))
+            }
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-medium text-slate-600">Teto por noite</span>
+          <Input
+            type="number"
+            min={100}
+            max={20000}
+            value={tmrDailyLimitDraft}
+            disabled={savingSettings || !settings}
+            onChange={(event) => setTmrDailyLimitDraft(event.target.value)}
+            onBlur={() =>
+              commit(tmrDailyLimitDraft, 100, 20000, 5000, (value) => onSaveSettings({ tmr_backfill_daily_limit: value }))
+            }
           />
         </label>
       </div>

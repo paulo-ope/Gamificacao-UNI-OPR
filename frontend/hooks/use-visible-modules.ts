@@ -2,9 +2,24 @@
 
 import { useEffect, useState } from "react";
 
-import { api, peekSessionCache } from "@/lib/api";
+import { api, invalidateSessionCache, peekSessionCache } from "@/lib/api";
 import { workspaceModules } from "@/lib/module-registry";
 import type { AuthUser, WorkspaceVisibleModule } from "@/lib/types";
+
+const MODULES_CHANGED_EVENT = "uni:workspace-modules-changed";
+
+/**
+ * Avisa a casca de navegação de que a lista de módulos mudou (nome, descrição, status ou ordem
+ * ajustados na Administração).
+ *
+ * Sem isto, a tela que fez a mudança atualizava só a si mesma: a barra lateral seguia com o nome
+ * antigo até o cache de 30s de `/workspace/modules` expirar, e a impressão era de que salvar não
+ * tinha efeito (achado real na verificação ao vivo, 2026-09-09).
+ */
+export function notifyWorkspaceModulesChanged() {
+  invalidateSessionCache("/workspace/modules");
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(MODULES_CHANGED_EVENT));
+}
 
 /**
  * Módulos que este usuário pode abrir.
@@ -20,6 +35,15 @@ export function useVisibleModules(user: AuthUser | null) {
   const [visibleModules, setVisibleModules] = useState<WorkspaceVisibleModule[] | null>(
     () => peekSessionCache<WorkspaceVisibleModule[]>("/workspace/modules"),
   );
+  const [reloadToken, setReloadToken] = useState(0);
+
+  useEffect(() => {
+    function onModulesChanged() {
+      setReloadToken((current) => current + 1);
+    }
+    window.addEventListener(MODULES_CHANGED_EVENT, onModulesChanged);
+    return () => window.removeEventListener(MODULES_CHANGED_EVENT, onModulesChanged);
+  }, []);
 
   useEffect(() => {
     if (!user) {
@@ -38,7 +62,7 @@ export function useVisibleModules(user: AuthUser | null) {
     return () => {
       active = false;
     };
-  }, [user]);
+  }, [user, reloadToken]);
 
   if (!user) return [];
   if (visibleModules) return visibleModules;

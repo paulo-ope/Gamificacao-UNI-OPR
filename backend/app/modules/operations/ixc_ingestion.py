@@ -381,6 +381,7 @@ def _normalize_record(
         "source_order_id": source_id,
         "order_code": f"IXC-{source_id}",
         "protocol": _clean(record.get("protocolo")) or None,
+        "ticket_id": _clean(record.get("id_ticket")) or None,
         "contract_id": contract_id or None,
         "customer_id": _clean(record.get("id_cliente")) or None,
         "customer_login": _first(login_record, "login") or None,

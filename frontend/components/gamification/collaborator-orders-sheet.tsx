@@ -30,6 +30,7 @@ import { SummaryMetric } from "@/components/ui/summary-metric";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { formatAnnulledPoints, formatDateTime, formatHours, formatInteger, formatMoney, formatPoints, formatSignedPoints } from "@/lib/format";
+import { pointValueFromTotals } from "@/lib/gamificacao-helpers";
 import { recurrenceClassificationLabel, resolveRecurrenceDisplay } from "@/lib/recurrence-display";
 import { regionalName } from "@/lib/regional";
 import { type Tone, scoringStatusEntry } from "@/lib/tones";
@@ -133,13 +134,24 @@ export function CollaboratorOrdersSheet({
   useEffect(() => {
     if (!open || !score) return;
 
+    let cancelled = false;
     setLoading(true);
     setError(null);
     api
       .collaboratorOrdersDetail(score.collaborator_id, filters)
-      .then(setDetail)
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
+      .then((payload) => {
+        if (!cancelled) setDetail(payload);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [filters, open, score?.collaborator_id]);
 
   useEffect(() => {
@@ -249,7 +261,7 @@ export function CollaboratorOrdersSheet({
   const hasGarantiaDiscount = Math.abs(garantiaDiscount) > 0.001;
 
   const healthMultiplier = score?.health_multiplier ?? regionalHealth?.multiplier ?? null;
-  const effectivePointValue = pointValue ?? (detail ? detail.summary.estimated_payment / (detail.summary.net_points || 1) : null);
+  const effectivePointValue = pointValue ?? (detail ? pointValueFromTotals(detail.summary.estimated_payment, detail.summary.net_points) : null);
   const tabs: Array<[FilterMode, string]> = [
     ["all", "Resumo"],
     ["scored", "O.S pontuadas"],
@@ -654,7 +666,7 @@ export function CollaboratorOrdersSheet({
                 </section>
               ) : null}
 
-              <section className="overflow-hidden rounded-md border bg-white">
+              <section className="table-frame overflow-hidden rounded-md border bg-white">
                   <Table className="table-fixed text-xs md:text-sm">
                     <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
                       <TableRow className="border-slate-700 hover:bg-slate-900">

@@ -24,11 +24,19 @@ from app.modules.management.scheduler import run_management_case_scheduler_loop
 from app.modules.mcp_connector.router import router as mcp_connector_router
 from app.modules.mcp_connector.server import build_mcp_server
 from app.modules.operations.backlog_snapshot import run_backlog_snapshot_loop
-from app.modules.operations.login_status_snapshot import run_login_status_snapshot_loop
-from app.modules.operations.onu_signal_snapshot import run_onu_signal_snapshot_loop
+from app.modules.operations.login_status_snapshot import (
+    run_login_status_snapshot_loop,
+    run_login_status_snapshot_purge_loop,
+)
+from app.modules.operations.onu_signal_snapshot import (
+    run_onu_signal_snapshot_loop,
+    run_onu_signal_snapshot_purge_loop,
+)
 from app.modules.operations.router import router as operations_router
 from app.modules.scheduling.router import router as scheduling_router
 from app.modules.scheduling.scheduler import run_scheduling_sync_loop
+from app.modules.support.ixc_ticket_baseline import run_ixc_ticket_baseline_loop
+from app.modules.support.ixc_ticket_scheduler import run_ixc_ticket_sync_loop
 from app.modules.support.router import router as support_router
 from app.modules.workspace.router import router as workspace_router
 from app.services.ixc_scheduler import run_ixc_sync_loop
@@ -75,6 +83,15 @@ async def lifespan(app: FastAPI):
             run_opa_sync_loop(settings_.opa_sync_interval_minutes, initial_enabled=settings_.opa_sync_enabled)
         )
 
+    # Atendimento IXC (`su_ticket`, indicador antecipado de incidente - ver docs/STATUS.md
+    # 2026-09-10) e base de clientes por regional (`cliente_contrato`) - mesma condição de
+    # configuração do `ixc_sync_task` (usa o mesmo cliente IXC). Liga/desliga e intervalo
+    # configuráveis por AppSetting, sem variável de ambiente nova (ver
+    # modules/support/ixc_ticket_scheduler.py).
+    ixc_ticket_sync_task = None
+    if settings_.ixc_api_base_url and settings_.ixc_api_token:
+        ixc_ticket_sync_task = asyncio.create_task(run_ixc_ticket_sync_loop())
+
     # Sincronização automática do módulo de Agendamento (eventos de agenda/reagendamento do IXC) -
     # mesma condição de configuração do `ixc_sync_task` (usa o mesmo cliente IXC). Sempre incremental
     # via marca d'água - nunca faz backfill grande sozinho (ver modules/scheduling/scheduler.py).
@@ -89,6 +106,12 @@ async def lifespan(app: FastAPI):
     # Sem dependência de configuração externa (ao contrário do IXC) - sempre roda, é só uma
     # leitura do próprio banco de O.S. já sincronizado.
     backlog_snapshot_task = asyncio.create_task(run_backlog_snapshot_loop())
+
+    # Baseline horário/dia-da-semana do Atendimento IXC (Fase 4 do plano analítico, 2026-09-15) -
+    # mesma condição do backlog_snapshot_task acima: só lê `su_ticket` já sincronizado, sem
+    # dependência de configuração externa. Roda 1x/dia (idempotente, ver
+    # ixc_ticket_baseline.run_ixc_ticket_baseline_loop).
+    ixc_ticket_baseline_task = asyncio.create_task(run_ixc_ticket_baseline_loop())
 
     # UNI Intelligence: motor de monitores (incidente coletivo, deterioração de SLA, pressão
     # operacional, saúde dos próprios monitores) - lê dados já sincronizados por operations, sem
@@ -116,6 +139,16 @@ async def lifespan(app: FastAPI):
     if settings_.ixc_api_base_url and settings_.ixc_api_token:
         onu_signal_snapshot_task = asyncio.create_task(run_onu_signal_snapshot_loop())
 
+    # Purga do histórico append-only de status de login (incidente de 17/09/2026: sem retenção,
+    # a tabela chegou a 66GB e derrubou o Postgres por falta de disco) - independe de configuração
+    # do IXC, mesma condição do backlog_snapshot_task acima.
+    login_status_retention_task = asyncio.create_task(run_login_status_snapshot_purge_loop())
+
+    # Mesmo cuidado preventivo para o histórico de sinal ONU (mesmo desenho append-only sem
+    # retenção, mesmo risco de crescimento sem limite - ver docstring de
+    # onu_signal_snapshot.ONU_SIGNAL_RETENTION_ENABLED_KEY).
+    onu_signal_retention_task = asyncio.create_task(run_onu_signal_snapshot_purge_loop())
+
     # `streamable_http_app()` tem seu próprio lifespan (inicia o gerenciador de sessão MCP), mas
     # Starlette não propaga o protocolo ASGI "lifespan" automaticamente para apps montados via
     # `app.mount` - sem isso, toda chamada de tool falha com "Task group is not initialized"
@@ -136,6 +169,11 @@ async def lifespan(app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             await opa_sync_task
 
+    if ixc_ticket_sync_task:
+        ixc_ticket_sync_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await ixc_ticket_sync_task
+
     if scheduling_sync_task:
         scheduling_sync_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -144,6 +182,10 @@ async def lifespan(app: FastAPI):
     backlog_snapshot_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await backlog_snapshot_task
+
+    ixc_ticket_baseline_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ixc_ticket_baseline_task
 
     intelligence_scheduler_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -163,8 +205,28 @@ async def lifespan(app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             await onu_signal_snapshot_task
 
+    login_status_retention_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await login_status_retention_task
 
-app = FastAPI(title=settings_obj.app_name, version="0.1.0", lifespan=lifespan)
+    onu_signal_retention_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await onu_signal_retention_task
+
+
+# Docs interativos (/docs, /redoc) e o schema (/openapi.json) expõem toda a superfície da API
+# (rotas, parâmetros, modelos) sem exigir login - achado da auditoria de 2026-09-14. Ficam
+# desligados em produção; `APP_ENV` já é a mesma variável usada pela guarda de AUTH_SECRET_KEY em
+# core/config.py, não uma flag nova.
+_docs_enabled = settings_obj.app_env.lower() != "production"
+app = FastAPI(
+    title=settings_obj.app_name,
+    version="0.1.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 
 app.add_middleware(
     CORSMiddleware,

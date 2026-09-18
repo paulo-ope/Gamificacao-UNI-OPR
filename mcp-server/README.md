@@ -82,18 +82,52 @@ Reinicie o Claude Desktop depois de salvar.
 
 ## Ferramentas disponíveis
 
+Confira sempre contra o código (`grep '@mcp.tool' opr_analitica_mcp.py`) — esta tabela já ficou
+defasada uma vez, listando 10 tools quando o arquivo tinha 23.
+
+**O.S. e produção**
+
 | Tool | O que faz |
 |---|---|
 | `opr_aggregate_orders` | Agrupa O.S. por dimensão (regional, bairro, assunto, cluster geográfico, etapa de SLA...) e calcula uma métrica por grupo |
 | `opr_orders_timeseries` | Série temporal (dia/semana/mês) de abertas/fechadas/saldo, opcionalmente quebrada por dimensão |
 | `opr_search_orders` | Busca paginada de O.S. individuais, com texto (descrição de abertura, relato técnico) e todos os campos de SLA/tempo já calculados; suporta filtro geográfico por raio |
+| `opr_order_details` | Detalhamento completo de O.S. específicas por identificador |
 | `opr_backlog_aging` | Idade do backlog (O.S. em aberto) por dimensão |
 | `opr_backlog_history` | Série histórica diária de backlog/backlog atrasado (regional/team_model/sector/city) |
-| `opr_filter_options` | Lista valores realmente cadastrados no período, para montar filtros exatos com a grafia certa |
 | `opr_warranty_analytics` | Análise de garantia de ativação (mesma conta da aba Garantias) |
 | `opr_team_targets` | Metas de equipe vigentes numa data (histórico, não a configuração atual) |
 | `opr_team_target_performance` | Produção realizada x meta prevista, por modelo de equipe |
+| `opr_filter_options` | Lista valores realmente cadastrados no período, para montar filtros exatos com a grafia certa |
 | `opr_list_fields` | Lista campos da O.S. e quais já estão expostos à IA — útil pra descobrir se um filtro que você quer já existe |
+
+**Gestão Integrada (casos e justificativas)**
+
+| Tool | O que faz |
+|---|---|
+| `opr_management_pending_justifications` | "Quem está devendo justificativa": uma linha por colaborador x regional, com idade da pendência, supervisor e ids dos casos abertos — já ordenada pela fila de cobrança |
+| `opr_management_justifications` | Lê o texto das justificativas (motivo, plano de ação, decisão da matriz) por regional / colaborador / data. **Nasce desligada** na governança de IA — precisa de liberação de um administrador |
+| `opr_management_cases` | Listagem paginada dos casos em si (payload completo do caso) |
+| `opr_management_cases_diagnostics` | Diagnóstico agregado: quem mais não bate meta, por regional / colaborador / motivo |
+
+**Rede e conectividade**
+
+| Tool | O que faz |
+|---|---|
+| `opr_login_status` | Status atual de conectividade de logins específicos |
+| `opr_search_logins` | Busca paginada de logins, com filtro geográfico e de horário |
+| `opr_get_login_detail` | Detalhamento de um login (ONU/PON, tempo no estado atual, histórico de eventos) |
+| `opr_login_aggregate` | Agregado de conectividade por dimensão |
+| `opr_login_outages` | Quedas por período |
+| `opr_login_timeseries` | Série temporal de conectividade |
+| `opr_login_incident_analysis` | Funil de incidente coletivo numa única chamada |
+| `opr_offline_login_clusters` | Clusters geográficos de login offline (detecção de queda em massa) |
+| `opr_onu_signal` / `opr_onu_signal_history` | Sinal óptico/ONU: valor atual e série histórica |
+| `opr_coordinate_quality_audit` | Auditoria de qualidade das coordenadas cadastradas |
+
+Tools presentes só no conector MCP remoto (`backend/app/modules/mcp_connector/server.py`), ainda
+não portadas para cá: `opr_reschedule_by_technician`, `opr_reschedule_by_operator`,
+`opr_get_cockpit_context`, `opr_publish_cockpit_content`.
 
 ## Sobre o parâmetro `filters`
 

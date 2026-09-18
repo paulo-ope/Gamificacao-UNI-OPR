@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, ExternalLink, Inbox, Mail, PlugZap, Settings2, ShieldCheck, UserCog } from "lucide-react";
+import { Boxes, ExternalLink, Inbox, KeyRound, Mail, PlugZap, Settings2, ShieldCheck, UserCog } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AccessProfile, AdminPeopleStructure, AuthUser, EcosystemPermission, PortalAccessRequest, PortalInvite } from "@/lib/types";
 
-import { PARAMETER_MODULE_LINKS, type AdminTab, type VisibleModuleRow } from "./admin-shared";
+import { parameterModuleLinks, type AdminTab, type VisibleModuleRow } from "./admin-shared";
 
 type Props = {
   users: AuthUser[];
@@ -124,7 +124,10 @@ export function AdminOverviewPanel({
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" size="sm" variant="outline" onClick={() => onNavigate("profiles")}>
-              <ShieldCheck className="h-4 w-4" /> Perfis e permissões
+              <ShieldCheck className="h-4 w-4" /> Perfis de acesso
+            </Button>
+            <Button type="button" size="sm" variant="outline" onClick={() => onNavigate("permissions")}>
+              <KeyRound className="h-4 w-4" /> Permissões
             </Button>
             <Button type="button" size="sm" variant="outline" onClick={() => onNavigate("modules")}>
               <Boxes className="h-4 w-4" /> Módulos
@@ -153,9 +156,9 @@ export function AdminOverviewPanel({
             <p className="mt-1 text-sm text-slate-500">Cada módulo mantém suas regras de negócio e validações no próprio contexto operacional.</p>
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {PARAMETER_MODULE_LINKS.map((item) => (
+            {parameterModuleLinks(visibleModuleRows).map((item) => (
               <Link
-                key={item.module}
+                key={item.key}
                 href={item.path}
                 className="group rounded-lg border border-slate-200 p-4 transition hover:border-blue-300 hover:bg-blue-50/40"
               >
@@ -164,7 +167,7 @@ export function AdminOverviewPanel({
                   <ExternalLink className="h-4 w-4 shrink-0 text-slate-400 transition group-hover:text-blue-600" />
                 </div>
                 <p className="mt-2 text-sm text-slate-600">{item.owner}</p>
-                <Badge className="mt-3 border border-slate-200 bg-white text-slate-600">{item.permissionArea}</Badge>
+                <Badge className="mt-3 border border-slate-200 bg-white text-slate-600">{item.path}</Badge>
               </Link>
             ))}
           </div>

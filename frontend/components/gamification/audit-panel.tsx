@@ -24,14 +24,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SecondaryPill, StatusBadge } from "@/components/ui/status-badge";
 import { SummaryMetric } from "@/components/ui/summary-metric";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AppCombobox, Avatar } from "@/components/gamification/config-ui";
 import { OrderAuditSheet } from "@/components/gamification/order-audit-drawer";
 import { api } from "@/lib/api";
 import { formatAnnulledPoints, formatHours, formatInteger, formatMoney, formatPoints } from "@/lib/format";
+import { pointValueFromTotals } from "@/lib/gamificacao-helpers";
 import { recurrenceClassificationLabel, resolveRecurrenceDisplay } from "@/lib/recurrence-display";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import { scoringStatusEntry } from "@/lib/tones";
@@ -125,6 +129,10 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
+  // Desligado por padrao: a auditoria confere o que a gamificacao remunera, e remunerar so
+  // acontece pra equipe cadastrada. Ligar traz tambem as O.S de tecnico sem cadastro, que ficam
+  // fora do ranking e do pagamento - util pra conferir a base crua da importacao.
+  const [includeUnregistered, setIncludeUnregistered] = useState(false);
   const activeGroups = useMemo(() => groups.filter((group) => group.active), [groups]);
   const filteredCollaboratorOptions = useMemo(() => {
     const normalizedRegional = regional ? normalizeRegional(regional) : "";
@@ -132,7 +140,8 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       .filter((option) => !normalizedRegional || normalizeRegional(option.regional) === normalizedRegional)
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   }, [collaboratorOptions, regional]);
-  const hasFilters = mode !== "all" || Boolean(regional || collaboratorId || groupId || subject || sla || selectedGroupLabel);
+  const hasFilters =
+    mode !== "all" || includeUnregistered || Boolean(regional || collaboratorId || groupId || subject || sla || selectedGroupLabel);
   const subjectSuggestions = useMemo(() => {
     const normalized = subject.trim().toLowerCase();
     const matches = normalized ? subjectOptions.filter((option) => option.toLowerCase().includes(normalized)) : subjectOptions;
@@ -157,17 +166,18 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       only_recurrence: mode === "recurrence" || undefined,
       only_non_recurrent: mode === "non_recurrent" || undefined,
       only_diagnosis_blocked: mode === "diagnosis_blocked" || undefined,
+      only_registered: includeUnregistered ? false : undefined,
       audit_group_mode: groupMode,
       audit_group_label: selectedGroupLabel || undefined,
       page,
       page_size: pageSize
     }),
-    [calculationRunId, collaboratorId, debouncedSubject, groupId, groupMode, mode, page, pageSize, regional, selectedGroupLabel, sla]
+    [calculationRunId, collaboratorId, debouncedSubject, groupId, groupMode, includeUnregistered, mode, page, pageSize, regional, selectedGroupLabel, sla]
   );
 
   useEffect(() => {
     setPage(1);
-  }, [calculationRunId, collaboratorId, debouncedSubject, groupId, mode, regional, selectedGroupLabel, sla]);
+  }, [calculationRunId, collaboratorId, debouncedSubject, groupId, includeUnregistered, mode, regional, selectedGroupLabel, sla]);
 
   useEffect(() => {
     setSelectedGroupLabel(null);
@@ -201,9 +211,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       });
   }, [filters]);
 
-  const pointValue = audit?.summary.final_points
-    ? audit.summary.estimated_payment / audit.summary.final_points
-    : 0;
+  const pointValue = pointValueFromTotals(audit?.summary.estimated_payment ?? 0, audit?.summary.final_points ?? 0) ?? 0;
   const visibleOrders = useMemo(() => {
     return (audit?.orders ?? []) as AuditOrder[];
   }, [audit]);
@@ -263,8 +271,15 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     if (subject) chips.push({ key: "subject", label: `Assunto: ${subject}`, onRemove: () => setSubject("") });
     if (sla) chips.push({ key: "sla", label: `SLA: ${sla}`, onRemove: () => setSla("") });
     if (selectedGroupLabel) chips.push({ key: "groupLabel", label: `Grupo selecionado: ${selectedGroupLabel}`, onRemove: () => setSelectedGroupLabel(null) });
+    if (includeUnregistered) {
+      chips.push({
+        key: "includeUnregistered",
+        label: "Incluindo O.S de técnico sem cadastro",
+        onRemove: () => setIncludeUnregistered(false)
+      });
+    }
     return chips;
-  }, [activeGroups, collaboratorId, collaboratorOptions, groupId, mode, regional, selectedGroupLabel, sla, subject]);
+  }, [activeGroups, collaboratorId, collaboratorOptions, groupId, includeUnregistered, mode, regional, selectedGroupLabel, sla, subject]);
 
   function clearFilters() {
     setMode("all");
@@ -274,6 +289,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     setSubject("");
     setSla("");
     setSelectedGroupLabel(null);
+    setIncludeUnregistered(false);
     setPage(1);
   }
 
@@ -345,7 +361,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
   }
 
   return (
-    <section className="panel flex h-full min-h-0 flex-col">
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
       <div className="flex shrink-0 flex-col gap-3 border-b bg-white px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">
@@ -355,13 +371,22 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           <h2 className="mt-1 text-base font-semibold text-slate-950">Conferência das O.S e regras aplicadas</h2>
           <p className="mt-1 text-[11px] text-slate-500">Base, regra aplicada, pontos anulados e resultado final em uma tela operacional.</p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {activeFilterChips.length > 0 ? (
             <span className="flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600">
               <Filter className="h-3.5 w-3.5 text-uni-royal" />
               {activeFilterChips.length} filtro(s) ativo(s)
             </span>
           ) : null}
+          <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 hover:border-slate-300">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-[var(--uni-royal)]"
+              checked={includeUnregistered}
+              onChange={(event) => setIncludeUnregistered(event.target.checked)}
+            />
+            Incluir O.S sem cadastro
+          </label>
           <Button variant="outline" size="sm" onClick={clearFilters} disabled={!hasFilters}>
             Limpar
           </Button>
@@ -374,7 +399,14 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
 
       {audit ? (
         <div className="grid shrink-0 gap-2 overflow-x-auto border-b bg-white px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-          <SummaryMetric icon={ClipboardList} label="Total de O.S" value={`${formatInteger(audit.summary.total_service_orders)} O.S`} tone="slate" />
+          <SummaryMetric
+            icon={ClipboardList}
+            // Rotulo curto de proposito: este tile vive numa faixa de 7 colunas e o texto e
+            // truncado - "O.S de equipe cadastrada" perdia justamente a parte que distingue.
+            label={audit.registration_scope?.only_registered === false ? "Total de O.S" : "O.S cadastradas"}
+            value={`${formatInteger(audit.summary.total_service_orders)} O.S`}
+            tone="slate"
+          />
           <SummaryMetric
             icon={HelpCircle}
             label="O.S sem regra"
@@ -582,7 +614,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
         </div>
       ) : null}
 
-      {error ? <div className="mx-3 mt-2 shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
+      {error ? (
+        <div className="mx-3 mt-2 flex shrink-0 items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {error}
+        </div>
+      ) : null}
       {/* Loading sutil: a tabela anterior continua visível durante o refresh (nada de banner
           empurrando o layout) - só um spinner discreto quando ainda não há dado nenhum. */}
       {loading && !audit ? (
@@ -611,20 +648,31 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
             <span>
               {formatInteger(audit.total_orders ?? visibleOrders.length)} O.S no filtro atual, exibindo página {audit.page ?? page} de {audit.total_pages ?? 1}, por {groupModeLabel(groupMode)}.
             </span>
+            {/* A faixa de tiles acima e estreita e trunca - o recorte de cadastro fica aqui, onde
+                ha largura pra dizer o numero inteiro sem cortar. */}
+            {audit.registration_scope?.only_registered !== false &&
+            audit.registration_scope &&
+            audit.registration_scope.period_unregistered_service_orders > 0 ? (
+              <span className="text-slate-500">
+                Fora desta conferência: {formatInteger(audit.registration_scope.period_unregistered_service_orders)} O.S de
+                técnico sem cadastro, de {formatInteger(audit.registration_scope.period_total_service_orders)} no período.
+              </span>
+            ) : null}
             {loading ? <RefreshCw className="h-3 w-3 animate-spin text-uni-royal" /> : null}
           </div>
 
           {visibleOrders.length === 0 && !loading ? (
-            <div className="m-3 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
-              <div className="flex items-center justify-center gap-2 text-sm font-semibold text-slate-950">
-                <AlertTriangle className="h-4 w-4 text-amber-600" />
-                Nenhuma O.S encontrada com os filtros atuais.
-              </div>
-              <p className="mt-1 text-xs text-slate-500">A base não está zerada necessariamente; os filtros podem estar restringindo a auditoria.</p>
-              <Button className="mt-4" size="sm" variant="outline" onClick={clearFilters}>
-                Limpar filtros
-              </Button>
-            </div>
+            <EmptyState
+              className="m-3"
+              icon={<AlertTriangle className="h-6 w-6 text-amber-600" />}
+              title="Nenhuma O.S encontrada com os filtros atuais."
+              description="A base não está zerada necessariamente; os filtros podem estar restringindo a auditoria."
+              action={
+                <Button size="sm" variant="outline" onClick={clearFilters}>
+                  Limpar filtros
+                </Button>
+              }
+            />
           ) : null}
 
           {visibleOrders.length > 0 && activeGroup ? (
@@ -675,102 +723,100 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                 </div>
               </div>
 
-              <div className="mt-2 min-h-0 flex-1 overflow-hidden rounded-xl border bg-white">
-                <div className="audit-table-frame h-full">
-                  <table className="w-full table-fixed border-collapse text-xs">
-                    <thead className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm">
-                      <tr>
-                        {[
-                          ["O.S", "w-[76px]"],
-                          ["Colaborador", "w-[180px]"],
-                          ["Regional", "w-[110px]"],
-                          ["Cliente", "w-[160px]"],
-                          ["Assunto / diagnóstico", ""],
-                          ["Operação", "w-[160px]"],
-                          ["Pontos", "w-[95px]"],
-                          ["Valor", "w-[90px]"],
-                          ["Status", "w-[188px]"],
-                          ["Auditoria", "w-[90px]"]
-                        ].map(([label, width]) => (
-                          <th key={label} className={`${width} px-2 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-200`}>
-                            {label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleOrders.map((order) => {
-                        const statusEntry = scoringStatusEntry(order.scoring_status);
-                        const recurrenceDisplay = resolveRecurrenceDisplay(order);
-                        return (
-                        <tr key={order.id} className="odd:bg-white even:bg-slate-50/70 hover:bg-blue-50/40 [&>td]:border-b [&>td]:px-2 [&>td]:py-1.5 [&>td]:align-middle [&>td]:leading-snug">
-                          <td className="font-semibold">{order.os_code}</td>
-                          <td title={order.collaborator_name}>
-                            <div className="flex min-w-0 items-center gap-2">
-                              <Avatar name={order.collaborator_name} size="sm" />
-                              <div className="line-clamp-2 min-w-0">{order.collaborator_name}</div>
-                            </div>
-                          </td>
-                          <td title={regionalName(order.regional)}>
-                            <div className="line-clamp-2">{regionalName(order.regional)}</div>
-                          </td>
-                          <td title={order.customer_name}>
-                            <div className="line-clamp-2">{order.customer_name}</div>
-                          </td>
-                          <td title={`${order.os_subject} - ${order.diagnosis}`}>
-                            <div className="line-clamp-1 font-semibold text-slate-950">{order.os_subject}</div>
-                            <div className="line-clamp-1 text-[11px] text-slate-500">{order.diagnosis || order.os_type}</div>
-                          </td>
-                          <td>
-                            <div className="line-clamp-1">{order.group_name ?? "Sem regra"}</div>
-                            <div className="line-clamp-1 text-[11px] text-slate-500">{order.sla_status} - {formatHours(order.closing_time_hours)}</div>
-                          </td>
-                          <td>
-                            <div className="font-semibold tabular-nums">{formatPoints(order.net_points)}</div>
-                            <div className={order.penalty_points > 0 ? "text-[11px] font-medium tabular-nums text-red-600" : "text-[11px] tabular-nums text-slate-500"}>
-                              {formatAnnulledPoints(order.penalty_points)}
-                            </div>
-                          </td>
-                          <td>
-                            <div className="font-semibold tabular-nums text-uni-royal">{formatMoney(order.net_points * pointValue)}</div>
-                          </td>
-                          <td>
-                            {/* Etiqueta única por O.S: 1 badge de status + no máximo 1 pill secundário
-                                (retorno > reagendada > pendência) - o restante fica na auditoria.
-                                Ponto sólido em vez de ícone (mais limpo em linha densa), texto em
-                                uma linha só com título completo no hover em vez de quebrar em duas
-                                linhas dentro do badge. */}
-                            <div className="flex flex-col items-start gap-1">
-                              <StatusBadge tone={statusEntry.tone} dot className="max-w-full" title={statusEntry.label}>
-                                <span className="truncate">{statusEntry.label}</span>
-                              </StatusBadge>
-                              {recurrenceDisplay ? (
-                                <SecondaryPill tone={recurrenceDisplay.tone} className="max-w-full" title={recurrenceDisplay.label}>
-                                  <span className="truncate">{recurrenceDisplay.label}</span>
-                                </SecondaryPill>
-                              ) : order.has_reschedule ? (
-                                <SecondaryPill tone="amber" icon={Repeat}>
-                                  Reagendada
-                                </SecondaryPill>
-                              ) : order.has_pending ? (
-                                <SecondaryPill tone="slate" icon={Clock}>
-                                  Pendência
-                                </SecondaryPill>
-                              ) : null}
-                            </div>
-                          </td>
-                          <td>
-                            <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => setSelectedAuditOrder(order)}>
-                              <FileSearch className="h-4 w-4" />
-                              Auditar
-                            </Button>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="table-frame mt-2 min-h-0 flex-1 overflow-auto rounded-xl border bg-white">
+                <Table className="table-fixed border-collapse text-xs">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm">
+                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                      {[
+                        ["O.S", "w-[76px]"],
+                        ["Colaborador", "w-[180px]"],
+                        ["Regional", "w-[110px]"],
+                        ["Cliente", "w-[160px]"],
+                        ["Assunto / diagnóstico", ""],
+                        ["Operação", "w-[160px]"],
+                        ["Pontos", "w-[95px]"],
+                        ["Valor", "w-[90px]"],
+                        ["Status", "w-[188px]"],
+                        ["Auditoria", "w-[90px]"]
+                      ].map(([label, width]) => (
+                        <TableHead key={label} className={`${width} h-auto px-2 py-2 text-[10px] tracking-wide text-slate-200`}>
+                          {label}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visibleOrders.map((order) => {
+                      const statusEntry = scoringStatusEntry(order.scoring_status);
+                      const recurrenceDisplay = resolveRecurrenceDisplay(order);
+                      return (
+                      <TableRow key={order.id} className="odd:bg-white even:bg-slate-50/70 hover:bg-blue-50/40 [&>td]:border-b [&>td]:px-2 [&>td]:py-1.5 [&>td]:align-middle [&>td]:leading-snug">
+                        <TableCell className="font-semibold">{order.os_code}</TableCell>
+                        <TableCell title={order.collaborator_name}>
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Avatar name={order.collaborator_name} size="sm" />
+                            <div className="line-clamp-2 min-w-0">{order.collaborator_name}</div>
+                          </div>
+                        </TableCell>
+                        <TableCell title={regionalName(order.regional)}>
+                          <div className="line-clamp-2">{regionalName(order.regional)}</div>
+                        </TableCell>
+                        <TableCell title={order.customer_name}>
+                          <div className="line-clamp-2">{order.customer_name}</div>
+                        </TableCell>
+                        <TableCell title={`${order.os_subject} - ${order.diagnosis}`}>
+                          <div className="line-clamp-1 font-semibold text-slate-950">{order.os_subject}</div>
+                          <div className="line-clamp-1 text-[11px] text-slate-500">{order.diagnosis || order.os_type}</div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="line-clamp-1">{order.group_name ?? "Sem regra"}</div>
+                          <div className="line-clamp-1 text-[11px] text-slate-500">{order.sla_status} - {formatHours(order.closing_time_hours)}</div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-semibold tabular-nums">{formatPoints(order.net_points)}</div>
+                          <div className={order.penalty_points > 0 ? "text-[11px] font-medium tabular-nums text-red-600" : "text-[11px] tabular-nums text-slate-500"}>
+                            {formatAnnulledPoints(order.penalty_points)}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-semibold tabular-nums text-uni-royal">{formatMoney(order.net_points * pointValue)}</div>
+                        </TableCell>
+                        <TableCell>
+                          {/* Etiqueta única por O.S: 1 badge de status + no máximo 1 pill secundário
+                              (retorno > reagendada > pendência) - o restante fica na auditoria.
+                              Ponto sólido em vez de ícone (mais limpo em linha densa), texto em
+                              uma linha só com título completo no hover em vez de quebrar em duas
+                              linhas dentro do badge. */}
+                          <div className="flex flex-col items-start gap-1">
+                            <StatusBadge tone={statusEntry.tone} dot className="max-w-full" title={statusEntry.label}>
+                              <span className="truncate">{statusEntry.label}</span>
+                            </StatusBadge>
+                            {recurrenceDisplay ? (
+                              <SecondaryPill tone={recurrenceDisplay.tone} className="max-w-full" title={recurrenceDisplay.label}>
+                                <span className="truncate">{recurrenceDisplay.label}</span>
+                              </SecondaryPill>
+                            ) : order.has_reschedule ? (
+                              <SecondaryPill tone="amber" icon={Repeat}>
+                                Reagendada
+                              </SecondaryPill>
+                            ) : order.has_pending ? (
+                              <SecondaryPill tone="slate" icon={Clock}>
+                                Pendência
+                              </SecondaryPill>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => setSelectedAuditOrder(order)}>
+                            <FileSearch className="h-4 w-4" />
+                            Auditar
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
               </div>
 
               <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t bg-slate-50 px-3 py-2 text-xs text-slate-600">
@@ -820,7 +866,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
         }}
         calculationRunId={calculationRunId}
       />
-    </section>
+    </Card>
   );
 }
 

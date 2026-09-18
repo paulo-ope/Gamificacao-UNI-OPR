@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusToast } from "@/components/ui/status-toast";
+import { useConfirm } from "@/hooks/use-confirm";
 import { api } from "@/lib/api";
 import type { PortalProfile } from "@/lib/types";
 
@@ -37,6 +38,7 @@ export function ProfileSettings() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
 
   useEffect(() => {
     let isActive = true;
@@ -176,7 +178,13 @@ export function ProfileSettings() {
   }
 
   async function handleRemovePhoto() {
-    if (!window.confirm("Remover sua foto de perfil?")) return;
+    const confirmed = await confirm({
+      title: "Remover foto",
+      description: "Remover sua foto de perfil?",
+      confirmLabel: "Remover",
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setPhotoLoading(true);
     setError(null);
     setNotice(null);
@@ -199,12 +207,13 @@ export function ProfileSettings() {
 
   return (
     <section className="space-y-5">
+      {ConfirmDialog}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-sm text-slate-500">Minha conta</p>
           <h2 className="mt-1 text-xl font-semibold sm:text-2xl">Perfil e contato</h2>
         </div>
-        <Badge className="border-[#2d5fff]/25 bg-[#2d5fff]/10 text-[#0028f3]">Cadastro da Gamificação</Badge>
+        <Badge className="border-uni-royal/25 bg-uni-royal/10 text-uni-impact">Cadastro da Gamificação</Badge>
       </div>
 
       <StatusToast error={error} message={notice} onDismissError={() => setError(null)} onDismissMessage={() => setNotice(null)} />
@@ -223,21 +232,21 @@ export function ProfileSettings() {
         <form className="space-y-5 p-5 sm:p-6" onSubmit={handleSave}>
           <input ref={inputRef} accept="image/jpeg,image/png,image/webp" className="hidden" type="file" onChange={handlePhotoChange} />
           <div
-            className={`rounded-lg border-2 border-dashed p-4 transition-colors ${isDraggingPhoto ? "border-[#27d9bf] bg-[#27d9bf]/10" : "border-slate-200 bg-slate-50"}`}
+            className={`rounded-lg border-2 border-dashed p-4 transition-colors ${isDraggingPhoto ? "border-uni-turquoise bg-uni-turquoise/10" : "border-slate-200 bg-slate-50"}`}
             onDragEnter={(event) => { event.preventDefault(); setIsDraggingPhoto(true); }}
             onDragLeave={(event) => { event.preventDefault(); setIsDraggingPhoto(false); }}
             onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => { event.preventDefault(); setIsDraggingPhoto(false); const file = event.dataTransfer.files?.[0]; if (file) queuePhoto(file); }}
           >
             <div className="flex flex-wrap items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2d5fff]/10 text-[#0028f3]"><ImageUp className="h-5 w-5" /></div>
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-uni-royal/10 text-uni-impact"><ImageUp className="h-5 w-5" /></div>
               <div className="min-w-0 flex-1"><p className="text-sm font-medium text-slate-950">Atualizar foto de perfil</p><p className="text-xs text-slate-500">JPEG, PNG ou WEBP, até 2MB</p></div>
               <Button disabled={photoLoading} type="button" variant="outline" onClick={() => inputRef.current?.click()}><Upload className="h-4 w-4" />Selecionar foto</Button>
             </div>
           </div>
 
           {pendingPhoto && previewUrl ? (
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[#2d5fff]/20 bg-[#2d5fff]/5 p-3">
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-uni-royal/20 bg-uni-royal/5 p-3">
               <img alt="Prévia da nova foto" className="h-14 w-14 rounded-full object-cover" src={previewUrl} />
               <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{pendingPhoto.name}</p><p className="text-xs text-slate-500">{(pendingPhoto.size / 1024 / 1024).toFixed(1)} MB · pronta para atualizar</p></div>
               <Button aria-label="Cancelar nova foto" disabled={photoLoading} size="icon" type="button" variant="ghost" onClick={clearPendingPhoto}><X className="h-4 w-4" /></Button>
@@ -258,7 +267,7 @@ export function ProfileSettings() {
 
       <section className="rounded-lg border bg-white p-5 sm:p-6">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2d5fff]/10 text-[#0028f3]"><KeyRound className="h-5 w-5" /></div>
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-uni-royal/10 text-uni-impact"><KeyRound className="h-5 w-5" /></div>
           <div>
             <h3 className="text-base font-semibold text-slate-950">Trocar senha</h3>
             <p className="text-xs text-slate-500">Vale a qualquer momento, sem afetar seu acesso atual.</p>
@@ -272,7 +281,7 @@ export function ProfileSettings() {
               <div className="relative">
                 <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <Input
-                  className="pl-9 focus-visible:ring-[#2d5fff]"
+                  className="pl-9 focus-visible:ring-uni-royal"
                   id="profile-current-password"
                   autoComplete="current-password"
                   type={showPassword ? "text" : "password"}
@@ -287,7 +296,7 @@ export function ProfileSettings() {
               <div className="relative">
                 <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <Input
-                  className="px-9 focus-visible:ring-[#2d5fff]"
+                  className="px-9 focus-visible:ring-uni-royal"
                   id="profile-new-password"
                   autoComplete="new-password"
                   type={showPassword ? "text" : "password"}
@@ -311,7 +320,7 @@ export function ProfileSettings() {
               <div className="relative">
                 <Lock className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <Input
-                  className="pl-9 focus-visible:ring-[#2d5fff]"
+                  className="pl-9 focus-visible:ring-uni-royal"
                   id="profile-confirm-password"
                   autoComplete="new-password"
                   type={showPassword ? "text" : "password"}

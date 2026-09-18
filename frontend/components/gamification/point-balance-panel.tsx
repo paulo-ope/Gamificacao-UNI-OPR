@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Avatar, MetricCard } from "@/components/gamification/config-ui";
 import { CollaboratorBalanceHistorySheet } from "@/components/gamification/collaborator-balance-history-sheet";
+import { EmptyState } from "@/components/ui/empty-state";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -141,7 +142,7 @@ function BucketSection({
         </div>
       ) : null}
 
-      <div className="table-frame overflow-hidden rounded-[20px] border border-slate-200 bg-white">
+      <div className="table-frame overflow-hidden rounded-xl border border-slate-200 bg-white">
         <Table>
           <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
             <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -206,11 +207,8 @@ function BucketSection({
             })}
             {groups.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="py-8 text-center text-sm text-slate-500">
-                  <div className="flex flex-col items-center gap-2">
-                    <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                    {config.emptyLabel}
-                  </div>
+                <TableCell colSpan={5}>
+                  <EmptyState variant="plain" icon={<CheckCircle2 className="h-5 w-5 text-emerald-600" />} title={config.emptyLabel} />
                 </TableCell>
               </TableRow>
             ) : null}

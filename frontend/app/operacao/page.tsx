@@ -1,6 +1,5 @@
 ﻿"use client";
 
-import Link from "next/link";
 import { Database, Loader2, Search, X } from "lucide-react";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -78,6 +77,7 @@ const EMPTY_FILTERS: OperationFilters = {
   team_models: [],
   companies: [],
   regionals: [],
+  regional_groups: [],
   states: [],
   cities: [],
   contract_types: [],
@@ -104,6 +104,7 @@ const EMPTY_OVERVIEW: OperationOverview = {
   responsible_filter_active: false,
   completed: 0,
   in_progress: 0,
+  backlog_ignores_team_scope: true,
   opened_out_of_time: 0,
   completed_on_time: 0,
   completed_out_of_time: 0,
@@ -710,7 +711,6 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
   const dashboardRequest = useRef(0);
 
   const canRead = Boolean(user?.permissions.includes("operations:read"));
-  const canManage = Boolean(user?.permissions.includes("operations:manage"));
   const canManageTeamModels = Boolean(
     user?.permissions.includes("operations:manage_team_models"),
   );
@@ -1069,7 +1069,6 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
       : key === "date_from" || key === "date_to"
         ? value
         : value || undefined;
-    const next = { ...filters, [key]: normalizedValue };
     setFilters((current) =>
       current ? { ...current, [key]: normalizedValue } : current,
     );
@@ -1630,7 +1629,11 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
                 title="Backlog atual"
                 value={overview.in_progress}
                 helper={`${overview.opened_out_of_time} abertas atrasadas`}
-                note="Estoque ainda em andamento na consulta"
+                note={
+                  overview.backlog_ignores_team_scope && overview.responsible_filter_active
+                    ? "Estoque de agora, qualquer equipe (ainda sem executor definitivo)"
+                    : "Estoque ainda em andamento na consulta"
+                }
                 tone={overview.opened_out_of_time ? "warning" : "neutral"}
               />
               <OverviewMetricCard

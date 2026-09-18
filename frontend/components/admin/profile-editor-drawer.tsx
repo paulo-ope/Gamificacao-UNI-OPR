@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Save, Search, Trash2, X } from "lucide-react";
 
 import { AppCheckbox } from "@/components/ui/checkbox";
@@ -24,7 +25,9 @@ type Props = {
   onSetModulePermissions: (modulePermissions: EcosystemPermission[], selected: boolean) => void;
   onClose: () => void;
   onSave: () => void;
-  onDelete: () => void;
+  /** `reassignProfileId` é obrigatório quando o perfil tem pessoas vinculadas - ver
+   *  `delete_access_profile` no backend: sem destino, elas cairiam no papel legado. */
+  onDelete: (reassignProfileId: number | null) => void;
 };
 
 export function ProfileEditorDrawer({
@@ -43,8 +46,19 @@ export function ProfileEditorDrawer({
   onSave,
   onDelete,
 }: Props) {
-  const canDeleteThisProfile =
-    profileDraft.id !== "new" && !profiles.find((profile) => profile.id === profileDraft.id)?.is_system && canWriteProfiles;
+  const [reassignProfileId, setReassignProfileId] = useState<string>("");
+
+  // Perfil do sistema passou a ser excluível (2026-09-09): o bloqueio existia porque a semeadura o
+  // recriava no restart do backend, então "excluir" era uma ilusão. O que resta bloqueado (último
+  // perfil que administra acesso) chega como texto do backend, e a tela EXPLICA em vez de esconder
+  // o botão - "não consigo excluir e não sei por quê" era o pedido original.
+  const currentProfile = profiles.find((profile) => profile.id === profileDraft.id);
+  const canDeleteThisProfile = profileDraft.id !== "new" && canWriteProfiles;
+  const deleteBlockedReason = currentProfile?.delete_blocked_reason || null;
+  const linkedUsers = currentProfile?.user_count || 0;
+  const reassignOptions = profiles.filter((profile) => profile.active && profile.id !== profileDraft.id);
+  const needsReassign = linkedUsers > 0;
+  const deleteDisabled = saving || Boolean(deleteBlockedReason) || (needsReassign && !reassignProfileId);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/35 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="profile-editor-title">
@@ -145,8 +159,16 @@ export function ProfileEditorDrawer({
                             ariaLabel={permission.label}
                           />
                           <span className="min-w-0">
-                            <span className="flex items-center gap-1.5 font-medium text-slate-800">
+                            <span className="flex flex-wrap items-center gap-1.5 font-medium text-slate-800">
                               {permission.label}
+                              {permission.custom ? (
+                                <span
+                                  className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700"
+                                  title="Permissão criada na aba Permissões, não declarada em código."
+                                >
+                                  Própria
+                                </span>
+                              ) : null}
                               {permission.sensitive ? (
                                 <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
                                   Sensível
@@ -177,11 +199,50 @@ export function ProfileEditorDrawer({
 
         <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
+            <div className="grid gap-2">
               {canDeleteThisProfile ? (
-                <Button type="button" variant="outline" className="text-red-600" onClick={onDelete}>
-                  <Trash2 className="h-4 w-4" /> Excluir perfil
-                </Button>
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {needsReassign && !deleteBlockedReason ? (
+                      <label className="flex items-center gap-2 text-xs text-slate-600">
+                        <span>
+                          Mover {linkedUsers} {linkedUsers === 1 ? "pessoa" : "pessoas"} para
+                        </span>
+                        <select
+                          value={reassignProfileId}
+                          aria-label="Perfil que recebe as pessoas deste perfil"
+                          className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm"
+                          onChange={(event) => setReassignProfileId(event.target.value)}
+                        >
+                          <option value="">Escolher perfil...</option>
+                          {reassignOptions.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-red-600"
+                      disabled={deleteDisabled}
+                      title={deleteBlockedReason || undefined}
+                      onClick={() => onDelete(reassignProfileId ? Number(reassignProfileId) : null)}
+                    >
+                      <Trash2 className="h-4 w-4" /> Excluir perfil
+                    </Button>
+                  </div>
+                  {deleteBlockedReason ? (
+                    <p className="max-w-xl text-xs text-amber-700">{deleteBlockedReason}</p>
+                  ) : currentProfile?.is_system ? (
+                    <p className="max-w-xl text-xs text-slate-500">
+                      Perfil do sistema: excluir é permitido e não é desfeito no próximo restart, mas ele
+                      não volta sozinho — só recriando à mão.
+                    </p>
+                  ) : null}
+                </>
               ) : null}
             </div>
             <div className="flex gap-2">

@@ -81,7 +81,7 @@ type ConfirmOptions = {
 
 type UseClosureActionsParams = {
   summary: DashboardSummary | null;
-  currentUser: AuthUser | null;
+  currentUser: AuthUser;
   selectedRegionals: string[];
   confirm: (options: ConfirmOptions) => Promise<boolean>;
   withFeedback: <T>(action: () => Promise<T>, success: string | (() => string)) => Promise<T | undefined>;
@@ -142,7 +142,7 @@ export function useClosureActions({
   );
 
   const exportPaymentWorkbook = useCallback(async () => {
-    if (!summary || currentUser?.role === "viewer") return;
+    if (!summary || currentUser.role === "viewer") return;
     // "Desconto de saldo" mistura todo tipo de ajuste aplicado (garantia + manual + saldo
     // remanescente) - quem confere o pagamento (e a auditoria) precisa distinguir quanto disso
     // e especificamente debito de garantia, ja que os outros tipos tem motivo/origem diferentes.
@@ -321,7 +321,7 @@ export function useClosureActions({
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-  }, [currentUser?.role, selectedRegionals, summary]);
+  }, [currentUser.role, selectedRegionals, summary]);
 
   return { advanceRunStatus, exportPaymentWorkbook };
 }

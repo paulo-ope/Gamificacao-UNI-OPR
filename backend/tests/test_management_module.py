@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.models import Collaborator, User
+from app.modules.management import services as management_services
 from app.modules.management.models import ManagementOperationalMember
 from app.modules.operations.models import OperationOrder, OperationResponsibleAssignment, OperationTeamModel
 
@@ -49,6 +50,37 @@ def test_management_refresh_creates_operational_member_from_assignment(client, d
     assert member.team_model_id == model.id
     assert member.collaborator_id == collaborator.id
     assert member.ixc_employee_id == 123
+
+
+def test_refresh_links_collaborator_despite_accent_mismatch_with_the_ixc_name(db_session):
+    """Regressão (2026-09-16, IA relatando casos pendentes de forma imprecisa): o cadastro da
+    Gamificação tem o nome COM acento ("José Souza"), mas o histórico de O.S. do IXC (usado por
+    `resolve_responsible_regional_candidates`) trouxe o mesmo técnico SEM acento ("Jose Souza") -
+    variação real de digitação entre lotes de importação. Antes da correção, `_find_collaborator`
+    não achava o cadastro (comparação `func.lower` não tira acento) e o membro operacional ficava
+    "sem cadastro na Gamificação" mesmo o cadastro existindo."""
+    collaborator = Collaborator(name="José Souza", role="Tecnico", regional="UNI JARU", active=True, is_registered=True)
+    db_session.add(collaborator)
+    db_session.flush()
+    db_session.add(
+        OperationOrder(
+            source="ixc",
+            source_order_id="OS-ACCENT-1",
+            order_code="OS-ACCENT-1",
+            regional="UNI JARU",
+            os_type="Suporte",
+            os_subject="Fibra",
+            responsible="Jose Souza",
+            opened_at=datetime(2026, 7, 30, tzinfo=timezone.utc),
+            raw_payload={},
+        )
+    )
+    db_session.commit()
+
+    management_services.refresh_operational_members(db_session)
+
+    member = db_session.query(ManagementOperationalMember).one()
+    assert member.collaborator_id == collaborator.id
 
 
 def test_management_refresh_uses_admin_structure_supervisor(client, db_session):

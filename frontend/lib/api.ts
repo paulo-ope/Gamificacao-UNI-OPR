@@ -2,6 +2,9 @@ import type {
   AppSetting,
   AccessProfile,
   AdminWorkspaceModule,
+  AdminWorkspaceModuleSettingsPatch,
+  UserPermissionOverrideEffect,
+  UserPermissionOverview,
   AdminForcePasswordResetResult,
   AdminPeopleStructure,
   AdminPersonStructure,
@@ -10,7 +13,6 @@ import type {
   AuditOrders,
   PortalAudit,
   CalculationRunHistory,
-  CalculationRunSnapshot,
   CollaboratorOrderFilters,
   Collaborator,
   CollaboratorOrderDetail,
@@ -52,8 +54,7 @@ import type {
   StructureAudit,
   Notification,
   EcosystemPermission,
-  Permission,
-  PenaltyRule,
+  PermissionKey,
   PointBalanceEntry,
   PortalOrder,
   PortalOverview,
@@ -75,7 +76,6 @@ import type {
   ScoringGroup,
   ScoringSubjectRuleDeleteResult,
   ScoringSubjectRule,
-  ServiceOrder,
   ServiceOrderDeletePeriodResult,
   ServiceOrderPeriodSummary,
   ServiceOrderSubjectSummary,
@@ -90,12 +90,24 @@ import type {
   SupportOpaAttendantSummary,
   SupportOpaBreakdownDimension,
   SupportOpaBreakdowns,
+  SupportIxcAnalyticsContext,
+  SupportIxcAnalyticsDimension,
+  SupportIxcAnalyticsDriverItem,
+  SupportIxcAnalyticsPriorityItem,
+  SupportIxcTicketBreakdown,
+  SupportIxcTicketBreakdownLevel,
+  SupportIxcTicketDailyPoint,
+  SupportIxcTicketFilterOptions,
+  SupportIxcTicketOverviewKpis,
+  SupportIxcTicketSavedFilter,
+  SupportIxcTicketSavedFilterValues,
+  SupportIxcTicketPage,
+  SupportIxcTicketPriorityItem,
   SupportOpaFilters,
   SupportOpaImportMonth,
   SupportOpaSavedFilter,
   SupportOpaSavedFilterScope,
   SupportOpaTimeseries,
-  SupportOpaMetrics,
   SupportOpaOverview,
   SupportOpaSyncSettings,
   SupportOpaSyncStatus,
@@ -104,8 +116,9 @@ import type {
   WorkspaceVisibleModule
 } from "@/lib/types";
 
+import { authHeader, getAuthToken, notifyUnauthorized, setAuthToken as setAuthTokenShared } from "@/lib/auth-token";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
-const TOKEN_KEY = "gamification_auth_token";
 /** Espelha `PORTAL_ORDERS_MAX` do backend (`services/portal_dashboard.py`) - teto de O.S. que
  *  `/portal/my-orders` aceita. Pedir menos que isso cortava a lista do colaborador em silêncio. */
 export const PORTAL_ORDERS_MAX = 500;
@@ -128,7 +141,23 @@ const SESSION_CACHED_PATHS = new Set<string>(["/auth/me", "/workspace/modules"])
 const sessionCache = new Map<string, { value: unknown; at: number }>();
 
 function sessionCacheKey(path: string) {
-  return `${authToken ?? ""}:${path}`;
+  return `${getAuthToken() ?? ""}:${path}`;
+}
+
+/**
+ * Descarta uma entrada do cache de sessão (ou o cache inteiro, sem argumento).
+ *
+ * Existe para a mudança que a PRÓPRIA tela acabou de fazer aparecer na hora, sem esperar os 30
+ * segundos. Achado real (2026-09-09): renomear um módulo na Administração atualizava a tabela na
+ * hora, mas a barra lateral continuava com o nome antigo até o cache expirar - o que se lê na tela
+ * como "salvei e não mudou nada".
+ */
+export function invalidateSessionCache(path?: string) {
+  if (!path) {
+    sessionCache.clear();
+    return;
+  }
+  sessionCache.delete(sessionCacheKey(path));
 }
 
 /** Leitura SINCRONA do cache, para a tela nascer já com o dado em vez de começar carregando. */
@@ -138,27 +167,16 @@ export function peekSessionCache<T>(path: string): T | null {
   return entry.value as T;
 }
 
-function readStoredToken() {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-let authToken: string | null = readStoredToken();
-
+// Token/header centralizados em lib/auth-token.ts (achado da auditoria de 2026-09-14: a mesma
+// lógica estava duplicada de forma independente em 6 arquivos de API - um deles, localiza-api.ts,
+// cacheava o token numa variável própria que login/logout daqui nunca atualizava). `setAuthToken`
+// continua exportado DESTE arquivo porque `hooks/use-workspace-auth.ts` e mais 2 telas já importam
+// `{ setAuthToken } from "@/lib/api"` - não é um puro re-export porque o efeito colateral de
+// limpar `sessionCache` (30s de /auth/me e /workspace/modules) precisa continuar acontecendo, ou
+// um login logo após um logout/troca de usuário podia servir o cache do usuário ANTERIOR.
 export function setAuthToken(token: string | null) {
-  authToken = token;
-  // Sessão trocou: nada do que estava em cache vale mais.
+  setAuthTokenShared(token);
   sessionCache.clear();
-  if (typeof window === "undefined") return;
-  if (token) {
-    window.localStorage.setItem(TOKEN_KEY, token);
-  } else {
-    window.localStorage.removeItem(TOKEN_KEY);
-  }
-}
-
-function authHeaders(): HeadersInit {
-  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -169,7 +187,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (cached !== null) return cached;
   }
 
-  const dedupeKey = method === "GET" ? `${authToken ?? ""}:${path}` : null;
+  const dedupeKey = method === "GET" ? `${getAuthToken() ?? ""}:${path}` : null;
   if (dedupeKey && inFlightGetRequests.has(dedupeKey)) {
     return inFlightGetRequests.get(dedupeKey) as Promise<T>;
   }
@@ -192,18 +210,36 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
+  const hadToken = Boolean(getAuthToken());
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
-  if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
+  const token = getAuthToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers,
     cache: "no-store"
   });
 
+  // Sessão caiu no meio do uso (token expirou/foi revogado) - `hadToken` distingue isso de uma
+  // tentativa de LOGIN com credencial errada (que chega aqui sem token nenhum, e não deve derrubar
+  // a tela nem pisar na mensagem de erro que o próprio formulário de login já mostra). Achado da
+  // auditoria de 2026-09-14: antes disso, uma sessão expirada virava só "Erro HTTP 401" genérico
+  // em cada tela, sem reconduzir ao login.
+  if (response.status === 401 && hadToken) {
+    notifyUnauthorized();
+  }
+
   if (!response.ok) {
     const body = await response.text();
     throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
+  }
+
+  // 204 (e 205/304) não têm corpo - `response.json()` estouraria com "Unexpected end of JSON
+  // input" numa resposta de sucesso. Aparece em exclusão que não devolve o recurso (ver
+  // `deleteEcosystemPermission`).
+  if (response.status === 204 || response.status === 205 || response.headers.get("content-length") === "0") {
+    return undefined as T;
   }
 
   return response.json() as Promise<T>;
@@ -217,8 +253,15 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
 function extractApiErrorMessage(body: string, fallback: string): string {
   if (!body) return fallback;
   try {
-    const parsed = JSON.parse(body) as { detail?: string; message?: string };
+    const parsed = JSON.parse(body) as { detail?: string | Array<{ msg?: string }>; message?: string };
     if (typeof parsed.detail === "string" && parsed.detail) return parsed.detail;
+    // Erro de validação do Pydantic (422) vem como uma LISTA de objetos `{msg, loc, ...}`, não uma
+    // string - sem isto o JSON cru aparecia na tela. Mesmo tratamento que `lib/localiza-api.ts` já
+    // tinha (achado real registrado em docs/STATUS.md como pendência deste arquivo).
+    if (Array.isArray(parsed.detail) && parsed.detail.length > 0) {
+      const messages = parsed.detail.map((item) => item?.msg).filter((msg): msg is string => Boolean(msg));
+      if (messages.length > 0) return messages.join(" ");
+    }
     if (typeof parsed.message === "string" && parsed.message) return parsed.message;
   } catch {
     // corpo nao e JSON valido - cai no fallback abaixo (texto cru)
@@ -227,10 +270,12 @@ function extractApiErrorMessage(body: string, fallback: string): string {
 }
 
 async function requestBlob(path: string): Promise<Blob> {
+  const hadToken = Boolean(getAuthToken());
   const response = await fetch(`${API_URL}${path}`, {
-    headers: authHeaders(),
+    headers: authHeader(),
     cache: "no-store"
   });
+  if (response.status === 401 && hadToken) notifyUnauthorized();
   if (!response.ok) {
     const body = await response.text();
     throw new Error(extractApiErrorMessage(body, `Erro HTTP ${response.status}`));
@@ -242,12 +287,14 @@ async function uploadRequest<T>(path: string, file: File): Promise<T> {
   const formData = new FormData();
   formData.append("file", file);
 
+  const hadToken = Boolean(getAuthToken());
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
     body: formData,
-    headers: authHeaders(),
+    headers: authHeader(),
     cache: "no-store"
   });
+  if (response.status === 401 && hadToken) notifyUnauthorized();
 
   if (!response.ok) {
     const body = await response.text();
@@ -336,19 +383,65 @@ export const api = {
     request<PortalAccessRequest>(`/access-requests/${id}/reject`, { method: "POST", body: JSON.stringify(payload) }),
   operationRegionals: () => request<string[]>("/admin/operation-regionals"),
   ecosystemPermissions: () => request<EcosystemPermission[]>("/admin/permissions"),
+  createEcosystemPermission: (payload: {
+    key: string;
+    label: string;
+    module_key?: string | null;
+    description?: string | null;
+    sensitive?: boolean;
+  }) =>
+    request<EcosystemPermission>("/admin/permissions", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateEcosystemPermission: (
+    key: string,
+    payload: { label?: string; module_key?: string | null; description?: string | null; sensitive?: boolean; active?: boolean }
+  ) =>
+    request<EcosystemPermission>(`/admin/permissions/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  deleteEcosystemPermission: (key: string) =>
+    request<void>(`/admin/permissions/${encodeURIComponent(key)}`, {
+      method: "DELETE"
+    }),
   accessProfiles: () => request<AccessProfile[]>("/admin/access-profiles"),
-  createAccessProfile: (payload: { name: string; description?: string | null; active: boolean; permission_keys: Permission[] }) =>
+  createAccessProfile: (payload: { name: string; description?: string | null; active: boolean; permission_keys: PermissionKey[] }) =>
     request<AccessProfile>("/admin/access-profiles", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  updateAccessProfile: (id: number, payload: { name?: string; description?: string | null; active?: boolean; permission_keys?: Permission[] }) =>
+  updateAccessProfile: (id: number, payload: { name?: string; description?: string | null; active?: boolean; permission_keys?: PermissionKey[] }) =>
     request<AccessProfile>(`/admin/access-profiles/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
-  deleteAccessProfile: (id: number) =>
-    request<AccessProfile>(`/admin/access-profiles/${id}`, {
+  /** `reassignProfileId` é exigido pelo backend quando o perfil tem usuários vinculados: eles são
+   *  movidos para o perfil informado na mesma transação (ver `delete_access_profile`). */
+  deleteAccessProfile: (id: number, reassignProfileId?: number | null) =>
+    request<AccessProfile>(
+      `/admin/access-profiles/${id}${reassignProfileId ? `?reassign_profile_id=${reassignProfileId}` : ""}`,
+      { method: "DELETE" }
+    ),
+  // Permissão concedida ou negada diretamente numa pessoa, sem passar por perfil (ver aba
+  // "Permissões individuais" no editor de usuário).
+  getUserPermissionOverview: (userId: number) =>
+    request<UserPermissionOverview>(`/admin/users/${userId}/permissions`),
+  /** Chamar de novo com efeito diferente TROCA a exceção (não empilha) - é assim que a tela
+   *  alterna "Conceder"/"Negar" com um clique cada. */
+  setUserPermissionOverride: (
+    userId: number,
+    permission: string,
+    payload: { effect: UserPermissionOverrideEffect; reason?: string | null }
+  ) =>
+    request<UserPermissionOverview>(`/admin/users/${userId}/permissions/${encodeURIComponent(permission)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }),
+  /** Remove a exceção: a pessoa volta a ter exatamente o que o perfil dela concede. */
+  deleteUserPermissionOverride: (userId: number, permission: string) =>
+    request<UserPermissionOverview>(`/admin/users/${userId}/permissions/${encodeURIComponent(permission)}`, {
       method: "DELETE"
     }),
   workspaceModules: () => request<WorkspaceVisibleModule[]>("/workspace/modules"),
@@ -366,6 +459,12 @@ export const api = {
   deleteAdminModuleUserVisibility: (moduleKey: string, userId: number) =>
     request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/user-visibility/${userId}`, {
       method: "DELETE"
+    }),
+  /** Nome, descrição, status e ordem do módulo. Campo enviado em branco volta ao padrão do código. */
+  updateAdminModuleSettings: (moduleKey: string, payload: AdminWorkspaceModuleSettingsPatch) =>
+    request<AdminWorkspaceModule>(`/admin/modules/${moduleKey}/settings`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
     }),
   adminPeopleStructure: () => request<AdminPeopleStructure>("/admin/people-structure"),
   updateAdminPersonStructure: (
@@ -438,22 +537,6 @@ export const api = {
     return request<ManagementCasePage>(`/management/cases${query ? `?${query}` : ""}`);
   },
   managementCase: (id: number) => request<ManagementCase>(`/management/cases/${id}`),
-  createManagementCase: (payload: {
-    case_type: string;
-    metric_name: string;
-    regional?: string | null;
-    responsible_name?: string | null;
-    supervisor_user_id?: number | null;
-    team_model_id?: number | null;
-    reference_year?: number | null;
-    reference_month?: number | null;
-    expected_value?: number | null;
-    actual_value?: number | null;
-    deviation_value?: number | null;
-    severity?: string;
-    due_date?: string | null;
-  }) =>
-    request<ManagementCase>("/management/cases", { method: "POST", body: JSON.stringify(payload) }),
   openDailyManagementCase: (payload: {
     responsible_name: string;
     regional: string;
@@ -498,9 +581,6 @@ export const api = {
     payload: { name?: string; description?: string | null; active?: boolean; requires_description?: boolean }
   ) =>
     request<ManagementCaseReason>(`/management/case-reasons/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  managementSettings: () => request<Record<string, string>>("/management/settings"),
-  updateManagementSettings: (values: Record<string, string>) =>
-    request<Record<string, string>>("/management/settings", { method: "PUT", body: JSON.stringify(values) }),
   exportManagementCases: (filters: ManagementCaseFilters) => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {
@@ -527,12 +607,6 @@ export const api = {
       body: JSON.stringify({ enabled })
     }),
   gamificationPreview: () => request<GamificationPreview>("/dashboard/gamification-preview"),
-  supportOpaMetrics: (period: { date_from: string; date_to: string }) => {
-    const params = new URLSearchParams();
-    params.set("date_from", period.date_from);
-    params.set("date_to", period.date_to);
-    return request<SupportOpaMetrics>(`/support/opa-metrics?${params.toString()}`);
-  },
   supportOpaOverview: (filters: SupportOpaAttendanceFilters) => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {
@@ -742,8 +816,6 @@ export const api = {
         execution_note: options?.execution_note ?? undefined
       })
     }),
-  calculationRunDetail: (runId: number) => request(`/calculation-runs/${runId}`),
-  calculationRunSnapshot: (runId: number) => request<CalculationRunSnapshot>(`/calculation-runs/${runId}/snapshot`),
   updateCalculationRunStatus: (runId: number, payload: { status: string; note?: string | null }) =>
     request(`/calculation-runs/${runId}/status`, {
       method: "PATCH",
@@ -766,11 +838,6 @@ export const api = {
       body: JSON.stringify(payload ?? {})
     }),
   scoringSubjectRules: () => request<ScoringSubjectRule[]>("/scoring-subject-rules"),
-  createScoringSubjectRule: (payload: Partial<ScoringSubjectRule>) =>
-    request<ScoringSubjectRule>("/scoring-subject-rules", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    }),
   updateScoringSubjectRule: (id: number, payload: Partial<ScoringSubjectRule>) =>
     request<ScoringSubjectRule>(`/scoring-subject-rules/${id}`, {
       method: "PUT",
@@ -795,13 +862,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ items })
     }),
-  penaltyRules: () => request<PenaltyRule[]>("/penalty-rules"),
-  updatePenaltyRule: (id: number, payload: Partial<PenaltyRule>) =>
-    request<PenaltyRule>(`/penalty-rules/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(payload)
-    }),
-  diagnosisPenaltyRules: () => request<DiagnosisPenaltyRule[]>("/diagnosis-penalty-rules"),
   createDiagnosisPenaltyRule: (payload: Partial<DiagnosisPenaltyRule>) =>
     request<DiagnosisPenaltyRule>("/diagnosis-penalty-rules", {
       method: "POST",
@@ -869,8 +929,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ value })
     }),
-  seed: () => request<{ status: string }>("/service-orders/seed", { method: "POST" }),
-  serviceOrders: (limit = 500) => request<ServiceOrder[]>(`/service-orders?limit=${limit}`),
   serviceOrderPeriodSummary: () => request<ServiceOrderPeriodSummary[]>("/service-orders/period-summary"),
   serviceOrderSubjectSummary: (period: { reference_month: number; reference_year: number; regional?: string | null }) => {
     const params = new URLSearchParams();
@@ -902,20 +960,6 @@ export const api = {
     if (params?.limit) search.set("limit", String(params.limit));
     const query = search.toString();
     return request<ImportRun[]>(`/imports/runs${query ? `?${query}` : ""}`);
-  },
-  importRunDetail: (importRunId: number) => request<ImportRun>(`/imports/runs/${importRunId}`),
-  importRunAudits: (
-    importRunId: number,
-    params?: { action?: string; os_code?: string; reason?: string; limit?: number; offset?: number }
-  ) => {
-    const search = new URLSearchParams();
-    if (params?.action) search.set("action", params.action);
-    if (params?.os_code) search.set("os_code", params.os_code);
-    if (params?.reason) search.set("reason", params.reason);
-    if (params?.limit) search.set("limit", String(params.limit));
-    if (params?.offset) search.set("offset", String(params.offset));
-    const query = search.toString();
-    return request<ImportServiceOrderAudit[]>(`/imports/runs/${importRunId}/audits${query ? `?${query}` : ""}`);
   },
   importRunErrors: (importRunId: number, params?: { limit?: number; offset?: number }) => {
     const search = new URLSearchParams();
@@ -1021,7 +1065,149 @@ export const api = {
     request<PointBalanceEntry>(`/point-balance/entries/${entryId}/resolve`, {
       method: "POST",
       body: JSON.stringify({ points, note: note ?? null })
-    })
+    }),
+
+  // Atendimento real do IXC (su_ticket) - indicador antecipado de incidente, drill-down
+  // regional -> cidade -> bairro -> motivo/protocolo. Ver docs/STATUS.md 2026-09-11.
+  supportIxcTicketBreakdown: (params: {
+    level: SupportIxcTicketBreakdownLevel;
+    regional?: string;
+    city?: string;
+    neighborhood?: string;
+    subject_id?: string;
+    sector_id?: string;
+    date_from?: string;
+    date_to?: string;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportIxcTicketBreakdown>(`/support/ixc/tickets/breakdown?${query.toString()}`);
+  },
+
+  supportIxcTickets: (params: {
+    regional?: string;
+    city?: string;
+    neighborhood?: string;
+    subject_id?: string;
+    sector_id?: string;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportIxcTicketPage>(`/support/ixc/tickets?${query.toString()}`);
+  },
+
+  supportIxcTicketFilterOptions: () =>
+    request<SupportIxcTicketFilterOptions>(`/support/ixc/tickets/filter-options`),
+
+  supportIxcSavedFilters: () => request<SupportIxcTicketSavedFilter[]>("/support/ixc/saved-filters"),
+  createSupportIxcSavedFilter: (payload: { name: string; filters: SupportIxcTicketSavedFilterValues; is_default?: boolean }) =>
+    request<SupportIxcTicketSavedFilter>("/support/ixc/saved-filters", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  setSupportIxcSavedFilterDefault: (id: number, isDefault: boolean) =>
+    request<SupportIxcTicketSavedFilter>(`/support/ixc/saved-filters/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_default: isDefault }),
+    }),
+  deleteSupportIxcSavedFilter: (id: number) =>
+    request<{ status: string }>(`/support/ixc/saved-filters/${id}`, { method: "DELETE" }),
+
+  supportIxcTicketOverview: (params: {
+    month: string;
+    regional?: string;
+    subject_id?: string;
+    sector_id?: string;
+    day?: string;
+  }) => {
+    const query = new URLSearchParams({ month: params.month });
+    if (params.regional) query.set("regional", params.regional);
+    if (params.subject_id) query.set("subject_id", params.subject_id);
+    if (params.sector_id) query.set("sector_id", params.sector_id);
+    if (params.day) query.set("day", params.day);
+    return request<SupportIxcTicketOverviewKpis>(`/support/ixc/tickets/overview?${query.toString()}`);
+  },
+
+  supportIxcTicketDailySeries: (params: { month: string; regional?: string; subject_id?: string; sector_id?: string }) => {
+    const query = new URLSearchParams({ month: params.month });
+    if (params.regional) query.set("regional", params.regional);
+    if (params.subject_id) query.set("subject_id", params.subject_id);
+    if (params.sector_id) query.set("sector_id", params.sector_id);
+    return request<SupportIxcTicketDailyPoint[]>(`/support/ixc/tickets/daily-series?${query.toString()}`);
+  },
+
+  supportIxcTicketPriorities: (params: { month: string; subject_id?: string; sector_id?: string; day?: string }) => {
+    const query = new URLSearchParams({ month: params.month });
+    if (params.subject_id) query.set("subject_id", params.subject_id);
+    if (params.sector_id) query.set("sector_id", params.sector_id);
+    if (params.day) query.set("day", params.day);
+    return request<SupportIxcTicketPriorityItem[]>(`/support/ixc/tickets/priorities?${query.toString()}`);
+  },
+
+  // Fase 2/3 do plano de evolução analítica do Atendimento IXC (2026-09-15): contrato de
+  // contexto único, aditivo aos endpoints acima - modelo de período livre (date_from/date_to +
+  // janela anterior de mesmo tamanho), alimenta o painel unificado (ixc-ticket-analytics-panel).
+  supportIxcAnalyticsContext: (params: {
+    date_from?: string;
+    date_to?: string;
+    regional?: string;
+    city?: string;
+    neighborhood?: string;
+    subject_id?: string;
+    sector_id?: string;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportIxcAnalyticsContext>(`/support/ixc/analytics/context?${query.toString()}`);
+  },
+
+  supportIxcAnalyticsPriorities: (params: {
+    dimension: SupportIxcAnalyticsDimension;
+    date_from?: string;
+    date_to?: string;
+    regional?: string;
+    city?: string;
+    neighborhood?: string;
+    subject_id?: string;
+    sector_id?: string;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportIxcAnalyticsPriorityItem[]>(`/support/ixc/analytics/priorities?${query.toString()}`);
+  },
+
+  supportIxcAnalyticsDrivers: (params: {
+    date_from?: string;
+    date_to?: string;
+    regional?: string;
+    city?: string;
+    neighborhood?: string;
+    subject_id?: string;
+    sector_id?: string;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportIxcAnalyticsDriverItem[]>(`/support/ixc/analytics/drivers?${query.toString()}`);
+  }
 };
 
 export { API_URL };

@@ -11,7 +11,9 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), {
   loading: () => <div className="h-[300px] animate-pulse rounded-xl bg-slate-100" aria-label="Carregando gráfico" />,
 });
 
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { InfoHint } from "@/components/gamification/info-hint";
+import { CATEGORICAL_SLOTS, UNI_MIDNIGHT, UNI_ROYAL, UNI_TURQUOISE } from "@/lib/chart-palette";
 import { formatAnnulledPoints, formatMoney, formatPoints } from "@/lib/format";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type { CollaboratorScore, PenaltyDistributionItem, RegionalHealthItem } from "@/lib/types";
@@ -78,8 +80,8 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
     x2: 1,
     y2: 0,
     colorStops: [
-      { offset: 0, color: "#2d5fff" },
-      { offset: 1, color: "#27d9bf" }
+      { offset: 0, color: UNI_ROYAL },
+      { offset: 1, color: UNI_TURQUOISE }
     ]
   };
 
@@ -121,7 +123,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
           show: true,
           position: "right",
           distance: 6,
-          color: "#010c8b",
+          color: UNI_MIDNIGHT,
           fontWeight: 600,
           formatter: ({ value }: { value: number }) => formatPoints(value)
         }
@@ -216,7 +218,10 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
       axisLabel: { color: "#334155", interval: 0, rotate: 18 }
     },
     yAxis: { type: "value", min: 0, max: 100, axisLabel: { formatter: "{value}%", color: "#475569" } },
-    color: ["#2d5fff", "#e11d48"],
+    // Paleta categórica de dado (lib/chart-palette.ts), não azul/vermelho arbitrário - os azuis de
+    // marca ficam para a interface, nunca para identidade de série (achado da auditoria de layout,
+    // 2026-09-15/16).
+    color: [CATEGORICAL_SLOTS[0], CATEGORICAL_SLOTS[7]],
     series: [
       {
         name: "SLA",
@@ -364,7 +369,9 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
         })),
         symbolSize: (_value: [number, number], params: { data: { total_orders: number } }) =>
           Math.max(12, Math.min(42, 10 + Math.sqrt(params.data.total_orders || 0) / 2)),
-        itemStyle: { color: "#2d5fff", opacity: 0.8, borderColor: "#ffffff", borderWidth: 1 },
+        // Mesmo motivo do `color` de healthOption acima: série de dado usa o slot categórico, não
+        // o azul de marca.
+        itemStyle: { color: CATEGORICAL_SLOTS[0], opacity: 0.8, borderColor: "#ffffff", borderWidth: 1 },
         label: { show: false },
         emphasis: {
           label: {
@@ -381,65 +388,65 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
 
   return (
     <section className="grid gap-4 lg:grid-cols-3">
-      <div className="panel lg:col-span-3">
-        <div className="panel-header bg-slate-50/70">
+      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-3">
+        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2">
-            <h2 className="panel-title">Dispersão saúde da base x pontuação</h2>
+            <CardTitle className="text-base font-semibold text-foreground">Dispersão saúde da base x pontuação</CardTitle>
             <InfoHint ariaLabel="Ajuda sobre Dispersão saúde da base x pontuação" description="Compara a qualidade da base com a pontuação final gerada por regional." />
           </div>
-        </div>
+        </CardHeader>
         <div className="px-2 py-4">
           <ReactECharts option={healthScatterOption} style={{ height: 320 }} />
         </div>
-      </div>
+      </Card>
 
-      <div className="panel lg:col-span-3">
-        <div className="panel-header bg-slate-50/70">
+      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-3">
+        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2">
-            <h2 className="panel-title">Dispersão de produtividade</h2>
+            <CardTitle className="text-base font-semibold text-foreground">Dispersão de produtividade</CardTitle>
             <InfoHint ariaLabel="Ajuda sobre Dispersão de produtividade" description="Relaciona volume, pontuação, reincidência e outros fatores por colaborador ou grupo." />
           </div>
-        </div>
+        </CardHeader>
         <div className="px-2 py-4">
           <ReactECharts option={scatterOption} style={{ height: 320 }} />
         </div>
-      </div>
+      </Card>
 
-      <div className="panel lg:col-span-2">
-        <div className="panel-header bg-slate-50/70">
+      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-2">
+        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2">
-            <h2 className="panel-title">Top 15 por pontos finais</h2>
+            <CardTitle className="text-base font-semibold text-foreground">Top 15 por pontos finais</CardTitle>
             <InfoHint ariaLabel="Ajuda sobre Top 15 por pontos finais" description="Mostra quem terminou o período com maior pontuação final depois das anulações e multiplicadores." />
           </div>
-        </div>
+        </CardHeader>
         <div className="px-2 py-4">
           <ReactECharts option={rankingOption} style={{ height: Math.max(220, rankingData.length * 38) }} />
         </div>
-      </div>
+      </Card>
 
-      <div className="panel">
-        <div className="panel-header bg-slate-50/70">
+      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
+        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2">
-            <h2 className="panel-title">Distribuição de pontos anulados</h2>
+            <CardTitle className="text-base font-semibold text-foreground">Distribuição de pontos anulados</CardTitle>
             <InfoHint ariaLabel="Ajuda sobre Distribuição de pontos anulados" description="Mostra os principais motivos de anulação por quantidade de O.S e volume de pontos." />
           </div>
-        </div>
+        </CardHeader>
         <div className="px-2 py-4">
           <ReactECharts option={penaltyOption} style={{ height: Math.max(220, penaltyData.length * 42) }} />
         </div>
-      </div>
+      </Card>
 
-      <div className="panel lg:col-span-3">
-        <div className="panel-header bg-slate-50/70">
+      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-3">
+        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2">
-            <h2 className="panel-title">Saúde operacional por regional/base</h2>
+            <CardTitle className="text-base font-semibold text-foreground">Saúde operacional por regional/base</CardTitle>
             <InfoHint ariaLabel="Ajuda sobre Saúde operacional por regional/base" description="Mostra como SLA e reincidência influenciam a leitura de saúde operacional da base." />
           </div>
-        </div>
+        </CardHeader>
         <div className="px-2 py-4">
           <ReactECharts option={healthOption} style={{ height: 300 }} />
         </div>
-      </div>
+      </Card>
     </section>
   );
 }

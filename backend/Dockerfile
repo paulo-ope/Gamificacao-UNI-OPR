@@ -21,6 +21,15 @@ COPY scripts ./scripts
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 
+# Container roda como usuário sem privilégio - achado da auditoria de 2026-09-14 (sem `USER`, a
+# imagem rodava como root por padrão). Nenhuma parte da aplicação precisa de root: não há bind a
+# porta privilegiada (8000), nem escrita em disco fora do Postgres (persistência é só via banco).
+# `chown` do WORKDIR inteiro pro novo usuário poder ler os arquivos copiados acima (que vieram com
+# dono root do COPY) - sem group/other write, então não é um `chmod 777`.
+RUN groupadd --system app && useradd --system --gid app --home-dir /app --no-create-home app \
+    && chown -R app:app /app
+USER app
+
 EXPOSE 8000
 
 # Sem --reload: em produção (VM), o reload observa o filesystem e QUALQUER toque nos arquivos

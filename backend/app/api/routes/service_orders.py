@@ -147,6 +147,24 @@ def delete_service_orders_by_period(
     calculation_run_ids = [run.id for run in calculation_runs]
     order_ids_to_delete = [order.id for order in orders_to_delete]
 
+    # Fechamento pago e o registro real de um pagamento feito - apagar o periodo nao pode desfazer
+    # isso silenciosamente. Achado real (auditoria 2026-09-15): esta rota exige so `orders:import`
+    # (perfil operator), que nem tem `calculation:run` pra marcar um fechamento como pago - ou seja,
+    # sem esta checagem, o perfil mais fraco do modulo podia apagar um pagamento que nem o proprio
+    # perfil e capaz de criar. Bloqueado incondicionalmente, mesmo sem lancamento de garantia
+    # vinculado (o guard de `blocking_entries` abaixo cobre um caso diferente: fechamento SEM pagar
+    # mas com ledger dependente).
+    paid_runs = [run for run in calculation_runs if run.status == "paid"]
+    if paid_runs:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Este período tem {len(paid_runs)} fechamento(s) PAGO(S) "
+                f"(#{', #'.join(str(run.id) for run in paid_runs)}). Apagar o período destruiria um "
+                "pagamento já realizado. Reverta o pagamento antes de apagar o período."
+            ),
+        )
+
     # Um fechamento (CalculationRun) e o registro real de um pagamento: apagar um que ja foi usado
     # como origem/aplicacao de um debito de garantia destruiria historico financeiro de verdade, e
     # isso continua bloqueado abaixo. Ja uma O.S bruta importada e apenas dado de origem re-importavel

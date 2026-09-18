@@ -10,11 +10,12 @@ from sqlalchemy import Date, Integer, String, and_, case, cast, func, or_, selec
 from sqlalchemy.orm import Session
 
 from app.models import User
-from app.services.regional import effective_managed_regionals
+from app.services.regional import GROUPED_TO_GRANULAR, effective_managed_regionals, granular_regionals_for_group, regional_group_options
 
 from .models import OperationBacklogSnapshot, OperationBranchCapacity, OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE, OPERATIONS_TIMEZONE_NAME, local_period_utc_bounds, operations_period_bounds
 from .scope import ALL_SECTOR_NAMES
+from .technology_group import OTHER_TECHNOLOGY_GROUP, RAW_SUBJECT_TECHNOLOGY_GROUP
 
 
 # Colunas ordenáveis do detalhamento de O.S. (ver `order_page`/`opening_order_page`/
@@ -243,7 +244,7 @@ def _backlog_filters(filters: dict) -> dict:
     return {**_opening_filters(filters), "closed_weekdays": [], "closed_time_from": None, "closed_time_to": None}
 
 
-WARRANTY_ORIGIN_SHARED_FILTERS = ("regionals", "companies", "states", "cities", "team_models")
+WARRANTY_ORIGIN_SHARED_FILTERS = ("regionals", "regional_groups", "companies", "states", "cities", "team_models")
 
 
 def _warranty_origin_filters(filters: dict) -> dict:
@@ -295,6 +296,25 @@ def _dimension_conditions(
             .exists()
         )
         conditions.append(assigned_to_model)
+    # "regionals" também é excluído aqui (não só "regional_groups") - ao listar as opções do
+    # próprio filtro "Filial" (`filter_options`, exclude_filter="regionals"), a seleção de
+    # "Regional" não pode escondê-las: os dois filtros descrevem a mesma dimensão em
+    # granularidades diferentes e devem ficar independentes na listagem de opções (a condição
+    # real ainda combina os dois normalmente quando a query de fato roda, exclude_filter=None).
+    if exclude_filter not in ("regional_groups", "regionals"):
+        selected_regional_groups = filters.get("regional_groups")
+        if selected_regional_groups:
+            # "Regional" agrupa filiais reais (ex.: São Felipe D'Oeste dentro de Rolim de Moura -
+            # ver services/regional.py). A coluna guarda a identidade granular, então o filtro
+            # expande cada grupo selecionado pra suas filiais reais antes do IN(...). Um grupo
+            # desconhecido não deve virar "sem filtro" silencioso - zera o resultado (id == -1),
+            # mesmo padrão já usado acima para o gestor regional sem escopo configurado.
+            expanded_regionals: set[str] = set()
+            for group in selected_regional_groups:
+                expanded_regionals.update(granular_regionals_for_group(group))
+            conditions.append(
+                OperationOrder.regional.in_(sorted(expanded_regionals)) if expanded_regionals else OperationOrder.id == -1
+            )
     for api_field, column in FILTER_COLUMNS.items():
         if api_field == exclude_filter:
             continue
@@ -549,6 +569,11 @@ def filter_options(
     # consultar o banco só para descobrir "quais dias existem".
     result["opened_weekdays"] = list(WEEKDAY_KEYS)
     result["closed_weekdays"] = list(WEEKDAY_KEYS)
+    # "Regional" (agrupado) é fixo, não derivado do banco por filial (como "regionals" acima) -
+    # a lista de grupos vem de `services/regional.py`, a mesma fonte usada pela Gamificação. Não
+    # há necessidade de excluir o próprio filtro para calcular as opções: os grupos são um
+    # catálogo fechado, não um valor livre digitado nos dados.
+    result["regional_groups"] = regional_group_options()
     directory = db.get(OperationResponsibleDirectorySetting, 1)
     source = directory.source if directory else "orders"
     if source in {"ixc", "both"}:
@@ -599,9 +624,15 @@ def overview(db: Session, date_from: date, date_to: date, user: User, **filters)
             func.avg(case((completed, OperationOrder.elapsed_hours), else_=None)),
         ).where(*conditions)
     ).one()
-    # Backlog is a current stock: it deliberately ignores the selected dates.
+    # Backlog é um estoque atual: ignora deliberadamente o período selecionado E os filtros de
+    # execução (`_backlog_filters`, mesma convenção documentada em `regional_matrix`/
+    # `openings_analytics`) - uma O.S. ainda aberta não tem executor definitivo, filtrar o
+    # estoque por modelo de equipe/responsável só esconderia demanda real. Achado real
+    # (2026-09-16): até aqui esta função era a ÚNICA do módulo que ainda aplicava os filtros
+    # completos ao backlog - com o mesmo filtro de equipe, o card desta tela mostrava um número
+    # e a tabela por filial (que já seguia a convenção) mostrava outro, maior, pro mesmo estoque.
     backlog_conditions = [
-        *_dimension_conditions(db, user, filters),
+        *_dimension_conditions(db, user, _backlog_filters(filters)),
         OperationOrder.is_closed.is_(False),
     ]
     backlog_row = db.execute(
@@ -651,6 +682,9 @@ def overview(db: Session, date_from: date, date_to: date, user: User, **filters)
         "responsible_filter_active": bool(filters.get("responsibles") or filters.get("team_models")),
         "completed": completed_count,
         "in_progress": in_progress_count,
+        # Mesma flag de `regional_matrix` - avisa a tela que "in_progress"/"opened_out_of_time"
+        # não mudam com o filtro de modelo de equipe/responsável, mesmo quando ele está ativo.
+        "backlog_ignores_team_scope": True,
         "opened_out_of_time": opened_out,
         "completed_on_time": completed_on_time,
         "completed_out_of_time": completed_out,
@@ -661,6 +695,20 @@ def overview(db: Session, date_from: date, date_to: date, user: User, **filters)
         "average_wait_to_displacement_minutes": round(sum(wait_minutes) / len(wait_minutes), 2) if wait_minutes else None,
         "average_cycle_minutes": round(sum(cycle_minutes) / len(cycle_minutes), 2) if cycle_minutes else None,
     }
+
+
+# Case SQL que reescreve a filial granular pela regional agrupada (ex.: "UNI - SAO FELIPE DOESTE"
+# -> "UNI - ROLIM DE MOURA") direto no GROUP BY de `regional_matrix` - pedido do usuário
+# (2026-09-14): a Visão Geral (donut "Finalizadas por filial" e tabela "Operação por filial", os
+# dois lidos do mesmo `regional_matrix`) deve agrupar por Regional, não por Filial. Construído a
+# partir de `GROUPED_TO_GRANULAR` (services/regional.py, a mesma fonte do filtro `regional_groups`)
+# - granular que já é o nome do próprio grupo (a maioria) não entra aqui e cai no `else_`.
+_REGIONAL_MATRIX_GROUP_WHENS = [
+    (OperationOrder.regional == granular, grouped)
+    for grouped, granular_list in GROUPED_TO_GRANULAR.items()
+    for granular in granular_list
+    if granular != grouped
+]
 
 
 def _regional_matrix_item(
@@ -695,7 +743,12 @@ def regional_matrix(
     include_sla: bool = True,
     **filters,
 ) -> dict:
-    """Uma linha por filial com as quatro medidas da Visão Geral executiva.
+    """Uma linha por REGIONAL (agrupada - ver `_REGIONAL_MATRIX_GROUP_WHENS`) com as quatro medidas
+    da Visão Geral executiva - alimenta a tabela "Operação por filial" e o donut "Finalizadas por
+    filial" (que só lê o campo `completed` daqui, sem consulta própria). Antes de 2026-09-14
+    agrupava por filial granular; a Visão Geral passou a usar só "Regional" no filtro e nos
+    gráficos, então São Felipe D'Oeste soma dentro de Rolim de Moura, e São Miguel/Seringueiras
+    dentro de São Francisco do Guaporé - mesmo critério de `normalize_regional_grouped`.
 
     Cada coluna carrega DELIBERADAMENTE um escopo de filtro diferente, seguindo a convenção que
     já vale no resto do módulo (`overview`, `openings_analytics`, `overview_trend_daily`):
@@ -718,7 +771,10 @@ def regional_matrix(
     abre a Visão Geral sem `operations:view_sla`.
     """
     start, end = local_period_utc_bounds(date_from, date_to)
-    regional_label = func.coalesce(OperationOrder.regional, "Não identificada")
+    regional_label = case(
+        *_REGIONAL_MATRIX_GROUP_WHENS,
+        else_=func.coalesce(OperationOrder.regional, "Não identificada"),
+    )
 
     opened_rows = db.execute(
         select(regional_label, func.count(OperationOrder.id))
@@ -801,6 +857,43 @@ def regional_matrix(
         "sla_available": include_sla,
         "items": items,
         "total": total,
+    }
+
+
+def overview_collaborator_production(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
+    """Finalizadas por responsável - o segundo nível do donut de modelo de equipe da Visão Geral.
+
+    Existe como consulta PRÓPRIA e enxuta em vez de reaproveitar `collaborator_sla` (que responde a
+    `/operations/sla/collaborators`, usada pela Operação Analítica) por três motivos medidos no
+    banco real, 2026-09-10, no recorte de um modelo de equipe em 30 dias:
+
+    - `collaborator_sla` roda em ~144 ms e devolve ~19 KB (15 campos por pessoa: tempos de execução
+      mín/méd/máx, aderência ao agendamento, contagem por tipo de O.S. numa SEGUNDA consulta);
+      esta roda em ~58 ms e devolve ~1,7 KB. O donut usa dois campos: nome e finalizadas.
+    - `collaborator_sla` agrupa por responsável E filial, então quem atende mais de uma filial vem
+      em várias linhas e precisava ser somado de novo do lado da tela; aqui o `GROUP BY` já é só
+      por responsável.
+    - a rota de SLA exige `operations:view_sla`, e produção por técnico não é dado de SLA: nomes e
+      contagem de finalizadas já são alcançáveis por qualquer perfil com `operations:read` (basta
+      escolher um colaborador no filtro da própria tela). Uma rota própria não herda uma permissão
+      que este dado não precisa.
+
+    O escopo regional do usuário e todos os filtros de dimensão continuam aplicados por
+    `_query_conditions`, igual a qualquer outra consulta do módulo.
+    """
+    conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
+    responsible = func.coalesce(OperationOrder.responsible, "Não identificado")
+    completed = func.count(OperationOrder.id)
+    rows = db.execute(
+        select(responsible, completed)
+        .where(*conditions, OperationOrder.closed_at.between(start, end))
+        .group_by(responsible)
+        .order_by(completed.desc(), responsible.asc())
+    ).all()
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        "items": [{"responsible": row[0], "completed": row[1]} for row in rows],
     }
 
 
@@ -990,9 +1083,20 @@ def sla_breakdown(db: Session, date_from: date, date_to: date, user: User, group
         "department": OperationOrder.department,
         "sector": OperationOrder.sector,
     }
-    field = allowed_groups.get(group_by, OperationOrder.os_type)
     conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
-    label = func.coalesce(field, "Não identificado")
+    if group_by == "technology_group":
+        # Rollup por tecnologia/categoria (Ativação/Suporte x Fibra Urbana/Fibra Rural/Rádio) por
+        # cima do assunto granular - precisa ser um `case()` avaliado no próprio GROUP BY (não um
+        # remapeamento em Python depois), senão vários assuntos que caem no mesmo grupo apareceriam
+        # como linhas separadas em vez de somadas. Mesmo padrão de `regional.py` (regional agrupada
+        # por cima da regional granular), aplicado aqui ao assunto.
+        label = case(
+            *[(OperationOrder.os_subject == subject, group) for subject, group in RAW_SUBJECT_TECHNOLOGY_GROUP.items()],
+            else_=OTHER_TECHNOLOGY_GROUP,
+        )
+    else:
+        field = allowed_groups.get(group_by, OperationOrder.os_type)
+        label = func.coalesce(field, "Não identificado")
     elapsed = OperationOrder.elapsed_hours
     rows = db.execute(
         select(
@@ -2248,6 +2352,7 @@ def monthly_calendar(
                     "median_color": model.median_color,
                     "good_color": model.good_color,
                     "excellent_color": model.excellent_color,
+                    "requires_justification": model.requires_justification,
                     "target_rules": [
                         {
                             "id": rule.id,

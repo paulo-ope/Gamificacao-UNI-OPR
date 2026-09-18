@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case
+from sqlalchemy import case, delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -175,3 +176,100 @@ async def run_login_status_snapshot_loop() -> None:
         except Exception:
             logger.exception("Falha ao capturar snapshot de status de login.")
         await asyncio.sleep(_current_login_status_interval_seconds())
+
+
+# Achado real do incidente de 17/09/2026: `operations_login_status_snapshots` é append-only (ver
+# docstring do model) sem nenhuma retenção desde que existe (migration de 2026-08-13) - chegou a
+# 66GB (87% do banco) e derrubou o Postgres da VM por falta de espaço em disco. Ligada por padrão
+# (diferente de `prune_superseded_drafts`, que é destrutiva sobre registro de pagamento e por isso
+# exige opt-in): esta tabela é telemetria pura para detecção de cluster geográfico, não registro de
+# negócio, e o crescimento sem limite já causou dois incidentes de indisponibilidade do cockpit.
+# Padrão de 7 dias (não 14) por decisão explícita de 17/09/2026: a VM deste projeto tem um único
+# disco de 97GB sem possibilidade de expansão nem de anexar um disco adicional - depois do purge
+# inicial a folga ficou em ~2,5GB fixos, então quanto menor o volume de dados vivos nesta tabela,
+# mais espaço de reuso sobra pros próximos ciclos de captura.
+LOGIN_STATUS_RETENTION_ENABLED_KEY = "login_status_retention_enabled"
+LOGIN_STATUS_RETENTION_DAYS_KEY = "login_status_retention_days"
+LOGIN_STATUS_RETENTION_DEFAULT_DAYS = 7
+LOGIN_STATUS_RETENTION_MIN_DAYS = 3
+LOGIN_STATUS_RETENTION_MAX_DAYS = 180
+# Roda a purga a cada 6h - não precisa ser mais frequente, o volume que importa é o de dias, não o
+# de horas.
+LOGIN_STATUS_RETENTION_INTERVAL_SECONDS = 6 * 60 * 60
+# Cada lote é deletado e comitado em transação própria - achado real do mesmo incidente: com a VM
+# operando a poucos GB livres em disco, um único DELETE apagando meses de histórico de uma vez
+# gera WAL suficiente para estourar esse espaço livre e derrubar o Postgres de novo antes mesmo de
+# terminar a limpeza. Lotes pequenos com uma pausa entre eles dão tempo pro checkpointer/autovacuum
+# acompanhar.
+_RETENTION_BATCH_SIZE = 20_000
+_RETENTION_BATCH_PAUSE_SECONDS = 0.2
+
+
+def _current_retention_days() -> int:
+    with SessionLocal() as db:
+        raw = get_setting(db, LOGIN_STATUS_RETENTION_DAYS_KEY, "")
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        days = LOGIN_STATUS_RETENTION_DEFAULT_DAYS
+    return min(max(days, LOGIN_STATUS_RETENTION_MIN_DAYS), LOGIN_STATUS_RETENTION_MAX_DAYS)
+
+
+def _retention_enabled(default: bool) -> bool:
+    with SessionLocal() as db:
+        raw = get_setting(db, LOGIN_STATUS_RETENTION_ENABLED_KEY, "")
+    if not raw:
+        return default
+    return raw.strip().lower() in {"true", "1", "sim", "yes"}
+
+
+def purge_old_login_status_snapshots(
+    db: Session, *, retention_days: int, batch_size: int = _RETENTION_BATCH_SIZE
+) -> int:
+    """Apaga em lotes linhas de `operations_login_status_snapshots` com `captured_at` mais antigo
+    que `retention_days`. Cada lote é sua própria transação (commit por lote, não uma transação só
+    pra tudo) - ver `LOGIN_STATUS_RETENTION_INTERVAL_SECONDS` acima para o motivo. Retorna o total
+    de linhas removidas."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    total_deleted = 0
+    while True:
+        batch_ids = db.scalars(
+            select(OperationLoginStatusSnapshot.id)
+            .where(OperationLoginStatusSnapshot.captured_at < cutoff)
+            .limit(batch_size)
+        ).all()
+        if not batch_ids:
+            break
+        db.execute(delete(OperationLoginStatusSnapshot).where(OperationLoginStatusSnapshot.id.in_(batch_ids)))
+        db.commit()
+        total_deleted += len(batch_ids)
+        if len(batch_ids) < batch_size:
+            break
+        time.sleep(_RETENTION_BATCH_PAUSE_SECONDS)
+    return total_deleted
+
+
+async def run_login_status_snapshot_purge_loop() -> None:
+    """Loop infinito, roda a cada `LOGIN_STATUS_RETENTION_INTERVAL_SECONDS`: purga snapshots de
+    status de login mais antigos que `LOGIN_STATUS_RETENTION_DAYS_KEY` dias. Independe de
+    configuração do IXC (roda sempre, mesmo padrão de `run_backlog_snapshot_loop`) - só limpa
+    histórico já gravado, não chama a API externa. Liga/desliga e o número de dias são
+    configuráveis por AppSetting, lidos a cada ciclo, sem precisar reiniciar o backend. Uma falha
+    numa rodada não derruba o loop, só é logada."""
+    while True:
+        try:
+            if _retention_enabled(default=True):
+                retention_days = _current_retention_days()
+                with SessionLocal() as db:
+                    deleted = await asyncio.to_thread(
+                        purge_old_login_status_snapshots, db, retention_days=retention_days
+                    )
+                if deleted:
+                    logger.info(
+                        "Purga de snapshots de status de login: %d linhas removidas (retenção de %d dias).",
+                        deleted,
+                        retention_days,
+                    )
+        except Exception:
+            logger.exception("Falha ao purgar snapshots antigos de status de login.")
+        await asyncio.sleep(LOGIN_STATUS_RETENTION_INTERVAL_SECONDS)

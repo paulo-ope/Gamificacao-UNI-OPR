@@ -78,6 +78,7 @@ def service_orders_audit(
     only_recurrence: bool = False,
     only_non_recurrent: bool = False,
     only_diagnosis_blocked: bool = False,
+    only_registered: bool = True,
     audit_group_mode: str | None = None,
     audit_group_label: str | None = None,
     page: int = Query(default=1, ge=1),
@@ -115,6 +116,10 @@ def service_orders_audit(
             only_recurrence=only_recurrence,
             only_non_recurrent=only_non_recurrent,
             only_diagnosis_blocked=only_diagnosis_blocked,
+            # Ligado por padrao: a auditoria existe pra conferir o que a gamificacao remunera, e
+            # remunerar so acontece pra equipe cadastrada - com o total cru continuando visivel em
+            # `registration_scope`. `only_registered=false` traz a base do periodo inteira.
+            only_registered=only_registered,
             audit_group_mode=audit_group_mode,
             audit_group_label=audit_group_label,
             os_type=os_type,
@@ -186,6 +191,7 @@ def service_orders_scoring_audit(
     only_recurrence: bool = False,
     only_non_recurrent: bool = False,
     only_diagnosis_blocked: bool = False,
+    only_registered: bool = True,
     audit_group_mode: str | None = None,
     audit_group_label: str | None = None,
     page: int = Query(default=1, ge=1),
@@ -211,6 +217,7 @@ def service_orders_scoring_audit(
         only_recurrence=only_recurrence,
         only_non_recurrent=only_non_recurrent,
         only_diagnosis_blocked=only_diagnosis_blocked,
+        only_registered=only_registered,
         audit_group_mode=audit_group_mode,
         audit_group_label=audit_group_label,
         page=page,

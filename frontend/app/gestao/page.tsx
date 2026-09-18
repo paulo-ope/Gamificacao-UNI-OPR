@@ -492,7 +492,11 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
               </Button>
             </div>
           ) : null}
-          <div className="overflow-x-auto p-4">
+          {/* Sem `overflow-x-auto` aqui: o próprio `<Table>` já rola horizontalmente e mostra a
+              dica de scroll (ver components/ui/table.tsx) - duplicar o scroll container aqui
+              fazia o overflow real acontecer NESTE div, e a dica (que observa o container interno
+              do Table) nunca disparava. */}
+          <div className="p-4">
             <Table>
               <TableHeader>
                 <TableRow>

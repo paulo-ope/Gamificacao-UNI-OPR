@@ -18,12 +18,21 @@ uma com ciclo de vida e fonte de dado próprios; nenhuma foi fundida numa entida
                                                  cadastro manual (OperationResponsibleAssignment)
                                                  tem prioridade sobre histórico de O.S.
 
-Chave de casamento entre elas: nome normalizado (`_norm`/`_norm_name`, casefold + colapsa espaço),
-mais `ixc_employee_id` quando disponível - não há FK direta entre `ManagementOperationalMember` e
+Chave de casamento entre elas: nome normalizado (`cases._norm`, que delega em
+`regional.normalize_key` - casefold, colapsa espaço E remove acento), mais `ixc_employee_id`
+quando disponível - não há FK direta entre `ManagementOperationalMember` e
 `OperationResponsibleAssignment`/`OperationOrder`. Uma pessoa pode ter mais de uma linha de
 `ManagementOperationalMember` (uma por regional em que teve cadastro/atividade) - "regional
 canônica de uma pessoa pelo nome" é resolvida por `cases.py:_resolve_member_for_case`, não por
-uma FK única."""
+uma FK única.
+
+Achado real (2026-09-16): até aqui a normalização não removia acento ("José Souza"/"Jose Souza"
+- variação real de digitação/importação do IXC entre lotes - viravam DUAS pessoas diferentes),
+o que fazia casos de gestão/pendência de justificativa aparecerem sob uma identidade quando
+deveriam estar sob a outra (falso positivo, falso negativo e pessoa errada, todos o mesmo
+sintoma). Corrigido reaproveitando `regional.normalize_key` (já resolvia isso para nome de
+regional) em vez de duplicar um algoritmo mais fraco; o filtro exato por nome em SQL usa
+`cases.names_matching` (resolve a comparação em Python - `unicodedata` não roda em SQL)."""
 from __future__ import annotations
 
 from datetime import date, datetime, timezone

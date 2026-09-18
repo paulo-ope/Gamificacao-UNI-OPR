@@ -44,3 +44,19 @@ export const CHART_INK = {
 } as const;
 
 export type CategoricalSlot = (typeof CATEGORICAL_SLOTS)[number];
+
+/**
+ * Cores da marca UNI usadas dentro de configurações do ECharts - lá não dá pra usar classe do
+ * Tailwind (é um objeto de config JS/canvas, não DOM). Mesmos valores exatos de
+ * `tailwind.config.ts` e `app/globals.css` (`--uni-royal`, `--uni-turquoise`, `--uni-midnight`).
+ *
+ * Ficam AQUI (não em `CATEGORICAL_SLOTS`) de propósito: são cor de INTERFACE (fundo de gradiente
+ * de uma única série, texto de rótulo), nunca identidade de série de dado - ver a regra acima
+ * sobre os azuis da marca. (Achado da auditoria 2026-09-15: existiu um módulo separado
+ * `lib/charts/chart-palette.ts` com estes mesmos valores, criado sem checar que este arquivo já
+ * existia - unificado aqui para não haver duas fontes divergentes.)
+ */
+export const UNI_ROYAL = "#2d5fff";
+export const UNI_TURQUOISE = "#27d9bf";
+export const UNI_IMPACT = "#0028f3";
+export const UNI_MIDNIGHT = "#010c8b";

@@ -514,7 +514,10 @@ def _run_collective_outage_rule(db: Session, rule: IntelligenceAlertRule) -> lis
     require_same_regional = bool(params.get("require_same_regional", True))
     regionals_filter = set(scope.get("regionals") or [])
 
-    analysis = login_incident_analysis(db, window_minutes=window_minutes, regionals=None, cluster_radius_meters=radius_meters, cluster_min_size=min_count)
+    # `user=None`: monitor de sistema, sem usuário associado - varre o sistema inteiro de
+    # propósito (a regra configurável já tem seu próprio `scope_json["regionals"]`, aplicado
+    # abaixo, independente do escopo de qualquer usuário - ver `regional_scope_or_deny`).
+    analysis = login_incident_analysis(db, user=None, window_minutes=window_minutes, regionals=None, cluster_radius_meters=radius_meters, cluster_min_size=min_count)
     detections: list[MonitorDetection] = []
     for cluster in analysis.get("geo_clusters", []):
         logins = cluster.get("logins", [])

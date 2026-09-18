@@ -4,6 +4,7 @@ import { Save } from "lucide-react";
 
 import { AppCombobox, AppInput, AppSwitch } from "@/components/gamification/config-ui";
 import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
@@ -67,15 +68,15 @@ export function GovernanceRulesPanel({
   }
 
   return (
-    <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
-      <div className="panel-header">
+    <Card className="rounded-2xl border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+      <CardHeader className="flex min-w-0 flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
-          <h2 className="panel-title">Governança da Apuração</h2>
-          <p className="panel-subtitle">
+          <CardTitle className="text-base font-semibold text-foreground">Governança da Apuração</CardTitle>
+          <p className="text-sm text-muted-foreground">
             Primeiro ajuste o que manda no fechamento: valor do ponto, janela de reincidência e multiplicadores.
           </p>
         </div>
-      </div>
+      </CardHeader>
 
       <div className="grid gap-4 border-t p-5 lg:grid-cols-4">
         <div className="grid gap-2">
@@ -169,7 +170,7 @@ export function GovernanceRulesPanel({
             Nenhuma regra de saúde está ativa. Enquanto isso, o ranking usa multiplicador neutro 1.00x.
           </div>
         ) : null}
-        <div className="overflow-hidden rounded-2xl border border-slate-200">
+        <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
               <TableRow className="border-slate-700 hover:bg-slate-900">
@@ -225,7 +226,7 @@ export function GovernanceRulesPanel({
         </div>
       </div>
       ) : null}
-    </section>
+    </Card>
   );
 }
 
