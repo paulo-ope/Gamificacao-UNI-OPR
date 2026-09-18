@@ -17,6 +17,7 @@ import { OperationsOpeningsAnalytics } from "@/components/operations/operations-
 import { OperationsOrderDetailDialog } from "@/components/operations/operations-order-detail-dialog";
 import { OperationsOverviewCharts } from "@/components/operations/operations-overview-charts";
 import { OperationsSlaHierarchyTable } from "@/components/operations/operations-sla-hierarchy-table";
+import { OperationsSlaMatrixTable } from "@/components/operations/operations-sla-matrix-table";
 import { OperationsTeamConfiguration } from "@/components/operations/operations-team-configuration";
 import { OperationsWarrantyAnalytics } from "@/components/operations/operations-warranty-analytics";
 import { OperationsWorkScheduleOverview } from "@/components/operations/operations-work-schedule-overview";
@@ -57,6 +58,7 @@ import {
   type OperationSavedFilter,
   type OperationSavedFilterValues,
   type OperationSlaHierarchy,
+  type OperationSlaMatrix,
   type OperationSlaRiskItem,
   type OperationTrendGranularity,
   type OperationTrendSeries,
@@ -244,6 +246,12 @@ const EMPTY_SLA_HIERARCHY: OperationSlaHierarchy = {
     after_72h_rate: null,
     average_closing_hours: null,
   },
+};
+const EMPTY_SLA_MATRIX: OperationSlaMatrix = {
+  date_from: "",
+  date_to: "",
+  regionals: [],
+  rows: [],
 };
 const CLOSED_OPERATION_STATUSES = new Set(["finalizada", "cancelada"]);
 function filtersForOpenScope(current: OperationFilterState) {
@@ -631,6 +639,8 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
     useState<OperationSlaHierarchy>(EMPTY_SLA_HIERARCHY);
   const [collaboratorSla, setCollaboratorSla] =
     useState<OperationCollaboratorSla>(EMPTY_COLLABORATOR_SLA);
+  const [slaMatrix, setSlaMatrix] =
+    useState<OperationSlaMatrix>(EMPTY_SLA_MATRIX);
   const [warrantyAnalytics, setWarrantyAnalytics] = useState<OperationWarrantyAnalytics>(
     EMPTY_WARRANTY_ANALYTICS,
   );
@@ -720,6 +730,9 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
   const canManageSubjects = Boolean(
     user?.permissions.includes("operations:manage_subjects"),
   );
+  const canManageSlaGroups = Boolean(
+    user?.permissions.includes("operations:manage_sla_groups"),
+  );
   const canSyncIxc = Boolean(user?.permissions.includes("operations:sync_ixc"));
   const canViewOpenings = Boolean(user?.permissions.includes("operations:view_openings"));
   const canViewSla = Boolean(user?.permissions.includes("operations:view_sla"));
@@ -738,14 +751,15 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
       "overview",
       ...(canViewOpenings ? ["openings" as const] : []),
       ...(canViewSla ? ["sla" as const] : []),
+      ...(canViewSla ? ["matrix" as const] : []),
       ...(canViewWarranty ? ["garantias" as const] : []),
       ...(canViewCalendar ? ["calendar" as const] : []),
       ...(canViewBacklog ? ["progress" as const] : []),
       ...(canViewOrderDetails ? ["details" as const] : []),
       "network",
-      ...(canManageTeamModels || canManageOwnTeamMembers || canManageSubjects || canSyncIxc ? ["teams" as const] : []),
+      ...(canManageTeamModels || canManageOwnTeamMembers || canManageSubjects || canManageSlaGroups || canSyncIxc ? ["teams" as const] : []),
     ],
-    [canManageOwnTeamMembers, canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
+    [canManageOwnTeamMembers, canManageSlaGroups, canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
   );
 
   const loadDashboard = useCallback(
@@ -841,6 +855,13 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
           if (dashboardRequest.current !== requestId) return;
           setSlaHierarchy(nextSlaHierarchy);
           setCollaboratorSla(nextCollaboratorSla);
+          return;
+        }
+
+        if (requestedTab === "matrix") {
+          const nextSlaMatrix = await operationsApi.slaMatrix(effectiveFilters);
+          if (dashboardRequest.current !== requestId) return;
+          setSlaMatrix(nextSlaMatrix);
           return;
         }
 
@@ -1745,6 +1766,14 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
             <OperationsCollaboratorSlaTable data={collaboratorSla} />
           </TabsContent>
 
+          <TabsContent value="matrix">
+            {appliedFilters ? (
+              <OperationsSlaMatrixTable data={slaMatrix} isLoading={loading} />
+            ) : (
+              <div className="h-80 animate-pulse rounded-2xl border bg-white" />
+            )}
+          </TabsContent>
+
           <TabsContent value="garantias">
             {appliedFilters ? (
               <OperationsWarrantyAnalytics
@@ -2233,6 +2262,7 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
               canManageTeamModels={canManageTeamModels}
               canManageOwnTeamMembers={canManageOwnTeamMembers}
               canManageSubjects={canManageSubjects}
+              canManageSlaGroups={canManageSlaGroups}
               canManageViews={canManageViews}
               canSyncIxc={canSyncIxc}
               ixcSyncSettings={ixcSyncSettings}

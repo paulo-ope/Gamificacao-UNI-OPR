@@ -795,6 +795,70 @@ class OperationSubjectTypeMappingOut(BaseModel):
     active: bool = True
 
 
+class OperationSlaGroupCreate(BaseModel):
+    card_label: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=120)
+
+
+class OperationSlaGroupUpdate(BaseModel):
+    card_label: str | None = Field(default=None, min_length=1, max_length=120)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    display_order: int | None = None
+    active: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class OperationSlaGroupOut(BaseModel):
+    id: int
+    card_label: str
+    name: str
+    display_order: int
+    active: bool
+    subjects: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OperationSlaGroupSubjectsUpdate(BaseModel):
+    """Substitui a lista INTEIRA de assuntos de um grupo - mesmo estilo de
+    `OperationSubjectTypeBulkUpdate`. Um assunto já atribuído a outro grupo é movido pra este,
+    nunca duplicado (a unicidade é garantida pela constraint em `subject`)."""
+
+    subjects: list[str] = Field(default_factory=list, max_length=500)
+
+
+class OperationSlaCatalogSubjectOut(BaseModel):
+    subject: str
+    order_count: int
+    group_id: int | None = None
+    group_name: str | None = None
+
+
+class OperationSlaMatrixCell(BaseModel):
+    regional: str
+    completed: int
+    sla_rate: float | None = None
+    average_closing_hours: float | None = None
+
+
+class OperationSlaMatrixRow(BaseModel):
+    group_id: int
+    card_label: str
+    group_name: str
+    cells: list[OperationSlaMatrixCell]
+    total: OperationSlaMatrixCell
+
+
+class OperationSlaMatrix(BaseModel):
+    date_from: date
+    date_to: date
+    regionals: list[str]
+    rows: list[OperationSlaMatrixRow]
+
+
 class OperationResponsibleAssignmentUpdate(BaseModel):
     responsible_name: str = Field(min_length=1, max_length=180)
     regional: str = Field(min_length=1, max_length=160)

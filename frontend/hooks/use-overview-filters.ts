@@ -10,9 +10,6 @@ import type {
   OverviewSupportFilterValues,
 } from "@/lib/operations-api";
 
-/** Padrão de período da Visão Geral, decidido com o usuário: últimos 30 dias. */
-export const OVERVIEW_DEFAULT_DAYS = 30;
-
 /**
  * Filtros de O.S. que a Visão Geral publica na URL e que uma visão global salva pode pré-setar.
  * Só as dimensões de uso executivo - jogar os ~30 filtros do módulo na URL deixaria o link
@@ -41,23 +38,17 @@ export type OverviewSupportFilters = {
 /** O recorte completo da tela: filtros de O.S. + filtros do SGP. */
 export type OverviewFilters = OperationFilterState & OverviewSupportFilters;
 
-function addDaysIso(iso: string, days: number) {
-  const [year, month, day] = iso.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
-}
-
 /**
- * Últimos N dias, cortados no início do ano operacional.
- *
- * O corte não é detalhe: `validate_operations_period` só aceita datas do ano corrente, então em
- * janeiro "últimos 30 dias" cairia em dezembro do ano anterior e a tela abriria com 422.
+ * Mês atual - mesmo padrão já usado pela Operação Analítica (`GET /operations/period` calcula
+ * `date_from`/`date_to` do lado do backend, do dia 1 do mês corrente até hoje, dentro do ano
+ * operacional). Pedido do usuário em 2026-09-18: a Visão Geral calculava seu próprio padrão
+ * ("últimos 30 dias" a partir de `allowed_to`), ignorando esses dois campos - por isso a tela
+ * nunca abria no mês atual, e não havia como fixar isso como padrão (o botão "Definir como
+ * padrão" só salva filtros de dimensão, nunca período).
  */
 export function defaultOverviewRange(period: OperationPeriod | null) {
   if (!period) return null;
-  const dateTo = period.allowed_to;
-  const naiveFrom = addDaysIso(dateTo, -(OVERVIEW_DEFAULT_DAYS - 1));
-  const dateFrom = naiveFrom < period.allowed_from ? period.allowed_from : naiveFrom;
-  return { date_from: dateFrom, date_to: dateTo };
+  return { date_from: period.date_from, date_to: period.date_to };
 }
 
 function readUrlFilters(params: URLSearchParams) {
