@@ -342,8 +342,7 @@ class OperationBacklogSnapshot(Base):
 class OperationLoginStatusSnapshot(Base):
     """Fotografia periódica (várias vezes por dia, não 1x/dia como o backlog) do status de conexão
     de cada login do IXC (`radusuarios.online`) - append-only, nunca upsertada, pra permitir montar
-    a série "esse login ficou fora de 'online' nos últimos N dias" e cruzar com lat/long pra achar
-    clusters geográficos de queda (ex.: rompimento de fibra num trecho). Sem esta tabela o IXC só
+    a série "esse login ficou fora de 'online' nos últimos N dias". Sem esta tabela o IXC só
     devolve o status atual (achado confirmado consultando `radusuarios` direto: não existe endpoint
     de histórico de status por login, só accounting RADIUS em `radacct`, que não cobre logins fibra
     monitorados por sinal óptico - a maioria dos casos com `online` diferente de 'S').
@@ -353,28 +352,22 @@ class OperationLoginStatusSnapshot(Base):
     justamente o estado que se quer detectar, então perder essa distinção reduzindo pra
     True/False descartaria o sinal mais relevante da feature.
 
-    `latitude`/`longitude` são gravados a cada captura (não só uma vez) porque o cadastro do login
-    pode ganhar coordenada depois de já existir - guardar por captura evita ter que voltar no IXC
-    pra saber "quando essa coordenada passou a existir"."""
+    Não guarda `login`/`latitude`/`longitude` (achado real do levantamento de espaço em disco de
+    2026-09-18: essa tabela chegou a 66GB/87% do disco da VM, e nenhum dos 3 consumidores desta
+    tabela - `login_aggregate.login_timeseries`, `login_search._recent_login_events` - lê esses
+    campos; a detecção geográfica de cluster usa `OperationLoginCurrentStatus`, não esta tabela).
+    Removidos pra cortar a largura de cada linha - login/lat/long ficavam duplicados 1x por captura
+    por login (a cada ~5min) apesar de já existirem, atualizados, em `OperationLoginCurrentStatus`.
+    Quem precisar de identificação/geo de um evento histórico faz join por `login_id` com
+    `operations_login_current_status`."""
 
     __tablename__ = "operations_login_status_snapshots"
-    __table_args__ = (
-        Index("ix_operations_login_status_snapshots_login_captured", "login_id", "captured_at"),
-        Index(
-            "ix_operations_login_status_snapshots_online_geo",
-            "online",
-            "latitude",
-            "longitude",
-        ),
-    )
+    __table_args__ = (Index("ix_operations_login_status_snapshots_login_captured", "login_id", "captured_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    login_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    login: Mapped[str] = mapped_column(String(160), nullable=False)
+    login_id: Mapped[int] = mapped_column(Integer, nullable=False)
     online: Mapped[str] = mapped_column(String(10), nullable=False, default="")
-    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Passthrough direto de `ultima_conexao_final` do IXC (achado real da auditoria de
     # 2026-08-21) - fica NULL enquanto o login está online AGORA (reflete o estado/sessão atual,
