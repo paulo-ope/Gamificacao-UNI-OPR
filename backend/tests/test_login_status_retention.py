@@ -13,7 +13,6 @@ def _snapshot(db_session, *, login_id: int, captured_at: datetime):
         OperationLoginStatusSnapshot(
             captured_at=captured_at,
             login_id=login_id,
-            login=f"login-{login_id}",
             online="S",
         )
     )

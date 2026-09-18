@@ -107,7 +107,18 @@ def capture_login_status_snapshot(db: Session, client: IxcClient) -> int:
     if not parsed:
         return 0
 
-    db.bulk_save_objects([OperationLoginStatusSnapshot(captured_at=captured_at, **fields) for fields in parsed])
+    db.bulk_save_objects(
+        [
+            OperationLoginStatusSnapshot(
+                captured_at=captured_at,
+                login_id=fields["login_id"],
+                online=fields["online"],
+                last_connected_at=fields["last_connected_at"],
+                last_disconnected_at=fields["last_disconnected_at"],
+            )
+            for fields in parsed
+        ]
+    )
     upsert_login_current_status(
         db,
         [
