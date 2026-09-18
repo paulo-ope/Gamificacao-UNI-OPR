@@ -298,14 +298,59 @@ export type OperationSlaItem = {
   average_closing_hours: number | null;
 };
 
-/** Rótulos de `group_by=technology_group` (`GET /operations/sla`) - espelham exatamente
- * `ACTIVATION_TECHNOLOGY_GROUPS`/`SUPPORT_TECHNOLOGY_GROUPS` de
- * `backend/app/modules/operations/technology_group.py`. Não há endpoint de catálogo para essas 6
- * strings (são fixas, definidas pelo painel executivo que este agrupamento reproduz - ver
- * `docs/integracao-uni/regras-agrupamento-sla-tecnologia.json`), então ficam hardcoded aqui; se o
- * backend renomear um grupo, este array precisa acompanhar. */
-export const SLA_ACTIVATION_TECHNOLOGY_GROUPS = ["Ativação Fibra Urbana", "Ativação Fibra Rural", "Ativação Rádio"] as const;
-export const SLA_SUPPORT_TECHNOLOGY_GROUPS = ["Suporte Fibra Urbana", "Suporte Fibra Rural", "Suporte Rádio"] as const;
+/**
+ * Um gauge de "SLA por tecnologia" (ex.: "Ativação Fibra Urbana"). `card_label` agrupa vários
+ * grupos visualmente num único card da Visão Geral (ex.: "SLA de Ativação" reúne 3 grupos) -
+ * configurável pela tela (pedido do usuário em 2026-09-18: antes disso os 6 grupos eram
+ * hardcoded no frontend, sem tela pra editar).
+ */
+export type OperationSlaGroup = {
+  id: number;
+  card_label: string;
+  name: string;
+  display_order: number;
+  active: boolean;
+  subjects: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type OperationSlaGroupCreate = { card_label: string; name: string };
+export type OperationSlaGroupUpdate = Partial<{ card_label: string; name: string; display_order: number; active: boolean }>;
+
+/** Assunto granular de O.S. já visto em alguma importação - para a tela de configuração escolher
+ * em vez de digitar de cabeça. */
+export type OperationSlaCatalogSubject = {
+  subject: string;
+  order_count: number;
+  group_id: number | null;
+  group_name: string | null;
+};
+
+/** Uma célula da "Matriz de indicadores por filial": Volume/SLA%/TME de um grupo numa REGIONAL
+ * (agrupada) específica, ou o total "Matriz" recalculado por contagem (ver `queries.sla_group_matrix`
+ * no backend - nunca é a média dos percentuais das filiais). */
+export type OperationSlaMatrixCell = {
+  regional: string;
+  completed: number;
+  sla_rate: number | null;
+  average_closing_hours: number | null;
+};
+
+export type OperationSlaMatrixRow = {
+  group_id: number;
+  card_label: string;
+  group_name: string;
+  cells: OperationSlaMatrixCell[];
+  total: OperationSlaMatrixCell;
+};
+
+export type OperationSlaMatrix = {
+  date_from: string;
+  date_to: string;
+  regionals: string[];
+  rows: OperationSlaMatrixRow[];
+};
 
 export type OperationSlaHierarchyLevel = "os_type" | "subject" | "diagnosis";
 
@@ -1066,6 +1111,18 @@ export const operationsApi = {
     request<OperationSlaItem[]>(
       `/operations/sla?${query(filters, { group_by: groupBy })}`,
     ),
+  slaGroups: () => request<OperationSlaGroup[]>("/operations/sla-groups"),
+  slaCatalogSubjects: () => request<OperationSlaCatalogSubject[]>("/operations/sla-groups/catalog-subjects"),
+  createSlaGroup: (payload: OperationSlaGroupCreate) =>
+    request<OperationSlaGroup>("/operations/sla-groups", { method: "POST", body: JSON.stringify(payload) }),
+  updateSlaGroup: (id: number, payload: OperationSlaGroupUpdate) =>
+    request<OperationSlaGroup>(`/operations/sla-groups/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteSlaGroup: (id: number) =>
+    request<void>(`/operations/sla-groups/${id}`, { method: "DELETE" }),
+  setSlaGroupSubjects: (id: number, subjects: string[]) =>
+    request<OperationSlaGroup>(`/operations/sla-groups/${id}/subjects`, { method: "PUT", body: JSON.stringify({ subjects }) }),
+  slaMatrix: (filters: OperationFilterState) =>
+    request<OperationSlaMatrix>(`/operations/sla/matrix?${query(filters)}`),
   slaHierarchy: (
     filters: OperationFilterState,
     level: OperationSlaHierarchyLevel,

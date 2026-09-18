@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session
 from app.models import User
 from app.services.regional import GROUPED_TO_GRANULAR, effective_managed_regionals, granular_regionals_for_group, regional_group_options
 
-from .models import OperationBacklogSnapshot, OperationBranchCapacity, OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
+from .models import OperationBacklogSnapshot, OperationBranchCapacity, OperationImportRun, OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSlaGroup, OperationSlaSubjectGroup, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE, OPERATIONS_TIMEZONE_NAME, local_period_utc_bounds, operations_period_bounds
 from .scope import ALL_SECTOR_NAMES
-from .technology_group import OTHER_TECHNOLOGY_GROUP, RAW_SUBJECT_TECHNOLOGY_GROUP
+from .technology_group import OTHER_TECHNOLOGY_GROUP
 
 
 # Colunas ordenáveis do detalhamento de O.S. (ver `order_page`/`opening_order_page`/
@@ -1085,14 +1085,22 @@ def sla_breakdown(db: Session, date_from: date, date_to: date, user: User, group
     }
     conditions, start, end = _query_conditions(db, date_from, date_to, user, filters)
     if group_by == "technology_group":
-        # Rollup por tecnologia/categoria (Ativação/Suporte x Fibra Urbana/Fibra Rural/Rádio) por
-        # cima do assunto granular - precisa ser um `case()` avaliado no próprio GROUP BY (não um
-        # remapeamento em Python depois), senão vários assuntos que caem no mesmo grupo apareceriam
-        # como linhas separadas em vez de somadas. Mesmo padrão de `regional.py` (regional agrupada
-        # por cima da regional granular), aplicado aqui ao assunto.
-        label = case(
-            *[(OperationOrder.os_subject == subject, group) for subject, group in RAW_SUBJECT_TECHNOLOGY_GROUP.items()],
-            else_=OTHER_TECHNOLOGY_GROUP,
+        # Rollup configurável (Ativação/Suporte x Fibra Urbana/Fibra Rural/Rádio, ou o que o
+        # usuário tiver cadastrado em `OperationSlaGroup`) por cima do assunto granular - precisa
+        # ser um `case()` avaliado no próprio GROUP BY (não um remapeamento em Python depois),
+        # senão vários assuntos que caem no mesmo grupo apareceriam como linhas separadas em vez
+        # de somadas. Mesmo padrão de `regional.py` (regional agrupada por cima da regional
+        # granular), aplicado aqui ao assunto. Grupo inativo não entra no case - seus assuntos
+        # caem em "Outros" até serem realocados (não somem da consulta).
+        assignments = db.execute(
+            select(OperationSlaSubjectGroup.subject, OperationSlaGroup.name)
+            .join(OperationSlaGroup, OperationSlaGroup.id == OperationSlaSubjectGroup.group_id)
+            .where(OperationSlaGroup.active.is_(True))
+        ).all()
+        label = (
+            case(*[(OperationOrder.os_subject == subject, name) for subject, name in assignments], else_=OTHER_TECHNOLOGY_GROUP)
+            if assignments
+            else func.coalesce(None, OTHER_TECHNOLOGY_GROUP)
         )
     else:
         field = allowed_groups.get(group_by, OperationOrder.os_type)
@@ -1136,6 +1144,116 @@ def sla_breakdown(db: Session, date_from: date, date_to: date, user: User, group
             }
         )
     return sorted(result, key=lambda item: (-item["completed"], item["label"]))
+
+
+def _sla_matrix_cell(regional: str, values: tuple[int, int, int, float, int] | None) -> dict:
+    if not values:
+        return {"regional": regional, "completed": 0, "sla_rate": None, "average_closing_hours": None}
+    completed, on_time, out_of_time, elapsed_sum, elapsed_count = values
+    measurable = on_time + out_of_time
+    return {
+        "regional": regional,
+        "completed": completed,
+        "sla_rate": round((on_time / measurable) * 100, 1) if measurable else None,
+        "average_closing_hours": round(elapsed_sum / elapsed_count, 2) if elapsed_count else None,
+    }
+
+
+def sla_group_matrix(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
+    """Uma linha por grupo de SLA ativo (`OperationSlaGroup`, gerenciados em `/sla-groups`) x uma
+    coluna por REGIONAL (agrupada - mesmo critério de `regional_matrix`/`_REGIONAL_MATRIX_GROUP_WHENS`),
+    com Volume/SLA%/TME - alimenta a "Matriz de indicadores por filial" pedida pelo usuário em
+    2026-09-18 pra reproduzir, dentro do workspace, o painel executivo (Volume/SLA/TME por filial e
+    categoria) que ele hoje monta na mão a partir de planilhas Excel exportadas do IXC.
+
+    Grupo sem nenhuma O.S. no período/filtro aparece igual na matriz, com todas as células vazias
+    (nunca some da lista - a tela precisa mostrar "sem dado" pra quem espera ver a categoria).
+    Assunto sem grupo atribuído (ainda não classificado em `/sla-groups`) fica de fora - a matriz é
+    fechada nos grupos cadastrados, igual aos gauges de `sla_breakdown(group_by="technology_group")`.
+    """
+    start, end = local_period_utc_bounds(date_from, date_to)
+    conditions = _dimension_conditions(db, user, filters)
+
+    groups = list(
+        db.scalars(
+            select(OperationSlaGroup)
+            .where(OperationSlaGroup.active.is_(True))
+            .order_by(OperationSlaGroup.card_label.asc(), OperationSlaGroup.display_order.asc())
+        )
+    )
+    assignments = db.execute(
+        select(OperationSlaSubjectGroup.subject, OperationSlaGroup.id)
+        .join(OperationSlaGroup, OperationSlaGroup.id == OperationSlaSubjectGroup.group_id)
+        .where(OperationSlaGroup.active.is_(True))
+    ).all()
+
+    empty_result = {"date_from": date_from, "date_to": date_to, "regionals": [], "rows": []}
+    if not groups or not assignments:
+        return empty_result
+
+    group_label = case(*[(OperationOrder.os_subject == subject, group_id) for subject, group_id in assignments], else_=None)
+    regional_label = case(
+        *_REGIONAL_MATRIX_GROUP_WHENS,
+        else_=func.coalesce(OperationOrder.regional, "Não identificada"),
+    )
+    elapsed = OperationOrder.elapsed_hours
+
+    rows = db.execute(
+        select(
+            group_label,
+            regional_label,
+            func.count(OperationOrder.id),
+            func.sum(case((OperationOrder.sla_status == "on_time", 1), else_=0)),
+            func.sum(case((OperationOrder.sla_status == "out_of_time", 1), else_=0)),
+            func.sum(elapsed),
+            func.sum(case((elapsed.is_not(None), 1), else_=0)),
+        )
+        .where(*conditions, OperationOrder.closed_at.between(start, end), group_label.is_not(None))
+        .group_by(group_label, regional_label)
+    ).all()
+
+    by_group: dict[int, dict[str, tuple[int, int, int, float, int]]] = {}
+    regionals: set[str] = set()
+    for group_id, regional, completed, on_time, out_of_time, elapsed_sum, elapsed_count in rows:
+        regional_str = str(regional)
+        regionals.add(regional_str)
+        by_group.setdefault(int(group_id), {})[regional_str] = (
+            int(completed or 0),
+            int(on_time or 0),
+            int(out_of_time or 0),
+            float(elapsed_sum or 0.0),
+            int(elapsed_count or 0),
+        )
+
+    sorted_regionals = sorted(regionals)
+    matrix_rows = []
+    for group in groups:
+        values_by_regional = by_group.get(group.id, {})
+        cells = [_sla_matrix_cell(regional, values_by_regional.get(regional)) for regional in sorted_regionals]
+        # Igual à convenção de `regional_matrix`: o total soma as CONTAGENS e recalcula o
+        # percentual/média, nunca faz média das médias das filiais.
+        totals = list(values_by_regional.values())
+        total_values = (
+            (
+                sum(v[0] for v in totals),
+                sum(v[1] for v in totals),
+                sum(v[2] for v in totals),
+                sum(v[3] for v in totals),
+                sum(v[4] for v in totals),
+            )
+            if totals
+            else None
+        )
+        matrix_rows.append(
+            {
+                "group_id": group.id,
+                "card_label": group.card_label,
+                "group_name": group.name,
+                "cells": cells,
+                "total": _sla_matrix_cell("Matriz", total_values),
+            }
+        )
+    return {"date_from": date_from, "date_to": date_to, "regionals": sorted_regionals, "rows": matrix_rows}
 
 
 def _sla_percentage(value: int, total: int) -> float | None:

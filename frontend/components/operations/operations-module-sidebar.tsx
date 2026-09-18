@@ -1,8 +1,8 @@
 "use client";
 
-import { BarChart3, CalendarDays, ClipboardList, Gauge, Inbox, ListChecks, Radio, Settings2, ShieldCheck } from "lucide-react";
+import { BarChart3, CalendarDays, ClipboardList, Gauge, Inbox, ListChecks, Radio, Settings2, ShieldCheck, Table2 } from "lucide-react";
 
-export type OperationTab = "overview" | "openings" | "sla" | "garantias" | "calendar" | "progress" | "details" | "network" | "teams";
+export type OperationTab = "overview" | "openings" | "sla" | "matrix" | "garantias" | "calendar" | "progress" | "details" | "network" | "teams";
 
 // Exportado para a navegação global do ecossistema (`lib/module-screens.ts`) poder listar as
 // telas deste módulo no menu lateral sem manter uma segunda cópia dos rótulos.
@@ -11,6 +11,7 @@ export const OPERATION_NAV_ITEMS: Array<{ value: OperationTab; label: string; de
   { value: "openings", label: "Aberturas", description: "Entrada e desvios", icon: Inbox },
   { value: "progress", label: "Andamento", description: "Todo o backlog aberto", icon: ListChecks },
   { value: "sla", label: "SLA", description: "Prazos e produtividade", icon: BarChart3 },
+  { value: "matrix", label: "Matriz", description: "Volume/SLA/TME por filial", icon: Table2 },
   { value: "garantias", label: "Garantias", description: "Retornos em garantia de ativação", icon: ShieldCheck },
   { value: "calendar", label: "Calendário", description: "Produção mensal", icon: CalendarDays },
   { value: "details", label: "Detalhamento", description: "Drill-through e busca", icon: ClipboardList },

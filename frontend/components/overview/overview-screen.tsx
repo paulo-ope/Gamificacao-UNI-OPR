@@ -32,13 +32,12 @@ import {
 } from "@/lib/overview-chart-options";
 import {
   operationsApi,
-  SLA_ACTIVATION_TECHNOLOGY_GROUPS,
-  SLA_SUPPORT_TECHNOLOGY_GROUPS,
   type OperationFilterState,
   type OperationOverviewDefaultFilter,
   type OperationOverviewFilterKey,
   type OperationPeriod,
   type OperationSavedFilterValues,
+  type OperationSlaGroup,
   type OverviewSupportFilterValues,
 } from "@/lib/operations-api";
 import { previousWindow, windowLengthDays } from "@/lib/period";
@@ -163,12 +162,26 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     fallbackError: "Não foi possível carregar a série diária.",
   });
   // "SLA por tecnologia" (pedido do usuário, 2026-09-17, reproduzindo o painel executivo de
-  // outro sistema) - mesmo endpoint de SLA, só um `group_by` novo; os dois gauges (Ativação e
-  // Suporte) leem da mesma resposta, não fazem uma chamada cada.
+  // outro sistema) - mesmo endpoint de SLA, só um `group_by` novo; todos os cards leem da mesma
+  // resposta, não fazem uma chamada cada. Os GRUPOS em si (2026-09-18) são configuráveis pela
+  // tela (Operação Analítica -> Configurações -> SLA por tecnologia), não mais hardcoded - por
+  // isso a lista de cards/grupos também vem da API (`slaGroups`), não de uma constante local.
   const slaTechnology = useBlockQuery(() => operationsApi.sla(opFilters!, "technology_group"), [filterKey], {
     enabled: ready && canSeeSla,
     fallbackError: "Não foi possível carregar o SLA por tecnologia.",
   });
+  const slaGroups = useBlockQuery(() => operationsApi.slaGroups(), [], { enabled: canSeeSla });
+  const slaCards = useMemo(() => {
+    const byCard = new Map<string, OperationSlaGroup[]>();
+    for (const group of slaGroups.data ?? []) {
+      if (!group.active) continue;
+      const list = byCard.get(group.card_label) ?? [];
+      list.push(group);
+      byCard.set(group.card_label, list);
+    }
+    Array.from(byCard.values()).forEach((list) => list.sort((a, b) => a.display_order - b.display_order));
+    return Array.from(byCard.entries()).sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
+  }, [slaGroups.data]);
   // Mesma janela que já alimenta o card de comparação do topo (`previousOverview`) - aqui vira
   // uma linha no gráfico, não só um número agregado.
   const previousTrends = useBlockQuery(() => operationsApi.overviewTrends(previousFilters!, "day"), [filterKey], {
@@ -525,22 +538,18 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         ) : null}
       </div>
 
-      {canSeeSla ? (
+      {canSeeSla && slaCards.length > 0 ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          <OverviewSlaTechnologyGauges
-            eyebrow="SLA por tecnologia"
-            title="SLA de Ativação"
-            groups={SLA_ACTIVATION_TECHNOLOGY_GROUPS}
-            items={slaTechnology.error ? null : slaTechnology.data}
-            state={{ loading: slaTechnology.loading, error: slaTechnology.error }}
-          />
-          <OverviewSlaTechnologyGauges
-            eyebrow="SLA por tecnologia"
-            title="SLA de Suporte"
-            groups={SLA_SUPPORT_TECHNOLOGY_GROUPS}
-            items={slaTechnology.error ? null : slaTechnology.data}
-            state={{ loading: slaTechnology.loading, error: slaTechnology.error }}
-          />
+          {slaCards.map(([cardLabel, cardGroups]) => (
+            <OverviewSlaTechnologyGauges
+              key={cardLabel}
+              eyebrow="SLA por tecnologia"
+              title={cardLabel}
+              groups={cardGroups.map((group) => group.name)}
+              items={slaTechnology.error ? null : slaTechnology.data}
+              state={{ loading: slaTechnology.loading || slaGroups.loading, error: slaTechnology.error ?? slaGroups.error }}
+            />
+          ))}
         </div>
       ) : null}
 

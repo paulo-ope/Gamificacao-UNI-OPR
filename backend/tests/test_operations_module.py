@@ -17,6 +17,8 @@ from app.modules.operations.models import (
     OperationOrder,
     OperationResponsibleAssignment,
     OperationResponsibleDirectorySetting,
+    OperationSlaGroup,
+    OperationSlaSubjectGroup,
     OperationTeamModel,
     OperationTeamTargetVersion,
 )
@@ -505,10 +507,28 @@ def test_sla_technology_group_rolls_up_subjects_and_sums_matching_groups(client,
     granular (`os_subject`) que a Operação Analítica já importa - sem precisar de campo novo.
     Dois assuntos diferentes que caem no mesmo grupo ("Instalação Fibra Urbana" e "Retorno de
     Instalação Fibra Urbana") precisam somar no mesmo bucket, não aparecer como linhas
-    separadas - é exatamente o risco do `case()` SQL não estar bem construído."""
+    separadas - é exatamente o risco do `case()` SQL não estar bem construído.
+
+    Desde 2026-09-18 o agrupamento vem do banco (`OperationSlaGroup`/`OperationSlaSubjectGroup`),
+    não mais de um dicionário Python fixo - a suíte de testes só cria as tabelas via
+    `Base.metadata.create_all` (sem rodar a migration de semeadura), então o teste precisa
+    cadastrar os grupos que vai usar."""
     date_from, date_to = current_month_bounds()
     opened_at = _utc_at(date_from, 8)
     closed_at = _utc_at(date_from, 10)
+
+    activation_urban = OperationSlaGroup(card_label="SLA de Ativação", name="Ativação Fibra Urbana", display_order=0)
+    support_radio = OperationSlaGroup(card_label="SLA de Suporte", name="Suporte Rádio", display_order=1)
+    db_session.add_all([activation_urban, support_radio])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OperationSlaSubjectGroup(subject="Instalação Fibra Urbana", group_id=activation_urban.id),
+            OperationSlaSubjectGroup(subject="Retorno de Instalação Fibra Urbana", group_id=activation_urban.id),
+            OperationSlaSubjectGroup(subject="Suporte Externo Rádio", group_id=support_radio.id),
+        ]
+    )
+    db_session.flush()
 
     def _order(order_id: str, subject: str, sla_status: str) -> OperationOrder:
         return OperationOrder(
@@ -558,6 +578,82 @@ def test_sla_technology_group_rolls_up_subjects_and_sums_matching_groups(client,
     assert by_label["Suporte Rádio"]["sla_rate"] == 100.0
     assert by_label["Outros"]["completed"] == 1
     assert "Ativação Fibra Rural" not in by_label
+
+
+def test_sla_matrix_breaks_down_by_group_and_regional_with_recomputed_total(client, db_session):
+    """`/operations/sla/matrix` (pedido do usuário em 2026-09-18: reproduzir a "Matriz de
+    indicadores por filial" - Volume/SLA/TME por categoria x filial - que ele hoje monta na mão a
+    partir de planilhas Excel). Uma linha por `OperationSlaGroup` ativo, uma célula por REGIONAL
+    (agrupada), mais uma célula "Matriz" com o total RECALCULADO a partir das contagens somadas -
+    não a média dos percentuais das filiais (mesma convenção de `regional_matrix`, ver
+    `test_operations_regional_matrix.py`). Duas filiais diferentes pro mesmo grupo, pra garantir
+    que a célula de cada uma fica separada e a "Matriz" soma as duas."""
+    activation_urban = OperationSlaGroup(card_label="SLA de Ativação", name="Ativação Fibra Urbana", display_order=0)
+    db_session.add(activation_urban)
+    db_session.flush()
+    db_session.add(OperationSlaSubjectGroup(subject="Instalação Fibra Urbana", group_id=activation_urban.id))
+    db_session.flush()
+
+    date_from, date_to = current_month_bounds()
+    opened_at = _utc_at(date_from, 8)
+    closed_at_fast = _utc_at(date_from, 10)  # 2h de execução
+    closed_at_slow = _utc_at(date_from + timedelta(days=1), 8)  # 24h de execução
+
+    def _order(order_id: str, regional: str, sla_status: str, closed_at, elapsed_hours: int) -> OperationOrder:
+        return OperationOrder(
+            source="ixc",
+            source_order_id=order_id,
+            order_code=f"IXC-{order_id}",
+            regional=regional,
+            sector="Suporte Externo Fibra",
+            os_type="Ativação",
+            os_subject="Instalação Fibra Urbana",
+            responsible="Técnico 1",
+            status="Finalizada",
+            status_code="F",
+            is_closed=True,
+            sla_status=sla_status,
+            sla_target_hours=24,
+            elapsed_hours=elapsed_hours,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            raw_payload={},
+        )
+
+    db_session.add_all(
+        [
+            _order("matrix-1", "UNI - JI PARANA", "on_time", closed_at_fast, 2),
+            _order("matrix-2", "UNI - JI PARANA", "out_of_time", closed_at_slow, 24),
+            _order("matrix-3", "UNI - OURO PRETO DOESTE", "on_time", closed_at_fast, 2),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        "/api/operations/sla/matrix",
+        params={"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) == 1
+    row = payload["rows"][0]
+    assert row["group_name"] == "Ativação Fibra Urbana"
+    cells_by_regional = {cell["regional"]: cell for cell in row["cells"]}
+
+    ji_parana = cells_by_regional["UNI - JI PARANA"]
+    assert ji_parana["completed"] == 2
+    assert ji_parana["sla_rate"] == 50.0
+    assert ji_parana["average_closing_hours"] == 13.0
+
+    ouro_preto = cells_by_regional["UNI - OURO PRETO DOESTE"]
+    assert ouro_preto["completed"] == 1
+    assert ouro_preto["sla_rate"] == 100.0
+
+    total = row["total"]
+    assert total["completed"] == 3
+    # Recalculado (2 no prazo / 3 mensuráveis), não a média de 50% e 100%.
+    assert total["sla_rate"] == round((2 / 3) * 100, 1)
+    assert total["average_closing_hours"] == round((2 + 24 + 2) / 3, 2)
 
 
 def test_overview_backlog_ignores_team_model_and_responsible_filters(client, db_session):

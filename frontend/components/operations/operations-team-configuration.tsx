@@ -36,6 +36,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { OperationsBranchCapacityPanel } from "@/components/operations/operations-branch-capacity-panel";
+import { OperationsSlaGroupsPanel } from "@/components/operations/operations-sla-groups-panel";
 import { StatusToast } from "@/components/ui/status-toast";
 import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import {
@@ -133,6 +134,7 @@ export function OperationsTeamConfiguration({
   canManageTeamModels,
   canManageOwnTeamMembers,
   canManageSubjects,
+  canManageSlaGroups,
   canManageViews,
   canSyncIxc,
   ixcSyncSettings,
@@ -141,6 +143,7 @@ export function OperationsTeamConfiguration({
   canManageTeamModels: boolean;
   canManageOwnTeamMembers: boolean;
   canManageSubjects: boolean;
+  canManageSlaGroups: boolean;
   canManageViews: boolean;
   canSyncIxc: boolean;
   ixcSyncSettings: OperationIxcSyncSettings | null;
@@ -154,8 +157,16 @@ export function OperationsTeamConfiguration({
   const canAccessTeamsSection = canManageTeamModels || canManageOwnTeamMembers;
   const canAssignMembers = canAccessTeamsSection;
   const [data, setData] = useState<OperationTeamConfiguration | null>(null);
-  const [section, setSection] = useState<"models" | "members" | "subjects" | "sync" | "capacity">(
-    canManageTeamModels ? "models" : canManageOwnTeamMembers ? "members" : canManageSubjects ? "subjects" : "sync",
+  const [section, setSection] = useState<"models" | "members" | "subjects" | "sync" | "capacity" | "sla-groups">(
+    canManageTeamModels
+      ? "models"
+      : canManageOwnTeamMembers
+        ? "members"
+        : canManageSubjects
+          ? "subjects"
+          : canManageSlaGroups
+            ? "sla-groups"
+            : "sync",
   );
   const [subjectMappings, setSubjectMappings] = useState<
     OperationSubjectTypeMapping[]
@@ -630,6 +641,12 @@ export function OperationsTeamConfiguration({
                 "Faixas Boa, Ótima e Excelente por filial",
                 Target,
               ],
+              [
+                "sla-groups",
+                "SLA por tecnologia",
+                "Grupos e assuntos dos gauges da Visão Geral",
+                Layers3,
+              ],
             ] as const
           )
             .filter(([value]) =>
@@ -639,7 +656,9 @@ export function OperationsTeamConfiguration({
                   ? canSyncIxc
                   : value === "members"
                     ? canAccessTeamsSection
-                    : canManageTeamModels,
+                    : value === "sla-groups"
+                      ? canManageSlaGroups
+                      : canManageTeamModels,
             )
             .map(([value, label, description, Icon]) => (
             <button
@@ -819,6 +838,20 @@ export function OperationsTeamConfiguration({
             </p>
           </CardHeader>
           <OperationsBranchCapacityPanel regionals={regionals} canManage={canManage} />
+        </Card>
+        <Card
+          className={`${section === "sla-groups" ? "block" : "hidden"} min-w-0 rounded-2xl border-slate-200`}
+        >
+          <CardHeader className="border-b">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Layers3 className="h-4 w-4 text-blue-600" /> SLA por tecnologia
+            </CardTitle>
+            <p className="text-xs text-slate-500">
+              Grupos configuráveis usados pelos gauges "SLA de Ativação"/"SLA de Suporte" (e outros que você
+              criar) na Visão Geral.
+            </p>
+          </CardHeader>
+          <OperationsSlaGroupsPanel canManage={canManageSlaGroups} />
         </Card>
         <Card
           className={`${section === "models" ? "block" : "hidden"} min-w-0 rounded-2xl border-slate-200`}
