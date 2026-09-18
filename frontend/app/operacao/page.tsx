@@ -719,6 +719,16 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
   // Retained for the explicit option refresh flow; ordinary edits never trigger it.
   const filterOptionsRequest = useRef(0);
   const dashboardRequest = useRef(0);
+  // Filtro automático (pedido do usuário 2026-09-18, igual à Visão Geral): `updateFilter` agenda
+  // a aplicação depois de uma pausa, em vez de esperar o clique em "Filtrar". Esse ref guarda o
+  // timeout pendente pra sempre cancelar o anterior - sem isso, trocar 2 campos rápido disparava
+  // 2 consultas em sequência em vez de uma só com os dois valores já combinados.
+  const applyFiltersTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (applyFiltersTimeout.current) clearTimeout(applyFiltersTimeout.current);
+    };
+  }, []);
 
   const canRead = Boolean(user?.permissions.includes("operations:read"));
   const canManageTeamModels = Boolean(
@@ -1090,9 +1100,16 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
       : key === "date_from" || key === "date_to"
         ? value
         : value || undefined;
-    setFilters((current) =>
-      current ? { ...current, [key]: normalizedValue } : current,
-    );
+    const next = { ...filters, [key]: normalizedValue };
+    setFilters(next);
+    // Auto-aplica depois de uma pausa (debounce) em vez de esperar o clique em "Filtrar" - mesmo
+    // comportamento da Visão Geral. O botão "Filtrar" continua funcionando (aplica na hora,
+    // cancelando o timeout pendente), pra quem prefere confirmar manualmente.
+    if (applyFiltersTimeout.current) clearTimeout(applyFiltersTimeout.current);
+    applyFiltersTimeout.current = setTimeout(() => {
+      applyFiltersTimeout.current = null;
+      applyFilters(next);
+    }, 500);
   }
 
   function clearDates() {
@@ -1602,7 +1619,13 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
         datesIgnored={activeTab === "progress"}
         filterCount={filterCount}
         onChange={updateFilter}
-        onApply={() => filters && applyFilters(filters)}
+        onApply={() => {
+          if (applyFiltersTimeout.current) {
+            clearTimeout(applyFiltersTimeout.current);
+            applyFiltersTimeout.current = null;
+          }
+          if (filters) applyFilters(filters);
+        }}
         onClearAll={clearAllFilters}
         onClearDates={clearDates}
         onImport={() => void runImport()}
@@ -1768,7 +1791,7 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
 
           <TabsContent value="matrix">
             {appliedFilters ? (
-              <OperationsSlaMatrixTable data={slaMatrix} isLoading={loading} />
+              <OperationsSlaMatrixTable data={slaMatrix} filters={appliedFilters} isLoading={loading} />
             ) : (
               <div className="h-80 animate-pulse rounded-2xl border bg-white" />
             )}

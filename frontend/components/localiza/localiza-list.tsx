@@ -1,15 +1,18 @@
 "use client";
 
-import { Check, Copy, Search, X } from "lucide-react";
-import { useState } from "react";
+import { Check, Copy, Filter, Search, X } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { commonDateRangePresets, DateRangePicker } from "@/components/ui/date-range-picker";
+import { FilterChip } from "@/components/ui/filter-chip";
 import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useCollapsibleFilters } from "@/hooks/use-collapsible-filters";
 import { distanceClassificationLabel, distanceClassificationTone, formatDistanceMeters, googleMapsUrl } from "@/lib/geo-distance";
+import { formatIsoDate } from "@/lib/format";
 import type { LocationRequest, LocationRequestStatus } from "@/lib/localiza-api";
 import { LOCALIZA_STATUS_LABELS, LOCALIZA_STATUS_TONE, formatPortoVelho, localizaRequestLabel } from "./localiza-format";
 
@@ -74,6 +77,18 @@ export function LocalizaList({
     onDateChange("date_to", "");
     onStatusChange("");
   }
+  // Recolhido por padrão - pedido do usuário em 2026-09-18 ao padronizar o formato de filtro
+  // recolhível entre módulos.
+  const { expanded: filtersOpen, toggle: toggleFiltersOpen } = useCollapsibleFilters({
+    persistKey: "uni_localiza_filters_expanded",
+  });
+  const filterChips = useMemo(() => {
+    const chips: Array<{ key: string; label: string }> = [];
+    if (search) chips.push({ key: "search", label: `Busca: ${search}` });
+    if (dateFrom || dateTo) chips.push({ key: "period", label: `Período: ${formatIsoDate(dateFrom)} – ${formatIsoDate(dateTo)}` });
+    if (status) chips.push({ key: "status", label: STATUS_FILTER_OPTIONS.find((option) => option.value === status)?.label ?? status });
+    return chips;
+  }, [search, dateFrom, dateTo, status]);
 
   // "Solicitado por" é sempre a mesma pessoa em "Meus links" - some a coluna nesse caso, ela só
   // ajuda a distinguir quando o recorte é "Todos" (pedido do usuário: evitar informação redundante
@@ -83,7 +98,9 @@ export function LocalizaList({
 
   return (
     <Card className="min-w-0 rounded-2xl border-slate-200 shadow-sm">
-      <CardHeader className="grid gap-3 border-b border-slate-100 pb-4">
+      {/* Sticky - pedido do usuário em 2026-09-18: o botão de filtros não pode sumir ao rolar a
+          tela (mesmo padrão em todas as barras de filtro do ecossistema). */}
+      <CardHeader className="sticky top-[var(--workspace-header-height)] z-40 grid gap-3 rounded-t-2xl border-b border-slate-100 bg-white pb-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <CardTitle>Solicitações de localização</CardTitle>
           <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -108,40 +125,50 @@ export function LocalizaList({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="grid min-w-[220px] flex-1 gap-1">
-            <label className="text-[11px] font-medium text-slate-500">Buscar</label>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
-              <Input
-                className="pl-8"
-                placeholder="O.S., protocolo OPA, cliente ou código"
-                value={search}
-                onChange={(event) => onSearchChange(event.target.value)}
-              />
-            </div>
-          </div>
-          <DateRangePicker label="Período" dateFrom={dateFrom} dateTo={dateTo} presets={commonDateRangePresets()} onChange={onDateChange} />
-          <div className="grid gap-1">
-            <label className="text-[11px] font-medium text-slate-500">Status</label>
-            <select
-              value={status}
-              onChange={(event) => onStatusChange(event.target.value as LocationRequestStatus | "")}
-              className="h-10 rounded-md border border-input bg-white px-3 text-sm text-slate-700"
-            >
-              {STATUS_FILTER_OPTIONS.map((option) => (
-                <option key={option.value || "all"} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={toggleFiltersOpen}>
+            <Filter className="h-3.5 w-3.5" /> Filtros{filterChips.length ? ` (${filterChips.length})` : ""}
+          </Button>
+          {filterChips.map((chip) => (
+            <FilterChip key={chip.key} label={chip.label} />
+          ))}
           {hasActiveFilters ? (
-            <Button type="button" variant="ghost" size="sm" className="h-8 px-2 text-xs text-blue-700" onClick={clearFilters}>
-              <X className="h-3.5 w-3.5" aria-hidden="true" /> Limpar filtros
+            <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px] text-blue-700" onClick={clearFilters}>
+              <X className="h-3 w-3" aria-hidden="true" /> Limpar
             </Button>
           ) : null}
         </div>
+        {filtersOpen ? (
+          <div className="flex flex-wrap items-end gap-3 border-t border-slate-100 pt-3">
+            <div className="grid min-w-[220px] flex-1 gap-1">
+              <label className="text-[11px] font-medium text-slate-500">Buscar</label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
+                <Input
+                  className="pl-8"
+                  placeholder="O.S., protocolo OPA, cliente ou código"
+                  value={search}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                />
+              </div>
+            </div>
+            <DateRangePicker label="Período" dateFrom={dateFrom} dateTo={dateTo} presets={commonDateRangePresets()} onChange={onDateChange} />
+            <div className="grid gap-1">
+              <label className="text-[11px] font-medium text-slate-500">Status</label>
+              <select
+                value={status}
+                onChange={(event) => onStatusChange(event.target.value as LocationRequestStatus | "")}
+                className="h-10 rounded-md border border-input bg-white px-3 text-sm text-slate-700"
+              >
+                {STATUS_FILTER_OPTIONS.map((option) => (
+                  <option key={option.value || "all"} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        ) : null}
       </CardHeader>
       <CardContent className="min-w-0 overflow-x-auto p-0">
         <Table className="min-w-[820px]">

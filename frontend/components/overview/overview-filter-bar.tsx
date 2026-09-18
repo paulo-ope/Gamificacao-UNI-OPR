@@ -1,11 +1,13 @@
 "use client";
 
-import { BookmarkCheck, ChevronDown, ListFilter, RotateCcw, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { BookmarkCheck, ChevronDown, ListFilter, RotateCcw } from "lucide-react";
+import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { FilterChip } from "@/components/ui/filter-chip";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { useCollapsibleFilters } from "@/hooks/use-collapsible-filters";
 import {
   OVERVIEW_LIST_KEYS,
   OVERVIEW_SUPPORT_KEYS,
@@ -101,26 +103,10 @@ export function OverviewFilterBar({
 
   // Nasce aberta (mesmo padrão da barra lateral): filtro é interação primária, não um detalhe
   // escondido no primeiro uso. Recolher fica guardado por navegador, não pelo padrão global.
-  const [expanded, setExpanded] = useState(true);
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(EXPANDED_STORAGE_KEY);
-      if (stored !== null) setExpanded(stored === "true");
-    } catch {
-      // Sem preferência acessível: segue aberta.
-    }
-  }, []);
-  function toggleExpanded() {
-    setExpanded((current) => {
-      const next = !current;
-      try {
-        window.localStorage.setItem(EXPANDED_STORAGE_KEY, String(next));
-      } catch {
-        // Preferência é conveniência: não impedir a interação se o armazenamento falhar.
-      }
-      return next;
-    });
-  }
+  const { expanded, toggle: toggleExpanded } = useCollapsibleFilters({
+    persistKey: EXPANDED_STORAGE_KEY,
+    defaultExpanded: true,
+  });
 
   const chips = useMemo<Chip[]>(() => {
     const items: Chip[] = [];
@@ -159,7 +145,9 @@ export function OverviewFilterBar({
   const periodLabel = `${formatIsoDate(filters.date_from)} – ${formatIsoDate(filters.date_to)}`;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+    // Sticky - pedido do usuário em 2026-09-18: o botão de filtros não pode sumir ao rolar a
+    // tela (mesmo padrão em todas as barras de filtro do ecossistema).
+    <section className="sticky top-[var(--workspace-header-height)] z-40 rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center gap-2 p-3">
         <button
           type="button"
@@ -181,20 +169,7 @@ export function OverviewFilterBar({
         {!expanded && chips.length ? (
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
             {chips.map((chip) => (
-              <span
-                key={chip.key}
-                className="inline-flex max-w-full items-center gap-1 rounded-full border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1 text-[11px] font-medium text-slate-700"
-              >
-                <span className="truncate">{chip.label}</span>
-                <button
-                  type="button"
-                  onClick={chip.onRemove}
-                  aria-label={`Remover filtro ${chip.label}`}
-                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700"
-                >
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
+              <FilterChip key={chip.key} label={chip.label} onRemove={chip.onRemove} variant="pill" />
             ))}
           </div>
         ) : (

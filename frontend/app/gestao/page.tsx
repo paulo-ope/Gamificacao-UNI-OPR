@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BriefcaseBusiness, CheckCircle2, ExternalLink, Loader2, RefreshCw, Search, ShieldAlert } from "lucide-react";
+import { BriefcaseBusiness, CheckCircle2, ExternalLink, Filter, Loader2, RefreshCw, Search, ShieldAlert, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
@@ -12,9 +12,11 @@ import { StructureAuditPanel } from "@/components/management/structure-audit-pan
 import { WorkspaceAppShell } from "@/components/workspace/app-shell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FilterChip } from "@/components/ui/filter-chip";
 import { Input } from "@/components/ui/input";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useCollapsibleFilters } from "@/hooks/use-collapsible-filters";
 import { api } from "@/lib/api";
 import type { AuthUser, ManagementDashboard, ManagementOperationalMember, ManagementOptions, ManagementShiftPatternSuggestion } from "@/lib/types";
 
@@ -161,6 +163,11 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filters, setFilters] = useState({ search: "", regional: "", status: "", supervisor_user_id: "", collaborator_regional: "" });
   const [tab, setTab] = useState<ManagementTab>("structure");
+  // Recolhido por padrão - pedido do usuário em 2026-09-18 ao padronizar o formato de filtro
+  // recolhível entre módulos (mesmo hook de Operação Analítica/Agendamento/SGP Suporte).
+  const { expanded: filtersOpen, toggle: toggleFiltersOpen } = useCollapsibleFilters({
+    persistKey: "uni_management_filters_expanded",
+  });
 
   // Abre direto na tela pedida pela URL (`?tab=`), que é como o menu lateral do ecossistema
   // linka as telas deste módulo. Mesma convenção que a Administração e o SGP Suporte já usavam.
@@ -198,6 +205,18 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
     () => Array.from(new Set((data?.members ?? []).map((item) => item.collaborator_regional).filter((value): value is string => Boolean(value)))).sort(),
     [data]
   );
+  const filterChips = useMemo(() => {
+    const chips: Array<{ key: keyof typeof filters; label: string; clear: () => void }> = [];
+    if (filters.search) chips.push({ key: "search", label: `Busca: ${filters.search}`, clear: () => setFilters((current) => ({ ...current, search: "" })) });
+    if (filters.regional) chips.push({ key: "regional", label: `Regional: ${filters.regional}`, clear: () => setFilters((current) => ({ ...current, regional: "" })) });
+    if (filters.collaborator_regional) chips.push({ key: "collaborator_regional", label: `Origem: ${filters.collaborator_regional}`, clear: () => setFilters((current) => ({ ...current, collaborator_regional: "" })) });
+    if (filters.supervisor_user_id) {
+      const name = options.supervisors.find((item) => String(item.id) === filters.supervisor_user_id)?.name ?? filters.supervisor_user_id;
+      chips.push({ key: "supervisor_user_id", label: `Supervisor: ${name}`, clear: () => setFilters((current) => ({ ...current, supervisor_user_id: "" })) });
+    }
+    if (filters.status) chips.push({ key: "status", label: `Status: ${statusLabels[filters.status] ?? filters.status}`, clear: () => setFilters((current) => ({ ...current, status: "" })) });
+    return chips;
+  }, [filters, options.supervisors]);
 
   async function load() {
     setLoading(true);
@@ -226,6 +245,18 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
   useEffect(() => {
     if (user && canRead) void load();
   }, [user, canRead]);
+
+  // Filtro automático (pedido do usuário 2026-09-18, igual à Visão Geral/UNI Localiza) - com
+  // debounce por causa do campo de busca em texto livre (sem isso, cada tecla dispararia uma
+  // consulta). Dispara de novo no primeiro carregamento também (mesmo padrão de
+  // `app/localiza/page.tsx`) - um segundo `load()` 400ms depois do primeiro é aceitável, nunca
+  // deixa a tela desatualizada.
+  useEffect(() => {
+    if (!user || !canRead) return;
+    const timeout = setTimeout(() => void load(), 400);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
 
   async function refreshStructure() {
     setMessage(null);
@@ -400,38 +431,61 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
           ))}
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr_auto]">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
-              <Input className="pl-9" placeholder="Buscar colaborador ou regional" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
-            </div>
-            <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.regional} onChange={(event) => setFilters({ ...filters, regional: event.target.value })}>
-              <option value="">Todas as regionais (operacional)</option>
-              {regionals.map((regional) => <option key={regional} value={regional}>{regional}</option>)}
-            </select>
-            <select
-              className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
-              value={filters.collaborator_regional}
-              onChange={(event) => setFilters({ ...filters, collaborator_regional: event.target.value })}
-              title="Filtra pela regional de origem do colaborador (Collaborator.regional), não pela regional onde ele produziu"
-            >
-              <option value="">Todas as regionais (origem)</option>
-              {originRegionals.map((regional) => <option key={regional} value={regional}>{regional}</option>)}
-            </select>
-            <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.supervisor_user_id} onChange={(event) => setFilters({ ...filters, supervisor_user_id: event.target.value })}>
-              <option value="">Todos os supervisores</option>
-              {options.supervisors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-            <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
-              <option value="">Todos os status</option>
-              {Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-            <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Filtrar
+        {/* Sticky - pedido do usuário em 2026-09-18: o botão de filtros não pode sumir ao rolar a
+            tela (mesmo padrão em todas as barras de filtro do ecossistema). */}
+        <div className="sticky top-[var(--workspace-header-height)] z-40 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={toggleFiltersOpen}>
+              <Filter className="h-3.5 w-3.5" /> Filtros{filterChips.length ? ` (${filterChips.length})` : ""}
             </Button>
+            {filterChips.map((chip) => (
+              <FilterChip key={chip.key} label={chip.label} />
+            ))}
+            {filterChips.length ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-[11px] text-blue-700"
+                onClick={() => setFilters({ search: "", regional: "", status: "", supervisor_user_id: "", collaborator_regional: "" })}
+              >
+                <X className="h-3 w-3" /> Limpar
+              </Button>
+            ) : null}
           </div>
+          {filtersOpen ? (
+            <div className="mt-3 grid gap-3 border-t border-slate-100 pt-3 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr_auto]">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                <Input className="pl-9" placeholder="Buscar colaborador ou regional" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
+              </div>
+              <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.regional} onChange={(event) => setFilters({ ...filters, regional: event.target.value })}>
+                <option value="">Todas as regionais (operacional)</option>
+                {regionals.map((regional) => <option key={regional} value={regional}>{regional}</option>)}
+              </select>
+              <select
+                className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
+                value={filters.collaborator_regional}
+                onChange={(event) => setFilters({ ...filters, collaborator_regional: event.target.value })}
+                title="Filtra pela regional de origem do colaborador (Collaborator.regional), não pela regional onde ele produziu"
+              >
+                <option value="">Todas as regionais (origem)</option>
+                {originRegionals.map((regional) => <option key={regional} value={regional}>{regional}</option>)}
+              </select>
+              <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.supervisor_user_id} onChange={(event) => setFilters({ ...filters, supervisor_user_id: event.target.value })}>
+                <option value="">Todos os supervisores</option>
+                {options.supervisors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+              <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+                <option value="">Todos os status</option>
+                {Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+              <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Filtrar
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
