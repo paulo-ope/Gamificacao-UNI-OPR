@@ -4161,6 +4161,44 @@ regressão.
 
 ## Frentes em andamento / conhecidas
 
+- **Suíte de testes do backend trava intermitentemente ao rodar neste container
+  (real, com credenciais de IXC/OPA configuradas) — DIAGNOSTICADO, NÃO CORRIGIDO
+  (2026-09-19)**. Achado durante a implementação do Swagger de integração externa:
+  rodar a suíte completa (`pytest`) trava sem previsão; ao investigar com
+  `pytest-timeout` (15s por teste) isolando os arquivos de IXC/OPA, apareceram
+  **44 erros idênticos** — todos `ERROR at teardown de <teste>`, em testes sem
+  relação nenhuma entre si (`test_orders_can_be_filtered_by_local_closing_time`,
+  `test_configuration_json_import_and_export`,
+  `test_import_opa_period_endpoint_rejects_when_busy` etc.).
+  - **Causa raiz**: a fixture `client` (`tests/conftest.py:88`) faz
+    `with TestClient(app) as test_client`, disparando o `lifespan()` REAL de
+    `app/main.py` a cada teste — startup e shutdown completos. Como este
+    container específico tem `IXC_API_BASE_URL`/`IXC_API_TOKEN`/`OPA_API_BASE_URL`/
+    `OPA_API_TOKEN` reais configurados (é o backend de verdade, não um ambiente de
+    teste isolado), `lifespan()` sobe de fato TODAS as tasks de produção (sync
+    IXC, sync OPA, sync de atendimento IXC, sync de Agendamento, snapshot de
+    login, snapshot de sinal ONU, geração de casos de gestão) contra a API
+    externa real, em TODO teste que usa `client`.
+  - No shutdown, `task.cancel()` (`app/main.py:162-214`) não interrompe uma
+    chamada HTTP síncrona já em andamento dentro da task — `await task` espera a
+    chamada de rede real terminar por conta própria. `TestClient.__exit__`
+    trava esperando essa thread (`anyio.from_thread`) encerrar. Log confirma
+    disputa real: "Sincronização automática de atendimento IXC não pôde
+    continuar: outra importação já está em andamento" (dezenas de testes em
+    sequência competindo pelo mesmo lock de importação contra a mesma API).
+  - **Por que é intermitente**: cada chamada real ao IXC/OPA leva ~1-2s por
+    página; na maioria das vezes o cancelamento "ganha a corrida", mas quando
+    calha de estar no meio de uma chamada bloqueante bem no instante do
+    `cancel()`, o teardown trava até a API externa responder (ou não responder).
+  - **Não é bug de teste individual nem desta feature** — é lacuna de isolamento
+    de ambiente: `lifespan()` não distingue "rodando via TestClient em teste" de
+    "rodando de verdade". Rodar a suíte num ambiente sem essas variáveis
+    configuradas não teria esse problema.
+  - **Achado à parte, sem relação**, na mesma investigação: `test_localiza_ixc_lookup.py`
+    teve 9 falhas reais (não timeout) — não investigado a fundo, pode já ser
+    conhecido ou pré-existente.
+  - Não corrigido ainda — ver sugestão em "Próximos passos".
+
 - **Filtro "Regional" (agrupado) sobre o filtro "Filial" — IMPLEMENTADO, testado e
   validado ao vivo** (2026-09-14/15, usuário: "Tenho já o filtro por filial, agora
   preciso agrupar para um filtro de regional... ex Rolim de Moura e São Felipe como
@@ -4290,6 +4328,11 @@ regressão.
 
 ## Próximos passos sugeridos
 
+- **Corrigir o travamento intermitente da suíte de testes** (ver "Frentes em
+  andamento" — teardown de `TestClient` esperando tasks reais de sync IXC/OPA
+  cancelarem). Caminhos possíveis: `lifespan()` não subir os schedulers reais
+  quando `TESTING`/um sinalizador equivalente estiver ativo, ou a fixture
+  `client` usar um lifespan vazio/fake em vez do `lifespan()` de produção.
 - Definir a visão global que será o filtro padrão da Visão Geral (botão "Definir como
   padrão" na própria tela, exige `operations:views:update_global`). Sem isso a tela
   abre sem pré-set de modelo de equipe.
