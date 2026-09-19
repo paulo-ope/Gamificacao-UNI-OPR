@@ -33,6 +33,8 @@ export function OverviewSlaTechnologyGauges({
   state?: OverviewBlockState;
 }) {
   const option = useMemo(() => (items ? buildSlaTechnologyGaugeOption(items, groups) : null), [items, groups]);
+  const byGroup = useMemo(() => new Map((items ?? []).map((item) => [item.label, item])), [items]);
+  const slotWidthPercent = 100 / groups.length;
 
   return (
     <OverviewBlock
@@ -42,7 +44,19 @@ export function OverviewSlaTechnologyGauges({
       state={{ ...state, empty: !state?.loading && !state?.error && items !== null && items.length === 0 }}
     >
       {option ? (
-        <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 180, width: "100%" }} />
+        <>
+          <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 180, width: "100%" }} />
+          <div className="flex" role="presentation">
+            {groups.map((group) => {
+              const averageHours = byGroup.get(group)?.average_closing_hours ?? null;
+              return (
+                <div key={group} className="text-center text-xs text-slate-500" style={{ width: `${slotWidthPercent}%` }}>
+                  Tempo médio: {averageHours === null ? "-" : `${averageHours.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}h`}
+                </div>
+              );
+            })}
+          </div>
+        </>
       ) : (
         <div className="h-[180px] animate-pulse rounded-xl bg-slate-100" aria-label="Carregando gráfico" />
       )}
