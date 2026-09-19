@@ -64,6 +64,7 @@ só no frontend, conforme `AGENTS.md`):
 | `admin:roles:read` / `admin:roles:write` | Perfis de acesso |
 | `admin:ai_governance:read` / `admin:ai_governance:write` | Endpoints, campos e grants de IA |
 | `admin:ai_tokens:manage` | Emissão e revogação de tokens de API de IA |
+| `admin:integrations:read` | Ver a documentação Swagger de integração externa (`/admin/docs/integracao-uni`) |
 
 `admin:users:write` é a **permissão-trava** do ecossistema (`ADMIN_GATEKEEPER_PERMISSION` em
 `router.py`): o último perfil ativo que a concede não pode ser excluído nem inativado, para o
@@ -217,6 +218,43 @@ escopo, sem exigir migration nova (a coluna já é uma lista livre).
 
 **A chave bruta (`raw_key`) só aparece nesta resposta de criação — não fica recuperável depois**
 (o banco grava apenas o hash). A tela/cliente precisa copiá-la e guardá-la na hora.
+
+### Swagger de Integração Externa (`/api/admin/docs/integracao-uni`)
+
+Não é o `/docs` padrão do FastAPI (esse fica desligado em produção — expõe toda a API sem login,
+achado da auditoria de 2026-09-14, ver `app/main.py`). Esta rota fica **sempre ligada**, inclusive
+em produção, mas:
+
+- só mostra o subconjunto de endpoints já documentado à mão para o time externo (tag OpenAPI
+  `operations`, o mesmo escopo de `docs/api-operacao-analitica.md`);
+- exige autenticação em toda chamada, por uma das duas formas abaixo (implementação em
+  `app/modules/admin/integration_docs.py`).
+
+| Método + path | Descrição | Autenticação aceita |
+|---|---|---|
+| `GET /docs/integracao-uni` | Casca HTML do Swagger UI. | Ver abaixo |
+| `GET /docs/integracao-uni/openapi.json` | Schema OpenAPI filtrado (só endpoints tag `operations`). | Ver abaixo |
+
+**Autenticação (qualquer uma das duas):**
+
+1. **Sessão do workspace** — `Authorization: Bearer <JWT de login>` de um usuário com a permissão
+   `admin:integrations:read`.
+2. **Token de integração** — o mesmo `AiApiToken`/`ApiKeyCredential` emitido em
+   Administração → Gestão API/MCP (ver seção *Tokens de API* acima), enviado como header
+   `x-api-key` **ou** como `?token=` na própria URL.
+
+O `?token=` existe só para esta rota de leitura de documentação: ao abrir a página no navegador, o
+Swagger UI busca o `openapi.json` sozinho (via `fetch` do próprio navegador) e não repete headers
+customizados — sem embutir o token na URL do schema, a casca HTML autenticaria mas a lista de
+endpoints, que é o que importa, ficaria bloqueada. Para chamada automatizada (curl/script), prefira
+o header (`Authorization` ou `x-api-key`) em vez de `?token=` — evita o token ficar em log de
+acesso ou histórico do navegador.
+
+Para abrir no navegador como time externo:
+
+```
+https://operacao.souuni.com/api/admin/docs/integracao-uni?token=<seu token de integração>
+```
 
 ### Logs de Auditoria de Acesso
 

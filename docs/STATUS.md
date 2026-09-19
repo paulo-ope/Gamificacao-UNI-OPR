@@ -44,6 +44,29 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Administração — Swagger protegido e filtrado de integração externa (2026-09-18/19, pedido do
+  usuário: um Swagger próprio para o time externo/UNI, diferente do `/docs` padrão que fica
+  desligado em produção).**
+  - Rotas novas `GET /api/admin/docs/integracao-uni` (HTML do Swagger UI) e
+    `GET /api/admin/docs/integracao-uni/openapi.json` (schema filtrado), sempre ligadas mesmo em
+    produção — implementação em `app/modules/admin/integration_docs.py`, rotas registradas em
+    `app/modules/admin/router.py`.
+  - Filtro: só endpoints com a tag OpenAPI `operations` entram no schema (o mesmo escopo já
+    documentado à mão em `docs/api-operacao-analitica.md`) — 64 endpoints hoje, nenhum de outro
+    módulo.
+  - Autenticação: aceita ou sessão do workspace (`Authorization: Bearer`, permissão nova
+    `admin:integrations:read`, já incluída no papel legado `admin`) ou token de integração
+    (`AiApiToken`/`ApiKeyCredential`, o mesmo emitido em Administração → Gestão API/MCP), este
+    último por header `x-api-key` **ou** `?token=` na URL — necessário porque o Swagger UI busca o
+    `openapi.json` sozinho no navegador, sem repetir headers customizados.
+  - Detalhe completo (exemplos, tabela de autenticação) em `docs/api-admin.md`, seção "Swagger de
+    Integração Externa".
+  - Testes novos em `test_admin_integration_docs.py` (7 casos: sem auth, Bearer sem permissão,
+    Bearer com permissão, token via query, token de integração válido/revogado, chave legado) -
+    todos passando. Verificado também ao vivo contra o backend real em Docker (200/401 conforme
+    esperado, schema com os 64 endpoints corretos).
+
+
 - **Plano de evolução analítica do Atendimento IXC — Fases 0 a 6 implementadas por
   completo (2026-09-15/17)**. Plano técnico de 16 seções apresentado e aprovado antes
   de codificar (arquitetura: camada nova por cima de `SupportIxcTicket`, rotas antigas

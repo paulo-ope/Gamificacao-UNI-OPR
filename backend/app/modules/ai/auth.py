@@ -98,6 +98,16 @@ def require_api_key_context(
     return _resolve_api_key_context(api_key, db)
 
 
+def try_resolve_api_key_context(api_key: str | None, db: Session) -> ApiKeyContext | None:
+    """Mesma resolução de `require_api_key_context`, mas devolve `None` em vez de levantar 401 -
+    para quem (como a documentação de integração externa, `admin/integration_docs.py`) tenta a
+    chave de API como UMA de várias formas de autenticação aceitas, não a única."""
+    try:
+        return _resolve_api_key_context(api_key, db)
+    except HTTPException:
+        return None
+
+
 def require_api_key_user(
     api_key: str | None = Security(_api_key_header),
     db: Session = Depends(get_db),
