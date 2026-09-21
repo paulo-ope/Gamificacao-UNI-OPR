@@ -9,17 +9,18 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from mcp.server.auth.provider import AuthorizationParams
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
-from app.core.security import hash_password
-from app.models import User
+from app.core.security import hash_password, permissions_for_user
+from app.models import User, UserPermissionOverride
 from app.modules.mcp_connector import provider as provider_module
 from app.modules.mcp_connector.models import McpOAuthAuthorizationCode, McpOAuthClient, McpOAuthToken
-from app.modules.mcp_connector.provider import OprMcpOAuthProvider
+from app.modules.mcp_connector.provider import OprMcpOAuthProvider, resolve_user_for_access_token
 from app.modules.mcp_connector.router import router as consent_router
 from app.modules.mcp_connector.provider import SCOPE
 from app.modules.mcp_connector.server import _validated_filters
@@ -325,3 +326,28 @@ def test_validated_filters_accepts_known_keys_and_fills_defaults():
 
 def test_validated_filters_accepts_none():
     assert _validated_filters(None)["regionals"] == []
+
+
+def test_resolve_user_for_access_token_can_compute_permissions_with_overrides(db_session, user_with_scope):
+    """Regressão: `resolve_user_for_access_token` fazia `db.expunge(user)` sem carregar
+    `permission_overrides` antes - qualquer tool do MCP que chamasse `permissions_for_user` (via
+    `require_permission`/checagem de escopo) nesse usuário detached estourava "Parent instance
+    <User> is not bound to a Session" ao tentar o lazy-load. `access_profiles`/`permissions` já
+    eram carregados; faltava só `permission_overrides`."""
+    db_session.add(
+        UserPermissionOverride(user_id=user_with_scope.id, permission="management:read", effect="grant")
+    )
+    db_session.commit()
+    user_id = user_with_scope.id
+    # A fixture `_mcp_settings` faz `resolve_user_for_access_token` reusar a MESMA `db_session` do
+    # teste (ver comentário na fixture) - sem tirar o usuário do identity map antes, `db.get(...)`
+    # devolveria o objeto já carregado sem aplicar o `selectinload` (Session.get só respeita
+    # loader options numa consulta nova, não ao servir do identity map), mascarando exatamente o
+    # bug que este teste existe pra pegar. Em produção cada chamada abre uma `SessionLocal()`
+    # nova, então isso nunca acontece de verdade - aqui é só pra forçar o mesmo caminho.
+    db_session.expunge(user_with_scope)
+
+    resolved = resolve_user_for_access_token(SimpleNamespace(subject=str(user_id)))
+
+    assert resolved is not None
+    assert "management:read" in permissions_for_user(resolved)

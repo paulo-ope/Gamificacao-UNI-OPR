@@ -288,14 +288,17 @@ def resolve_user_for_access_token(access_token: AccessToken) -> User | None:
     if not access_token.subject:
         return None
     with SessionLocal() as db:
-        # Carrega `access_profiles`/`permissions` ANTES do expunge - achado real: sem isso,
-        # `permissions_for_user` (chamado pelas tools do MCP com a sessão original já fechada)
-        # tentava lazy-load em `user.access_profiles` e estourava "Parent instance <User> is not
-        # bound to a Session".
+        # Carrega `access_profiles`/`permissions`/`permission_overrides` ANTES do expunge - achado
+        # real: sem isso, `effective_permissions_for_user` (chamado pelas tools do MCP com a sessão
+        # original já fechada) tentava lazy-load em `user.access_profiles`/`user.permission_overrides`
+        # e estourava "Parent instance <User> is not bound to a Session".
         user = db.get(
             User,
             int(access_token.subject),
-            options=[selectinload(User.access_profiles).selectinload(AccessProfile.permissions)],
+            options=[
+                selectinload(User.access_profiles).selectinload(AccessProfile.permissions),
+                selectinload(User.permission_overrides),
+            ],
         )
         if user is None or not user.active:
             return None
