@@ -44,6 +44,128 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Calendário Operacional — colisão de chave na bolinha de status do caso + relatório de
+  lacuna de regra de fim de semana (2026-09-21, investigação a partir de um caso real: bolinha
+  amarela no dia do Marcelo Menezes Costa/20-set sem nenhuma justificativa correspondente).**
+  - **Bug real corrigido**: `dailyCaseKey`/nova `monthlyCaseKey` em
+    `operations-monthly-calendar.tsx` identificavam o caso só por
+    `responsible_name` (+ data no diário) — dois colaboradores com o MESMO nome em regionais
+    diferentes na mesma data faziam a bolinha de status (e o texto "Aguardando matriz" etc.) de
+    um aparecer na célula do outro, mesmo sem caso nenhum pra ele. Chave agora inclui a
+    regional (`collaborator.reference_regional`/`item.regional`), mesmo critério de identidade
+    que o backend já usa (`get_or_create_daily_case`/`get_or_create_monthly_case` em
+    `cases.py`). **Decisão**: usar regional, não `collaborator_id` — esse campo é nullable no
+    `ManagementCase` (depende de `_resolve_member_for_case` achar cadastro) e nem existe hoje
+    no payload do calendário; regional está sempre presente e já é a chave real do backend.
+  - **Achado maior, ainda mais relevante pro caso do Marcelo**: `_rule_for_day` (`cases.py`) só
+    tem piso padrão de meta pra dia de semana — sábado/domingo sem regra HABILITADA no modelo
+    de equipe devolve `None`, e `generate_daily_cases_for_date` pula o colaborador INTEIRO
+    nesse dia, mesmo com produção zero, sem gerar caso nem avisar ninguém. 20/09/2026 (o dia do
+    caso) é domingo — se o modelo "TECNICO 12/36H" do Marcelo não tem regra de domingo
+    habilitada, é essa a causa raiz mais provável, não a colisão de chave (que era um bug real
+    e separado, mas não o motivo original do relato).
+  - **Novo relatório em Gestão Integrada** pra fechar esse vão de vez: card ao lado do toggle
+    de geração automática listando todo modelo de equipe com `requires_justification=true` sem
+    regra de sábado/domingo habilitada, com quantos colaboradores ativos são afetados e os
+    nomes. Backend: `cases_engine.case_generation_gaps` +
+    `GET /management/settings/case-generation-gaps` (mesmo escopo de visibilidade dos demais
+    endpoints de Gestão). Frontend: card nome em `management-cases-panel.tsx`.
+  - **Bug separado, achado ao tentar verificar dado real via MCP**: `resolve_user_for_access_token`
+    (`mcp_connector/provider.py`) fazia eager-load de `access_profiles`/`permissions` mas não de
+    `permission_overrides` antes do `expunge()` — qualquer tool do conector MCP que dependesse
+    de `effective_permissions_for_user` com override configurado quebrava com
+    `Parent instance <User> is not bound to a Session`. Corrigido (adicionado
+    `selectinload(User.permission_overrides)`); **precisa de restart/redeploy do backend pra
+    valer** - ainda não verificado ao vivo contra o caso do Marcelo por causa disso.
+  - Testes novos: 4 casos de `case_generation_gaps` (gera lacuna, some com as duas regras,
+    ignora modelo com `requires_justification=false`, respeita escopo de supervisor) +
+    1 regressão de `resolve_user_for_access_token` (falha sem o fix, passa com ele — confirmado
+    revertendo e rodando de propósito). `tsc --noEmit` limpo. Suíte de
+    `test_management_cases.py`/`test_mcp_connector.py` rodando: os testes tocados por esta
+    sessão todos passando; os "ERROR" de SQLite-em-thread que aparecem em alguns testes via
+    `TestClient` são a mesma instabilidade intermitente já documentada acima, não regressão
+    desta mudança.
+  - **Pendente**: confirmar ao vivo (depois do restart do backend) se o modelo do Marcelo
+    realmente carece da regra de domingo, e então cadastrá-la em Configuração de Equipes.
+  - **Fix commitado nesta sessão (2026-09-21, commit `3bde7d0`)**: `provider.py` +
+    `test_mcp_connector.py` isolados do resto do WIP da branch, sem tocar nos outros ~145
+    arquivos modificados de sessões paralelas.
+  - **Achado novo desta sessão, importante**: pedido do usuário partia da premissa de que
+    `GET /api/operations/sla-matrix` conteria as justificativas — **não é o caso**. A rota real
+    é `GET /operations/sla/matrix` (Operação Analítica, `queries.sla_group_matrix`) e só traz
+    Volume/SLA%/TME por grupo×regional, sem nenhum campo de justificativa. Quem tem
+    `justification_text`/`action_plan`/`reviewed_by` é `ManagementCase` (Gestão Integrada), já
+    exposto por completo via MCP em `opr_management_cases`/`opr_management_pending_justifications`/
+    `opr_management_justifications` (aceitam `reference_date_from`/`to`, `regional`,
+    `has_justification`, `supervisor_user_id` etc. e reusam `case_scope_conditions(user)` — o
+    mesmo escopo de visibilidade da tela). **Não foi criada tool nova** (`opr_sla_matrix`) porque
+    as 3 já existentes cobrem o pedido sem duplicar lógica.
+  - **Validação ao vivo tentada e BLOQUEADA**: chamei `opr_management_justifications` com
+    `reference_date_from=2026-09-15`/`reference_date_to=2026-09-21` pelo conector MCP real desta
+    sessão ("UNI WORKSPACE") — `DetachedInstanceError` ainda ocorre. Rebuildei e reiniciei
+    `opr-gamification-backend` local (Docker) com o fix presente (confirmado via
+    `docker exec ... grep`), repeti a chamada — erro persiste. Investigando: `docker logs` não
+    mostra NENHUMA requisição `/mcp` chegando nesse container, e ele roda com `PUBLIC_BASE_URL`
+    vazio, que é a condição que desliga o servidor MCP em `main.py` (`mcp_server_instance =
+    build_mcp_server() if settings_obj.public_base_url else None`). **Conclusão: o conector "UNI
+    WORKSPACE" que as sessões de IA usam aponta para um backend de produção fora deste checkout
+    local — o restart local não tem efeito nenhum sobre ele.** Falta alguém com acesso ao deploy
+    desse backend levar o commit `3bde7d0` até lá; só depois disso a chamada acima pode ser
+    revalidada de verdade.
+
+- **`docs/integracao-uni/` — pacote de integração somente-leitura para o Cubo de Dados
+  Corporativo/Portal Executivo (análise concluída em 2026-09-17, commit `6c0e69e`; achado e
+  confirmado como já commitado nesta branch em 2026-09-21, numa sessão que quase o
+  sobrescreveu por engano — ver correção abaixo).** Cobre os **7 módulos de negócio**
+  (Operação Analítica, SGP Suporte, Gestão Integrada, Agendamento, Gamificação, UNI
+  Intelligence, Administração), com `openapi.yaml` extraído ao vivo do schema real do
+  FastAPI (330 rotas/392 operações) — não escrito à mão.
+  - Arquivos: `README.md`, `openapi.yaml`, `catalogo.json`/`catalogo.md` (datasets,
+    indicadores com fórmula, relacionamentos, lacunas), `cobertura.md` (matriz
+    encontrado/documentado/API/testado/validado pela área — **nada está marcado como
+    validado pela área**, isso é trabalho pendente da área de negócio), `acesso.md`
+    (autenticação, permissões, classificação de dado sensível, procedimento de
+    provisionamento), `validacao.md` (evidência do que foi de fato executado/verificado),
+    `handoff-infra.md` (5 decisões pendentes da equipe de infra), `exemplos/` (script
+    consumidor + chamadas cruas).
+  - **Formulas de Gamificação (pontuação, penalidades, bônus de liderança) e severidade de
+    caso da Gestão Integrada foram confirmadas por leitura literal completa** de
+    `backend/app/services/scoring_detail.py` (2382 linhas), `backend/app/services/
+    leadership_bonus.py` (535 linhas) e `backend/app/modules/management/cases.py` — não por
+    inferência de uso externo.
+  - **Validado contra um painel real de produção** ("Painel do CEO — Operações",
+    2026-09-17, print compartilhado pelo dono do sistema): SLA por tecnologia
+    (Fibra Urbana/Rural/Rádio) confirmado como `GET /api/operations/sla?group_by=subject`
+    + agrupamento do lado do consumidor via `regras-agrupamento-sla-tecnologia.json`
+    (cópia salva no pacote); CSAT Suporte Interno confirmado
+    (`SupportOpaAttendance.rating`); **CSAT Suporte de Campo é gap real, sem fonte
+    encontrada em Operação Analítica** — pendência a esclarecer com quem mantém o painel.
+  - **Três resultados continuam bloqueados, sem confusão entre eles**: (1) documentação —
+    feita; (2) credencial real de produção para o Cubo — **não criada**, bloqueada por
+    exigir aprovação humana explícita (não é uma identidade exclusiva hoje — o mecanismo
+    existente, `role=ai_service`, é compartilhado entre todas as integrações de IA; ver
+    `acesso.md` §5 para as duas opções de arquitetura, ainda sem decisão); (3) deploy da
+    documentação em produção e verificação com consulta autenticada real — **não
+    executados**, dependem do item 2. URL de produção confirmada pelo dono do sistema:
+    `https://operacao.souuni.com` (login carregado com sucesso), mas `APP_ENV` exato do
+    servidor não confirmado.
+  - **Achados técnicos reais registrados como gaps** (não hipotéticos, por leitura de
+    código): `ManagementCase` sem `UniqueConstraint` de banco pra idempotência de caso
+    diário/mensal (janela teórica de corrida, código só faz SELECT+checagem em memória);
+    duas funções de filtro de período na Gamificação (`period_orders` vs
+    `period_orders_for_aggregation`) sem explicação de por que ambas existem; `su_ticket`/
+    Operação Analítica têm duas normalizações de "regional" divergentes (granular vs.
+    agrupada) que não são comparáveis sem checar qual módulo usa qual.
+  - **Correção registrada nesta sessão (2026-09-21)**: uma sessão pediu pra documentar a
+    API e provisionar a integração do zero, sem checar primeiro se `docs/integracao-uni/`
+    já existia — escreveu por cima de 7 desses arquivos (README, acesso, catálogo,
+    openapi.yaml, .env.example, exemplos/consumidor.py) antes de perceber pelo tamanho
+    incomum do `openapi.yaml` (23k linhas geradas agora vs. 46k já commitadas). Revertido
+    com `git checkout --` antes de qualquer commit — nada foi perdido, `git status` confere
+    idêntico ao estado anterior. Lição registrada aqui pra não se repetir: **sempre `git
+    status`/`git log -- <caminho>` antes de escrever num diretório que pode já ter
+    trabalho de outra sessão**, mesmo quando o pedido do usuário sugere "do zero".
+
 - **Administração — Swagger protegido e filtrado de integração externa (2026-09-18/19, pedido do
   usuário: um Swagger próprio para o time externo/UNI, diferente do `/docs` padrão que fica
   desligado em produção).**
