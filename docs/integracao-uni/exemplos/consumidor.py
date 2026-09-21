@@ -2,22 +2,26 @@
 """Consumidor de exemplo — integração de leitura do Cubo de Dados Corporativo / Portal Executivo.
 
 Demonstra, contra a API REST do UNI Workspace (ver ../openapi.yaml):
-  1. Autenticação via token de API (header Authorization: Bearer) lido de variável de ambiente
-     — nenhuma credencial fica hardcoded neste arquivo.
+  1. Autenticação por LOGIN (e-mail/senha da conta de serviço) → Bearer JWT, com renovação
+     automática quando expira. Não é um token fixo de longa duração: é o mesmo mecanismo de
+     sessão usado por qualquer usuário humano (ver ../acesso.md seção 5).
   2. Consulta filtrada (Operação Analítica: overview por período/regional).
   3. Paginação (SGP Suporte: atendimentos OPA, page/page_size).
   4. Consulta de indicador (Operação Analítica: SLA).
   5. Tratamento de falhas (timeout, erro HTTP, erro de rede) com retry simples e backoff.
 
 Não depende de sessão de navegador. Usa só `requests` (mesma stack Python do backend do projeto).
-Não executa nenhuma operação de escrita — este script só faz GET.
+Não executa nenhuma operação de escrita — este script só faz GET (e o único POST, `/auth/login`,
+é a própria autenticação, não uma operação de dado de negócio).
 
 Uso:
     python consumidor.py
 
 Variáveis de ambiente esperadas (ver ../.env.example):
     UNI_API_BASE_URL   - ex.: http://localhost:8000/api
-    UNI_API_TOKEN       - token Bearer da identidade técnica de leitura (ver ../acesso.md)
+    UNI_API_EMAIL       - e-mail da conta de serviço de leitura (ver ../acesso.md)
+    UNI_API_PASSWORD    - senha dessa conta, obtida pelo canal seguro combinado (nunca por chat)
+    UNI_API_TOKEN       - opcional: pula o login automático se já houver um Bearer válido em mãos
 """
 from __future__ import annotations
 
@@ -42,32 +46,76 @@ class UniApiClient:
 
     Não implementa nenhum verbo de escrita de propósito — este consumidor
     de exemplo existe para provar leitura, não para ser um SDK completo.
+
+    Autentica por LOGIN (e-mail/senha), não por token fixo: `POST /auth/login` é chamado uma vez
+    na primeira requisição e de novo automaticamente se uma chamada devolver 401 (Bearer expirado)
+    — é assim que "renovar a credencial" funciona aqui, sem passo manual algum.
     """
 
-    def __init__(self, base_url: str, token: str, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        email: str | None = None,
+        password: str | None = None,
+        token: str | None = None,
+        timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
         if not base_url:
             raise ValueError("UNI_API_BASE_URL não informado")
-        if not token:
-            raise ValueError("UNI_API_TOKEN não informado")
+        if not token and not (email and password):
+            raise ValueError("Informe UNI_API_TOKEN, ou UNI_API_EMAIL + UNI_API_PASSWORD")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._email = email
+        self._password = password
         self._session = requests.Session()
         self._session.headers.update(
             {
-                "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
                 "User-Agent": "uni-cubo-corporativo-exemplo/1.0",
             }
         )
+        if token:
+            self._set_token(token)
+        else:
+            self._login()
+
+    def _set_token(self, token: str) -> None:
+        self._session.headers["Authorization"] = f"Bearer {token}"
+
+    def _login(self) -> None:
+        if not (self._email and self._password):
+            raise UniApiError(
+                "Bearer expirou e não há UNI_API_EMAIL/UNI_API_PASSWORD para renovar sozinho "
+                "(só foi passado UNI_API_TOKEN fixo). Gere um novo token manualmente ou informe "
+                "email/senha da conta de serviço."
+            )
+        response = requests.post(
+            f"{self.base_url}/auth/login",
+            json={"email": self._email, "password": self._password},
+            timeout=self.timeout,
+        )
+        if response.status_code != 200:
+            raise UniApiError(
+                f"Login falhou ({response.status_code}) — verificar UNI_API_EMAIL/UNI_API_PASSWORD "
+                "e se a conta de serviço continua ativa (ver acesso.md seção 5)."
+            )
+        payload = response.json()
+        self._set_token(payload["access_token"])
+        permissions = payload.get("user", {}).get("permissions", [])
+        print(f"  login OK — {len(permissions)} permissões concedidas a esta identidade")
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """GET com retry simples para erros transitórios (timeout, 502/503/504).
+        """GET com retry simples para erros transitórios (timeout, 502/503/504) e renovação
+        automática de sessão em caso de 401 (tenta login de novo uma única vez).
 
-        Erros de autenticação/autorização (401/403) e de contrato (404/422)
-        NÃO são reprocessados — indicam um problema que retry não resolve.
+        Erro de autorização (403) e de contrato (404/422) NÃO são reprocessados — indicam um
+        problema que retry não resolve.
         """
         url = f"{self.base_url}{path}"
         last_exc: Exception | None = None
+        relogged_in = False
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
@@ -84,9 +132,14 @@ class UniApiClient:
                 continue
 
             if response.status_code == 401:
+                if not relogged_in:
+                    print(f"  401 em {path} — Bearer expirado/inválido, tentando login de novo...")
+                    relogged_in = True
+                    self._login()
+                    continue
                 raise UniApiError(
-                    "401 Unauthorized — token ausente, expirado ou inválido. "
-                    "Verificar UNI_API_TOKEN e a validade/revogação da credencial (ver acesso.md)."
+                    "401 Unauthorized mesmo depois de renovar o login — credencial revogada ou "
+                    "inválida. Verificar UNI_API_EMAIL/UNI_API_PASSWORD (ver acesso.md)."
                 )
             if response.status_code == 403:
                 raise UniApiError(
@@ -171,21 +224,23 @@ def demo_tratamento_de_falha(client: UniApiClient) -> None:
 
 def main() -> int:
     base_url = os.environ.get("UNI_API_BASE_URL", "")
+    email = os.environ.get("UNI_API_EMAIL", "")
+    password = os.environ.get("UNI_API_PASSWORD", "")
     token = os.environ.get("UNI_API_TOKEN", "")
 
     print("== 1. Autenticação ==")
     print(f"  base_url: {base_url or '(não definido)'}")
-    print(f"  token presente: {'sim' if token else 'não'}")
+    print(f"  modo: {'token fixo (UNI_API_TOKEN)' if token else 'login automático (UNI_API_EMAIL/PASSWORD)'}")
 
-    if not base_url or not token:
+    if not base_url or not (token or (email and password)):
         print(
-            "\nUNI_API_BASE_URL e/ou UNI_API_TOKEN não definidos. "
+            "\nUNI_API_BASE_URL e/ou credenciais não definidos. "
             "Copie ../.env.example para .env local e preencha com uma credencial válida "
-            "(ver ../acesso.md — provisionamento ainda pendente nesta análise)."
+            "(ver ../acesso.md seção 5)."
         )
         return 1
 
-    client = UniApiClient(base_url=base_url, token=token)
+    client = UniApiClient(base_url=base_url, email=email or None, password=password or None, token=token or None)
 
     try:
         demo_consulta_filtrada(client)

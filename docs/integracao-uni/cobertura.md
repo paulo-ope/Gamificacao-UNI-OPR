@@ -1,6 +1,13 @@
 # Cobertura de dados — matriz módulo → dataset → interface → documentação → testes → pendências
 
-Commit analisado: `6c0e69ea531ee28fa5f4fe2cf54a59c5b59cac08` · Data: 2026-09-17
+Commit analisado: `6c0e69ea531ee28fa5f4fe2cf54a59c5b59cac08` · Data: 2026-09-17.
+**Nota de 2026-09-21**: a matriz abaixo (dataset → endpoint) continua válida — nenhum endpoint de
+negócio mudou. O que mudou foi a **camada de acesso**: todos os endpoints `GET` listados aqui,
+dos 9 módulos, agora estão cobertos por um único mecanismo de leitura corporativa (Swagger
+`/api/admin/docs/integracao-uni` + credencial de leitura dedicada, ver [acesso.md](acesso.md)) —
+não há mais a limitação "só o que o conector MCP expõe" que esta matriz registrava como pendência
+em alguns módulos. As colunas de **teste automatizado** e **validação de negócio** desta matriz
+não mudaram (são sobre o dado em si, não sobre como se acessa) e continuam as pendências reais.
 
 Esta matriz distingue **documentação completa** de **acesso completo** — são resultados diferentes. Um dataset pode estar 100% documentado neste pacote e ainda não ter sido tecnicamente testado ponta-a-ponta, nem validado pela área de negócio responsável. As duas últimas colunas nunca devem ser lidas como concluídas só porque as três primeiras estão.
 

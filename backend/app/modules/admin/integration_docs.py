@@ -98,9 +98,10 @@ escrita em outro lugar da API real).
 Cada conta tem um conjunto fixo de permissões (`GET .../auth/login` devolve a lista em `user.permissions`).
 Uma chamada para um dado fora do conjunto autorizado responde `403`, não `404` nem dado vazio.
 
-### Cobertura
-Ver `docs/integracao-uni/cobertura-validacao.md` no repositório para o que está verificado em
-produção versus só documentado no código.
+### Cobertura e validação
+Ver `docs/integracao-uni/cobertura.md` (matriz módulo -> dataset -> interface -> testes) e
+`docs/integracao-uni/validacao.md` (o que foi de fato verificado, com evidência) no repositório
+para o que está checado em produção versus só documentado no código.
 """
 
 

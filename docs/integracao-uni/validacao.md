@@ -25,16 +25,38 @@ Commit analisado: `6c0e69ea531ee28fa5f4fe2cf54a59c5b59cac08` · Data: 2026-09-17
   perfil `cubo_corporativo_readonly` e do usuário de serviço (aguardando o usuário executar essas
   etapas manualmente — ver seção abaixo).
 
+## Atualização — 2026-09-21, credencial real criada e testada (desenvolvimento local)
+
+Diferente da entrada de 2026-09-17 (que registrava a criação de credencial como bloqueada), esta
+rodada **executou o provisionamento de ponta a ponta** em desenvolvimento local, com o dono do
+sistema decidindo os dois pontos que bloqueavam antes (escopo = todos os módulos; canal do segredo
+= entrega direta via SSH, sem depender de secrets manager formal). Nada disto foi simulado —
+comandos e saídas reais abaixo.
+
+| Verificação | Comando/evidência | Resultado |
+|---|---|---|
+| `AccessProfile` "Cubo de Dados Corporativo - Leitura" criado | script Python via `docker exec` (ORM direto, mesmo padrão usado para a migration de grupos de SLA) | `profile_id: 9`, 28 permissões, `has_any_write: False` (checado programaticamente contra sufixos `:write`/`:manage`/`:sync`/`:delete`/`:review`/`calculation:run`/`:publish`) |
+| Usuário de serviço `cubo-uni@internal.souuni.com` criado | idem | `user_id: 179`, vinculado só a esse perfil |
+| Login real | `POST /api/auth/login` com email/senha da conta | `200`, `access_token` (JWT) válido, `user.permissions` com as 28 chaves esperadas |
+| Leitura permitida | `GET /api/operations/period` e `GET /api/operations/sla?...` com o Bearer da conta | `200` nos dois |
+| Escrita bloqueada | `PUT /api/operations/ixc-sync-settings` e `POST /api/calculation-runs/calculate` com o mesmo Bearer | `403` nos dois — confirma que a restrição é aplicada pelo backend por operação, não só pela ausência de botão na tela |
+| Doc de integração acessível pela própria conta | `GET /api/admin/docs/integracao-uni/openapi.json` com o Bearer da conta | `200`, schema com 182 operações, todas `GET` |
+| Script consumidor completo (`exemplos/consumidor.py`) rodado de ponta a ponta | `python exemplos/consumidor.py` com `UNI_API_EMAIL`/`UNI_API_PASSWORD` reais, contra `http://localhost:8000/api` | Login automático (28 permissões relatadas pelo próprio script); consulta filtrada de overview (10 campos retornados); **paginação real de 39.183 registros** de atendimentos OPA; consulta do indicador SLA (lista vazia no recorte de teste, resultado válido — sem O.S. com prazo mensurável nesse período/filtro, não é erro); erro 404 tratado corretamente em rota inexistente. Saída completa do script arquivada nesta sessão. |
+
+**Ainda não verificado em produção** (ver [deploy.md](deploy.md) para o status exato e o checklist
+de verificação pós-deploy): réplica do perfil/usuário na VM real, login e chamadas de leitura/
+escrita contra `https://operacao.souuni.com`, e reexecução do `consumidor.py` apontando pra lá.
+
 ## O que NÃO foi executado (pendências reais, não simuladas)
 
-| Item pedido | Por que não foi feito | Como desbloquear |
+| Item pedido | Status em 2026-09-21 | Como desbloquear o que resta |
 |---|---|---|
-| Criação da identidade técnica read-only real (usuário/perfil/token) | Bloqueado pelo classificador de segurança da sessão ao tentar criar um usuário de teste no banco local ("Credential Materialization") — comportamento correto e esperado: credenciais exigem aprovação explícita do usuário humano, não de um agente automatizado, mesmo em ambiente local | Executar o procedimento de [acesso.md §5](acesso.md#5-provisionamento-da-credencial--procedimento-não-executado-nesta-análise) manualmente, ou aprovar explicitamente uma sessão com permissão para isso |
-| Execução real de `exemplos/consumidor.py` contra a API autenticada | Depende do item acima (não há token válido) | Preencher `.env` com uma credencial real gerada conforme `acesso.md` e rodar `python exemplos/consumidor.py` |
-| Validação cruzada dos indicadores (SLA, TMA/TMR, TTFA, pontuação) contra o sistema de origem/relatórios existentes, nos 3 recortes exigidos pela norma (dia pequeno, dia grande, período de 7 dias) | Requer execução autenticada (item acima) e comparação manual com telas/relatórios já publicados — não é uma verificação de código estático | Repetir o roteiro de `docs/roteiro-comparacao-tmr-opa-suite.md` (já existente no projeto, usado como modelo) para cada indicador do catálogo, com uma pessoa da área validando os números |
-| Aprovação de negócio da classificação de dados pessoais/sensíveis (`acesso.md §4`) | É uma decisão de RH/DPO, não uma verificação técnica | Levar `acesso.md §4` para a área responsável |
-| Confirmação da URL real de homologação/produção | Não visível no código-fonte (URLs de ambiente não versionadas) | Preencher `servers:` em `openapi.yaml` e `.env.example` com a equipe de infraestrutura |
-| Bloqueio de escrita testado em ambiente isolado | Depende da credencial existir primeiro; mesmo com ela, testar tentativas de escrita (POST/PUT/DELETE) com a identidade read-only deve ocorrer só em ambiente de teste dedicado, nunca em produção | Após a credencial existir, rodar uma chamada de escrita de baixo risco (ex.: `POST /api/intelligence/alerts/{id}/dismiss` com um alerta de teste) esperando `403`, documentando o resultado aqui |
+| Criação da identidade técnica read-only real (usuário/perfil/token) | ✅ **Feito em desenvolvimento local** (ver seção acima). ⏳ Produção pendente. | Réplica em produção — ver [deploy.md](deploy.md) |
+| Execução real de `exemplos/consumidor.py` contra a API autenticada | ✅ **Feito contra desenvolvimento local** (ver seção acima, saída real do script). ⏳ Produção pendente. | Reexecutar apontando `UNI_API_BASE_URL` pra produção depois do deploy |
+| Validação cruzada dos indicadores (SLA, TMA/TMR, TTFA, pontuação) contra o sistema de origem/relatórios existentes, nos 3 recortes exigidos pela norma (dia pequeno, dia grande, período de 7 dias) | ❌ Ainda não feito | Repetir o roteiro de `docs/roteiro-comparacao-tmr-opa-suite.md` (já existente no projeto, usado como modelo) para cada indicador do catálogo, com uma pessoa da área validando os números |
+| Aprovação de negócio da classificação de dados pessoais/sensíveis (`acesso.md §4`) | ❌ Ainda não feito | Levar `acesso.md §4` para a área responsável (RH/DPO) |
+| Confirmação da URL real de homologação/produção | ✅ Produção confirmada (`https://operacao.souuni.com`). Homologação: não existe ambiente separado identificado. | — |
+| Bloqueio de escrita testado | ✅ **Feito em desenvolvimento local** — `PUT /operations/ixc-sync-settings` e `POST /calculation-runs/calculate` com a credencial do cubo devolveram `403` (ver seção acima). ⏳ Produção pendente. | Repetir contra produção depois do deploy, documentar aqui |
 
 ## Divergências encontradas entre documentação e código (achados reais, não hipotéticos)
 

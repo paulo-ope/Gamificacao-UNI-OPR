@@ -1,6 +1,13 @@
 # Acesso — autenticação, permissões e provisionamento da identidade técnica
 
-Commit analisado: `6c0e69ea531ee28fa5f4fe2cf54a59c5b59cac08` · Data: 2026-09-17
+Commit analisado: `6c0e69ea531ee28fa5f4fe2cf54a59c5b59cac08` · Data: 2026-09-17.
+**Atualizado em 2026-09-21** com o mecanismo real implementado, testado e mesclado em `master`
+(pendente só o deploy físico na VM de produção — ver [deploy.md](deploy.md)). O texto original de
+2026-09-17 (seções 1-4) permanece como registro histórico do que já existia; a seção 5 foi
+reescrita porque o procedimento nela proposto (token `AiApiToken`/`x-api-key`) **não funciona**
+para os routers de módulo (só `/api/ai/*` aceita `x-api-key` — os demais exigem Bearer JWT de
+sessão). O mecanismo real acabou sendo diferente, mais simples: login com e-mail/senha de uma
+conta de serviço dedicada.
 
 ## 1. Como a autenticação funciona hoje (fato, não proposta)
 
@@ -41,6 +48,10 @@ escopado ao módulo `/api/ai` (Operações/Gestão), não à leitura corporativa
 pacote descreve.
 
 ## 2. Por que a identidade do cubo não pode ser simplesmente "outro usuário `ai_service`"
+
+> Nota de 2026-09-21: a lista de permissões proposta abaixo (2026-09-17) foi o ponto de partida.
+> A lista **realmente implementada e testada** — que inclui também `admin:*:read` (por decisão do
+> dono do sistema: escopo "todos os módulos, sem exceção") — está na seção 5.
 
 `ai:query` hoje dá acesso só ao que o módulo `/api/ai` expõe (Operação, Rede, Gestão Integrada —
 ver [cobertura.md](cobertura.md)). Não cobre Gamificação, Suporte, Agendamento, Intelligence nem
@@ -108,48 +119,70 @@ Nenhum destes itens foi aprovado por uma área de negócio/DPO nesta análise �
 é técnica (o que o código já trata como segredo/PII vs. o que já é servido hoje), não uma aprovação
 de compliance.
 
-## 5. Provisionamento da credencial — procedimento (NÃO EXECUTADO nesta análise)
+## 5. Provisionamento da credencial — o que foi de fato feito (2026-09-21)
 
-Esta análise **não criou nenhuma credencial real**. O procedimento abaixo é o que precisa
-acontecer, e cada passo exige aprovação explícita antes de execução:
+O dono do sistema decidiu, nesta sessão, os dois pontos que bloqueavam a análise de 2026-09-17:
+**escopo = todos os módulos, sem exceção** (item 1 abaixo já não é uma escolha em aberto) e
+**canal do segredo = entrega direta via SSH** (resolve o item 5 — sem depender de um secrets
+manager formal ainda não configurado).
 
-1. **Decisão de escopo** — a área de negócio confirma a lista de permissões da seção 2 (adicionar
-   ou remover módulos conforme necessidade real do Portal Executivo).
-2. **Criar `AccessProfile` dedicado** (ex.: `"cubo_corporativo_readonly"`) com exatamente essas
-   permissões, via tela de Administração ou migration — nunca reaproveitar o papel `admin` nem
-   um usuário humano existente.
-3. **Criar usuário de serviço** vinculado a esse perfil, sem `collaborator_id` (não representa uma
-   pessoa), com `managed_regional`/`managed_regionals` **vazios** (para não herdar o recorte
-   regional de um gestor específico — o cubo precisa de visão corporativa completa).
-4. **Gerar token de API** (não senha) — reusar o padrão já existente de `AiApiToken`
-   (`key_prefix` + `key_hash`, chave crua exibida **uma única vez** na criação, nunca recuperável
-   depois — mesmo padrão de
-   [backend/app/modules/ai_governance/models.py:103-118](../../backend/app/modules/ai_governance/models.py)).
-   Preferir esse mecanismo a JWT de usuário porque já tem expiração/revogação/escopo por design.
-5. **Armazenar no gerenciador de segredos aprovado** — **pendência real**: esta análise confirmou
-   que **não há secrets manager integrado** no projeto hoje (só `.env`/Docker Compose, ver
-   `gap.no_secrets_manager` em [catalogo.json](catalogo.json)). Antes de gerar a chave real, a
-   equipe de infraestrutura precisa decidir onde ela será armazenada — a regra do projeto
-   ([docs/manual_programacao_senior.md](../manual_programacao_senior.md)) exige "secrets apenas em
-   `.env` ou secret manager", mas nenhum secret manager está configurado. **Não gerar a chave real
-   até esta decisão existir.**
-6. **Consumo pelo serviço central de integração** — a chave é usada pelo backend do time do
-   cubo/Portal Executivo, nunca pelo navegador do usuário final nem diretamente por um modelo de
-   IA sem essa camada intermediária.
-7. **Renovação e revogação** — seguir o padrão de `AiApiToken.expires_at`/`revoked_at`; definir
-   janela de renovação com a equipe operadora antes de emitir a chave real (não definida nesta
-   análise — pendência).
+Mecanismo real implementado (diferente do proposto em 2026-09-17): como só `/api/ai/*` aceita
+`x-api-key`, e os routers de módulo (`operations`, `management`, `support`, `gamification` etc.)
+só aceitam **Bearer JWT de sessão** (`get_current_user`, o mesmo usado por qualquer login humano),
+a identidade do cubo é uma **conta de serviço com e-mail/senha**, não um `AiApiToken`. O login
+(`POST /api/auth/login`) já É o mecanismo de renovação: o Bearer expira
+(`AUTH_TOKEN_EXPIRE_MINUTES`, 720 min/12h por padrão) e a própria conta loga de novo quando
+precisar — não existe refresh token separado, nem precisa existir.
 
-### Se o provisionamento não puder ser feito com segurança agora
+1. ✅ **Escopo decidido**: todos os 9 módulos de negócio, só leitura. Permissões concedidas
+   (28 no total, zero com sufixo `:write`/`:manage`/`:sync`/`:delete`/`:review`/`calculation:run`
+   nem qualquer `admin:*:write`):
+   ```
+   dashboard:read, audit:read, orders:read, scoring:read,
+   operations:read, operations:views:read_global, operations:view_order_details,
+   operations:view_openings, operations:view_sla, operations:view_warranty,
+   operations:view_calendar, operations:view_backlog, operations:export,
+   support:read, scheduling:read, scheduling:views:read_global, localiza:read,
+   management:read, management:audit_structure:read,
+   admin:users:read, admin:roles:read, admin:permissions:read, admin:modules:read,
+   admin:audit:read, admin:ai_governance:read, admin:integrations:read,
+   intelligence:read, ai:query
+   ```
+2. ✅ **`AccessProfile` dedicado criado**: `"Cubo de Dados Corporativo - Leitura"`, com exatamente
+   essas 28 permissões, `is_system=False`. Nada de papel `admin` nem usuário humano existente.
+3. ✅ **Usuário de serviço criado**: `cubo-uni@internal.souuni.com`, sem `collaborator_id`
+   (não representa pessoa), papel legado `ai_service` (irrelevante para a permissão de fato — quem
+   manda é o perfil), vinculado só a este perfil.
+4. ✅ **Validado com login real** (não simulado): `POST /api/auth/login` com essa conta devolve um
+   Bearer JWT com as 28 permissões no payload de resposta. Testado contra endpoint de leitura
+   (`GET /api/operations/period` → `200`) e contra endpoint de escrita
+   (`PUT /api/operations/ixc-sync-settings` → `403`, `POST /api/calculation-runs/calculate` →
+   `403`) — a restrição é aplicada pelo backend de verdade, não só pela ausência de botão na tela.
+5. ✅ **Ambiente**: feito e verificado em **desenvolvimento local** primeiro. Replicação para
+   **produção** planejada para acontecer via o mesmo script (ORM direto, mesmo padrão usado para
+   semear os grupos de SLA por tecnologia faltantes em produção), rodado pelo dono do sistema via
+   SSH — ver [deploy.md](deploy.md) para o status exato (pode já estar feito quando você ler isto;
+   `deploy.md` é a fonte da verdade sobre o que já aconteceu em produção, este arquivo descreve o
+   mecanismo).
+6. ⏳ **Entrega do segredo**: por decisão do dono do sistema, o canal é a própria sessão SSH dele
+   na VM de produção — o comando de criação roda lá, a senha gerada aparece só na tela do terminal
+   dele, nunca passa pelo assistente de IA nem fica registrada neste pacote. **Sem gerenciador de
+   segredos formal configurado ainda** (Vault/1Password/etc.) — decisão consciente de usar o canal
+   mais simples disponível agora; revisitar se a equipe de integração central pedir algo mais
+   robusto (rotação automática, auditoria de acesso ao segredo em si).
+7. **Renovação**: automática por design — login expira em 12h, a própria chamada de login seguinte
+   gera um novo Bearer. Não há passo manual de "renovar token".
+8. **Revogação**: `active=false` no usuário `cubo-uni@internal.souuni.com` (via tela de
+   Administração ou diretamente no banco) invalida todo acesso imediatamente — `get_current_user`
+   rejeita usuário inativo mesmo com um Bearer ainda não expirado.
 
-Registrar como pendência explícita (não simular, não contornar): **hoje o provisionamento está
-bloqueado pela ausência de um secrets manager aprovado** (passo 5). O procedimento acima é
-suficiente para executar assim que essa decisão de infraestrutura existir; até lá, qualquer chave
-gerada manualmente deve ficar fora do Git e comunicada por canal seguro (não e-mail, não chat),
-como já orienta [AGENTS.md](../../AGENTS.md).
+## 6. O que este pacote fez e não fez
 
-## 6. O que este pacote NÃO fez
-
-- Não criou usuário, perfil, token ou qualquer credencial real.
-- Não alterou nenhuma rota nem criou endpoint novo.
-- Não imprimiu nem gerou nenhum segredo em nenhum arquivo deste pacote.
+- ✅ Criou o perfil de acesso e o usuário de serviço (local, confirmado; produção conforme
+  `deploy.md`).
+- ✅ Validou leitura permitida / escrita bloqueada com chamadas reais (não simuladas).
+- ❌ Não alterou nenhuma rota de negócio nem criou endpoint de dado novo — só a rota de
+  documentação (`/admin/docs/integracao-uni`) e o schema OpenAPI filtrado que ela serve.
+- ❌ Não imprimiu nem gravou a senha real em nenhum arquivo deste pacote, commit, log ou resposta
+  de chat — só o e-mail da conta (não é segredo) aparece aqui.
+- ⏳ Ainda não configurou um secrets manager formal (decisão consciente, ver item 6 acima).
