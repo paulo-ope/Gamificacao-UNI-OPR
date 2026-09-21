@@ -44,6 +44,27 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Matriz de indicadores por filial (Operação Analítica → aba Matriz) — coluna de cidade
+  desalinhada com os próprios números (2026-09-21, achado do usuário via screenshot real: "a
+  cidade está desalinhada com seus números", confirmado como deslocamento de 1 coluna).**
+  - **Bug real**: o `<thead>` de `operations-sla-matrix-table.tsx` tinha 1 coluna a menos que
+    cada linha do `<tbody>` — o corpo usa DUAS colunas à esquerda dos dados por filial (nome do
+    grupo com `rowSpan={3}` + rótulo da métrica "Realizadas"/"SLA"/"T.M. fech."), mas o
+    cabeçalho só tinha uma ("Indicador"). Como o navegador alinha colunas de `<table>` por
+    posição/índice, não por texto, cada nome de filial no cabeçalho acabava desenhado uma
+    coluna à esquerda do número que na verdade descrevia.
+  - **Corrigido**: adicionada a `<TableHead>` vazia que faltava (alinhada com a coluna do
+    rótulo da métrica) e `totalColumns` ajustado de `regionals.length + 2` para `+ 3` (usado no
+    `colSpan` das linhas de carregamento/vazio).
+  - **Validado ao vivo, não só por leitura de código**: como `docker-compose.yml` builda o
+    frontend em modo produção (`node server.js`, sem hot-reload), precisou rebuild +
+    `docker compose up -d frontend` pra a correção valer. Login de teste, período alargado pra
+    uma janela com dado real, e confirmação por dois caminhos - inspeção do DOM
+    (`thead th`/`tbody td` por índice, contagem e texto batendo célula a célula) e leitura
+    visual da tabela (ex.: UNI - ALTA FLORESTA D'OESTE = 119, UNI - ALVORADA D'OESTE = 159,
+    batendo com o índice de cada coluna).
+  - Commit isolado do resto do WIP desta branch compartilhada (só o arquivo do fix): `85263b5`.
+
 - **Calendário Operacional — colisão de chave na bolinha de status do caso + relatório de
   lacuna de regra de fim de semana (2026-09-21, investigação a partir de um caso real: bolinha
   amarela no dia do Marcelo Menezes Costa/20-set sem nenhuma justificativa correspondente).**
