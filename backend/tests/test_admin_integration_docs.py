@@ -1,8 +1,9 @@
 """Swagger protegido e filtrado de integração externa (`app/modules/admin/integration_docs.py`).
 
 Cobre as duas formas de autenticação aceitas (sessão do workspace e token de integração) e o
-filtro do schema para só os endpoints já documentados em docs/api-operacao-analitica.md (tag
-`operations`).
+filtro do schema para só os endpoints de leitura dos módulos de negócio autorizados (ver
+`INTEGRATION_DOCS_TAGS`) - todos os 9 módulos desde 2026-09-21 (pedido do Cubo de Dados
+Corporativo / Portal Executivo UNI), nunca método de escrita.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.core.security import create_access_token, hash_api_key
+from app.modules.admin.integration_docs import INTEGRATION_DOCS_TAGS
 from app.modules.ai.models import ApiKeyCredential
 from app.models import User, UserPermissionOverride
 from app.modules.ai_governance.models import AiApiToken
@@ -38,11 +40,18 @@ def test_session_bearer_with_permission_returns_filtered_schema(client, db_sessi
     assert response.status_code == 200
     schema = response.json()
     assert schema["paths"]
+    allowed_tags = set(INTEGRATION_DOCS_TAGS)
     for path, methods in schema["paths"].items():
+        # Trava estrutural: só GET pode aparecer, mesmo que a tag do router misture leitura e
+        # escrita (ex.: calculation-runs tem GET de status e POST /calculate).
+        assert set(methods.keys()) == {"get"}, path
         for operation in methods.values():
-            assert "operations" in operation.get("tags", []), path
-    # Endpoint de outro módulo (ex.: Administração) não pode aparecer no schema filtrado.
-    assert not any(path.startswith("/api/admin/") for path in schema["paths"])
+            assert allowed_tags & set(operation.get("tags", [])), path
+            # Toda operação carrega a permissão exigida (extraída por introspecção do código) -
+            # ver docstring de _permission_keys_from_dependant.
+            assert "x-permission" in operation, path
+    # Módulo fora da lista autorizada (ex.: legado /users, OAuth do MCP) não pode aparecer.
+    assert not any(path.startswith("/api/users") for path in schema["paths"])
 
 
 def test_session_bearer_as_query_token_works_for_swagger_ui_fetch(client, db_session, admin_user):
