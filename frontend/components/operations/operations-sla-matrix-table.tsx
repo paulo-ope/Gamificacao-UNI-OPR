@@ -70,7 +70,7 @@ export function OperationsSlaMatrixTable({
   }, [data.rows]);
   const showLoader = isLoading && !data.rows.length;
   const showEmpty = !isLoading && !data.rows.length;
-  const totalColumns = data.regionals.length + 2;
+  const totalColumns = data.regionals.length + 3;
 
   async function handleExport() {
     setExporting(true);
@@ -111,7 +111,13 @@ export function OperationsSlaMatrixTable({
         <Table className="text-xs">
           <TableHeader className="sticky top-0 z-20 bg-slate-100">
             <TableRow className="hover:bg-slate-100">
+              {/* Duas colunas na verdade: `rowSpan={3}` (nome do grupo) + rótulo da métrica
+                  (Realizadas/SLA/T.M. fech.), igual ao corpo da tabela abaixo - sem esta segunda
+                  `<TableHead>` o cabeçalho tinha uma coluna a menos que as linhas do corpo, e cada
+                  nome de filial acabava desenhado uma coluna à esquerda do número que descrevia
+                  (achado real, 2026-09-21: "cidade desalinhada com seus números"). */}
               <TableHead className="sticky left-0 z-30 min-w-64 bg-slate-100">Indicador</TableHead>
+              <TableHead className="min-w-20 bg-slate-100" />
               {data.regionals.map((regional) => (
                 <TableHead key={regional} className="min-w-24 text-center text-[10px]">
                   {regional}
