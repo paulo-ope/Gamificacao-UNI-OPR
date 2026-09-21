@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.openapi.utils import get_openapi
+from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token, permissions_for_user
@@ -103,6 +104,45 @@ produção versus só documentado no código.
 """
 
 
+# Respostas de erro comuns a QUALQUER endpoint desta doc (mesmo esquema de autenticação/
+# autorização em todo o backend, ver core/security.py) - documentadas aqui uma vez, aplicadas em
+# cada operação, em vez de exigir isso em 182 docstrings manuais.
+_COMMON_ERROR_RESPONSES: dict[str, dict] = {
+    "401": {"description": "Sem `Authorization: Bearer` válido, ou token expirado/malformado."},
+    "403": {"description": "Autenticado, mas sem a permissão exigida por este endpoint (ver campo `x-permission` abaixo)."},
+    "422": {"description": "Parâmetro obrigatório ausente ou em formato inválido (ex.: `date_from`/`date_to` fora do padrão `YYYY-MM-DD`)."},
+}
+
+
+def _permission_keys_from_dependant(dependant) -> list[str]:
+    """Extrai, por introspecção real do código (não digitado à mão), toda chave de permissão que
+    `require_permission`/`require_any_permission` exige nesta rota - inclui tanto a exigida no
+    parâmetro da própria função quanto a herdada de `APIRouter(dependencies=[...])` (ex.: todo
+    endpoint de `operations` herda `operations:read` do router, além da permissão específica do
+    endpoint). Caminho certo de errar isso à mão seria esquecer uma das duas fontes."""
+    found: list[str] = []
+    stack = [dependant]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        call = getattr(current, "call", None)
+        code = getattr(call, "__code__", None)
+        closure = getattr(call, "__closure__", None)
+        qualname = getattr(call, "__qualname__", "")
+        if code is not None and closure is not None:
+            freevars = code.co_freevars
+            if qualname.startswith("require_permission.") and "permission" in freevars:
+                found.append(closure[freevars.index("permission")].cell_contents)
+            elif qualname.startswith("require_any_permission.") and "permissions" in freevars:
+                found.extend(closure[freevars.index("permissions")].cell_contents)
+        stack.extend(getattr(current, "dependencies", None) or [])
+    # Ordem estável e sem duplicata (router + rota podem repetir a mesma chave).
+    return sorted(set(found))
+
+
 _UNAUTHORIZED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail=(
@@ -165,6 +205,30 @@ def build_integration_openapi_schema(request: Request) -> dict:
             if tag in _TAG_DESCRIPTIONS
         ],
     )
+    # (path_format, método) -> APIRoute real, para depois voltar da entrada do schema OpenAPI (que
+    # só tem string) até o objeto de rota (que tem o `dependant` de verdade) e extrair a permissão
+    # exigida por introspecção, não por texto digitado à mão. Nesta versão do FastAPI,
+    # `app.routes`/`router.routes` guardam um `_IncludedRouter` por `include_router` (não a
+    # `APIRoute` já com o prefixo aplicado) - a rota de verdade mora em
+    # `_IncludedRouter.original_router.routes`, com o path relativo só ao próprio router. O
+    # prefixo de CADA nível de inclusão (pode haver mais de um - ex.: `admin_router` incluído
+    # dentro de `intelligence_router`, que por sua vez é incluído no app com `/api`) fica em
+    # `_IncludedRouter.include_context.prefix` - por isso a recursão acumula prefixo por nível em
+    # vez de assumir um único prefixo fixo.
+    routes_by_path_method: dict[tuple[str, str], APIRoute] = {}
+
+    def _index_route(route_obj, prefix: str) -> None:
+        if isinstance(route_obj, APIRoute):
+            for method in route_obj.methods or ():
+                routes_by_path_method[(prefix + route_obj.path_format, method.lower())] = route_obj
+        elif hasattr(route_obj, "original_router"):
+            nested_prefix = prefix + getattr(route_obj.include_context, "prefix", "")
+            for nested in route_obj.original_router.routes:
+                _index_route(nested, nested_prefix)
+
+    for route in app.routes:
+        _index_route(route, "")
+
     filtered_paths: dict = {}
     for path, methods in full_schema.get("paths", {}).items():
         kept_methods = {
@@ -177,6 +241,19 @@ def build_integration_openapi_schema(request: Request) -> dict:
             # permissão da conta que consome.
             if method == "get" and allowed_tags & set(operation.get("tags", []))
         }
+        for method, operation in kept_methods.items():
+            route = routes_by_path_method.get((path, method))
+            permissions = _permission_keys_from_dependant(route.dependant) if route else []
+            operation["x-permission"] = permissions or ["nenhuma (só exige estar autenticado)"]
+            note = (
+                f"**Permissão exigida:** `{' ou '.join(permissions)}`"
+                if permissions
+                else "**Permissão exigida:** nenhuma além de estar autenticado."
+            )
+            operation["description"] = f"{operation.get('description', '').strip()}\n\n{note}".strip()
+            responses = operation.setdefault("responses", {})
+            for code, body in _COMMON_ERROR_RESPONSES.items():
+                responses.setdefault(code, body)
         if kept_methods:
             filtered_paths[path] = kept_methods
     full_schema["paths"] = filtered_paths
