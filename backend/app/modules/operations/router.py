@@ -525,6 +525,8 @@ def _filter_params(
 
 @router.get("/period", response_model=OperationPeriod)
 def available_period():
+    """Intervalo de datas permitido para consulta no módulo (ano operacional corrente, de 1º de
+    janeiro até hoje, fuso `America/Porto_Velho`), mais o período padrão sugerido (mês corrente)."""
     allowed_from, allowed_to = operations_period_bounds()
     return {
         "date_from": allowed_to.replace(day=1),
@@ -540,6 +542,9 @@ def ixc_sync_settings(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Configuração atual da sincronização automática do IXC: liga/desliga, intervalo de
+    importação, intervalo da varredura de backlog aberto, janela de retroação em dias, setores
+    IXC escopados e os intervalos/estado da captura de status de login e de sinal ONU."""
     return _sync_settings_response(db)
 
 
@@ -549,6 +554,9 @@ def update_ixc_sync_settings(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Atualiza a configuração de sincronização automática do IXC - todos os campos são
+    opcionais, só os enviados são alterados. Persiste em `app_settings`, recalcula o próximo
+    horário permitido quando o intervalo muda e grava log de auditoria."""
     before = _sync_settings_response(db)
     if payload.enabled is not None:
         upsert_setting(
@@ -629,6 +637,9 @@ def import_period(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Importa um único dia de O.S. do IXC - `date_from` deve ser igual a `date_to`, por
+    segurança (a interface divide o período em chamadas diárias). Erros da API do IXC viram 502,
+    limite de consulta vira 422, conflito de execução concorrente vira 409."""
     validate_operations_period(payload.date_from, payload.date_to)
     if payload.date_from != payload.date_to:
         raise HTTPException(
@@ -684,6 +695,8 @@ def start_backfill_import(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Cria e dispara em background um job de reimportação histórica do IXC, para um intervalo de
+    datas maior do que `/imports` aceita por chamada."""
     validate_operations_period(payload.date_from, payload.date_to)
     job = backfill.create_backfill_job(
         db,
@@ -703,6 +716,7 @@ def backfill_import_status(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Status/progresso de um job de importação histórica do IXC (404 se não existir)."""
     job = db.get(backfill.OperationBackfillJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Importacao historica nao encontrada.")
@@ -729,6 +743,8 @@ def start_open_backlog_import(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Cria e dispara em background uma varredura do backlog ainda aberto no IXC, sem limite pela
+    janela de data do backfill comum."""
     try:
         job = backfill.create_open_backlog_job(
             db,
@@ -748,6 +764,7 @@ def open_backlog_import_status(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Status dessa varredura de backlog aberto do IXC (404 se não existir)."""
     job = db.get(backfill.OperationOpenBacklogJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Varredura de backlog aberto não encontrada.")
@@ -764,6 +781,10 @@ def filters(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Opções disponíveis para cada dimensão de filtro do módulo, já restritas ao escopo pedido.
+
+    `scope="period"` exige `date_from`/`date_to`; `scope="in_progress"` os torna opcionais (usa
+    o período operacional padrão quando ausentes)."""
     if scope == "period":
         if date_from is None or date_to is None:
             raise HTTPException(status_code=422, detail="Informe a data inicial e a data final para consultar este período.")
@@ -791,6 +812,8 @@ def overview(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Indicadores executivos do período: abertas, concluídas, em aberto, fora do prazo, taxa de
+    SLA, médias diárias de abertura/conclusão e tempos médios de fechamento/deslocamento/ciclo."""
     _validated_period(date_from, date_to)
     return queries.overview(
         db,
@@ -922,6 +945,9 @@ def overview_visible_filters(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Filtros que a barra da Visão Geral deve exibir, a partir do catálogo fixo de filtros
+    disponíveis (dimensões da Operação Analítica + do SGP Suporte). Sem configuração salva,
+    devolve o padrão: os cinco filtros de O.S."""
     return _overview_visible_filters_response(db, user)
 
 
@@ -957,6 +983,9 @@ def overview_regional_matrix(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Quadro por regional com abertas, backlog, backlog vencido e concluídas; a coluna de taxa
+    de SLA só aparece preenchida se o usuário tiver `operations:view_sla` - sem a permissão, ela
+    volta em branco em vez da tabela inteira ser negada."""
     _validated_period(date_from, date_to)
     # A coluna de SLA é a única do quadro que exige permissão própria (`operations:view_sla`,
     # igual às rotas /sla*). Em vez de negar a tabela inteira, quem não tem a permissão recebe as
@@ -1006,6 +1035,8 @@ def capacity_summary(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Resumo de capacidade por filial no período, comparado contra a meta cadastrada em
+    `/branch-capacity`."""
     _validated_period(date_from, date_to)
     items = queries.branch_capacity_summary(db, date_from, date_to, user, **selected_filters)
     return {"date_from": date_from, "date_to": date_to, "items": items}
@@ -1016,6 +1047,7 @@ def list_branch_capacity(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
+    """Lista a capacidade cadastrada por filial."""
     return queries.branch_capacities(db)
 
 
@@ -1026,6 +1058,7 @@ def update_branch_capacity(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
+    """Atualiza (ou cria) a capacidade cadastrada de uma filial."""
     item = queries.upsert_branch_capacity(db, regional, payload, user.id)
     db.commit()
     db.refresh(item)
@@ -1041,6 +1074,8 @@ def overview_work_schedule(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Classifica as conclusões do período dentro/fora da jornada configurada por modelo de
+    equipe, opcionalmente restrito a `model_ids`."""
     _validated_period(date_from, date_to)
     if len(model_ids) > MAX_FILTER_VALUES_PER_FIELD:
         raise HTTPException(status_code=422, detail="Selecione menos modelos de equipe.")
@@ -1063,6 +1098,8 @@ def overview_trends(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Série temporal de abertas/concluídas/taxa de SLA no período, agrupada por dia, semana ou
+    mês (`granularity`)."""
     _validated_period(date_from, date_to)
     return services.overview_trends(
         db,
@@ -1082,6 +1119,7 @@ def overview_backlog_trend(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Série diária do estoque de backlog ao longo do período."""
     _validated_period(date_from, date_to)
     return queries.backlog_daily_trend(db, date_from, date_to, user, **selected_filters)
 
@@ -1094,6 +1132,8 @@ def overview_volume_alerts(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Compara o backlog atual por assunto contra a média recente (z-score) e classifica em
+    `normal`/`attention`/`critical`/`insufficient`."""
     _validated_period(date_from, date_to)
     return services.subject_volume_alerts(db, date_to, user, **selected_filters)
 
@@ -1111,6 +1151,9 @@ def overview_control_tower(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Visão executiva "torre de controle": resumo e itens do nível pedido (`level`), com drill
+    hierárquico via `parent_*` - cada nível exige que todo o caminho pai já tenha sido
+    informado."""
     _validated_period(date_from, date_to)
     required_parents = {
         "regional": (parent_subject,),
@@ -1148,6 +1191,8 @@ def openings_analytics(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Analítico de aberturas no período: série temporal, heatmap (dia da semana × hora),
+    ranking, aging e insights, agrupado por `granularity`."""
     _validated_period(date_from, date_to)
     return queries.openings_analytics(db, date_from, date_to, user, granularity=granularity, **selected_filters)
 
@@ -1157,6 +1202,8 @@ def operations_data_freshness(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Horário da última importação/sincronização bem-sucedida por fonte, usado pelo indicador de
+    frescor de dado da tela."""
     del user
     return queries.data_freshness(db)
 
@@ -1170,6 +1217,15 @@ def sla(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Indicadores de SLA agrupados por `group_by` (tipo de O.S., assunto, diagnóstico,
+    departamento, setor ou grupo de tecnologia): concluídas, no prazo/fora do prazo, taxa de SLA,
+    faixas de tempo até o fechamento e média de horas de fechamento.
+
+    `sla_rate` vem `null` (não 0%) quando não há nenhuma O.S. com prazo medível no grupo/período/
+    filtro - nunca tratar como SLA ruim. Com `group_by="technology_group"`, o grupo "Outros"
+    (assuntos sem grupo de tecnologia ativo) aparece na lista mas não deve ser somado ao SLA
+    geral por tecnologia, e esse SLA geral não é a média simples dos `sla_rate` dos grupos -
+    precisa ser ponderado pelas bases (`on_time`/`out_of_time`) de cada um."""
     _validated_period(date_from, date_to)
     return queries.sla_breakdown(
         db,
@@ -1189,6 +1245,12 @@ def sla_matrix(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Matriz de SLA: uma linha por grupo de SLA ativo (cadastro em `/sla-groups`, ex.: Ativação/
+    Suporte x Fibra Urbana/Fibra Rural/Rádio) × uma coluna por regional agrupada. Cada célula traz
+    `completed`, `sla_rate` e `average_closing_hours`; a coluna `total` por linha é RECALCULADA a
+    partir da soma das contagens de todas as filiais, nunca a média dos percentuais de cada
+    filial. Grupo sem nenhuma O.S. no período/filtro aparece igual na resposta, com todas as
+    células zeradas."""
     _validated_period(date_from, date_to)
     return queries.sla_group_matrix(db, date_from, date_to, user, **selected_filters)
 
@@ -1204,6 +1266,9 @@ def sla_hierarchy(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Mesmas métricas de `/sla`, em forma de hierarquia navegável (tipo de O.S. → assunto →
+    diagnóstico) com uma linha de total. Drill exige o pai do nível acima ao filtrar um nível
+    mais fundo (ex.: `parent_subject` exige `parent_os_type`)."""
     _validated_period(date_from, date_to)
     if parent_subject and not parent_os_type:
         raise HTTPException(status_code=422, detail="Informe o tipo geral ao filtrar um assunto específico.")
@@ -1227,6 +1292,8 @@ def sla_collaborators(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """SLA por colaborador: concluídas, taxa de SLA, dias ativos, média diária, tempo de execução
+    mínimo/médio/máximo, contagem por tipo de O.S. e aderência a agendamento."""
     _validated_period(date_from, date_to)
     return queries.collaborator_sla(db, date_from, date_to, user, **selected_filters)
 
@@ -1246,6 +1313,8 @@ def warranty(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Analítico de retorno em garantia: taxa por origem, ranking regional e por tipo de origem,
+    conforme `period_basis` (abertura ou fechamento) e `denominator` escolhidos."""
     _validated_period(date_from, date_to)
     return queries.warranty_analytics(
         db,
@@ -1268,6 +1337,9 @@ def calendar_view(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Grade mensal de desempenho diário/mensal por regional ou colaborador (`group_by`),
+    classificada contra as faixas do modelo de equipe, já considerando escala alternada (12x36)
+    importada do módulo de Gestão."""
     _validated_period(date_from, date_to)
     return services.monthly_calendar(
         db, date_to, user, group_by=group_by, shift_info_by_identity=_shift_info_by_identity(db), **selected_filters
@@ -1286,6 +1358,7 @@ def calendar_orders(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Página de O.S. de um dia/regional/responsável específico do calendário mensal."""
     _validated_period(day, day)
     return services.calendar_order_page(
         db,
@@ -1313,6 +1386,8 @@ def calendar_day_detail(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Detalhe de um dia do calendário mensal (métricas + página de O.S.). `reference_regional`
+    desambigua um colaborador que atendeu mais de uma regional no mesmo dia."""
     _validated_period(day, day)
     return services.calendar_day_detail(
         db,
@@ -1342,6 +1417,7 @@ def calendar_week_detail(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Mesmo detalhe de `/calendar/day-detail`, agregado por semana (`date_from`/`date_to`)."""
     _validated_period(date_from, date_to)
     return services.calendar_week_detail(
         db,
@@ -1372,6 +1448,7 @@ def calendar_month_detail(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Mesmo detalhe de `/calendar/day-detail`, agregado pelo mês inteiro."""
     _validated_period(date_from, date_to)
     return services.calendar_month_detail(
         db,
@@ -1394,6 +1471,8 @@ def in_progress(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Quebra do backlog atual (O.S. com `closed_at` nulo) por `group_by`, com quantidade e
+    percentual. Sem filtro de período - é sempre o estoque em aberto agora."""
     return queries.in_progress_breakdown(
         db,
         user,
@@ -1408,6 +1487,8 @@ def in_progress_sla_risk(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Backlog atual quebrado por risco de SLA (`breached`/`critical`/`attention`/`on_track`/
+    `no_target`)."""
     return queries.in_progress_sla_risk(db, user, **selected_filters)
 
 
@@ -1422,6 +1503,8 @@ def in_progress_orders(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Página paginada/ordenável do backlog atual, com filtro opcional por faixa de risco de SLA
+    (`sla_risk`)."""
     return queries.in_progress_order_page(
         db,
         user,
@@ -1738,6 +1821,16 @@ def orders(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
+    """Página de O.S. do período, ordenável e paginável, com busca geográfica opcional
+    (`near_latitude`/`near_longitude`/`radius_km`, os três juntos ou nenhum).
+
+    Sujeita ao gate de campos/filtros por perfil (`ai_governance`): `fields` e `date_field` são
+    validados contra o que o perfil pode ver. `response_mode="summary"` recorta a resposta para
+    um conjunto enxuto de campos (pensado para triagem por agentes de IA); sem esse parâmetro (ou
+    com `fields` explícito), a resposta traz todos os campos autorizados, incluindo os campos
+    calculados (`service_address`, `address_is_structured`, `service_description`,
+    `technical_report`). Toda chamada é registrada em auditoria de acesso a dado
+    (`record_ai_access`)."""
     started_at = perf_counter()
     _validated_period(date_from, date_to)
     policy = enforce_ai_endpoint_for_user(db, user, "operations.orders.list", "api")
@@ -1806,6 +1899,8 @@ def opening_orders(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Página de O.S. abertas no período, com filtros adicionais de faixa de aging
+    (`aging_bucket`), dia da semana (`weekday`) e hora (`hour`) de abertura."""
     _validated_period(date_from, date_to)
     return queries.opening_order_page(
         db,
@@ -1835,6 +1930,10 @@ def order_detail(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
+    """Detalhe de uma O.S. por id de origem (IXC). Sujeita ao mesmo gate de campos por perfil de
+    `GET /orders`, mas usa a capacidade `detail_available` (não `selectable`), que também
+    autoriza campos que só existem no detalhe (ex.: `raw_payload` redigido). 404 se a O.S. não
+    for encontrada."""
     order = queries.order_by_source_id(db, user, source_order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Ordem de serviço não encontrada.")
@@ -1930,6 +2029,8 @@ def list_saved_filters(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Lista as visões salvas pessoais do usuário, mais as globais se ele tiver
+    `operations:views:read_global`."""
     condition = OperationSavedFilter.user_id == user.id
     if "operations:views:read_global" in _saved_filter_permissions(user):
         condition = condition | (OperationSavedFilter.visibility == "global")
@@ -1948,6 +2049,9 @@ def get_team_configuration(
     user: User = Depends(get_current_user),
     scope: Literal["full", "own"] = Depends(_team_scope_for_user),
 ):
+    """Catálogo completo de modelos de equipe + lista de colaboradores. No escopo `own`
+    (supervisor), só os colaboradores supervisionados pelo usuário aparecem na lista; o catálogo
+    de modelos continua visível por inteiro."""
     configuration = queries.team_configuration(db, user)
     if scope == "full":
         return configuration
@@ -1967,6 +2071,7 @@ def update_responsible_directory(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
+    """Troca a fonte do diretório de responsáveis usado pelo módulo."""
     setting = db.get(OperationResponsibleDirectorySetting, 1)
     if setting is None:
         setting = OperationResponsibleDirectorySetting(id=1)
@@ -1983,6 +2088,9 @@ def sync_ixc_collaborator_directory(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:sync_ixc")),
 ):
+    """Importa `funcionarios` do IXC para o cadastro interno de colaboradores
+    (`OperationIxcCollaborator`), marcando como inativo quem saiu de cena na base de origem.
+    Sincronização manual e paginada, sem corte de quantidade."""
     if "operations:manage_team_models" not in permissions_for_user(user):
         raise HTTPException(status_code=403, detail="Seu perfil não permite administrar o cadastro de colaboradores.")
     try:
@@ -2027,7 +2135,9 @@ def export_configuration_json(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
-    """Portable, ID-free configuration snapshot for the operational module."""
+    """Exporta um snapshot portátil (sem IDs de banco) de modelos de equipe e membros; inclui
+    mapeamentos de assunto e visões salvas somente se o usuário também tiver, respectivamente,
+    `operations:manage_subjects` e `operations:manage_filters`."""
     permissions = permissions_for_user(user)
     models = list(db.scalars(select(OperationTeamModel).order_by(OperationTeamModel.name.asc())))
     assignments = list(db.scalars(select(OperationResponsibleAssignment).order_by(OperationResponsibleAssignment.updated_at.desc())))
@@ -2095,7 +2205,10 @@ def import_configuration_json(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
-    """Merges a portable configuration snapshot without relying on database IDs."""
+    """Importa (faz merge pelo NOME, não pelo ID) um snapshot de configuração: cria ou atualiza
+    modelos de equipe, membros, mapeamentos de assunto e visões salvas existentes. Mapeamentos de
+    assunto exigem `operations:manage_subjects`; visões salvas exigem `operations:manage_filters`
+    (visão global no arquivo exige também `operations:views:create_global`)."""
     permissions = permissions_for_user(user)
     if payload.subject_mappings and "operations:manage_subjects" not in permissions:
         raise HTTPException(status_code=403, detail="Seu perfil não permite importar classificações de assuntos.")
@@ -2231,6 +2344,8 @@ def create_team_model(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
+    """Cria um modelo de equipe (faixas abaixo/mediano/bom/meta, cores e regras de meta por tipo
+    de período). Nome único (comparação sem diferenciar maiúsculas/minúsculas)."""
     values = payload.model_dump()
     target_rules = values.pop("target_rules", [])
     values["name"] = _normalize_team_model_name(values["name"])
@@ -2255,6 +2370,8 @@ def update_team_model(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
+    """Atualização parcial de um modelo de equipe; revalida a ordem crescente das faixas
+    resultantes (abaixo < mediano < bom < meta)."""
     item = _team_model_or_404(db, model_id)
     before = snapshot(item)
     changes = payload.model_dump(exclude_unset=True)
@@ -2288,6 +2405,7 @@ def list_subject_type_mappings(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Lista o mapeamento assunto de O.S. → tipo de O.S."""
     return queries.subject_type_mappings(db, user)
 
 
@@ -2297,6 +2415,8 @@ def update_subject_type_mappings(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_subjects")),
 ):
+    """Atualiza em lote o mapeamento assunto → tipo de O.S. (vários assuntos para um mesmo tipo)
+    e já reflete o novo tipo nas O.S. existentes com aquele assunto."""
     os_type = " ".join(payload.os_type.strip().split())
     subjects = sorted({" ".join(subject.strip().split()) for subject in payload.subjects if subject.strip()})
     if not os_type or not subjects:
@@ -2333,6 +2453,7 @@ def delete_team_model(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_team_models")),
 ):
+    """Exclui um modelo de equipe. Bloqueado (409) se houver colaborador vinculado ao modelo."""
     item = _team_model_or_404(db, model_id)
     linked_members = int(
         db.scalar(
@@ -2387,6 +2508,8 @@ def _sla_groups_out(db: Session, groups: list[OperationSlaGroup]) -> list[Operat
 
 @router.get("/sla-groups", response_model=list[OperationSlaGroupOut], dependencies=[Depends(require_permission("operations:view_sla"))])
 def list_sla_groups(db: Session = Depends(get_db)):
+    """Lista os grupos de SLA cadastrados (ex.: Ativação/Suporte x Fibra Urbana/Fibra Rural/
+    Rádio), com os assuntos de O.S. atribuídos a cada um."""
     groups = list(db.scalars(select(OperationSlaGroup).order_by(OperationSlaGroup.card_label.asc(), OperationSlaGroup.display_order.asc())))
     return _sla_groups_out(db, groups)
 
@@ -2432,6 +2555,8 @@ def create_sla_group(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_sla_groups")),
 ):
+    """Cria um grupo de SLA (`card_label`, `name`). Nome único (comparação sem diferenciar
+    maiúsculas/minúsculas)."""
     name = " ".join(payload.name.strip().split())
     card_label = " ".join(payload.card_label.strip().split())
     # `func.lower(...)` dos dois lados (nunca `.casefold()` em Python contra `func.lower()` em
@@ -2459,6 +2584,7 @@ def update_sla_group(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_sla_groups")),
 ):
+    """Atualiza `card_label`/`name`/`display_order`/`active` de um grupo de SLA."""
     item = _sla_group_or_404(db, group_id)
     before = snapshot(item)
     changes = payload.model_dump(exclude_unset=True)
@@ -2488,6 +2614,7 @@ def delete_sla_group(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_sla_groups")),
 ):
+    """Exclui um grupo de SLA e os vínculos de assunto associados."""
     item = _sla_group_or_404(db, group_id)
     before = snapshot(item)
     # Exclusão explícita, não só `ondelete="CASCADE"` da FK - achado real dos testes: SQLite não
@@ -2507,6 +2634,8 @@ def replace_sla_group_subjects(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission("operations:manage_sla_groups")),
 ):
+    """Substitui a lista inteira de assuntos atribuídos a um grupo de SLA - um assunto já
+    atribuído a outro grupo é movido, nunca duplicado."""
     item = _sla_group_or_404(db, group_id)
     subjects = sorted({" ".join(subject.strip().split()) for subject in payload.subjects if subject.strip()})
     db.execute(delete(OperationSlaSubjectGroup).where(OperationSlaSubjectGroup.group_id == item.id))
@@ -2534,6 +2663,10 @@ def assign_team_member(
     user: User = Depends(get_current_user),
     scope: Literal["full", "own"] = Depends(_team_scope_for_user),
 ):
+    """Reatribui o modelo de equipe de um colaborador. No escopo `own` (supervisor), só se o
+    colaborador for supervisionado pelo usuário (404, não 403, se não for - evita confirmar
+    existência de nome fora da própria equipe). Também espelha a mudança no módulo de Gestão e
+    liga escala alternada automática quando o novo modelo é 12x36."""
     responsible_name = _normalize_responsible_name(payload.responsible_name)
     regional = payload.regional.strip()
     if scope == "own" and _responsible_identity(responsible_name) not in _supervised_identities(db, user):
@@ -2595,6 +2728,8 @@ def create_saved_filter(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Cria uma visão salva de filtros; nome único por escopo (pessoal do usuário ou global).
+    Visão global exige também `operations:views:create_global`."""
     name = payload.name.strip()
     if payload.visibility == "global":
         _ensure_global_saved_filter_permission(user, "create")
@@ -2618,6 +2753,9 @@ def update_saved_filter(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Atualiza nome/filtros/visibilidade de uma visão salva. Dono da visão pessoal precisa de
+    `operations:manage_filters`; visão global exige `operations:views:update_global` (ou
+    `create_global` ao promover uma pessoal para global)."""
     item = _saved_filter_or_404_scoped(db, saved_filter_id, user)
     if not _can_manage_saved_filter(user, item, "update"):
         raise HTTPException(status_code=403, detail="Seu perfil não permite atualizar esta visão.")
@@ -2646,6 +2784,7 @@ def delete_saved_filter(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Exclui uma visão salva, com a mesma checagem de posse/permissão de atualização."""
     item = _saved_filter_or_404_scoped(db, saved_filter_id, user)
     if not _can_manage_saved_filter(user, item, "delete"):
         raise HTTPException(status_code=403, detail="Seu perfil não permite excluir esta visão.")
