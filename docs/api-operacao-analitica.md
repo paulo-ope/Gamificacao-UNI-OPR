@@ -160,6 +160,14 @@ mesmo quando chamadas pela própria tela web (origem `"api"`), e registra o aces
 - `GET /sla/collaborators` — `operations:view_sla`. SLA por colaborador: concluídas, taxa de
   SLA, dias ativos, média diária, tempo de execução mínimo/médio/máximo, contagem por tipo de
   O.S. e aderência a agendamento.
+- `GET /sla/matrix` — `operations:view_sla`. Sem `group_by` (fixo: uma linha por grupo de SLA
+  ativo × uma coluna por REGIONAL agrupada). Consome os grupos cadastrados em `/sla-groups`
+  (gerenciáveis pela tela de Configuração — "SLA por tecnologia", ex.: Ativação/Suporte x Fibra
+  Urbana/Fibra Rural/Rádio, mas totalmente configurável). Cada célula traz `completed`,
+  `sla_rate` e `average_closing_hours`; a coluna extra `total` por linha é o total RECALCULADO a
+  partir da soma das contagens de todas as filiais — nunca a média dos percentuais de cada
+  filial (mesma convenção de `/overview/regional-matrix`). Grupo sem nenhuma O.S. no
+  período/filtro aparece igual na resposta, com todas as células zeradas.
 
 ### Garantia
 - `GET /warranty` — `operations:view_warranty`. Query `period_basis` (`opened`/`closed`),

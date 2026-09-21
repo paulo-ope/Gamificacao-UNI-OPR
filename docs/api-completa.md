@@ -237,8 +237,8 @@ Exigem `support:read`.
 
 | Tool | Propósito | Parâmetros principais | Retorno |
 |---|---|---|---|
-| `opr_ixc_brief` | Resumo do estado atual do Atendimento IXC — indicador ANTECIPADO de incidente (não substitui a O.S.). Primeira chamada recomendada de qualquer análise sobre esse indicador. | `regional` (opcional; omitido = operação inteira). | `{generated_at, period, scope, status (critico/dentro_da_curva/em_melhora/sem_dado), ticket_count, deviation_pct, top_driver, reach, momentum, bursts}`. `deviation_pct`/`bursts` `null` quando não há amostra suficiente. |
-| `opr_ixc_signals` | Lista as regionais com algum sinal disparado agora (severidade crítica, tendência sustentada, pico intra-dia ativo) — regional "na curva" não aparece. | Sem parâmetros. | `{"signals": [{scope, severity, deviation_pct, top_driver, momentum_trend, consecutive_days_above_expected, burst_active, reason_codes}]}`, ordenado por severidade e magnitude. `reason_codes` são códigos estáveis (ex.: `HIGH_DEVIATION`), sem texto narrativo. |
+| `opr_ixc_brief` | Resumo do estado atual do Atendimento IXC — indicador ANTECIPADO de incidente (não substitui a O.S.). Primeira chamada recomendada de qualquer análise sobre esse indicador. Consolidado em 2026-09-17 (correção da auditoria): não exige mais chamadas separadas pra drivers/conversão em O.S. | `regional` (opcional; omitido = operação inteira). | `{generated_at, context_key, period, scope, status, severity_basis (historical\|peers\|insufficient_data), ticket_count, expected, deviation_pct, peers_deviation_pct, effective_deviation_pct, tickets_per_1000_contracts, top_driver, drivers (top 5), geographic_concentration, reach, momentum, bursts, os_conversion, reason_codes, drill}`. `reason_codes` é lista de OBJETOS com os números que sustentam cada código, não strings soltas. `context_key` é decodificável em `GET /support/ixc/analytics/context/{context_key}(/tickets)`. |
+| `opr_ixc_signals` | Lista as regionais com algum sinal disparado agora (severidade crítica/em melhora — por histórico OU por pares —, tendência sustentada, pico intra-dia ativo) — regional "na curva" não aparece. | Sem parâmetros. | `{"signals": [{context_key, scope, severity, severity_basis, ticket_count, expected, deviation_pct, effective_deviation_pct, tickets_per_1000_contracts, top_driver, drivers, geographic_concentration, reach, momentum_trend, consecutive_days_above_expected, burst_active, reason_codes, drill}]}`, ordenado por severidade e magnitude. |
 
 #### Cockpit / UNI Intelligence
 
@@ -544,6 +544,14 @@ mesmo quando chamadas pela própria tela web (origem `"api"`), e registra o aces
 - `GET /sla/collaborators` — `operations:view_sla`. SLA por colaborador: concluídas, taxa de
   SLA, dias ativos, média diária, tempo de execução mínimo/médio/máximo, contagem por tipo de
   O.S. e aderência a agendamento.
+- `GET /sla/matrix` — `operations:view_sla`. Sem `group_by` (fixo: uma linha por grupo de SLA
+  ativo × uma coluna por REGIONAL agrupada). Consome os grupos cadastrados em `/sla-groups`
+  (gerenciáveis pela tela de Configuração — "SLA por tecnologia", ex.: Ativação/Suporte x Fibra
+  Urbana/Fibra Rural/Rádio, mas totalmente configurável). Cada célula traz `completed`,
+  `sla_rate` e `average_closing_hours`; a coluna extra `total` por linha é o total RECALCULADO a
+  partir da soma das contagens de todas as filiais — nunca a média dos percentuais de cada
+  filial (mesma convenção de `/overview/regional-matrix`). Grupo sem nenhuma O.S. no
+  período/filtro aparece igual na resposta, com todas as células zeradas.
 
 #### Garantia
 - `GET /warranty` — `operations:view_warranty`. Query `period_basis` (`opened`/`closed`),

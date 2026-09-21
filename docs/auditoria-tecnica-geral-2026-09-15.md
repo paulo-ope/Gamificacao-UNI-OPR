@@ -126,7 +126,7 @@ nenhuma regressão nova.
 
 ---
 
-### [P0] Governança de campo da IA não tem efeito na chamada padrão de `opr_order_details`/`opr_search_orders`
+### [P0] Governança de campo da IA não tem efeito na chamada padrão de `opr_order_details`/`opr_search_orders` — ✅ CORRIGIDO EM 2026-09-17
 **Tipo:** Segurança · API/MCP
 **Local:** `backend/app/modules/mcp_connector/server.py:769,809-812` (tool
 `opr_order_details`); `ai/router.py:164-174,227-233`
@@ -151,9 +151,37 @@ própria e não pode ser o default).
 **Esforço:** Médio. **Risco da alteração:** Médio (pode quebrar clientes MCP que
 dependem do payload completo hoje — avisar/versionar). **Confiança:** Confirmado.
 
+**Status:** Corrigido em 2026-09-17 — o mesmo problema existia em 3 pontos, não só
+nas duas tools MCP citadas: `operations/router.py::_resolve_order_output_fields`
+(listagem/detalhe REST de O.S.) e `ai/router.py::resolve_ai_search_output_fields`/
+`resolve_ai_order_details_output_fields` (usadas tanto por `/api/ai/*` quanto pelas
+tools MCP `opr_search_orders`/`opr_order_details`) devolviam `fields=None` ("sem
+filtro") sempre que `response_mode="full"` (o padrão) era usado sem `fields`
+explícito — desligar um campo em `AiFieldPermission` não tinha efeito nenhum no
+caminho mais comum. Correção: novo método `EffectivePolicy.field_allowed_or_uncatalogued`
+em `ai_governance/policy.py` — como `field_allowed`, mas trata campo não catalogado
+como *permitido* (não negado), porque o modo "full" precisa reconstruir a lista
+inteira de campos do schema sem derrubar campos calculados em Python que nunca
+tiveram entrada no catálogo (ex. `distance_km`, `sla_risk` em
+`ai/queries.py::AI_SEARCH_ITEM_FIELDS`). As três funções agora sempre recortam por
+essa política, mesmo em modo "full". Bug encontrado ao escrever o teste de
+regressão: usar só `schema.model_fields` (sem `model_computed_fields`) fazia campos
+`@computed_field` como `service_description` sumirem do modo "full" mesmo
+autorizados — corrigido usando `set(schema.model_fields) | set(schema.model_computed_fields)`.
+Achado colateral fora do escopo desta correção, documentado e não corrigido: `pop`
+está em `AI_SEARCH_GOVERNED_FIELDS` (`ai/queries.py`) mas nunca foi adicionado a
+`OperationOrderOut` (`operations/schemas.py`), então `field_registry.py` já
+catalogava `pop` como não-selecionável mesmo para um perfil sem restrição nenhuma —
+isso não importava enquanto o modo "full" ignorava a política; agora que passa a
+valer, `pop` some do modo "full" de `opr_search_orders` também. É um gap
+pré-existente do catálogo, não uma regressão desta correção — registrado como
+assert explícito no teste novo. 7 testes novos em
+`tests/test_field_governance_full_mode.py` (REST list/detail + camada de IA pura +
+guarda de regressão do campo calculado); suíte ampla sem nenhuma regressão nova.
+
 ---
 
-### [P0] Fechamento manual de ciclo (`/calculation-runs/calculate`) não tem lock nem trava de duplicata — já causou incidente real em produção
+### [P0] Fechamento manual de ciclo (`/calculation-runs/calculate`) não tem lock nem trava de duplicata — já causou incidente real em produção — ✅ CORRIGIDO EM 2026-09-17
 **Tipo:** Bug · Dados
 **Local:** `backend/app/api/routes/calculation_runs.py:93-123` →
 `app/services/calculation.py:158-244` (`calculate_scores`); poda de duplicatas em
@@ -174,6 +202,64 @@ padrão com chamada também no caminho manual.
 **Esforço:** Médio. **Risco da alteração:** Médio (mexe no caminho de cálculo
 financeiro — testar bem). **Confiança:** Confirmado (incidente já documentado no
 próprio código).
+
+**Status:** Corrigido em 2026-09-17. **Precisão sobre a evidência original:** os
+"1.106 fechamentos duplicados/225 mil linhas" citados acima (comentário de
+`prune_superseded_drafts`) são acúmulo de **recálculos sequenciais legítimos** (o
+sincronizador do IXC roda `recalculate_current_period` a cada ~20 min e nada nunca
+apagava os rascunhos anteriores) - não são, por si só, prova de uma condição de
+corrida. Isso é FATO verificado no código (`calculation.py`, docstring de
+`prune_superseded_drafts`), não hipótese; e é um problema DIFERENTE (mitigado pela
+poda de rascunhos, `DRAFT_RETENTION_ENABLED_SETTING`, desligada por padrão), que
+esta correção não precisou tocar. O que esta correção resolve é a ausência REAL de
+proteção contra duas execuções **sobrepostas no tempo** do mesmo ciclo - confirmada
+por leitura de código (`calculate_scores` sempre faz `db.add(CalculationRun(...))`
+sem checar nada preexistente, nenhuma linha do model tem `UniqueConstraint`) e
+**reproduzida com threads reais** (`tests/test_calculation_run_lock.py::test_thread_real_*`,
+duas conexões SQLite genuinamente independentes por arquivo, não `:memory:`/
+`StaticPool`). A superfície de risco é concreta neste sistema: o processo roda um
+único `uvicorn` sem `--workers`, mas os handlers síncronos de rota rodam no
+threadpool do FastAPI enquanto o sincronizador do IXC roda em paralelo
+(`asyncio`/`run_in_threadpool`, `ixc_scheduler.py:308-309`) - um clique manual em
+"recalcular" pode literalmente sobrepor o ciclo automático de 20 em 20 minutos.
+**Correção:** nova tabela `calculation_run_locks` (model `CalculationRunLock`,
+migration `20260917_0104`) com `UniqueConstraint(lock_key)` - a garantia atômica é
+do BANCO, não de uma variável em memória do processo, então funciona entre
+threads/processos/workers diferentes. `calculation_closure.py::acquire_calculation_lock`
+insere e COMMITA a trava imediatamente (transação própria e curta, visível a
+qualquer outra conexão antes do cálculo pesado começar); um `IntegrityError` vira
+`HTTPException(409)` "já existe um cálculo em andamento" - rejeição imediata, sem
+bloquear a requisição esperando. `release_calculation_lock` sempre roda em
+`finally` (via `calculation_cycle_lock`, context manager), numa transação própria,
+mesmo que o cálculo tenha lançado exceção - garantindo que uma falha no meio não
+deixa a trava presa (achado G da checagem de concorrência). Adicionalmente, uma
+trava mais velha que 30 minutos é "roubada" antes de qualquer tentativa de
+aquisição - cobre o caso de um processo derrubado (kill -9/OOM) no meio do cálculo,
+que nunca chegaria a chamar `release_calculation_lock`. Aplicado nos DOIS pontos de
+entrada que chamam `calculate_scores`: `calculation_runs.py::calculate` (manual) e
+`calculation.py::recalculate_current_period` (automático, sincronizador do IXC e
+correção de Tipo Geral) - o identificador do ciclo é sempre
+(`reference_month`, `reference_year`, `regional` normalizado por
+`normalize_regional_grouped`, com `__ALL__` no lugar de `NULL` porque `NULL` não é
+igual a `NULL` em `UNIQUE` nem no Postgres nem no SQLite). Ciclos diferentes
+(mês/ano/regional diferentes) continuam rodando em paralelo sem qualquer bloqueio
+entre si; um recálculo sequencial do MESMO ciclo (uma chamada só depois da outra
+terminar) continua permitido, sem mudança de comportamento - é a criação de
+múltiplos rascunhos ao longo do tempo, um problema à parte, não o que esta
+correção ataca. A regra já existente de período fechado/pago
+(`ensure_period_not_closed`) não foi alterada e continua vencendo com sua própria
+mensagem, verificado em teste dedicado. **9 testes novos**
+(`tests/test_calculation_run_lock.py`): trava por chave (ciclos diferentes nunca
+colidem); trava fresca bloqueia uma segunda tentativa; trava mais velha que 30 min
+é roubada; exceção no meio do cálculo libera a trava; recálculo sequencial do mesmo
+ciclo continua permitido; a trava não interfere na regra de período pago; e dois
+testes com **threads reais** (arquivo SQLite dedicado, duas conexões
+independentes, `threading.Barrier` forçando disputa simultânea) provando que só um
+lado vence tanto na aquisição isolada da trava quanto no fluxo completo
+(`calculation_cycle_lock` + `calculate_scores` + commit) - confirmando ao final que
+só um `CalculationRun` foi criado pela dupla concorrente. Suíte ampla (19 arquivos,
+218 testes, 179 passed, ao redor de cálculo/pagamento/portal/gamificação) sem
+nenhum `FAILED` novo, só o `ERROR` de teardown intermitente já conhecido (39).
 
 ---
 
@@ -523,9 +609,10 @@ Confirmado sem consumidor (verificado com grep dos dois lados antes de listar):
 1. ~~Unificar permissões de Administração (`admin:users:*` ↔ `users:manage`).~~ ✅ Corrigido em 2026-09-17.
 2. ~~Escopo regional em `/operations/network/*` (e `/api/ai/infra/*`, achado durante a
    correção).~~ ✅ Corrigido em 2026-09-17.
-3. Aplicar governança de campo também no modo `"full"` de
-   `opr_order_details`/`opr_search_orders`.
-4. Lock/dedup na criação de rascunho de cálculo (`/calculation-runs/calculate`).
+3. ~~Aplicar governança de campo também no modo `"full"` de
+   `opr_order_details`/`opr_search_orders`.~~ ✅ Corrigido em 2026-09-17.
+4. ~~Lock/dedup na criação de rascunho de cálculo (`/calculation-runs/calculate`).~~
+   ✅ Corrigido em 2026-09-17.
 
 **Fase 2 — Quick wins (ver seção 3)**
 Os 8 itens listados, agrupados por módulo, em paralelo — nenhum depende de outro.
