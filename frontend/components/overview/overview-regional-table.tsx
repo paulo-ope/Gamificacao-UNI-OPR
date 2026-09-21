@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { OverviewBlock, type OverviewBlockState } from "@/components/overview/overview-block";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatInteger, formatPercent } from "@/lib/format";
+import { formatHours, formatInteger, formatPercent } from "@/lib/format";
 import { slaSystemTone } from "@/lib/operations-sla";
 import type {
   OperationBranchCapacitySummaryItem,
@@ -16,7 +16,7 @@ import type {
 import { toneTextClass } from "@/lib/tones";
 import { cn } from "@/lib/utils";
 
-type SortKey = "regional" | "opened" | "backlog" | "completed" | "sla_rate" | "capacity";
+type SortKey = "regional" | "opened" | "backlog" | "completed" | "sla_rate" | "average_closing_hours" | "capacity";
 
 const COLUMNS: Array<{
   key: SortKey;
@@ -29,6 +29,7 @@ const COLUMNS: Array<{
   { key: "backlog", label: "Em aberto", scope: "estoque de agora, qualquer equipe", align: "right" },
   { key: "completed", label: "Finalizadas", scope: "com os filtros aplicados", align: "right" },
   { key: "sla_rate", label: "SLA", scope: "com os filtros aplicados", align: "right" },
+  { key: "average_closing_hours", label: "TMA", scope: "com os filtros aplicados", align: "right" },
   { key: "capacity", label: "Meta da filial", scope: "finalizadas × faixa cadastrada", align: "left" },
 ];
 
@@ -161,6 +162,7 @@ export function OverviewRegionalTable({
                 >
                   {formatPercent(item.sla_rate)}
                 </TableCell>
+                <TableCell className="text-right tabular-nums">{formatHours(item.average_closing_hours)}</TableCell>
                 {hasAnyCapacity ? (
                   <TableCell>
                     <CapacityBadge item={capacityByRegional.get(item.regional)} />
@@ -189,6 +191,7 @@ export function OverviewRegionalTable({
                 <TableCell className="text-right tabular-nums">{formatInteger(data.total.backlog)}</TableCell>
                 <TableCell className="text-right tabular-nums">{formatInteger(data.total.completed)}</TableCell>
                 <TableCell className="text-right tabular-nums">{formatPercent(data.total.sla_rate)}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatHours(data.total.average_closing_hours)}</TableCell>
                 {hasAnyCapacity ? <TableCell /> : null}
                 {onDrillRegional ? <TableCell /> : null}
               </TableRow>
@@ -200,8 +203,8 @@ export function OverviewRegionalTable({
         <strong className="font-semibold text-slate-600">Por que as colunas não somam entre si:</strong>{" "}
         &quot;Abertas no período&quot; é a demanda que entrou e ignora modelo de equipe e colaborador (na abertura a
         O.S. ainda não tem executor). &quot;Em aberto&quot; é o estoque de agora e ignora o período selecionado.
-        &quot;Finalizadas&quot; e &quot;SLA&quot; respeitam todos os filtros, inclusive modelo de equipe e
-        colaborador.
+        &quot;Finalizadas&quot;, &quot;SLA&quot; e &quot;TMA&quot; respeitam todos os filtros, inclusive modelo de
+        equipe e colaborador.
       </p>
     </OverviewBlock>
   );

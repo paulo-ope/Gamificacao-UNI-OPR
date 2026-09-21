@@ -876,6 +876,7 @@ export type OperationRegionalMatrixItem = {
   completed_on_time: number | null;
   completed_out_of_time: number | null;
   sla_rate: number | null;
+  average_closing_hours: number | null;
 };
 
 // Cada coluna do quadro obedece a um escopo de filtro diferente de propósito - as flags abaixo

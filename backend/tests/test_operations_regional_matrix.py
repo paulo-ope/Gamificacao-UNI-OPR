@@ -265,14 +265,53 @@ def test_rows_group_sao_felipe_and_rolim_de_moura_together(client, db_session):
     assert items_by_regional["UNI - SAO FRANCISCO DO GUAPORE"]["completed"] == 1
 
 
+def test_average_closing_hours_is_the_tma_of_completed_orders(client, db_session):
+    """TMA (tempo médio de atendimento) segue o mesmo escopo de "Finalizadas"/SLA: respeita todos
+    os filtros e é a média de `elapsed_hours` das O.S. finalizadas no período, não do estoque."""
+    _, date_to = current_month_bounds()
+    db_session.add_all(
+        [
+            _closed("rm-tma-1", date_to, sla_status="on_time", elapsed_hours=2.0),
+            _closed("rm-tma-2", date_to, sla_status="on_time", elapsed_hours=6.0),
+            # Em aberto não entra na média - não tem `elapsed_hours` (ainda não fechou).
+            _open("rm-tma-open", date_to, sla_status="on_time"),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        ENDPOINT, params={"date_from": date_to.isoformat(), "date_to": date_to.isoformat()}
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    row = _row(payload, "UNI - NORTE")
+    assert row["average_closing_hours"] == 4.0
+    assert payload["total"]["average_closing_hours"] == 4.0
+
+
+def test_average_closing_hours_is_none_without_completed_orders(client, db_session):
+    _, date_to = current_month_bounds()
+    db_session.add(_open("rm-tma-none", date_to, sla_status="on_time"))
+    db_session.flush()
+
+    response = client.get(
+        ENDPOINT, params={"date_from": date_to.isoformat(), "date_to": date_to.isoformat()}
+    )
+
+    assert response.status_code == 200
+    row = _row(response.json(), "UNI - NORTE")
+    assert row["average_closing_hours"] is None
+
+
 def test_sla_columns_are_blank_without_view_sla_permission(client, db_session):
     """A tela é compartilhada entre perfis: sem `operations:view_sla` o quadro continua vindo com
     os volumes, só as colunas de prazo ficam em branco."""
     _, date_to = current_month_bounds()
     db_session.add_all(
         [
-            _closed("rm-perm-1", date_to, sla_status="on_time"),
-            _closed("rm-perm-2", date_to, sla_status="out_of_time"),
+            _closed("rm-perm-1", date_to, sla_status="on_time", elapsed_hours=2.0),
+            _closed("rm-perm-2", date_to, sla_status="out_of_time", elapsed_hours=4.0),
         ]
     )
     db_session.flush()
@@ -311,11 +350,14 @@ def test_sla_columns_are_blank_without_view_sla_permission(client, db_session):
     assert row["opened"] == 2
     assert row["sla_rate"] is None
     assert row["completed_on_time"] is None
+    assert row["average_closing_hours"] is None
     assert payload["total"]["sla_rate"] is None
+    assert payload["total"]["average_closing_hours"] is None
 
     assert with_sla.status_code == 200
     assert with_sla.json()["sla_available"] is True
     assert _row(with_sla.json(), "UNI - NORTE")["sla_rate"] == 50.0
+    assert _row(with_sla.json(), "UNI - NORTE")["average_closing_hours"] == 3.0
 
 
 def test_regional_scope_of_the_user_restricts_the_table(client, db_session):

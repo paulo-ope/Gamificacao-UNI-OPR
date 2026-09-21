@@ -67,6 +67,42 @@ def test_regionals_filter_restricts_the_sum(client, db_session):
     assert response.json()["points"] == [{"snapshot_date": day.isoformat(), "backlog": 10}]
 
 
+def test_regional_groups_filter_expands_to_granular_branches(client, db_session):
+    """"Regional" (grupo) é o único filtro regional exibido na Visão Geral - o snapshot guarda a
+    filial granular, então "UNI - ROLIM DE MOURA" precisa somar também São Felipe D'Oeste."""
+    day = date(2026, 8, 20)
+    db_session.add_all(
+        [
+            _snapshot(day, "UNI - ROLIM DE MOURA", "Suporte Externo Fibra", 10),
+            _snapshot(day, "UNI - SAO FELIPE DOESTE", "Suporte Externo Fibra", 3),
+            _snapshot(day, "UNI - JI PARANA", "Suporte Externo Fibra", 7),
+        ]
+    )
+    db_session.flush()
+
+    response = client.get(
+        ENDPOINT,
+        params={"date_from": day.isoformat(), "date_to": day.isoformat(), "regional_groups": "UNI - ROLIM DE MOURA"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["points"] == [{"snapshot_date": day.isoformat(), "backlog": 13}]
+
+
+def test_unknown_regional_group_zeroes_the_result(client, db_session):
+    day = date(2026, 8, 20)
+    db_session.add(_snapshot(day, "UNI - ROLIM DE MOURA", "Suporte Externo Fibra", 10))
+    db_session.flush()
+
+    response = client.get(
+        ENDPOINT,
+        params={"date_from": day.isoformat(), "date_to": day.isoformat(), "regional_groups": "REGIONAL INEXISTENTE"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["points"] == []
+
+
 def test_sectors_filter_restricts_the_sum(client, db_session):
     day = date(2026, 8, 20)
     db_session.add_all(
