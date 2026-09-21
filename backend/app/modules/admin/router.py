@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -15,6 +17,10 @@ from app.models import (
     UserAccessProfile,
     WorkspaceModuleSetting,
     WorkspaceModuleVisibility,
+)
+from app.modules.admin.integration_docs import (
+    build_integration_openapi_schema,
+    require_integration_docs_access,
 )
 from app.modules.admin.user_permissions_service import (
     overview as user_permission_overview,
@@ -873,3 +879,25 @@ def delete_user_permission_override(
     db.commit()
     db.refresh(target)
     return _user_permission_overview_out(db, target)
+
+
+@router.get("/docs/integracao-uni", include_in_schema=False)
+def integration_docs_ui(
+    request: Request,
+    token: str | None = None,
+    _: User = Depends(require_integration_docs_access),
+) -> HTMLResponse:
+    """Swagger só com os endpoints documentados para integração externa (ver
+    `integration_docs.py`). Não aparece no `/docs` padrão nem no schema completo."""
+    openapi_url = f"{request.scope.get('root_path', '')}{request.url.path}/openapi.json"
+    if token:
+        openapi_url = f"{openapi_url}?token={token}"
+    return get_swagger_ui_html(openapi_url=openapi_url, title="UNI Workspace - Integração Externa")
+
+
+@router.get("/docs/integracao-uni/openapi.json", include_in_schema=False)
+def integration_docs_openapi(
+    request: Request,
+    _: User = Depends(require_integration_docs_access),
+) -> JSONResponse:
+    return JSONResponse(build_integration_openapi_schema(request))

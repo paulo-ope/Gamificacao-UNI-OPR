@@ -177,8 +177,8 @@ def test_login_timeseries_counts_only_the_scoped_regional_via_join(db_session):
     _login(db_session, 1, "a", ROLIM)
     _login(db_session, 2, "b", JI_PARANA)
     since = datetime(2026, 9, 17, 12, 0, 0, tzinfo=timezone.utc)
-    db_session.add(OperationLoginStatusSnapshot(login_id=1, login="a", online="N", captured_at=since))
-    db_session.add(OperationLoginStatusSnapshot(login_id=2, login="b", online="N", captured_at=since))
+    db_session.add(OperationLoginStatusSnapshot(login_id=1, online="N", captured_at=since))
+    db_session.add(OperationLoginStatusSnapshot(login_id=2, online="N", captured_at=since))
     db_session.commit()
 
     scoped = login_timeseries(db_session, user=_user(managed_regionals=[ROLIM]), since=since, until=since + timedelta(minutes=1))

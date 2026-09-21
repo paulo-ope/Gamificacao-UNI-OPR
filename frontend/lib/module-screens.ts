@@ -59,6 +59,7 @@ function withPermissions(
 const OPERATION_SCREEN_PERMISSIONS: ScreenPermissionMap = {
   openings: ["operations:view_openings"],
   sla: ["operations:view_sla"],
+  matrix: ["operations:view_sla"],
   garantias: ["operations:view_warranty"],
   calendar: ["operations:view_calendar"],
   progress: ["operations:view_backlog"],

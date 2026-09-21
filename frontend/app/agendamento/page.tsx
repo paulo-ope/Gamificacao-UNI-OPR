@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { commonDateRangePresets, DateRangePicker } from "@/components/ui/date-range-picker";
@@ -121,6 +121,14 @@ function AgendamentoPageContent({ user }: { user: AuthUser }) {
   const [period, setPeriod] = useState<{ date_from: string; date_to: string }>(defaultPeriod);
   const [filters, setFilters] = useState<SecondaryFilters>(DEFAULT_SECONDARY_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<SecondaryFilters>(DEFAULT_SECONDARY_FILTERS);
+  // Filtro automático (pedido do usuário 2026-09-18, igual à Visão Geral) - ver mesmo padrão em
+  // `app/operacao/page.tsx`.
+  const applyFiltersTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (applyFiltersTimeout.current) clearTimeout(applyFiltersTimeout.current);
+    };
+  }, []);
   const [options, setOptions] = useState<SchedulingFilterOptions>(EMPTY_OPTIONS);
   const [dashboard, setDashboard] = useState<SchedulingDashboard | null>(null);
   const [todayDashboard, setTodayDashboard] = useState<SchedulingDashboard | null>(null);
@@ -388,15 +396,36 @@ function AgendamentoPageContent({ user }: { user: AuthUser }) {
           savedFilterVisibility={savedFilterVisibility}
           canManageFilters={canManageFilters}
           canManageGlobalViews={canManageGlobalViews}
-          onChange={(next) => setFilters({
-            filial_ids: next.filial_ids,
-            setor_ids: next.setor_ids,
-            assunto_ids: next.assunto_ids,
-            operator_ids: next.operator_ids,
-            technician_ids: next.technician_ids,
-            count_mode: next.count_mode,
-          })}
-          onApply={applyFilters}
+          onChange={(next) => {
+            const merged: SecondaryFilters = {
+              filial_ids: next.filial_ids,
+              setor_ids: next.setor_ids,
+              assunto_ids: next.assunto_ids,
+              operator_ids: next.operator_ids,
+              technician_ids: next.technician_ids,
+              count_mode: next.count_mode,
+            };
+            setFilters(merged);
+            // Auto-aplica depois de uma pausa (debounce), mesmo padrão da Visão Geral/Operação
+            // Analítica - "Aplicar" continua funcionando pra quem prefere confirmar na hora.
+            // Usa `merged` (valor local, já com a mudança) em vez de chamar `applyFilters()` (que
+            // lê `filters` do estado por closure) - `setFilters` só commita no próximo render, e
+            // por o timeout disparar depois, `applyFilters()` capturaria o valor ANTERIOR ao
+            // clique, um "off-by-one" real que só aparece com o debounce.
+            if (applyFiltersTimeout.current) clearTimeout(applyFiltersTimeout.current);
+            applyFiltersTimeout.current = setTimeout(() => {
+              applyFiltersTimeout.current = null;
+              void loadMonthData(month, merged);
+              void loadPeriodData(period, merged);
+            }, 500);
+          }}
+          onApply={() => {
+            if (applyFiltersTimeout.current) {
+              clearTimeout(applyFiltersTimeout.current);
+              applyFiltersTimeout.current = null;
+            }
+            applyFilters();
+          }}
           onSelectSavedFilter={selectSavedFilter}
           onNameChange={setFilterName}
           onVisibilityChange={setSavedFilterVisibility}

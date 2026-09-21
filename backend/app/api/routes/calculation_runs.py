@@ -24,7 +24,7 @@ from app.services.calculation import (
     serialize_run,
 )
 from app.services.audit_log import record_audit_log
-from app.services.calculation_closure import serialize_run_status, update_run_status
+from app.services.calculation_closure import calculation_cycle_lock, serialize_run_status, update_run_status
 from app.services.leadership_bonus import calculate_and_store_leadership_bonus
 
 router = APIRouter(prefix="/calculation-runs", tags=["calculation-runs"])
@@ -99,29 +99,35 @@ def calculate(
 ):
     if payload.reference_month is None or payload.reference_year is None:
         raise HTTPException(status_code=422, detail="Informe explicitamente o mes e o ano de referencia antes de recalcular.")
-    try:
-        with performance_step("calculation-runs.calculate", "calculate_scores"):
-            run = calculate_scores(
-                db,
-                reference_month=payload.reference_month,
-                reference_year=payload.reference_year,
-                regional=payload.regional,
-                point_value=payload.point_value,
-                executed_by=user.id,
-                allow_paid_revision=payload.create_revision,
-                execution_note=payload.execution_note,
-            )
-        with performance_step("calculation-runs.calculate", "leadership_bonus"):
-            calculate_and_store_leadership_bonus(db, run)
-        with performance_step("calculation-runs.calculate", "audit_log"):
-            record_audit_log(db, user, "run", "calculation_runs", run.id, None, payload)
-        with performance_step("calculation-runs.calculate", "commit"):
-            db.commit()
-        with performance_step("calculation-runs.calculate", "serialize"):
-            return serialize_run(run, db)
-    except Exception:
-        db.rollback()
-        raise
+    # Trava contra duas execuções do mesmo ciclo (mês/ano/regional) em paralelo - P0-4 da
+    # auditoria de 2026-09-15 (ver calculation_closure.py::calculation_cycle_lock). Precisa
+    # envolver o bloco inteiro, não só `calculate_scores`: o recálculo automático
+    # (`recalculate_current_period`) concorrente também passa pela mesma trava, e só é seguro
+    # liberá-la depois que ESTE cálculo estiver de fato commitado.
+    with calculation_cycle_lock(db, payload.reference_month, payload.reference_year, payload.regional, user=user):
+        try:
+            with performance_step("calculation-runs.calculate", "calculate_scores"):
+                run = calculate_scores(
+                    db,
+                    reference_month=payload.reference_month,
+                    reference_year=payload.reference_year,
+                    regional=payload.regional,
+                    point_value=payload.point_value,
+                    executed_by=user.id,
+                    allow_paid_revision=payload.create_revision,
+                    execution_note=payload.execution_note,
+                )
+            with performance_step("calculation-runs.calculate", "leadership_bonus"):
+                calculate_and_store_leadership_bonus(db, run)
+            with performance_step("calculation-runs.calculate", "audit_log"):
+                record_audit_log(db, user, "run", "calculation_runs", run.id, None, payload)
+            with performance_step("calculation-runs.calculate", "commit"):
+                db.commit()
+            with performance_step("calculation-runs.calculate", "serialize"):
+                return serialize_run(run, db)
+        except Exception:
+            db.rollback()
+            raise
 
 
 @router.get("/latest", response_model=CalculationRunOut | None)

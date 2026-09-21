@@ -577,11 +577,30 @@ class SupportIxcAnalyticsDriverItem(BaseModel):
     contribution_pct: float
 
 
+class SupportIxcGeographicConcentrationEntry(BaseModel):
+    value: str
+    count: int
+    share_pct: float
+
+
+class SupportIxcGeographicConcentration(BaseModel):
+    """Item 5 da correção pedida (2026-09-17) - `share_pct` dos dois níveis é sobre o TOTAL DO
+    ESCOPO, não em cascata cidade->bairro. Lembrete: `city`/`neighborhood` vêm do CADASTRO DO
+    CLIENTE, não são localização exata de falha de rede."""
+
+    city: SupportIxcGeographicConcentrationEntry | None = None
+    neighborhood: SupportIxcGeographicConcentrationEntry | None = None
+
+
 class SupportIxcAnalyticsContextOut(BaseModel):
     """Fase 2 do plano de evolução analítica (2026-09-14): resumo executivo de um escopo
     qualquer (regional/cidade/bairro + motivo/setor), no modelo de período livre unificado
     (`date_from`/`date_to` + janela anterior de mesmo tamanho) - ver `ixc_ticket_context.py`."""
 
+    # Identificador determinístico do agrupamento (item 3, 2026-09-17) - os MESMOS filtros sempre
+    # geram a MESMA chave; decodificável via `GET /ixc/analytics/context/{context_key}` e
+    # `GET /ixc/analytics/context/{context_key}/tickets`, sem reconstruir os parâmetros na mão.
+    context_key: str
     regional: str | None = None
     city: str | None = None
     neighborhood: str | None = None
@@ -592,15 +611,35 @@ class SupportIxcAnalyticsContextOut(BaseModel):
     tickets_per_1000_contracts: float | None = None
     previous_ticket_count: int = 0
     deviation_pct: float | None = None
+    # Desvio vs. a MÉDIA DOS PARES (demais itens do mesmo nível) - só preenchido quando
+    # `deviation_pct` (histórico próprio) não tinha amostra suficiente (item 1, 2026-09-17: mesmo
+    # fallback que a Visão Geral clássica já tinha, `ixc_ticket_overview.severity_basis`, portado
+    # pro contrato de contexto único que faltava essa proteção).
+    peers_deviation_pct: float | None = None
+    # Média bruta dos pares (mesma unidade de `tickets_per_1000_contracts` quando disponível,
+    # senão `ticket_count`) - o número por trás de `peers_deviation_pct`.
+    peers_avg: float | None = None
+    # Qual dos dois campos acima decidiu `severity` - nunca `None` quando um dos dois existe.
+    effective_deviation_pct: float | None = None
+    # "Esperado" numérico que sustenta `effective_deviation_pct` - `previous_ticket_count` quando
+    # `severity_basis="historical"`, `peers_avg` quando `"peers"`, `None` quando `"insufficient_data"`.
+    expected: float | None = None
     severity: str
+    # "historical" (padrão) | "peers" (fallback) | "insufficient_data" (nem um nem outro - NUNCA
+    # confundir com "dentro_da_curva": ausência de amostra não é normalidade).
+    severity_basis: str
     next_dimension: str | None = None
     reach: SupportIxcAnalyticsReach
     top_driver: SupportIxcAnalyticsDriverItem | None = None
+    # Lista completa de motivos decompostos (não só o principal) - item 4 da correção pedida
+    # (2026-09-17): "não quero apenas saber qual é o maior motivo".
+    drivers: list[SupportIxcAnalyticsDriverItem] = Field(default_factory=list)
+    geographic_concentration: SupportIxcGeographicConcentration | None = None
 
 
 class SupportIxcAnalyticsPriorityItem(BaseModel):
     """Um item do ranking do PRÓXIMO NÍVEL (`dimension`) - mesma forma de
-    `SupportIxcTicketBreakdownItem`, acrescida de `dimension`/`severity`."""
+    `SupportIxcTicketBreakdownItem`, acrescida de `dimension`/`severity`/`severity_basis`."""
 
     key: str
     label: str
@@ -611,7 +650,11 @@ class SupportIxcAnalyticsPriorityItem(BaseModel):
     coverage_pct: float | None = None
     previous_ticket_count: int = 0
     deviation_pct: float | None = None
+    peers_deviation_pct: float | None = None
     severity: str
+    severity_basis: str
+    # Chave do agrupamento que resultaria de drillar NESTE item (item 3, 2026-09-17).
+    context_key: str
 
 
 class SupportOpaAttendanceDetailData(BaseModel):

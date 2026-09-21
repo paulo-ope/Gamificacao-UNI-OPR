@@ -1,11 +1,11 @@
 "use client";
 
 import { Filter, Wifi, X } from "lucide-react";
-import { useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FilterChip } from "@/components/ui/filter-chip";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { useCollapsibleFilters } from "@/hooks/use-collapsible-filters";
 import type { SupportIxcTicketFilterOption, SupportIxcTicketFilterOptions, SupportIxcTicketThemeOption } from "@/lib/types";
 
 // Atalho pedido pelo usuário (2026-09-17): "filtrar só por assuntos de problema de internet" -
@@ -35,7 +35,7 @@ export function IxcTicketFiltersBar({
   sectorIds: string[];
   onChange: (next: { subjectIds: string[]; sectorIds: string[] }) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const { expanded, toggle } = useCollapsibleFilters();
   const activeCount = (subjectIds.length ? 1 : 0) + (sectorIds.length ? 1 : 0);
   const themes = options?.themes ?? [];
   const themeIds = themeIdsCoveredBySubjects(themes, subjectIds);
@@ -63,9 +63,11 @@ export function IxcTicketFiltersBar({
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+    // Sticky - pedido do usuário em 2026-09-18: o botão de filtros não pode sumir ao rolar a
+    // tela (mesmo padrão em todas as barras de filtro do ecossistema).
+    <div className="sticky top-[var(--workspace-header-height)] z-40 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => setExpanded((current) => !current)}>
+        <Button type="button" variant="outline" size="sm" onClick={toggle}>
           <Filter className="h-3.5 w-3.5" /> Filtros{activeCount ? ` (${activeCount})` : ""}
         </Button>
         {themes.length ? (
@@ -79,12 +81,8 @@ export function IxcTicketFiltersBar({
             <Wifi className="h-3.5 w-3.5" /> Internet/Conectividade
           </Button>
         ) : null}
-        {subjectIds.length ? (
-          <Badge className="border-slate-200 bg-slate-100 text-[11px] text-slate-700">Motivo: {subjectIds.length}</Badge>
-        ) : null}
-        {sectorIds.length ? (
-          <Badge className="border-slate-200 bg-slate-100 text-[11px] text-slate-700">Setor: {sectorIds.length}</Badge>
-        ) : null}
+        {subjectIds.length ? <FilterChip label={`Motivo: ${subjectIds.length}`} /> : null}
+        {sectorIds.length ? <FilterChip label={`Setor: ${sectorIds.length}`} /> : null}
         {activeCount ? (
           <Button
             type="button"

@@ -2439,7 +2439,25 @@ export type SupportIxcAnalyticsDriverItem = {
   contribution_pct: number;
 };
 
+// "historical" (padrão) | "peers" (fallback pra regional/cidade pequena) | "insufficient_data"
+// (nem um nem outro - NUNCA confundir com "dentro_da_curva") - correção pedida em 2026-09-17.
+export type SupportIxcSeverityBasis = "historical" | "peers" | "insufficient_data";
+
+export type SupportIxcGeographicConcentrationEntry = {
+  value: string;
+  count: number;
+  share_pct: number;
+};
+
+export type SupportIxcGeographicConcentration = {
+  city: SupportIxcGeographicConcentrationEntry | null;
+  neighborhood: SupportIxcGeographicConcentrationEntry | null;
+};
+
 export type SupportIxcAnalyticsContext = {
+  // Identificador determinístico do agrupamento (2026-09-17) - os mesmos filtros sempre geram a
+  // mesma chave; usável em `GET /ixc/analytics/context/{context_key}(/tickets)`.
+  context_key: string;
   regional: string | null;
   city: string | null;
   neighborhood: string | null;
@@ -2450,10 +2468,17 @@ export type SupportIxcAnalyticsContext = {
   tickets_per_1000_contracts: number | null;
   previous_ticket_count: number;
   deviation_pct: number | null;
+  peers_deviation_pct: number | null;
+  peers_avg: number | null;
+  effective_deviation_pct: number | null;
+  expected: number | null;
   severity: SupportIxcTicketSeverity;
+  severity_basis: SupportIxcSeverityBasis;
   next_dimension: SupportIxcAnalyticsDimension | null;
   reach: SupportIxcAnalyticsReach;
   top_driver: SupportIxcAnalyticsDriverItem | null;
+  drivers: SupportIxcAnalyticsDriverItem[];
+  geographic_concentration: SupportIxcGeographicConcentration | null;
 };
 
 export type SupportIxcAnalyticsPriorityItem = {
@@ -2466,5 +2491,33 @@ export type SupportIxcAnalyticsPriorityItem = {
   coverage_pct: number | null;
   previous_ticket_count: number;
   deviation_pct: number | null;
+  peers_deviation_pct: number | null;
   severity: SupportIxcTicketSeverity;
+  severity_basis: SupportIxcSeverityBasis;
+  context_key: string;
+};
+
+export type SupportIxcTicketBurstWindow = {
+  window: string;
+  observed: number;
+  expected: number | null;
+  upper_limit: number | null;
+  ratio: number | null;
+  active: boolean;
+  basis: string;
+};
+
+export type SupportIxcTicketMomentum = {
+  recent_avg: number;
+  previous_avg: number;
+  change_pct: number | null;
+  consecutive_days_above_expected: number;
+  trend: "accelerating" | "stable" | "decelerating" | "sem_dado";
+};
+
+export type SupportIxcTicketOsConversion = {
+  sample: number;
+  median_lead_minutes: number | null;
+  classification: "alto" | "moderado" | "baixo" | "sem_dado";
+  conversions: Record<string, number | null>;
 };

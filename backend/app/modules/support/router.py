@@ -1901,23 +1901,27 @@ def ixc_analytics_os_conversion(
     )
 
 
-@router.get("/ixc/tickets", response_model=SupportIxcTicketPage)
-def ixc_tickets_list(
-    regional: str | None = None,
-    city: str | None = None,
-    neighborhood: str | None = None,
-    subject_id: str | None = None,
-    sector_id: str | None = None,
-    date_from: date | None = None,
-    date_to: date | None = None,
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Nó final do drill-down: lista os atendimentos individuais (protocolo, status, motivo) de um
-    recorte regional/cidade/bairro/motivo - "clica no bairro, mostra os motivos E os protocolos"
-    (pedido explícito do usuário, ver docs/STATUS.md 2026-09-11)."""
+def _none_if_unmapped(value: str) -> str | None:
+    return None if value == ixc_ticket_taxonomy.NAO_MAPEADO else value
+
+
+def _ixc_tickets_page(
+    db: Session,
+    *,
+    regional: str | None,
+    city: str | None,
+    neighborhood: str | None,
+    subject_id: str | None,
+    sector_id: str | None,
+    date_from: date | None,
+    date_to: date | None,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    """Monta a página de protocolos com taxonomia/risco - extraído pra ser reaproveitado tanto por
+    `/ixc/tickets` (filtros soltos) quanto por `/ixc/analytics/context/{context_key}/tickets`
+    (filtros decodificados da chave, item 3 da correção de 2026-09-17) sem duplicar a lógica de
+    enriquecimento."""
     total, rows = ixc_ticket_queries.list_tickets(
         db,
         regional=regional,
@@ -1938,9 +1942,6 @@ def ixc_tickets_list(
         if subject_id not in taxonomy_cache:
             taxonomy_cache[subject_id] = ixc_ticket_taxonomy.resolve_theme_for_subject(db, subject_id)
         return taxonomy_cache[subject_id]
-
-    def _none_if_unmapped(value: str) -> str | None:
-        return None if value == ixc_ticket_taxonomy.NAO_MAPEADO else value
 
     items = []
     for row in rows:
@@ -1974,3 +1975,58 @@ def ixc_tickets_list(
             )
         )
     return {"total": total, "items": items}
+
+
+@router.get("/ixc/tickets", response_model=SupportIxcTicketPage)
+def ixc_tickets_list(
+    regional: str | None = None,
+    city: str | None = None,
+    neighborhood: str | None = None,
+    subject_id: str | None = None,
+    sector_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Nó final do drill-down: lista os atendimentos individuais (protocolo, status, motivo) de um
+    recorte regional/cidade/bairro/motivo - "clica no bairro, mostra os motivos E os protocolos"
+    (pedido explícito do usuário, ver docs/STATUS.md 2026-09-11)."""
+    return _ixc_tickets_page(
+        db, regional=regional, city=city, neighborhood=neighborhood, subject_id=subject_id, sector_id=sector_id,
+        date_from=date_from, date_to=date_to, limit=limit, offset=offset,
+    )
+
+
+@router.get("/ixc/analytics/context/{context_key}", response_model=SupportIxcAnalyticsContextOut)
+def ixc_analytics_context_by_key(
+    context_key: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Decodifica `context_key` (item 3 da correção, 2026-09-17) e devolve o MESMO contexto que
+    o gerou - permite recarregar/compartilhar um agrupamento sem reconstruir os filtros na mão."""
+    try:
+        filters = ixc_ticket_context.parse_context_key(context_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ixc_ticket_context.resolve_context(db, **filters)
+
+
+@router.get("/ixc/analytics/context/{context_key}/tickets", response_model=SupportIxcTicketPage)
+def ixc_analytics_context_tickets(
+    context_key: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Protocolos EXATOS que compõem o agrupamento de `context_key` - fecha o fluxo "sinal ->
+    context_key -> drill -> exatamente os tickets usados naquele contexto" (item 3, 2026-09-17)."""
+    try:
+        filters = ixc_ticket_context.parse_context_key(context_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _ixc_tickets_page(db, **filters, limit=limit, offset=offset)

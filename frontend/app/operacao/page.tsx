@@ -17,6 +17,7 @@ import { OperationsOpeningsAnalytics } from "@/components/operations/operations-
 import { OperationsOrderDetailDialog } from "@/components/operations/operations-order-detail-dialog";
 import { OperationsOverviewCharts } from "@/components/operations/operations-overview-charts";
 import { OperationsSlaHierarchyTable } from "@/components/operations/operations-sla-hierarchy-table";
+import { OperationsSlaMatrixTable } from "@/components/operations/operations-sla-matrix-table";
 import { OperationsTeamConfiguration } from "@/components/operations/operations-team-configuration";
 import { OperationsWarrantyAnalytics } from "@/components/operations/operations-warranty-analytics";
 import { OperationsWorkScheduleOverview } from "@/components/operations/operations-work-schedule-overview";
@@ -57,6 +58,7 @@ import {
   type OperationSavedFilter,
   type OperationSavedFilterValues,
   type OperationSlaHierarchy,
+  type OperationSlaMatrix,
   type OperationSlaRiskItem,
   type OperationTrendGranularity,
   type OperationTrendSeries,
@@ -244,6 +246,12 @@ const EMPTY_SLA_HIERARCHY: OperationSlaHierarchy = {
     after_72h_rate: null,
     average_closing_hours: null,
   },
+};
+const EMPTY_SLA_MATRIX: OperationSlaMatrix = {
+  date_from: "",
+  date_to: "",
+  regionals: [],
+  rows: [],
 };
 const CLOSED_OPERATION_STATUSES = new Set(["finalizada", "cancelada"]);
 function filtersForOpenScope(current: OperationFilterState) {
@@ -631,6 +639,8 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
     useState<OperationSlaHierarchy>(EMPTY_SLA_HIERARCHY);
   const [collaboratorSla, setCollaboratorSla] =
     useState<OperationCollaboratorSla>(EMPTY_COLLABORATOR_SLA);
+  const [slaMatrix, setSlaMatrix] =
+    useState<OperationSlaMatrix>(EMPTY_SLA_MATRIX);
   const [warrantyAnalytics, setWarrantyAnalytics] = useState<OperationWarrantyAnalytics>(
     EMPTY_WARRANTY_ANALYTICS,
   );
@@ -709,6 +719,16 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
   // Retained for the explicit option refresh flow; ordinary edits never trigger it.
   const filterOptionsRequest = useRef(0);
   const dashboardRequest = useRef(0);
+  // Filtro automático (pedido do usuário 2026-09-18, igual à Visão Geral): `updateFilter` agenda
+  // a aplicação depois de uma pausa, em vez de esperar o clique em "Filtrar". Esse ref guarda o
+  // timeout pendente pra sempre cancelar o anterior - sem isso, trocar 2 campos rápido disparava
+  // 2 consultas em sequência em vez de uma só com os dois valores já combinados.
+  const applyFiltersTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (applyFiltersTimeout.current) clearTimeout(applyFiltersTimeout.current);
+    };
+  }, []);
 
   const canRead = Boolean(user?.permissions.includes("operations:read"));
   const canManageTeamModels = Boolean(
@@ -719,6 +739,9 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
   );
   const canManageSubjects = Boolean(
     user?.permissions.includes("operations:manage_subjects"),
+  );
+  const canManageSlaGroups = Boolean(
+    user?.permissions.includes("operations:manage_sla_groups"),
   );
   const canSyncIxc = Boolean(user?.permissions.includes("operations:sync_ixc"));
   const canViewOpenings = Boolean(user?.permissions.includes("operations:view_openings"));
@@ -738,14 +761,15 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
       "overview",
       ...(canViewOpenings ? ["openings" as const] : []),
       ...(canViewSla ? ["sla" as const] : []),
+      ...(canViewSla ? ["matrix" as const] : []),
       ...(canViewWarranty ? ["garantias" as const] : []),
       ...(canViewCalendar ? ["calendar" as const] : []),
       ...(canViewBacklog ? ["progress" as const] : []),
       ...(canViewOrderDetails ? ["details" as const] : []),
       "network",
-      ...(canManageTeamModels || canManageOwnTeamMembers || canManageSubjects || canSyncIxc ? ["teams" as const] : []),
+      ...(canManageTeamModels || canManageOwnTeamMembers || canManageSubjects || canManageSlaGroups || canSyncIxc ? ["teams" as const] : []),
     ],
-    [canManageOwnTeamMembers, canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
+    [canManageOwnTeamMembers, canManageSlaGroups, canManageSubjects, canManageTeamModels, canSyncIxc, canViewBacklog, canViewCalendar, canViewOpenings, canViewOrderDetails, canViewSla, canViewWarranty],
   );
 
   const loadDashboard = useCallback(
@@ -841,6 +865,13 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
           if (dashboardRequest.current !== requestId) return;
           setSlaHierarchy(nextSlaHierarchy);
           setCollaboratorSla(nextCollaboratorSla);
+          return;
+        }
+
+        if (requestedTab === "matrix") {
+          const nextSlaMatrix = await operationsApi.slaMatrix(effectiveFilters);
+          if (dashboardRequest.current !== requestId) return;
+          setSlaMatrix(nextSlaMatrix);
           return;
         }
 
@@ -1069,9 +1100,16 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
       : key === "date_from" || key === "date_to"
         ? value
         : value || undefined;
-    setFilters((current) =>
-      current ? { ...current, [key]: normalizedValue } : current,
-    );
+    const next = { ...filters, [key]: normalizedValue };
+    setFilters(next);
+    // Auto-aplica depois de uma pausa (debounce) em vez de esperar o clique em "Filtrar" - mesmo
+    // comportamento da Visão Geral. O botão "Filtrar" continua funcionando (aplica na hora,
+    // cancelando o timeout pendente), pra quem prefere confirmar manualmente.
+    if (applyFiltersTimeout.current) clearTimeout(applyFiltersTimeout.current);
+    applyFiltersTimeout.current = setTimeout(() => {
+      applyFiltersTimeout.current = null;
+      applyFilters(next);
+    }, 500);
   }
 
   function clearDates() {
@@ -1581,7 +1619,13 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
         datesIgnored={activeTab === "progress"}
         filterCount={filterCount}
         onChange={updateFilter}
-        onApply={() => filters && applyFilters(filters)}
+        onApply={() => {
+          if (applyFiltersTimeout.current) {
+            clearTimeout(applyFiltersTimeout.current);
+            applyFiltersTimeout.current = null;
+          }
+          if (filters) applyFilters(filters);
+        }}
         onClearAll={clearAllFilters}
         onClearDates={clearDates}
         onImport={() => void runImport()}
@@ -1743,6 +1787,14 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
               <div className="h-80 animate-pulse rounded-2xl border bg-white" />
             )}
             <OperationsCollaboratorSlaTable data={collaboratorSla} />
+          </TabsContent>
+
+          <TabsContent value="matrix">
+            {appliedFilters ? (
+              <OperationsSlaMatrixTable data={slaMatrix} filters={appliedFilters} isLoading={loading} />
+            ) : (
+              <div className="h-80 animate-pulse rounded-2xl border bg-white" />
+            )}
           </TabsContent>
 
           <TabsContent value="garantias">
@@ -2233,6 +2285,7 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
               canManageTeamModels={canManageTeamModels}
               canManageOwnTeamMembers={canManageOwnTeamMembers}
               canManageSubjects={canManageSubjects}
+              canManageSlaGroups={canManageSlaGroups}
               canManageViews={canManageViews}
               canSyncIxc={canSyncIxc}
               ixcSyncSettings={ixcSyncSettings}

@@ -9,7 +9,7 @@
  * atrás de um toggle interno em `page.tsx` (item 14 do plano: "não remove os componentes antigos
  * até validar visualmente") - nenhuma rota antiga foi alterada. */
 
-import { AlertTriangle, ChevronRight, Gauge, TrendingUp } from "lucide-react";
+import { AlertTriangle, ChevronRight, Gauge, TrendingUp, Zap } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,10 @@ import type {
   SupportIxcAnalyticsDimension,
   SupportIxcAnalyticsDriverItem,
   SupportIxcAnalyticsPriorityItem,
+  SupportIxcSeverityBasis,
+  SupportIxcTicketBurstWindow,
+  SupportIxcTicketMomentum,
+  SupportIxcTicketOsConversion,
   SupportIxcTicketOut,
   SupportIxcTicketSeverity,
 } from "@/lib/types";
@@ -72,6 +76,21 @@ const DIMENSION_LABEL: Record<SupportIxcAnalyticsDimension, string> = {
   city: "Cidade",
   neighborhood: "Bairro",
   subject: "Motivo",
+};
+
+// Item 1 da correção pedida (2026-09-17) - explica ao humano, não só à IA, de onde vem a
+// severidade mostrada (nunca deixar "sem dado" parecer "normal").
+const SEVERITY_BASIS_LABEL: Record<SupportIxcSeverityBasis, string> = {
+  historical: "vs. histórico próprio",
+  peers: "vs. pares (histórico próprio insuficiente)",
+  insufficient_data: "sem base de comparação confiável",
+};
+
+const MOMENTUM_LABEL: Record<string, string> = {
+  accelerating: "acelerando",
+  decelerating: "desacelerando",
+  stable: "estável",
+  sem_dado: "sem dado suficiente",
 };
 
 function KpiTile({
@@ -148,6 +167,11 @@ export function IxcTicketAnalyticsPanel({
   const [priorities, setPriorities] = useState<SupportIxcAnalyticsPriorityItem[]>([]);
   const [drivers, setDrivers] = useState<SupportIxcAnalyticsDriverItem[]>([]);
   const [tickets, setTickets] = useState<SupportIxcTicketOut[] | null>(null);
+  // Item 8/10 da correção (2026-09-17): "hoje a IA recebe sinais que o usuário não vê na aba" -
+  // momentum/burst/conversão em O.S. já existiam só pra IA (opr_ixc_brief); expostos aqui também.
+  const [momentum, setMomentum] = useState<SupportIxcTicketMomentum | null>(null);
+  const [bursts, setBursts] = useState<SupportIxcTicketBurstWindow[]>([]);
+  const [osConversion, setOsConversion] = useState<SupportIxcTicketOsConversion | null>(null);
   const [expandedTicketId, setExpandedTicketId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -190,14 +214,21 @@ export function IxcTicketAnalyticsPanel({
           nextDimension
             ? Promise.resolve(null)
             : api.supportIxcTickets({ ...params, limit: 100 }),
+          // Sinais que a IA já via via opr_ixc_brief, agora também na tela (item 8/10).
+          api.supportIxcAnalyticsMomentum({ regional: params.regional, city: params.city, subject_id: params.subject_id, sector_id: params.sector_id }),
+          api.supportIxcAnalyticsBursts({ regional: params.regional }),
+          api.supportIxcAnalyticsOsConversion(params),
         ]);
       })
       .then((result) => {
         if (cancelled || !result) return;
-        const [prioritiesData, driversData, ticketPage] = result;
+        const [prioritiesData, driversData, ticketPage, momentumData, burstsData, osConversionData] = result;
         setPriorities(prioritiesData);
         setDrivers(driversData);
         setTickets(ticketPage ? ticketPage.items : null);
+        setMomentum(momentumData);
+        setBursts(burstsData);
+        setOsConversion(osConversionData);
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
@@ -303,6 +334,65 @@ export function IxcTicketAnalyticsPanel({
                   : "Sem cliente vinculado no recorte"
               }
             />
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-3 flex items-center gap-2">
+              <Zap className="h-4 w-4 text-blue-600" />
+              <p className="text-sm font-semibold text-slate-900">Sinais</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs text-slate-500">Base da severidade</p>
+                <p className="text-sm font-medium text-slate-800">{SEVERITY_BASIS_LABEL[context.severity_basis]}</p>
+              </div>
+              {momentum ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">Tendência (momentum)</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    {MOMENTUM_LABEL[momentum.trend] ?? momentum.trend}
+                    {momentum.consecutive_days_above_expected > 0
+                      ? ` · ${number(momentum.consecutive_days_above_expected)} dia(s) seguido(s) acima do esperado`
+                      : ""}
+                  </p>
+                </div>
+              ) : null}
+              {(() => {
+                const activeBurst = bursts.find((burst) => burst.active);
+                if (!activeBurst) return null;
+                return (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3">
+                    <p className="text-xs text-red-600">Burst ativo</p>
+                    <p className="text-sm font-medium text-red-800">
+                      Janela {activeBurst.window}:{" "}
+                      {activeBurst.ratio !== null ? `${number(activeBurst.ratio, 1)}x o esperado` : `${number(activeBurst.observed)} atendimentos`}
+                    </p>
+                  </div>
+                );
+              })()}
+              {context.geographic_concentration?.city ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">Concentração geográfica</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    {context.geographic_concentration.city.value} · {number(context.geographic_concentration.city.share_pct, 1)}%
+                    {context.geographic_concentration.neighborhood
+                      ? ` (bairro ${context.geographic_concentration.neighborhood.value}: ${number(context.geographic_concentration.neighborhood.share_pct, 1)}%)`
+                      : ""}
+                  </p>
+                </div>
+              ) : null}
+              {osConversion && osConversion.sample > 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-slate-500">Conversão em O.S. (24h)</p>
+                  <p className="text-sm font-medium text-slate-800">
+                    {osConversion.conversions["24h"] !== null && osConversion.conversions["24h"] !== undefined
+                      ? `${number(osConversion.conversions["24h"], 1)}%`
+                      : "-"}{" "}
+                    · amostra {number(osConversion.sample)}
+                  </p>
+                </div>
+              ) : null}
+            </div>
           </div>
 
           {context.reach.repeat_contact && Object.values(context.reach.repeat_contact).some((count) => count > 0) ? (

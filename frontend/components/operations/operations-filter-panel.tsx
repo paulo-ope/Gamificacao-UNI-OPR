@@ -23,6 +23,7 @@ import { DateRangePicker, commonDateRangePresets } from "@/components/ui/date-ra
 import { Input } from "@/components/ui/input";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { AppRadio } from "@/components/ui/radio";
+import { useCollapsibleFilters } from "@/hooks/use-collapsible-filters";
 import type {
   OperationFilterState,
   OperationFilters,
@@ -762,7 +763,12 @@ export function OperationsFilterPanel({
   onDeleteSaved: () => void;
 }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  // Recolhido por padrão em toda largura de tela (não só mobile) - pedido do usuário em
+  // 2026-09-18 ao padronizar o formato de filtro recolhível entre módulos. Persistido por
+  // navegador, mesmo padrão de `OverviewFilterBar`.
+  const { expanded: filtersOpen, toggle: toggleFiltersOpen } = useCollapsibleFilters({
+    persistKey: "uni_operations_filters_expanded",
+  });
   const activeChips = useMemo<ActiveChip[]>(() => {
     if (!filters) return [];
     const chips: ActiveChip[] = [];
@@ -1014,6 +1020,11 @@ export function OperationsFilterPanel({
 
   return (
     <section className="contents">
+      {/* Sticky sempre (não só `md:`) - pedido do usuário em 2026-09-18: o botão de abrir/fechar
+          filtros não pode sumir ao rolar a tela, senão fechar os filtros pra ver a tabela vira uma
+          armadilha (só reabre voltando ao topo). O grid de campos abaixo entra no MESMO wrapper
+          sticky (não tem sticky próprio) pra não duplicar o cálculo de offset. */}
+      <div className="sticky top-[var(--workspace-header-height)] z-40 bg-white">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 bg-white px-4 pb-3 pt-3 lg:px-7">
         <div>
           <p className="text-sm font-semibold text-slate-950">
@@ -1025,19 +1036,19 @@ export function OperationsFilterPanel({
           <Button
             type="button"
             variant="outline"
-            onClick={() => setMobileFiltersOpen((current) => !current)}
-            aria-expanded={mobileFiltersOpen}
-            className="mt-2 h-9 w-full justify-center md:hidden"
+            onClick={toggleFiltersOpen}
+            aria-expanded={filtersOpen}
+            className="mt-2 h-9 w-full justify-center md:w-auto"
           >
             <SlidersHorizontal className="h-4 w-4" />
-            {mobileFiltersOpen ? "Ocultar filtros" : "Filtros"}
+            {filtersOpen ? "Ocultar filtros" : "Filtros"}
             {filterCount ? (
               <Badge className="border-blue-100 bg-blue-50 px-1.5 text-blue-700">
                 {filterCount}
               </Badge>
             ) : null}
             <ChevronDown
-              className={`h-4 w-4 transition ${mobileFiltersOpen ? "rotate-180" : ""}`}
+              className={`h-4 w-4 transition ${filtersOpen ? "rotate-180" : ""}`}
             />
           </Button>
         </div>
@@ -1087,7 +1098,7 @@ export function OperationsFilterPanel({
           "presa" 14px antes do fim do cabecalho, sobrepondo visualmente o subtitulo ao rolar a
           página. Confirmado nos 4 breakpoints pedidos (1920x1080, 1366x768, 1024x768, 768x1024). */}
       <div
-        className={`${mobileFiltersOpen ? "grid" : "hidden"} max-h-[calc(100vh-var(--workspace-header-height))] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:sticky md:top-[var(--workspace-header-height)] md:z-40 md:grid md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,20rem)_repeat(5,minmax(0,1fr))]`}
+        className={`${filtersOpen ? "grid" : "hidden"} max-h-[calc(100vh-var(--workspace-header-height))] items-end gap-2 overflow-y-auto border-y border-slate-200 bg-white px-4 py-2 shadow-sm md:max-h-none md:grid-cols-2 md:overflow-visible lg:px-7 xl:grid-cols-3 2xl:grid-cols-[minmax(15.5rem,20rem)_repeat(5,minmax(0,1fr))]`}
       >
         <DateRangePicker
           dateFrom={filters?.date_from || ""}
@@ -1171,6 +1182,7 @@ export function OperationsFilterPanel({
           />
         </div>
         {advancedOpen ? advancedPanel : null}
+      </div>
       </div>
       <div className="border-b border-slate-200 bg-white px-4 pb-3 lg:px-7">
       {datesIgnored ? (

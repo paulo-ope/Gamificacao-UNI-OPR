@@ -13,7 +13,7 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-17** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-09-18** — branch `claude/suporte-sync-backfill-madrugada`
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
 compartilhado por várias sessões rodando em paralelo há alguns dias -
@@ -43,6 +43,117 @@ abaixo) - o erro de ambiente do SQLite-em-thread é intermitente, não indica
 regressão.
 
 ## O que foi feito recentemente
+
+- **Administração — Swagger protegido e filtrado de integração externa (2026-09-18/19, pedido do
+  usuário: um Swagger próprio para o time externo/UNI, diferente do `/docs` padrão que fica
+  desligado em produção).**
+  - Rotas novas `GET /api/admin/docs/integracao-uni` (HTML do Swagger UI) e
+    `GET /api/admin/docs/integracao-uni/openapi.json` (schema filtrado), sempre ligadas mesmo em
+    produção — implementação em `app/modules/admin/integration_docs.py`, rotas registradas em
+    `app/modules/admin/router.py`.
+  - Filtro: só endpoints com a tag OpenAPI `operations` entram no schema (o mesmo escopo já
+    documentado à mão em `docs/api-operacao-analitica.md`) — 64 endpoints hoje, nenhum de outro
+    módulo.
+  - Autenticação: aceita ou sessão do workspace (`Authorization: Bearer`, permissão nova
+    `admin:integrations:read`, já incluída no papel legado `admin`) ou token de integração
+    (`AiApiToken`/`ApiKeyCredential`, o mesmo emitido em Administração → Gestão API/MCP), este
+    último por header `x-api-key` **ou** `?token=` na URL — necessário porque o Swagger UI busca o
+    `openapi.json` sozinho no navegador, sem repetir headers customizados.
+  - Detalhe completo (exemplos, tabela de autenticação) em `docs/api-admin.md`, seção "Swagger de
+    Integração Externa".
+  - Testes novos em `test_admin_integration_docs.py` (7 casos: sem auth, Bearer sem permissão,
+    Bearer com permissão, token via query, token de integração válido/revogado, chave legado) -
+    todos passando. Verificado também ao vivo contra o backend real em Docker (200/401 conforme
+    esperado, schema com os 64 endpoints corretos).
+
+- **Operação Analítica — "Matriz de indicadores por filial" (Volume/SLA/TME por grupo de SLA x
+  filial) (2026-09-18, usuário pediu para reproduzir dentro do workspace um painel executivo
+  externo que ele montava na mão a partir de planilhas Excel — `indicadores.html`, upload manual +
+  localStorage).**
+  - Novo endpoint `GET /operations/sla/matrix` (`operations:view_sla`, `queries.sla_group_matrix`),
+    lendo DINAMICAMENTE os grupos de `OperationSlaGroup`/`OperationSlaSubjectGroup` - uma linha por
+    grupo ativo x uma coluna por REGIONAL agrupada, com Volume/SLA%/TME por célula e uma coluna
+    "Matriz" com o total RECALCULADO por contagem (nunca a média dos percentuais das filiais),
+    mesma convenção de `regional_matrix`.
+  - **Achado real de conflito de checkout**: o plano original era expandir `technology_group.py`
+    para 12 categorias fixas (pedido do usuário). No meio da implementação, descoberto que outra
+    sessão já tinha substituído esse dicionário fixo por um CRUD completo (`OperationSlaGroup`/
+    `OperationSlaSubjectGroup`, endpoints `/sla-groups*`, painel `operations-sla-groups-panel.tsx`)
+    na MESMA branch, ainda não commitado - `technology_group.py` só mantém `OTHER_TECHNOLOGY_GROUP`
+    como fallback, o resto do arquivo está órfão. A expansão de categorias virou decisão de DADO
+    (cadastrar os 6 grupos que faltam pela tela nova), não de código - edição já aplicada em
+    `technology_group.py` foi revertida antes de virar código morto duplicado.
+  - Frontend: tabela nova (`operations-sla-matrix-table.tsx`) na aba SLA de Operação Analítica
+    (`/operacao`), buscando `operationsApi.slaMatrix` em paralelo com `slaHierarchy`/
+    `collaboratorSla` (mesmo padrão de carregamento da aba).
+  - Teste novo (`test_sla_matrix_breaks_down_by_group_and_regional_with_recomputed_total`), suíte
+    completa de `test_operations_module.py` passando; `tsc --noEmit` limpo; verificado ao vivo no
+    navegador (chamada real 200 OK, célula "—" correta quando não há O.S. no período/escopo
+    filtrado, mesmo comportamento vazio dos painéis vizinhos sob o mesmo filtro).
+  - Docs atualizadas: seção SLA de `docs/api-completa.md` e `docs/api-operacao-analitica.md`.
+
+- **Atendimento IXC — correção pós-auditoria: fallback de pares no contexto padrão,
+  `context_key`, concentração geográfica/temática, evidência numérica nos sinais
+  (2026-09-18)**. Auditoria dedicada (2026-09-17, sem alterar código) mapeou o que uma
+  IA/humano conseguia descobrir hoje sobre "regional acima do esperado" e encontrou 2
+  lacunas de P1 e 3 de P2 no contrato de análise (`ixc_ticket_context.py`/
+  `ixc_ticket_intelligence.py`) - todas corrigidas nesta rodada, nesta ordem:
+  - **P1.1/1.2 - fallback de pares + `severity_basis` explícito** (o painel PADRÃO
+    desde 2026-09-15 não tinha essa proteção, só o painel clássico tinha - risco real de
+    falso negativo em regional/cidade pequena). `ixc_ticket_context._peers_stats`/
+    `_resolve_severity_with_basis` (novo) reaproveitam as MESMAS funções de breakdown já
+    testadas (`regional_breakdown`/`city_breakdown`/`neighborhood_breakdown` - uma query
+    pra todos os pares, não uma por valor como o clássico fazia) - `severity_basis`
+    agora é `"historical"`\|`"peers"`\|`"insufficient_data"` em `resolve_context` e em
+    cada item de `priorities_for_context`, nunca classifica ausência de amostra como
+    "dentro da curva".
+  - **P1.3/1.4 - `opr_ixc_brief`/`opr_ixc_signals` consolidados com evidência numérica**:
+    `drivers` (lista completa, não só o principal) e `os_conversion` (`OS_CONVERSION_V1`,
+    já existia isolado) agora vêm no MESMO payload, sem chamada extra. `reason_codes`
+    deixou de ser lista de strings (`"BURST_ACTIVE"`) e virou lista de OBJETOS com os
+    números que sustentam cada código (ex.: `{"code":"BURST_ACTIVE","window":"2h",
+    "current":34,"expected":10,"ratio":3.4}`) - a IA entende o "porquê" lendo só aquele
+    item, sem cruzar com outro payload.
+  - **P2.5 - `context_key`**: identificador DETERMINÍSTICO (não hash opaco nem UUID
+    aleatório - `base64(json{v,regional,city,neighborhood,subject_id,sector_id,
+    date_from,date_to})`, os MESMOS filtros sempre geram a MESMA chave) em
+    `resolve_context`/cada item de `priorities_for_context`. Rotas novas `GET
+    /ixc/analytics/context/{context_key}` e `.../tickets` decodificam a chave e devolvem
+    exatamente o contexto/os protocolos que a geraram - fecha "sinal → context_key →
+    drill → tickets exatos", sem a IA reconstruir filtro nenhum na mão.
+  - **P2.6/2.7 - concentração temática/geográfica calculadas no backend**: temática já
+    era resolvida por `driver_decomposition`/`contribution_pct` (Fase 1), só precisava
+    ser exposta por completo (`drivers` no contexto, não só `top_driver`). Geográfica é
+    NOVA: `ixc_ticket_context.geographic_concentration` acha a principal cidade e,
+    dentro dela, o principal bairro do escopo, com `share_pct` dos DOIS sobre o TOTAL DO
+    ESCOPO (não em cascata cidade→bairro) - só calculável com `regional` fixado (lembrete
+    explícito no código: `city`/`neighborhood` vêm do CADASTRO DO CLIENTE, não são
+    localização exata de falha de rede).
+  - **P2.8 - mesma inteligência no painel único do humano**: `ixc-ticket-analytics-
+    panel.tsx` ganhou um card "Sinais" (base da severidade, momentum, burst ativo,
+    concentração geográfica, conversão em O.S. 24h) - até aqui só a IA via
+    `opr_ixc_brief` via essas 3 métricas (achado da auditoria: endpoints
+    `/analytics/{momentum,bursts,os-conversion}` existiam no backend desde a Fase 4/6
+    sem NENHUMA função correspondente em `frontend/lib/api.ts`). Validado ao vivo:
+    Rolim de Moura mostrando "Concentração geográfica: Rolim de Moura · 84,7% (bairro
+    Zona Rural: 13,8%)", calculado automaticamente.
+  - **Testes**: 243 passed rodando `pytest -k "ixc"` completo (0 falhas), incluindo os
+    12 cenários pedidos pela correção (histórico suficiente/pares/sem base nenhuma,
+    `context_key` determinístico + drill reproduzindo exatamente os tickets do cálculo,
+    concentração forte/ausente, reason_code com evidência).
+  - **Adiado nesta rodada, com justificativa** (não é bloqueio técnico, é escopo):
+    - **P2.9 - burst por assunto/motivo**: auditado o custo (145 motivos mapeados hoje,
+      só 14 com `risk_weight >= 70`) - estratégia econômica proposta é baseline por par
+      (regional, motivo) só pra esses 14 motivos de alto risco (≈182 combinações × 168
+      slots, ordem de grandeza do baseline atual só-regional), NÃO implementada ainda.
+      Sem isso, o sistema não distingue hoje "Rolim inteira subiu" de "Rolim teve
+      especificamente um pico de Sem Conexão nas últimas 2h" - continua respondendo só
+      a primeira pergunta com precisão horária.
+    - **P3 - início estimado da anomalia**: dependia dos itens anteriores (regra
+      explícita do usuário: "implemente somente depois"); não iniciado.
+  - Documentação atualizada junto: `docs/api-suporte.md` (rotas de contexto/pares/
+    `context_key`), `docs/api-mcp-connector.md` e `docs/api-completa.md` (payload novo
+    de `opr_ixc_brief`/`opr_ixc_signals`).
 
 - **Plano de evolução analítica do Atendimento IXC — Fases 0 a 6 implementadas por
   completo (2026-09-15/17)**. Plano técnico de 16 seções apresentado e aprovado antes
@@ -477,20 +588,22 @@ regressão.
   abaixo, ele tem o "porquê" e a evidência completa que não cabe aqui.
   - Rodada com 7 investigações paralelas (subagentes), cada uma lendo código real
     e citando linha exata - não é achado por inspeção superficial.
-  - **4 achados P0 (crítico) - P0-1 e P0-2 CORRIGIDOS em 2026-09-17, P0-3 e P0-4
-    ainda não**, na ordem que o relatório recomenda: (1) ~~tela de Administração
-    quebra para perfil montado só com permissões `admin:*`~~ **corrigido** (ver
-    item dedicado abaixo); (2) ~~`/operations/network/*` (login, ONU,
-    geolocalização) não aplica o escopo regional do gestor~~ **corrigido** (ver
-    item dedicado abaixo - escopo real acabou incluindo `/api/ai/infra/*`
-    também, 11 rotas que a auditoria original não tinha listado); (3) governança
-    de campo da IA (`AiFieldPermission`) não tem efeito na chamada padrão de
-    `opr_order_details`/`opr_search_orders` (`response_mode="full"`, o modo mais
-    comum) - desligar um campo sensível na tela de administração da IA não
-    protege nada nesse caminho; (4) `POST /calculation-runs/calculate` cria
-    rascunho de fechamento sem lock/dedup - já causou 1.106 fechamentos
-    duplicados/225 mil linhas em produção, documentado no próprio comentário do
-    código (`calculation.py:854-858`).
+  - **4 achados P0 (crítico) - os 4 CORRIGIDOS em 2026-09-17**, na ordem que o
+    relatório recomenda: (1) ~~tela de Administração quebra para perfil montado só
+    com permissões `admin:*`~~ **corrigido** (ver item dedicado abaixo); (2)
+    ~~`/operations/network/*` (login, ONU, geolocalização) não aplica o escopo
+    regional do gestor~~ **corrigido** (ver item dedicado abaixo - escopo real
+    acabou incluindo `/api/ai/infra/*` também, 11 rotas que a auditoria original
+    não tinha listado); (3) ~~governança de campo da IA (`AiFieldPermission`) não
+    tem efeito na chamada padrão de `opr_order_details`/`opr_search_orders`
+    (`response_mode="full"`, o modo mais comum) - desligar um campo sensível na
+    tela de administração da IA não protege nada nesse caminho~~ **corrigido**
+    (ver item dedicado abaixo); (4) ~~`POST /calculation-runs/calculate` cria
+    rascunho de fechamento sem lock/dedup contra execução concorrente do mesmo
+    ciclo~~ **corrigido** (ver item dedicado abaixo - a evidência original dos
+    "1.106 fechamentos duplicados" era acúmulo de recálculo sequencial legítimo,
+    não uma corrida provada; a correção ataca a ausência real de proteção contra
+    SOBREPOSIÇÃO, confirmada com threads reais).
   - Achados P1 relevantes (ver relatório para lista completa): FKs sem `ondelete`
     quebram exclusão de colaborador líder/com saldo de garantia; campos
     financeiros em `Float` (ligado ao incidente de R$1.291,08 já registrado
@@ -501,9 +614,9 @@ regressão.
     O.S. sem teto de dias nem trava de concorrência (suporte já tem, operations
     não); `service_orders.py`/`imports.py`/`rules.py` sem nenhum teste (o primeiro
     inclui um endpoint destrutivo de exclusão em massa).
-  - **Próximo passo natural**: seguir corrigindo P0-3 e P0-4, nessa ordem (é a
-    ordem que o usuário pediu) - não reabrir a investigação, o relatório já tem
-    tudo levantado com evidência.
+  - **Próximo passo natural**: os 4 achados P0 estão corrigidos - seguir para os
+    achados P1 (ver lista logo abaixo e o relatório completo para os detalhes de
+    cada um) ou para a Fase 2 (quick wins) do plano recomendado do relatório.
 
 - **P0-1 corrigido: `admin:users:read/write/delete` agora abrem `/users`, `/invites`
   e `/access-requests` de verdade** (2026-09-17, usuário pediu pra corrigir a
@@ -603,6 +716,156 @@ regressão.
   - Suíte ampla rodada depois da mudança (operations, ai, mcp_connector,
     intelligence, onu_signal, login_timeseries - 154+ testes): **zero `FAILED`
     novo**, só o `ERROR` de teardown intermitente já conhecido.
+
+- **P0-3 corrigido: governança de campo da IA agora tem efeito também no modo
+  `"full"`** (2026-09-17, mesma sessão do P0-1/P0-2, "sim, continua com o P0-3").
+  - **Causa raiz confirmada, e maior que a auditoria descreveu**: não eram só as
+    duas tools MCP (`opr_order_details`/`opr_search_orders`) - o mesmo bug estava
+    em 3 pontos: `operations/router.py::_resolve_order_output_fields` (listagem
+    e detalhe REST de O.S., `/operations/orders` e `/operations/orders/{id}`) e
+    `ai/router.py::resolve_ai_search_output_fields`/
+    `resolve_ai_order_details_output_fields` (usadas tanto por `/api/ai/*`
+    quanto pelas próprias tools MCP). Todas devolviam `fields=None` ("sem
+    filtro nenhum aplicado") sempre que `response_mode="full"` - o padrão da
+    tela e da tool - era usado sem `fields` explícito. Desligar um campo em
+    `AiFieldPermission` na tela de administração da IA não tinha efeito nenhum
+    no caminho mais comum.
+  - **Correção**: novo método `EffectivePolicy.field_allowed_or_uncatalogued`
+    em `ai_governance/policy.py` - mesma lógica de `field_allowed`, mas trata
+    campo NÃO catalogado como **permitido**, não negado (`field_allowed` nega
+    por padrão porque valida um pedido explícito de `fields=[...]`; aqui o
+    objetivo é reconstruir a lista inteira de "tudo que o modo full sempre
+    devolveu" sem derrubar campos calculados em Python que nunca tiveram
+    entrada no catálogo, ex. `distance_km`/`sla_risk` em
+    `ai/queries.py::AI_SEARCH_ITEM_FIELDS`). As três funções passaram a sempre
+    recortar a lista de campos do schema por essa política, mesmo em modo
+    "full", em vez de devolver `None`.
+  - **Bug próprio introduzido e corrigido durante a implementação**: a primeira
+    versão usava só `schema.model_fields`, que NÃO inclui `@computed_field` do
+    Pydantic - campos calculados como `service_description`,
+    `technical_report`, `service_address`, `address_is_structured` sumiam do
+    modo "full" mesmo autorizados. Corrigido usando
+    `set(schema.model_fields) | set(schema.model_computed_fields)` nos três
+    pontos.
+  - **Achado colateral confirmado durante os testes, fora do escopo desta
+    correção**: `pop` está em `AI_SEARCH_GOVERNED_FIELDS` (`ai/queries.py`) mas
+    nunca foi adicionado a `OperationOrderOut` (`operations/schemas.py`) -
+    `field_registry.py` deriva "selecionável" da presença em
+    `OperationOrderOut.model_fields`, então `pop` já estava catalogado como
+    NÃO selecionável mesmo pra um perfil sem restrição nenhuma. Antes desta
+    correção isso não importava (modo "full" ignorava a política); agora que a
+    governança passa a valer de verdade, `pop` some do modo "full" de
+    `opr_search_orders` também - é a governança pegando um gap pré-existente do
+    catálogo, não uma regressão. Documentado como assert explícito no teste
+    novo (`AI_SEARCH_ITEM_FIELDS - search_fields == {"pop"}`), não corrigido
+    nesta sessão (mudaria o catálogo, fora do escopo do P0-3).
+  - **7 testes novos** (`tests/test_field_governance_full_mode.py`): 2 testes
+    HTTP (listagem e detalhe REST, resposta padrão sem `fields`, campo
+    desligado precisa sumir), 2 guardas de regressão de campo calculado (aparece
+    quando permitido, some quando desligado), 2 testes unitários da camada de
+    IA pura (`resolve_ai_search_output_fields`/`resolve_ai_order_details_output_fields`
+    via `resolve_effective_policy`), e 1 teste de "política sem nenhuma
+    restrição" que documenta o gap do `pop` e confirma que o modo "full" segue
+    devolvendo, na prática, tudo que devolvia antes da correção.
+  - Suíte ampla rodada depois da mudança (`operations`, `ai_fields`, `ai_geo`,
+    `ai_governance_fase2/fase3/extras`, `ai_service_description_and_backlog_city`,
+    `ai_sla_stage`, `ai_team_model_consistency`, `mcp_new_tools_match_http`,
+    `mcp_operations_now_and_freshness`, `mcp_connector`, `onu_signal(_history)`,
+    `network_regional_scope`, `field_governance_full_mode` - 207 testes):
+    **zero `FAILED`**, só o `ERROR` de teardown intermitente já conhecido (84,
+    mesma família do erro de SQLite-em-thread já registrado acima).
+
+- **P0-4 corrigido: `/calculation-runs/calculate` (e o recálculo automático) agora
+  travam contra execução concorrente do mesmo ciclo** (2026-09-17, mesma sessão do
+  P0-1/P0-2/P0-3, "sim, continua com o P0-4"). Auditado com o processo formal
+  pedido pelo usuário (diagnóstico primeiro, sem assumir o achado original como
+  correto) - detalhe completo, incluindo o texto exato da tarefa e o raciocínio de
+  cada decisão de design, em
+  **`docs/auditoria-tecnica-geral-2026-09-15.md`** (seção do achado P0-4).
+  - **Precisão sobre a evidência original do relatório**: os "1.106 fechamentos
+    duplicados/225 mil linhas" citados na auditoria são acúmulo de **recálculo
+    sequencial legítimo** (`recalculate_current_period` roda a cada ~20 min via
+    sincronizador do IXC e nada apagava os rascunhos anteriores) - FATO verificado
+    na docstring de `prune_superseded_drafts`, não uma corrida provada. É um
+    problema DIFERENTE (mitigado pela poda de rascunhos, desligada por padrão),
+    que esta correção não precisou tocar.
+  - **O que foi de fato confirmado por leitura de código**: `calculate_scores`
+    sempre `db.add(CalculationRun(...))` sem checar nada preexistente; nenhuma
+    linha do model tem `UniqueConstraint`; e o `SELECT ... FOR UPDATE` que já
+    existe em `calculation_runs.py::change_calculation_run_status` (achado C5 da
+    auditoria 2026-08-26) protege só a TRANSIÇÃO de status de um run que já
+    existe, não a criação. Não havia proteção nenhuma contra duas execuções
+    SOBREPOSTAS no tempo do mesmo ciclo (mesmo mês/ano/regional) - nem em
+    memória, nem no banco.
+  - **Confirmado como risco real, não só teórico**: o processo roda um único
+    `uvicorn` sem `--workers`, mas os handlers síncronos de rota rodam no
+    threadpool do FastAPI enquanto o sincronizador do IXC roda em paralelo
+    (`asyncio`/`run_in_threadpool`, `ixc_scheduler.py:308-309`) - um clique
+    manual em "recalcular" pode sobrepor o ciclo automático de 20 em 20 minutos,
+    ambos tipicamente `regional=None` (o caso mais comum). **Reproduzido com
+    threads reais** (não só chamando a função duas vezes em sequência - duas
+    conexões SQLite genuinamente independentes por arquivo, não
+    `:memory:`/`StaticPool`) antes de implementar qualquer correção.
+  - **Identidade do ciclo**: (`reference_month`, `reference_year`, `regional`
+    normalizado por `normalize_regional_grouped` - a mesma função que
+    `calculate_scores` já usa internamente, para nunca haver descompasso entre a
+    chave da trava e o que o cálculo de fato processa). `regional=None` vira o
+    literal `__ALL__` na chave, porque `NULL` não é igual a `NULL` em `UNIQUE`
+    nem no Postgres nem no SQLite.
+  - **Correção**: nova tabela `calculation_run_locks` (model `CalculationRunLock`
+    em `app/models.py`, migration `20260917_0104`) com
+    `UniqueConstraint(lock_key)` - a garantia atômica é do BANCO, não de uma
+    variável em memória do processo, então funciona entre threads/processos/
+    workers diferentes (item explicitamente pedido: nada de mutex local, cache
+    local ou "if exists" sem atomicidade). Três funções novas em
+    `calculation_closure.py`: `acquire_calculation_lock` (insere e COMMITA a
+    trava imediatamente, numa transação própria e curta, visível a qualquer
+    outra conexão antes do cálculo pesado começar; um `IntegrityError` vira
+    `HTTPException(409)` "já existe um cálculo em andamento" - rejeição
+    IMEDIATA, sem bloquear a requisição esperando); `release_calculation_lock`
+    (sempre roda em `finally`, numa transação própria, mesmo que o cálculo tenha
+    lançado exceção); `calculation_cycle_lock` (context manager que junta as
+    duas). Uma trava mais velha que 30 minutos (`CALCULATION_LOCK_STALE_AFTER`)
+    é "roubada" antes de qualquer tentativa de aquisição - cobre o processo
+    derrubado no meio do cálculo (kill -9/OOM) que nunca chegaria a chamar
+    `release_calculation_lock`, evitando trava presa para sempre.
+  - **Aplicado nos dois pontos de entrada** que chamam `calculate_scores`:
+    `calculation_runs.py::calculate` (manual, envolvendo TODO o bloco - cálculo +
+    bônus de liderança + auditoria + commit final, porque só é seguro liberar a
+    trava depois que o resultado estiver de fato commitado) e
+    `calculation.py::recalculate_current_period` (automático - um conflito de
+    trava vira `HTTPException(409)`, tratada pelo mesmo `except Exception` que já
+    existia para outros erros esperados deste caminho, ex. período já pago -
+    não derruba o sincronizador nem a correção de Tipo Geral).
+  - **Comportamento preservado, não alterado**: ciclos diferentes (mês/ano/
+    regional diferentes) continuam rodando em paralelo sem qualquer bloqueio
+    entre si; um recálculo sequencial do MESMO ciclo (uma chamada só depois da
+    outra terminar) continua permitido, sem mudança de comportamento - é a
+    criação de múltiplos rascunhos ao longo do tempo, um problema à parte que
+    esta correção não ataca. A regra já existente de período fechado/pago
+    (`ensure_period_not_closed`) não foi tocada e continua vencendo com sua
+    própria mensagem 409, distinta da mensagem nova da trava.
+  - **9 testes novos** (`tests/test_calculation_run_lock.py`): trava por chave
+    (ciclos diferentes nunca colidem); trava fresca bloqueia uma segunda
+    tentativa; trava mais velha que 30 min é roubada; exceção no meio do cálculo
+    libera a trava; recálculo sequencial do mesmo ciclo continua permitido; a
+    trava não interfere na regra de período pago; e **dois testes com threads
+    reais** (arquivo SQLite dedicado, duas conexões independentes,
+    `threading.Barrier` forçando disputa simultânea) provando que só um lado
+    vence tanto na aquisição isolada da trava quanto no fluxo completo
+    (`calculation_cycle_lock` + `calculate_scores` + commit) - confirmando ao
+    final que só um `CalculationRun` foi criado pela dupla concorrente (prova de
+    que a proteção funciona na camada persistente, não só no router).
+  - Suíte ampla rodada depois da mudança (`calculation_closure`,
+    `calculation_run_totals_consistency`, `calculation_run_lock`, `users`,
+    `network_regional_scope`, `field_governance_full_mode`, `draft_retention`,
+    `financial_endpoint_permissions`, `gamification_period_and_registered_orders`,
+    `gamification_preview`, `leadership_bonus_idempotency`, `operations_sync`,
+    `payment_refreshes_breakdowns`, `point_balance`, `portal_dashboard`,
+    `portal_run_selection`, `portal_team_summary`, `service_orders_delete_period`,
+    `ixc_scheduler` - 19 arquivos, 218 testes): **179 passed, zero `FAILED`**, só
+    o `ERROR` de teardown intermitente já conhecido (39, mesma família do erro de
+    SQLite-em-thread já registrado acima).
 
 - **Auditoria completa da Gamificação Operacional + 2 bugs críticos corrigidos** (2026-09-15,
   usuário: "AUDITE 100% O MODULO DE GAMIFICAÇÃO PARA FAZER UMA REESTRUTURAÇÃO VISUAL DESSE MODULO E
@@ -4138,6 +4401,44 @@ regressão.
 
 ## Frentes em andamento / conhecidas
 
+- **Suíte de testes do backend trava intermitentemente ao rodar neste container
+  (real, com credenciais de IXC/OPA configuradas) — DIAGNOSTICADO, NÃO CORRIGIDO
+  (2026-09-19)**. Achado durante a implementação do Swagger de integração externa:
+  rodar a suíte completa (`pytest`) trava sem previsão; ao investigar com
+  `pytest-timeout` (15s por teste) isolando os arquivos de IXC/OPA, apareceram
+  **44 erros idênticos** — todos `ERROR at teardown de <teste>`, em testes sem
+  relação nenhuma entre si (`test_orders_can_be_filtered_by_local_closing_time`,
+  `test_configuration_json_import_and_export`,
+  `test_import_opa_period_endpoint_rejects_when_busy` etc.).
+  - **Causa raiz**: a fixture `client` (`tests/conftest.py:88`) faz
+    `with TestClient(app) as test_client`, disparando o `lifespan()` REAL de
+    `app/main.py` a cada teste — startup e shutdown completos. Como este
+    container específico tem `IXC_API_BASE_URL`/`IXC_API_TOKEN`/`OPA_API_BASE_URL`/
+    `OPA_API_TOKEN` reais configurados (é o backend de verdade, não um ambiente de
+    teste isolado), `lifespan()` sobe de fato TODAS as tasks de produção (sync
+    IXC, sync OPA, sync de atendimento IXC, sync de Agendamento, snapshot de
+    login, snapshot de sinal ONU, geração de casos de gestão) contra a API
+    externa real, em TODO teste que usa `client`.
+  - No shutdown, `task.cancel()` (`app/main.py:162-214`) não interrompe uma
+    chamada HTTP síncrona já em andamento dentro da task — `await task` espera a
+    chamada de rede real terminar por conta própria. `TestClient.__exit__`
+    trava esperando essa thread (`anyio.from_thread`) encerrar. Log confirma
+    disputa real: "Sincronização automática de atendimento IXC não pôde
+    continuar: outra importação já está em andamento" (dezenas de testes em
+    sequência competindo pelo mesmo lock de importação contra a mesma API).
+  - **Por que é intermitente**: cada chamada real ao IXC/OPA leva ~1-2s por
+    página; na maioria das vezes o cancelamento "ganha a corrida", mas quando
+    calha de estar no meio de uma chamada bloqueante bem no instante do
+    `cancel()`, o teardown trava até a API externa responder (ou não responder).
+  - **Não é bug de teste individual nem desta feature** — é lacuna de isolamento
+    de ambiente: `lifespan()` não distingue "rodando via TestClient em teste" de
+    "rodando de verdade". Rodar a suíte num ambiente sem essas variáveis
+    configuradas não teria esse problema.
+  - **Achado à parte, sem relação**, na mesma investigação: `test_localiza_ixc_lookup.py`
+    teve 9 falhas reais (não timeout) — não investigado a fundo, pode já ser
+    conhecido ou pré-existente.
+  - Não corrigido ainda — ver sugestão em "Próximos passos".
+
 - **Filtro "Regional" (agrupado) sobre o filtro "Filial" — IMPLEMENTADO, testado e
   validado ao vivo** (2026-09-14/15, usuário: "Tenho já o filtro por filial, agora
   preciso agrupar para um filtro de regional... ex Rolim de Moura e São Felipe como
@@ -4267,6 +4568,11 @@ regressão.
 
 ## Próximos passos sugeridos
 
+- **Corrigir o travamento intermitente da suíte de testes** (ver "Frentes em
+  andamento" — teardown de `TestClient` esperando tasks reais de sync IXC/OPA
+  cancelarem). Caminhos possíveis: `lifespan()` não subir os schedulers reais
+  quando `TESTING`/um sinalizador equivalente estiver ativo, ou a fixture
+  `client` usar um lifespan vazio/fake em vez do `lifespan()` de produção.
 - Definir a visão global que será o filtro padrão da Visão Geral (botão "Definir como
   padrão" na própria tela, exige `operations:views:update_global`). Sem isso a tela
   abre sem pré-set de modelo de equipe.

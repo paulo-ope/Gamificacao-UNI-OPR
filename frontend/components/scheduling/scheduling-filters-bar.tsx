@@ -1,10 +1,10 @@
 "use client";
 
 import { Filter, Loader2, X } from "lucide-react";
-import { useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FilterChip } from "@/components/ui/filter-chip";
+import { useCollapsibleFilters } from "@/hooks/use-collapsible-filters";
 import type { SchedulingFilterOptions, SchedulingFilterState, SchedulingSavedFilter } from "@/lib/scheduling-api";
 
 import { SchedulingMultiSelect } from "./scheduling-multi-select";
@@ -62,22 +62,20 @@ export function SchedulingFiltersBar({
   onDelete: () => void;
 }) {
   const activeCount = ACTIVE_FILTER_CHIPS.reduce((total, { get }) => total + (get(filters).length ? 1 : 0), 0);
-  const [expanded, setExpanded] = useState(false);
+  const { expanded, toggle } = useCollapsibleFilters();
 
   return (
-    <div className="border-b border-slate-200 bg-white px-4 py-2 lg:px-7">
+    // Sticky - pedido do usuário em 2026-09-18: o botão de filtros não pode sumir ao rolar a
+    // tela (mesmo padrão em todas as barras de filtro do ecossistema).
+    <div className="sticky top-[var(--workspace-header-height)] z-40 border-b border-slate-200 bg-white px-4 py-2 lg:px-7">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={() => setExpanded((current) => !current)}>
+        <Button type="button" variant="outline" size="sm" onClick={toggle}>
           <Filter className="h-3.5 w-3.5" /> Filtros{activeCount ? ` (${activeCount})` : ""}
         </Button>
         {ACTIVE_FILTER_CHIPS.map(({ key, label, get }) => {
           const count = get(filters).length;
           if (!count) return null;
-          return (
-            <Badge key={key} className="border-slate-200 bg-slate-100 text-[11px] text-slate-700">
-              {label}: {count}
-            </Badge>
-          );
+          return <FilterChip key={key} label={`${label}: ${count}`} />;
         })}
         {activeCount ? (
           <Button

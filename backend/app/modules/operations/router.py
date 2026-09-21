@@ -54,7 +54,7 @@ from .onu_signal_snapshot import (
     query_onu_signal_history,
     query_onu_signal_status,
 )
-from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
+from .models import OperationIxcCollaborator, OperationOrder, OperationResponsibleAssignment, OperationResponsibleDirectorySetting, OperationSavedFilter, OperationSlaGroup, OperationSlaSubjectGroup, OperationSubjectTypeMapping, OperationTeamModel, OperationTeamTargetRule, OperationTeamTargetVersion
 from .period import OPERATIONS_TIMEZONE_NAME, operations_period_bounds, validate_operations_period
 from .scope import IXC_SECTORS, MAX_FILTER_VALUES_PER_FIELD, ixc_sector_scope_label, normalize_ixc_sector_ids
 from .schemas import (
@@ -125,6 +125,12 @@ from .schemas import (
     OperationCoordinateQualityResponseOut,
     OperationOnuSignalOut,
     OperationOnuSignalHistoryItemOut,
+    OperationSlaCatalogSubjectOut,
+    OperationSlaGroupCreate,
+    OperationSlaGroupOut,
+    OperationSlaGroupSubjectsUpdate,
+    OperationSlaGroupUpdate,
+    OperationSlaMatrix,
 )
 
 
@@ -1173,6 +1179,18 @@ def sla(
         group_by,
         **selected_filters,
     )
+
+
+@router.get("/sla/matrix", response_model=OperationSlaMatrix, dependencies=[Depends(require_permission("operations:view_sla"))])
+def sla_matrix(
+    date_from: date,
+    date_to: date,
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    _validated_period(date_from, date_to)
+    return queries.sla_group_matrix(db, date_from, date_to, user, **selected_filters)
 
 
 @router.get("/sla/hierarchy", response_model=OperationSlaHierarchy, dependencies=[Depends(require_permission("operations:view_sla"))])
@@ -2333,6 +2351,180 @@ def delete_team_model(
     record_audit_log(db, user, "delete", "operations_team_models", item.id, before, None)
     db.delete(item)
     db.commit()
+
+
+def _sla_group_or_404(db: Session, group_id: int) -> OperationSlaGroup:
+    item = db.get(OperationSlaGroup, group_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Grupo de SLA não encontrado.")
+    return item
+
+
+def _sla_groups_out(db: Session, groups: list[OperationSlaGroup]) -> list[OperationSlaGroupOut]:
+    subjects_by_group: dict[int, list[str]] = {}
+    if groups:
+        rows = db.execute(
+            select(OperationSlaSubjectGroup.group_id, OperationSlaSubjectGroup.subject).where(
+                OperationSlaSubjectGroup.group_id.in_([item.id for item in groups])
+            )
+        ).all()
+        for group_id, subject in rows:
+            subjects_by_group.setdefault(group_id, []).append(subject)
+    return [
+        OperationSlaGroupOut(
+            id=item.id,
+            card_label=item.card_label,
+            name=item.name,
+            display_order=item.display_order,
+            active=item.active,
+            subjects=sorted(subjects_by_group.get(item.id, [])),
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+        )
+        for item in groups
+    ]
+
+
+@router.get("/sla-groups", response_model=list[OperationSlaGroupOut], dependencies=[Depends(require_permission("operations:view_sla"))])
+def list_sla_groups(db: Session = Depends(get_db)):
+    groups = list(db.scalars(select(OperationSlaGroup).order_by(OperationSlaGroup.card_label.asc(), OperationSlaGroup.display_order.asc())))
+    return _sla_groups_out(db, groups)
+
+
+@router.get(
+    "/sla-groups/catalog-subjects",
+    response_model=list[OperationSlaCatalogSubjectOut],
+    dependencies=[Depends(require_permission("operations:manage_sla_groups"))],
+)
+def list_sla_catalog_subjects(db: Session = Depends(get_db)):
+    """Assuntos granulares que já apareceram em alguma O.S. (para o combobox da tela de
+    configuração escolher, em vez de digitar de cabeça), com a contagem de O.S. e o grupo atual
+    (se já estiver atribuído a algum)."""
+    counts = dict(
+        db.execute(
+            select(OperationOrder.os_subject, func.count(OperationOrder.id))
+            .where(OperationOrder.os_subject.is_not(None))
+            .group_by(OperationOrder.os_subject)
+        ).all()
+    )
+    assignments = dict(
+        db.execute(select(OperationSlaSubjectGroup.subject, OperationSlaSubjectGroup.group_id)).all()
+    )
+    group_names = dict(db.execute(select(OperationSlaGroup.id, OperationSlaGroup.name)).all())
+    all_subjects = set(counts) | set(assignments)
+    return sorted(
+        (
+            OperationSlaCatalogSubjectOut(
+                subject=subject,
+                order_count=counts.get(subject, 0),
+                group_id=assignments.get(subject),
+                group_name=group_names.get(assignments.get(subject)) if subject in assignments else None,
+            )
+            for subject in all_subjects
+        ),
+        key=lambda item: (-item.order_count, item.subject),
+    )
+
+
+@router.post("/sla-groups", response_model=OperationSlaGroupOut, status_code=201)
+def create_sla_group(
+    payload: OperationSlaGroupCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("operations:manage_sla_groups")),
+):
+    name = " ".join(payload.name.strip().split())
+    card_label = " ".join(payload.card_label.strip().split())
+    # `func.lower(...)` dos dois lados (nunca `.casefold()` em Python contra `func.lower()` em
+    # SQL) - achado real dos testes: SQLite só abaixa ASCII, então `LOWER('Único')` continua
+    # 'Único' enquanto `"Único".casefold()` já virou 'único', a comparação nunca bate e a
+    # duplicidade passa direto pro INSERT, que quebra na constraint com um 500 em vez de 409.
+    duplicate = db.scalar(select(OperationSlaGroup.id).where(func.lower(OperationSlaGroup.name) == func.lower(name)))
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="Já existe um grupo de SLA com esse nome.")
+    max_order = db.scalar(
+        select(func.max(OperationSlaGroup.display_order)).where(OperationSlaGroup.card_label == card_label)
+    )
+    item = OperationSlaGroup(card_label=card_label, name=name, display_order=(max_order or 0) + 1, created_by=user.id)
+    db.add(item)
+    db.flush()
+    record_audit_log(db, user, "create", "operations_sla_groups", item.id, None, snapshot(item))
+    db.commit()
+    return _sla_groups_out(db, [item])[0]
+
+
+@router.patch("/sla-groups/{group_id}", response_model=OperationSlaGroupOut)
+def update_sla_group(
+    group_id: int,
+    payload: OperationSlaGroupUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("operations:manage_sla_groups")),
+):
+    item = _sla_group_or_404(db, group_id)
+    before = snapshot(item)
+    changes = payload.model_dump(exclude_unset=True)
+    if "name" in changes and changes["name"] is not None:
+        changes["name"] = " ".join(changes["name"].strip().split())
+        duplicate = db.scalar(
+            select(OperationSlaGroup.id).where(
+                func.lower(OperationSlaGroup.name) == func.lower(changes["name"]),
+                OperationSlaGroup.id != item.id,
+            )
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail="Já existe um grupo de SLA com esse nome.")
+    if "card_label" in changes and changes["card_label"] is not None:
+        changes["card_label"] = " ".join(changes["card_label"].strip().split())
+    for field, value in changes.items():
+        setattr(item, field, value)
+    item.updated_at = datetime.now(timezone.utc)
+    record_audit_log(db, user, "update", "operations_sla_groups", item.id, before, snapshot(item))
+    db.commit()
+    return _sla_groups_out(db, [item])[0]
+
+
+@router.delete("/sla-groups/{group_id}", status_code=204)
+def delete_sla_group(
+    group_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("operations:manage_sla_groups")),
+):
+    item = _sla_group_or_404(db, group_id)
+    before = snapshot(item)
+    # Exclusão explícita, não só `ondelete="CASCADE"` da FK - achado real dos testes: SQLite não
+    # aplica cascade de FK por padrão (precisa de PRAGMA foreign_keys=ON, que o setup de teste não
+    # liga), então o cascade funciona no Postgres real mas fica inerte em SQLite, deixando o
+    # assunto órfão apontando pra um grupo que não existe mais.
+    db.execute(delete(OperationSlaSubjectGroup).where(OperationSlaSubjectGroup.group_id == item.id))
+    record_audit_log(db, user, "delete", "operations_sla_groups", item.id, before, None)
+    db.delete(item)
+    db.commit()
+
+
+@router.put("/sla-groups/{group_id}/subjects", response_model=OperationSlaGroupOut)
+def replace_sla_group_subjects(
+    group_id: int,
+    payload: OperationSlaGroupSubjectsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("operations:manage_sla_groups")),
+):
+    item = _sla_group_or_404(db, group_id)
+    subjects = sorted({" ".join(subject.strip().split()) for subject in payload.subjects if subject.strip()})
+    db.execute(delete(OperationSlaSubjectGroup).where(OperationSlaSubjectGroup.group_id == item.id))
+    existing = {
+        row.subject: row
+        for row in db.scalars(select(OperationSlaSubjectGroup).where(OperationSlaSubjectGroup.subject.in_(subjects)))
+    }
+    for subject in subjects:
+        row = existing.get(subject)
+        if row is not None:
+            row.group_id = item.id
+            row.updated_by = user.id
+            row.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(OperationSlaSubjectGroup(subject=subject, group_id=item.id, updated_by=user.id))
+    record_audit_log(db, user, "update", "operations_sla_subject_groups", item.id, None, {"subjects": subjects})
+    db.commit()
+    return _sla_groups_out(db, [item])[0]
 
 
 @router.put("/team-members", status_code=204)

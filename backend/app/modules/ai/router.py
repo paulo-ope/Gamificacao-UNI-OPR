@@ -244,9 +244,13 @@ def resolve_ai_order_details_output_fields(policy: EffectivePolicy, response_mod
     if response_mode == "summary":
         allowed = set(policy.selectable_fields(ENTITY_OPERATION_ORDERS))
         return [name for name in AI_ORDER_DETAIL_SUMMARY_FIELDS if name in allowed]
+    # `model_fields | model_computed_fields`: os 4 campos calculados a partir do `raw_payload`
+    # (`service_description` etc.) são `@computed_field` - `model_fields` sozinho não os inclui,
+    # embora `model_dump()` sim (achado real ao testar esta correção).
+    all_fields = set(OperationOrderDetailOut.model_fields) | set(OperationOrderDetailOut.model_computed_fields)
     return [
         name
-        for name in OperationOrderDetailOut.model_fields
+        for name in all_fields
         if policy.field_allowed_or_uncatalogued(ENTITY_OPERATION_ORDERS, name, "detail_available")
     ]
 

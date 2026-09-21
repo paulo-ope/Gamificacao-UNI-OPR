@@ -96,8 +96,11 @@ import type {
   SupportIxcAnalyticsPriorityItem,
   SupportIxcTicketBreakdown,
   SupportIxcTicketBreakdownLevel,
+  SupportIxcTicketBurstWindow,
   SupportIxcTicketDailyPoint,
   SupportIxcTicketFilterOptions,
+  SupportIxcTicketMomentum,
+  SupportIxcTicketOsConversion,
   SupportIxcTicketOverviewKpis,
   SupportIxcTicketSavedFilter,
   SupportIxcTicketSavedFilterValues,
@@ -1207,6 +1210,33 @@ export const api = {
       query.set(key, String(value));
     });
     return request<SupportIxcAnalyticsDriverItem[]>(`/support/ixc/analytics/drivers?${query.toString()}`);
+  },
+
+  // Item 8 da correção pedida (2026-09-17): "hoje a IA recebe sinais que o usuário não vê na
+  // aba" - momentum/burst/conversão em O.S. já existiam no backend sem função correspondente
+  // aqui; expostos agora pro painel único mostrar a mesma inteligência que a IA já tinha.
+  supportIxcAnalyticsMomentum: (params: { regional?: string; city?: string; subject_id?: string; sector_id?: string }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportIxcTicketMomentum>(`/support/ixc/analytics/momentum?${query.toString()}`);
+  },
+
+  supportIxcAnalyticsBursts: (params: { regional?: string }) => {
+    const query = new URLSearchParams();
+    if (params.regional) query.set("regional", params.regional);
+    return request<SupportIxcTicketBurstWindow[]>(`/support/ixc/analytics/bursts?${query.toString()}`);
+  },
+
+  supportIxcAnalyticsOsConversion: (params: { date_from?: string; date_to?: string; regional?: string; subject_id?: string; sector_id?: string }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportIxcTicketOsConversion>(`/support/ixc/analytics/os-conversion?${query.toString()}`);
   }
 };
 
