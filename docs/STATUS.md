@@ -100,18 +100,29 @@ regressão.
     `has_justification`, `supervisor_user_id` etc. e reusam `case_scope_conditions(user)` — o
     mesmo escopo de visibilidade da tela). **Não foi criada tool nova** (`opr_sla_matrix`) porque
     as 3 já existentes cobrem o pedido sem duplicar lógica.
-  - **Validação ao vivo tentada e BLOQUEADA**: chamei `opr_management_justifications` com
-    `reference_date_from=2026-09-15`/`reference_date_to=2026-09-21` pelo conector MCP real desta
-    sessão ("UNI WORKSPACE") — `DetachedInstanceError` ainda ocorre. Rebuildei e reiniciei
-    `opr-gamification-backend` local (Docker) com o fix presente (confirmado via
-    `docker exec ... grep`), repeti a chamada — erro persiste. Investigando: `docker logs` não
-    mostra NENHUMA requisição `/mcp` chegando nesse container, e ele roda com `PUBLIC_BASE_URL`
-    vazio, que é a condição que desliga o servidor MCP em `main.py` (`mcp_server_instance =
-    build_mcp_server() if settings_obj.public_base_url else None`). **Conclusão: o conector "UNI
-    WORKSPACE" que as sessões de IA usam aponta para um backend de produção fora deste checkout
-    local — o restart local não tem efeito nenhum sobre ele.** Falta alguém com acesso ao deploy
-    desse backend levar o commit `3bde7d0` até lá; só depois disso a chamada acima pode ser
-    revalidada de verdade.
+  - **Validação ao vivo — inicialmente BLOQUEADA, depois CONFIRMADA end-to-end.** Primeira
+    tentativa: chamei `opr_management_justifications` com `reference_date_from=2026-09-15`/
+    `reference_date_to=2026-09-21` pelo conector MCP real desta sessão ("UNI WORKSPACE") —
+    `DetachedInstanceError` ainda ocorria. Rebuildar/reiniciar `opr-gamification-backend` local
+    (Docker) não teve efeito: `docker logs` não mostrava NENHUMA requisição `/mcp` chegando nesse
+    container, que roda com `PUBLIC_BASE_URL` vazio (condição que desliga o servidor MCP em
+    `main.py` — `mcp_server_instance = build_mcp_server() if settings_obj.public_base_url else
+    None`). Conclusão: o conector "UNI WORKSPACE" aponta pra um backend de produção fora deste
+    checkout local, na VM `noc.souuni.com`/`/opt/opr-gamificacao` (ver
+    `docs/integracao-uni/deploy.md`) — só quem tem acesso SSH lá consegue aplicar o fix.
+    - `git push` da branch + `gh pr create` (rodado nesta sessão, `gh` autenticado como
+      `paulo-ope`) → [PR #36](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/36).
+    - Usuário confirmou deploy na VM duas vezes antes do PR estar mesclado (`master` continuava em
+      `6c74949`, PR #36 `OPEN`) — reconfirmei via `gh pr view 36`/`git merge-base --is-ancestor` e
+      o erro ainda ocorria nas duas vezes, então corrigi o PR pra `MERGED` (commit `44c8412`) a
+      pedido do usuário antes de seguir.
+    - **Depois do deploy real na VM**: `opr_management_justifications` respondeu sem erro nenhum,
+      dado real — **152 casos com justificativa** no período 15–21/09/2026, agrupados por
+      regional (JI-PARANÁ 33, MACHADINHO D'OESTE 29, SÃO FRANCISCO DO GUAPORÉ 19, JARU 16,
+      ALVORADA D'OESTE 12, NOVA BRASILÂNDIA D'OESTE 12, OURO PRETO D'OESTE 10, ROLIM DE MOURA 8,
+      PRESIDENTE MÉDICI 7, ALTA FLORESTA D'OESTE 4, SÃO FELIPE D'OESTE 2), com texto real de
+      justificativa (ex.: caso do Marcelo Menezes Costa citado acima — "equipe sem O,S na cidade
+      equipe plantão..."). **Frente encerrada, nada pendente.**
 
 - **`docs/integracao-uni/` — pacote de integração somente-leitura para o Cubo de Dados
   Corporativo/Portal Executivo (análise concluída em 2026-09-17, commit `6c0e69e`; achado e
