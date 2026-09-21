@@ -881,18 +881,54 @@ def delete_user_permission_override(
     return _user_permission_overview_out(db, target)
 
 
+def _integration_openapi_url(request: Request, token: str | None) -> str:
+    root_path = request.scope.get("root_path", "")
+    # request.url.path aqui é o path da página HTML (ex.: .../integracao-uni ou
+    # .../integracao-uni/swagger) - o openapi.json sempre vive um nível acima, direto em
+    # /docs/integracao-uni/openapi.json, então normaliza para esse caminho fixo em vez de
+    # concatenar (senão a variante /swagger apontaria para um openapi.json que não existe).
+    openapi_url = f"{root_path}/api/admin/docs/integracao-uni/openapi.json"
+    if token:
+        openapi_url = f"{openapi_url}?token={token}"
+    return openapi_url
+
+
 @router.get("/docs/integracao-uni", include_in_schema=False)
 def integration_docs_ui(
     request: Request,
     token: str | None = None,
     _: User = Depends(require_integration_docs_access),
 ) -> HTMLResponse:
-    """Swagger só com os endpoints documentados para integração externa (ver
-    `integration_docs.py`). Não aparece no `/docs` padrão nem no schema completo."""
-    openapi_url = f"{request.scope.get('root_path', '')}{request.url.path}/openapi.json"
-    if token:
-        openapi_url = f"{openapi_url}?token={token}"
-    return get_swagger_ui_html(openapi_url=openapi_url, title="UNI Workspace - Integração Externa")
+    """Documentação de integração externa (ver `integration_docs.py`), renderizada com Scalar -
+    interface moderna sobre o mesmo `openapi.json` filtrado (mesma autenticação, mesmos dados).
+    Não aparece no `/docs` padrão nem no schema completo. Versão com Swagger UI clássico
+    disponível em `/docs/integracao-uni/swagger`, para quem preferir."""
+    openapi_url = _integration_openapi_url(request, token)
+    html = f"""<!doctype html>
+<html>
+<head>
+    <title>UNI Workspace - Integração Externa</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+    <script id="api-reference" data-url="{openapi_url}" data-configuration='{{"theme":"purple","darkMode":true}}'></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>"""
+    return HTMLResponse(html)
+
+
+@router.get("/docs/integracao-uni/swagger", include_in_schema=False)
+def integration_docs_ui_classic(
+    request: Request,
+    token: str | None = None,
+    _: User = Depends(require_integration_docs_access),
+) -> HTMLResponse:
+    """Mesma documentação de `/docs/integracao-uni`, com o Swagger UI clássico em vez do Scalar -
+    para quem preferir a interface tradicional (ex.: já tem o fluxo de "Try it out" memorizado)."""
+    openapi_url = _integration_openapi_url(request, token)
+    return get_swagger_ui_html(openapi_url=openapi_url, title="UNI Workspace - Integração Externa (Swagger)")
 
 
 @router.get("/docs/integracao-uni/openapi.json", include_in_schema=False)
