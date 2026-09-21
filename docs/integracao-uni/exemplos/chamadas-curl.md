@@ -1,11 +1,22 @@
 # Exemplos de chamada crua (curl)
 
-Substitua `$UNI_API_BASE_URL` e `$UNI_API_TOKEN` pelas variáveis do seu `.env` local
-(ver [../.env.example](../.env.example)). Nenhum comando abaixo foi executado com uma
-credencial real nesta análise — foram validados apenas a forma da URL/parâmetros contra
-`openapi.yaml` e o retorno 401 esperado sem token (ver [../validacao.md](../validacao.md)).
+Substitua `$UNI_API_BASE_URL` pela URL da API (ver [../.env.example](../.env.example)).
+`$UNI_API_TOKEN` aqui **não é um segredo fixo** — é o `access_token` devolvido pelo login (passo
+0 abaixo), que expira em `AUTH_TOKEN_EXPIRE_MINUTES` (720min/12h por padrão) e precisa ser obtido
+de novo depois disso. Todos os exemplos deste arquivo já foram executados com sucesso contra
+desenvolvimento local com a credencial real do cubo — ver [../validacao.md](../validacao.md) para
+a evidência completa (401 sem token, 200 com token válido, 403 em escrita).
 
-## Autenticação — cabeçalho esperado
+## 0. Login — obter o token (fazer isso primeiro, e de novo quando expirar)
+
+```bash
+UNI_API_TOKEN=$(curl -s -X POST "$UNI_API_BASE_URL/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$UNI_API_EMAIL\",\"password\":\"$UNI_API_PASSWORD\"}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+```
+
+## 1. Autenticação — cabeçalho esperado nas chamadas seguintes
 
 ```bash
 curl -s "$UNI_API_BASE_URL/operations/overview?date_from=2026-09-01&date_to=2026-09-16" \
