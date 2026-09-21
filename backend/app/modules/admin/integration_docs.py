@@ -30,10 +30,30 @@ from app.modules.ai.auth import try_resolve_api_key_context
 
 REQUIRED_PERMISSION = "admin:integrations:read"
 
-# Tags do OpenAPI que compõem a documentação de integração externa hoje. Novo endpoint entra aqui
-# só quando for de fato parte do contrato externo (ver docs/api-operacao-analitica.md) - manter
-# esta lista curta e explícita é o ponto do filtro: nunca vira um espelho do /docs completo.
-INTEGRATION_DOCS_TAGS = ("operations",)
+# Tags do OpenAPI que compõem a documentação de integração externa hoje. Pedido do usuário em
+# 2026-09-21 (Cubo de Dados Corporativo / Portal Executivo): cobertura de leitura de TODOS os
+# módulos de negócio, sem exceção - cada tag aqui corresponde a um `APIRouter(tags=[...])` real
+# do backend (ver `docs/api-completa.md` para o mapeamento completo módulo -> endpoints).
+INTEGRATION_DOCS_TAGS = (
+    "operations",
+    "gamification",
+    "dashboard",
+    "scoring",
+    "rules",
+    "service-orders",
+    "calculation-runs",
+    "leadership",
+    "point-balance",
+    "collaborators",
+    "audit",
+    "support",
+    "scheduling",
+    "localiza",
+    "management",
+    "admin",
+    "admin-ai-governance",
+    "intelligence",
+)
 
 _UNAUTHORIZED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -96,7 +116,12 @@ def build_integration_openapi_schema(request: Request) -> dict:
         kept_methods = {
             method: operation
             for method, operation in methods.items()
-            if allowed_tags & set(operation.get("tags", []))
+            # Só GET: mesmo que um router misture leitura e escrita sob a mesma tag (ex.:
+            # calculation-runs tem GET de status e POST /calculate no mesmo arquivo), a doc de
+            # integração externa nunca deve LISTAR uma operação de escrita - "consulta,
+            # exclusivamente em leitura" (pedido do usuário) é garantido aqui, não só pela
+            # permissão da conta que consome.
+            if method == "get" and allowed_tags & set(operation.get("tags", []))
         }
         if kept_methods:
             filtered_paths[path] = kept_methods
