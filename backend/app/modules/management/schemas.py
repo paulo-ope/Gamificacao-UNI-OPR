@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.management.models import (
     JUSTIFY_TARGET_STATUSES,
@@ -432,6 +433,7 @@ class ManagementCaseGenerateResult(BaseModel):
     evaluated_members: int
     skipped_existing: int
     skipped_insufficient_data: int
+    excluded_members: int = 0
     reference_year: int
     reference_month: int
 
@@ -451,6 +453,80 @@ class ManagementAutoGenerateSettingsOut(BaseModel):
 
 class ManagementAutoGenerateSettingsUpdate(BaseModel):
     enabled: bool
+
+
+class ManagementCaseGenerationGap(BaseModel):
+    """Um modelo de equipe que cobra justificativa (`requires_justification=True`) mas não tem
+    regra HABILITADA pra sábado e/ou domingo - nesses dias, `generate_daily_cases_for_date` pula a
+    avaliação inteira, silenciosamente, mesmo com produção zero. Ver `cases.case_generation_gaps`."""
+
+    team_model_id: int
+    team_model_name: str
+    missing_period_types: list[Literal["saturday", "sunday"]]
+    affected_members: int
+    sample_responsible_names: list[str]
+
+
+class ManagementCaseGenerationGapsOut(BaseModel):
+    items: list[ManagementCaseGenerationGap]
+
+
+class ManagementCaseGenerationExclusionOut(BaseModel):
+    id: int
+    scope_type: Literal["member", "regional"]
+    member_id: int | None
+    member_responsible_name: str | None = None
+    member_regional: str | None = None
+    regional: str | None
+    date_from: date | None
+    date_to: date | None
+    reason: str
+    active: bool
+    created_by: int | None
+    created_by_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ManagementCaseGenerationExclusionCreate(BaseModel):
+    scope_type: Literal["member", "regional"]
+    member_id: int | None = None
+    regional: str | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    reason: str = Field(min_length=5, max_length=500)
+
+    @field_validator("regional")
+    @classmethod
+    def _blank_regional_to_none(cls, value: str | None) -> str | None:
+        return value.strip() if value and value.strip() else None
+
+    @field_validator("date_to")
+    @classmethod
+    def _date_range_is_ordered(cls, value: date | None, info) -> date | None:
+        date_from = info.data.get("date_from")
+        if value is not None and date_from is not None and value < date_from:
+            raise ValueError("date_to não pode ser anterior a date_from.")
+        return value
+
+    @model_validator(mode="after")
+    def _scope_matches_fields(self) -> "ManagementCaseGenerationExclusionCreate":
+        if self.scope_type == "member":
+            if not self.member_id or self.regional is not None:
+                raise ValueError("scope_type='member' exige member_id e nenhuma regional.")
+        else:
+            if not self.regional or self.member_id is not None:
+                raise ValueError("scope_type='regional' exige regional e nenhum member_id.")
+        return self
+
+
+class ManagementCaseGenerationExclusionUpdate(BaseModel):
+    date_from: date | None = None
+    date_to: date | None = None
+    reason: str | None = Field(default=None, min_length=5, max_length=500)
+    active: bool | None = None
 
 
 class StructureAuditFinding(BaseModel):

@@ -6,6 +6,7 @@ import {
   Loader2,
   MessageSquare,
   Search,
+  ShieldAlert,
   Sparkles,
   Zap,
   XCircle,
@@ -26,6 +27,7 @@ import type {
   ManagementAutoGenerateSettings,
   ManagementCase,
   ManagementCaseFilters,
+  ManagementCaseGenerationGap,
   ManagementCasePage,
   ManagementCaseReason,
   ManagementOptions,
@@ -71,6 +73,7 @@ export function ManagementCasesPanel({
   const [generating, setGenerating] = useState(false);
   const [autoGenerate, setAutoGenerate] = useState<ManagementAutoGenerateSettings | null>(null);
   const [autoGenerateSaving, setAutoGenerateSaving] = useState(false);
+  const [generationGaps, setGenerationGaps] = useState<ManagementCaseGenerationGap[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [selected, setSelected] = useState<ManagementCase | null>(null);
@@ -134,6 +137,7 @@ export function ManagementCasesPanel({
   useEffect(() => {
     if (!canGenerate) return;
     void api.managementAutoGenerateSettings().then(setAutoGenerate).catch(() => undefined);
+    void api.managementCaseGenerationGaps().then((result) => setGenerationGaps(result.items)).catch(() => undefined);
   }, [canGenerate]);
 
   async function toggleAutoGenerate(next: boolean) {
@@ -399,6 +403,45 @@ export function ManagementCasesPanel({
                 {autoGenerate.enabled ? "Desativar" : "Ativar"}
               </Button>
             ) : null}
+          </div>
+        ) : null}
+        {canGenerate && generationGaps.length > 0 ? (
+          <div className="mt-3 space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 shrink-0 text-amber-700" />
+              <span className="text-xs font-semibold text-amber-900">
+                {generationGaps.length === 1
+                  ? "1 modelo de equipe sem regra de fim de semana"
+                  : `${generationGaps.length} modelos de equipe sem regra de fim de semana`}
+              </span>
+            </div>
+            <p className="text-xs text-amber-800">
+              Sem uma regra de meta habilitada pra sábado/domingo, produção zero nesses dias nunca vira
+              caso automático - nem bolinha no calendário, nem botão &quot;Justificar dia&quot;. Configure a
+              regra em Operação Analítica → Configuração de Equipes.
+            </p>
+            <ul className="space-y-1 text-xs text-amber-900">
+              {generationGaps.map((gap) => (
+                <li key={gap.team_model_id} className="flex flex-wrap items-baseline gap-x-1.5">
+                  <span className="font-semibold">{gap.team_model_name}</span>
+                  <span>
+                    - falta regra de{" "}
+                    {gap.missing_period_types
+                      .map((period) => (period === "saturday" ? "sábado" : "domingo"))
+                      .join(" e ")}
+                  </span>
+                  <span className="text-amber-700">
+                    ({gap.affected_members} colaborador{gap.affected_members === 1 ? "" : "es"}
+                    {gap.sample_responsible_names.length
+                      ? `: ${gap.sample_responsible_names.join(", ")}${
+                          gap.affected_members > gap.sample_responsible_names.length ? "…" : ""
+                        }`
+                      : ""}
+                    )
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
       </div>

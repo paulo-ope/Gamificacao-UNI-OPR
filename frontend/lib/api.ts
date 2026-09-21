@@ -45,6 +45,10 @@ import type {
   ManagementCaseFilters,
   ManagementCaseGenerateResult,
   ManagementAutoGenerateSettings,
+  ManagementCaseGenerationExclusion,
+  ManagementCaseGenerationExclusionCreate,
+  ManagementCaseGenerationExclusionUpdate,
+  ManagementCaseGenerationGap,
   ManagementCasePage,
   ManagementCaseReason,
   ManagementDashboard,
@@ -608,6 +612,22 @@ export const api = {
     request<ManagementAutoGenerateSettings>("/management/settings/auto-generate", {
       method: "PUT",
       body: JSON.stringify({ enabled })
+    }),
+  managementCaseGenerationGaps: () =>
+    request<{ items: ManagementCaseGenerationGap[] }>("/management/settings/case-generation-gaps"),
+  managementCaseGenerationExclusions: (includeInactive = false) =>
+    request<ManagementCaseGenerationExclusion[]>(
+      `/management/case-generation-exclusions${includeInactive ? "?include_inactive=true" : ""}`
+    ),
+  createManagementCaseGenerationExclusion: (payload: ManagementCaseGenerationExclusionCreate) =>
+    request<ManagementCaseGenerationExclusion>("/management/case-generation-exclusions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateManagementCaseGenerationExclusion: (id: number, payload: ManagementCaseGenerationExclusionUpdate) =>
+    request<ManagementCaseGenerationExclusion>(`/management/case-generation-exclusions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     }),
   gamificationPreview: () => request<GamificationPreview>("/dashboard/gamification-preview"),
   supportOpaOverview: (filters: SupportOpaAttendanceFilters) => {

@@ -37,6 +37,7 @@ from app.modules.management.models import (
     OPEN_CASE_STATUSES,
     ManagementCase,
     ManagementCaseComment,
+    ManagementCaseGenerationExclusion,
     ManagementCaseReason,
     ManagementOperationalMember,
 )
@@ -268,14 +269,21 @@ def generate_performance_cases(
         )
     }
 
+    exclusions = active_generation_exclusions(db)
     created = 0
     skipped_existing = 0
     skipped_insufficient_data = 0
+    excluded = 0
     evaluated = 0
 
     for member in members:
         model = team_models.get(member.team_model_id)
         if model is None or not model.median_from_quantity or not model.requires_justification:
+            continue
+        if find_month_exclusion(
+            exclusions, member_id=member.id, regional=member.regional, reference_year=year, reference_month=month
+        ):
+            excluded += 1
             continue
         key = (_norm(member.responsible_name), _norm(member.regional))
         bucket = produced.get(key)
@@ -335,6 +343,7 @@ def generate_performance_cases(
         "evaluated_members": evaluated,
         "skipped_existing": skipped_existing,
         "skipped_insufficient_data": skipped_insufficient_data,
+        "excluded_members": excluded,
         "reference_year": year,
         "reference_month": month,
     }
@@ -648,6 +657,112 @@ def is_scheduled_workday(member: ManagementOperationalMember, day: date) -> bool
     )
 
 
+# --- Exclusão de geração de caso (colaborador/regional, período opcional) ----------------------
+#
+# Pedido do usuário (2026-09-21): parametrizar quem/quando NUNCA gera caso, sem precisar mudar o
+# modelo de equipe inteiro nem desativar o cadastro. Cobre os DOIS caminhos que abrem um
+# `CASE_TYPE_DAILY_BELOW`/`CASE_TYPE_PRODUCTIVITY` - a geração automática (scheduler, em lote) E a
+# abertura manual sob demanda (`POST /cases/daily`/`/cases/monthly`, clique em "Justificar dia/mês"
+# no calendário) - decisão explícita do usuário de bloquear os dois, não só o automático.
+
+
+def _exclusion_covers_day(exclusion: ManagementCaseGenerationExclusion, day: date) -> bool:
+    if exclusion.date_from is not None and day < exclusion.date_from:
+        return False
+    if exclusion.date_to is not None and day > exclusion.date_to:
+        return False
+    return True
+
+
+def _exclusion_overlaps_range(exclusion: ManagementCaseGenerationExclusion, range_start: date, range_end: date) -> bool:
+    """Pra avaliação MENSAL: qualquer sobreposição com o mês fechado já é motivo pra pular - decisão
+    conservadora, pra nunca cobrar quem teve algum dia excluído dentro do período (ex.: 5 dias de
+    férias dentro de um mês de 30), em vez de exigir que a exclusão cubra o mês inteiro."""
+    if exclusion.date_from is not None and exclusion.date_from > range_end:
+        return False
+    if exclusion.date_to is not None and exclusion.date_to < range_start:
+        return False
+    return True
+
+
+def _exclusion_applies_to(exclusion: ManagementCaseGenerationExclusion, *, member_id: int | None, regional: str) -> bool:
+    if exclusion.scope_type == "member":
+        return member_id is not None and exclusion.member_id == member_id
+    return _norm(exclusion.regional) == _norm(regional)
+
+
+def active_generation_exclusions(db: Session) -> list[ManagementCaseGenerationExclusion]:
+    """Todas as exclusões ATIVAS, carregadas de uma vez - usado pela geração em lote
+    (`generate_daily_cases_for_date`/`generate_performance_cases`) pra não disparar uma consulta
+    por colaborador dentro do loop (mesmo cuidado de N+1 já documentado em `_resolve_member_for_case`)."""
+    return list(
+        db.scalars(select(ManagementCaseGenerationExclusion).where(ManagementCaseGenerationExclusion.active.is_(True)))
+    )
+
+
+def find_day_exclusion(
+    exclusions: Sequence[ManagementCaseGenerationExclusion], *, member_id: int | None, regional: str, day: date
+) -> ManagementCaseGenerationExclusion | None:
+    return next(
+        (
+            exclusion
+            for exclusion in exclusions
+            if _exclusion_applies_to(exclusion, member_id=member_id, regional=regional) and _exclusion_covers_day(exclusion, day)
+        ),
+        None,
+    )
+
+
+def find_month_exclusion(
+    exclusions: Sequence[ManagementCaseGenerationExclusion],
+    *,
+    member_id: int | None,
+    regional: str,
+    reference_year: int,
+    reference_month: int,
+) -> ManagementCaseGenerationExclusion | None:
+    month_start = date(reference_year, reference_month, 1)
+    month_end = date(reference_year, reference_month, calendar_module.monthrange(reference_year, reference_month)[1])
+    return next(
+        (
+            exclusion
+            for exclusion in exclusions
+            if _exclusion_applies_to(exclusion, member_id=member_id, regional=regional)
+            and _exclusion_overlaps_range(exclusion, month_start, month_end)
+        ),
+        None,
+    )
+
+
+def active_generation_exclusion_for_daily_request(
+    db: Session, *, responsible_name: str, regional: str, day: date
+) -> ManagementCaseGenerationExclusion | None:
+    """Mesma checagem de `find_day_exclusion`, mas resolvendo o membro/regional canônica a partir
+    do nome - usada pela abertura MANUAL de caso (`POST /cases/daily`, ver router.py), que só tem o
+    nome/regional do clique no calendário, não um `member_id` já resolvido."""
+    member = _resolve_member_for_case(db, responsible_name)
+    canonical_regional = member.regional if member else normalize_regional(regional)
+    exclusions = active_generation_exclusions(db)
+    return find_day_exclusion(exclusions, member_id=member.id if member else None, regional=canonical_regional, day=day)
+
+
+def active_generation_exclusion_for_monthly_request(
+    db: Session, *, responsible_name: str, regional: str, reference_year: int, reference_month: int
+) -> ManagementCaseGenerationExclusion | None:
+    """Mesma checagem de `find_month_exclusion`, resolvendo membro/regional pelo nome - usada por
+    `POST /cases/monthly` (ver router.py)."""
+    member = _resolve_member_for_case(db, responsible_name)
+    canonical_regional = member.regional if member else normalize_regional(regional)
+    exclusions = active_generation_exclusions(db)
+    return find_month_exclusion(
+        exclusions,
+        member_id=member.id if member else None,
+        regional=canonical_regional,
+        reference_year=reference_year,
+        reference_month=reference_month,
+    )
+
+
 # Janela de dias corridos usada pra sugerir a escala 12x36 a partir da produção real. Só a ponta
 # mais recente entra na análise (não os 45 dias inteiros) porque a produção de um técnico pode
 # mudar de padrão no meio do caminho (trocou de turma, voltou de férias) - olhar só os últimos dias
@@ -841,8 +956,10 @@ def generate_daily_cases_for_date(
     ).all()
     team_models = {model.id: model for model in db.scalars(select(OperationTeamModel)).all() if model.active}
 
+    exclusions = active_generation_exclusions(db)
     created = 0
     already_open = 0
+    excluded = 0
     evaluated = 0
     for member in members:
         if not is_scheduled_workday(member, day):
@@ -853,6 +970,9 @@ def generate_daily_cases_for_date(
         model_dict = _team_model_dict(model)
         rule = _rule_for_day(model_dict, day)
         if rule is None:
+            continue
+        if find_day_exclusion(exclusions, member_id=member.id, regional=member.regional, day=day):
+            excluded += 1
             continue
         key = (_norm(member.responsible_name), _norm(member.regional))
         info = produced.get(key)
@@ -880,9 +1000,76 @@ def generate_daily_cases_for_date(
     return {
         "created_cases": created,
         "already_open_cases": already_open,
+        "excluded_members": excluded,
         "evaluated_members": evaluated,
         "reference_date": day.isoformat(),
     }
+
+
+def _missing_weekend_periods(model_dict: dict) -> list[str]:
+    """Sábado/domingo sem regra HABILITADA no modelo - ao contrário de dia de semana,
+    `_rule_for_day` não tem piso padrão pra fim de semana (devolve `None` direto), então esses
+    períodos não são avaliados em `generate_daily_cases_for_date`/`get_or_create_daily_case`."""
+    rules_by_type = {rule["period_type"]: rule for rule in model_dict["target_rules"]}
+    return [
+        period_type
+        for period_type in ("saturday", "sunday")
+        if rules_by_type.get(period_type) is None or not rules_by_type[period_type]["enabled"]
+    ]
+
+
+def case_generation_gaps(db: Session, *, user: User) -> list[dict]:
+    """Modelos de equipe com cobrança automática ligada (`requires_justification=True`) que não
+    têm regra habilitada pra sábado e/ou domingo - achado real de 2026-09-21: um colaborador com
+    produção ZERO num desses dias nunca gera caso (nem bolinha, nem botão "Justificar dia"),
+    porque `_rule_for_day` devolve `None` pra fim de semana sem regra própria e o dia inteiro é
+    pulado, silenciosamente, mesmo com escala normal (`is_scheduled_workday` sem escala alternada
+    configurada também trata fim de semana como dia útil comum). Sem este relatório, o "furo" só
+    aparecia manualmente, colaborador por colaborador, quando alguém reparava que a bolinha nunca
+    vinha pra um dia de fim de semana específico.
+
+    Só entra modelo com pelo menos um colaborador ATIVO usando ele, dentro do escopo de
+    visibilidade do usuário (mesma regra de `member_scope_conditions`) - modelo sem ninguém
+    afetado não é um problema a mostrar."""
+    members = db.scalars(
+        select(ManagementOperationalMember).where(
+            ManagementOperationalMember.is_active.is_(True),
+            ManagementOperationalMember.team_model_id.is_not(None),
+            ManagementOperationalMember.status.not_in(("outside_operation", "inactive")),
+            *member_scope_conditions(user),
+        )
+    ).all()
+    members_by_model: dict[int, list[ManagementOperationalMember]] = {}
+    for member in members:
+        members_by_model.setdefault(member.team_model_id, []).append(member)
+    if not members_by_model:
+        return []
+
+    models = db.scalars(
+        select(OperationTeamModel).where(
+            OperationTeamModel.id.in_(members_by_model.keys()),
+            OperationTeamModel.active.is_(True),
+            OperationTeamModel.requires_justification.is_(True),
+        )
+    ).all()
+
+    gaps = []
+    for model in models:
+        missing = _missing_weekend_periods(_team_model_dict(model))
+        if not missing:
+            continue
+        affected = members_by_model[model.id]
+        gaps.append(
+            {
+                "team_model_id": model.id,
+                "team_model_name": model.name,
+                "missing_period_types": missing,
+                "affected_members": len(affected),
+                "sample_responsible_names": sorted({member.responsible_name for member in affected})[:5],
+            }
+        )
+    gaps.sort(key=lambda item: -item["affected_members"])
+    return gaps
 
 
 def refresh_pending_cases(db: Session) -> dict:

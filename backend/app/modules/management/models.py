@@ -37,7 +37,19 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -136,6 +148,60 @@ class ManagementOperationalMember(Base):
     supervisor = relationship("User", foreign_keys=[supervisor_user_id])
     collaborator = relationship("Collaborator")
     team_model = relationship("OperationTeamModel")
+
+
+GENERATION_EXCLUSION_SCOPES = ("member", "regional")
+
+
+class ManagementCaseGenerationExclusion(Base):
+    """Suspende a cobrança de caso (automática E manual, via `POST /cases/daily`/`/cases/monthly`)
+    pra um colaborador específico (`member_id`, a linha de `ManagementOperationalMember` - não
+    `Collaborator.id`, porque uma pessoa pode ter mais de uma linha, uma por regional, e a exclusão
+    precisa valer só pra uma delas) ou pra uma regional inteira, num período opcional. Pedido do
+    usuário em 2026-09-21: hoje só dava pra desligar a cobrança MUDANDO O MODELO DE EQUIPE inteiro
+    (afeta todo mundo que usa aquele modelo) ou marcando o colaborador `outside_operation`/
+    `inactive` (remove ele de tudo, não só da cobrança) - nenhuma das duas serve pra um caso
+    pontual (férias, filial nova sem estrutura validada).
+
+    `date_to` nulo = sem fim (exclusão permanente a partir de `date_from`). `date_from` nulo = sem
+    início (vale desde sempre) - normalmente só faz sentido combinado com `date_to` nulo também
+    (exclusão permanente sem data), mas a coluna permite os dois nulos por simplicidade de
+    validação, não por caso de uso esperado.
+
+    Nunca é apagada de verdade - só desativada (`active=False`) - histórico de "por que esse
+    período não foi cobrado" é auditoria, igual ao resto do módulo."""
+
+    __tablename__ = "management_case_generation_exclusions"
+    __table_args__ = (
+        CheckConstraint(
+            "(scope_type = 'member' AND member_id IS NOT NULL AND regional IS NULL) OR "
+            "(scope_type = 'regional' AND regional IS NOT NULL AND member_id IS NULL)",
+            name="ck_management_case_generation_exclusion_scope",
+        ),
+        CheckConstraint(
+            "date_from IS NULL OR date_to IS NULL OR date_from <= date_to",
+            name="ck_management_case_generation_exclusion_date_range",
+        ),
+        Index("ix_management_case_generation_exclusion_member", "member_id"),
+        Index("ix_management_case_generation_exclusion_regional", "regional"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    member_id: Mapped[int | None] = mapped_column(
+        ForeignKey("management_operational_members.id", ondelete="CASCADE"), nullable=True
+    )
+    regional: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    date_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    member = relationship("ManagementOperationalMember")
+    created_by_user = relationship("User", foreign_keys=[created_by])
 
 
 class ManagementCaseReason(Base):

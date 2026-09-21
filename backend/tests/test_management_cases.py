@@ -12,7 +12,7 @@ from app.main import app
 from app.models import Collaborator, Notification, User
 from app.modules.management import cases as cases_engine
 from app.modules.management.models import ManagementCase, ManagementCaseReason, ManagementOperationalMember
-from app.modules.operations.models import OperationOrder, OperationTeamModel
+from app.modules.operations.models import OperationOrder, OperationTeamModel, OperationTeamTargetRule
 
 YEAR, MONTH = 2026, 7
 
@@ -920,3 +920,70 @@ def test_daily_case_endpoint_hides_case_outside_supervisor_scope(db_session, ope
         assert response.status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+# --- Relatório de lacuna de regra de fim de semana ----------------------------------------------
+
+
+def test_case_generation_gaps_flags_model_without_weekend_rule(db_session, operation_setup):
+    """Modelo sem regra de sábado/domingo aparece no relatório - achado real de 2026-09-21:
+    `_rule_for_day` devolve `None` pra fim de semana sem regra própria, então
+    `generate_daily_cases_for_date` pula o colaborador inteiro nesses dias, mesmo com produção
+    zero, sem gerar caso nem avisar ninguém."""
+    matrix = User(name="Matriz", email="matriz.gaps@pytest.local", role="admin", active=True, password_hash="x")
+    db_session.add(matrix)
+    db_session.flush()
+
+    gaps = cases_engine.case_generation_gaps(db_session, user=matrix)
+
+    assert len(gaps) == 1
+    gap = gaps[0]
+    assert gap["team_model_id"] == operation_setup["model"].id
+    assert set(gap["missing_period_types"]) == {"saturday", "sunday"}
+    assert gap["affected_members"] == 1
+    assert gap["sample_responsible_names"] == ["Joao Campo"]
+
+
+def test_case_generation_gaps_clears_once_both_weekend_rules_exist(db_session, operation_setup):
+    model = operation_setup["model"]
+    db_session.add_all(
+        [
+            OperationTeamTargetRule(team_model_id=model.id, period_type="saturday", enabled=True, target_quantity=3),
+            OperationTeamTargetRule(team_model_id=model.id, period_type="sunday", enabled=True, target_quantity=2),
+        ]
+    )
+    db_session.flush()
+    matrix = User(name="Matriz", email="matriz.gaps2@pytest.local", role="admin", active=True, password_hash="x")
+    db_session.add(matrix)
+    db_session.flush()
+
+    assert cases_engine.case_generation_gaps(db_session, user=matrix) == []
+
+
+def test_case_generation_gaps_ignores_model_that_does_not_require_justification(db_session, operation_setup):
+    operation_setup["model"].requires_justification = False
+    db_session.flush()
+    matrix = User(name="Matriz", email="matriz.gaps3@pytest.local", role="admin", active=True, password_hash="x")
+    db_session.add(matrix)
+    db_session.flush()
+
+    assert cases_engine.case_generation_gaps(db_session, user=matrix) == []
+
+
+def test_case_generation_gaps_respects_supervisor_scope(db_session, operation_setup):
+    """Supervisor sem `management:review` só vê a lacuna dos colaboradores/regionais dele."""
+    other_supervisor = User(name="Supervisor Ariquemes", email="sup.ari.gaps@pytest.local", role="operator", active=True, password_hash="x")
+    other_model = OperationTeamModel(name="Suporte Ariquemes", daily_target=5, active=True)
+    db_session.add_all([other_supervisor, other_model])
+    db_session.flush()
+    db_session.add(
+        ManagementOperationalMember(
+            responsible_name="Maria Campo", regional="UNI ARIQUEMES", team_model_id=other_model.id,
+            supervisor_user_id=other_supervisor.id, status="validated_operation", is_active=True,
+        )
+    )
+    db_session.commit()
+
+    gaps = cases_engine.case_generation_gaps(db_session, user=operation_setup["supervisor"])
+
+    assert [gap["team_model_id"] for gap in gaps] == [operation_setup["model"].id]

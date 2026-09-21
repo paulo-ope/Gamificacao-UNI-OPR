@@ -969,6 +969,47 @@ export type ManagementAutoGenerateSettings = {
   last_run_date: string | null;
 };
 
+export type ManagementCaseGenerationGap = {
+  team_model_id: number;
+  team_model_name: string;
+  missing_period_types: Array<"saturday" | "sunday">;
+  affected_members: number;
+  sample_responsible_names: string[];
+};
+
+export type ManagementCaseGenerationExclusion = {
+  id: number;
+  scope_type: "member" | "regional";
+  member_id: number | null;
+  member_responsible_name: string | null;
+  member_regional: string | null;
+  regional: string | null;
+  date_from: string | null;
+  date_to: string | null;
+  reason: string;
+  active: boolean;
+  created_by: number | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ManagementCaseGenerationExclusionCreate = {
+  scope_type: "member" | "regional";
+  member_id?: number | null;
+  regional?: string | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  reason: string;
+};
+
+export type ManagementCaseGenerationExclusionUpdate = {
+  date_from?: string | null;
+  date_to?: string | null;
+  reason?: string;
+  active?: boolean;
+};
+
 export type ManagementCaseBulkReviewResult = {
   updated_cases: number;
   skipped_pending: number;
