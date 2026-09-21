@@ -516,13 +516,7 @@ export function buildSlaTechnologyGaugeOption(
         splitLine: { show: false },
         axisLabel: { show: false },
         anchor: { show: false },
-        title: {
-          show: true,
-          offsetCenter: [0, "78%"],
-          fontSize: 11,
-          fontWeight: 600,
-          color: CHART_INK.secondary,
-        },
+        title: { show: false },
         detail: {
           show: true,
           valueAnimation: true,
@@ -532,7 +526,7 @@ export function buildSlaTechnologyGaugeOption(
           fontWeight: 700,
           color: CHART_INK.primary,
         },
-        data: [{ value: rate ?? 0, name: `${group}${item ? ` · ${item.completed}` : ""}` }],
+        data: [{ value: rate ?? 0 }],
       };
     }),
   };

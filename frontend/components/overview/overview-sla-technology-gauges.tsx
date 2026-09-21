@@ -45,13 +45,20 @@ export function OverviewSlaTechnologyGauges({
     >
       {option ? (
         <>
-          <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 180, width: "100%" }} />
+          <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 148, width: "100%" }} />
           <div className="flex" role="presentation">
             {groups.map((group) => {
-              const averageHours = byGroup.get(group)?.average_closing_hours ?? null;
+              const item = byGroup.get(group) ?? null;
+              const averageHours = item?.average_closing_hours ?? null;
               return (
-                <div key={group} className="text-center text-xs text-slate-500" style={{ width: `${slotWidthPercent}%` }}>
-                  Tempo médio: {averageHours === null ? "-" : `${averageHours.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}h`}
+                <div key={group} className="px-1 text-center" style={{ width: `${slotWidthPercent}%` }}>
+                  <p className="text-xs font-semibold leading-tight text-slate-600">
+                    {group}
+                    {item ? ` · ${item.completed}` : ""}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Tempo médio: {averageHours === null ? "-" : `${averageHours.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}h`}
+                  </p>
                 </div>
               );
             })}
