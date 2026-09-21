@@ -26,6 +26,7 @@ from app.services import cpk_health, point_balance, scoring_detail
 from app.services.cpk_client import CpkApiError
 from app.services.calculation_closure import (
     build_rule_snapshot,
+    calculation_cycle_lock,
     current_reference_period,
     ensure_period_not_closed,
     now_porto_velho,
@@ -951,19 +952,28 @@ def recalculate_current_period(
     efeito da mudança apareça no fechamento corrente sem precisar de um clique manual."""
     now = now_porto_velho()
     try:
-        run = calculate_scores(
-            db,
-            reference_month=now.month,
-            reference_year=now.year,
-            regional=None,
-            executed_by=triggered_by,
-            allow_paid_revision=False,
-            execution_note=execution_note,
-        )
-        calculate_and_store_leadership_bonus(db, run)
-        prune_superseded_drafts(db, run)
-        db.commit()
-        logger.info("Recálculo automático do período %02d/%d concluído (run #%s).", now.month, now.year, run.id)
+        # Mesma trava do caminho manual (`calculation_runs.py::calculate`) - P0-4 da auditoria de
+        # 2026-09-15. Sem isso, o ciclo automático de 20 em 20 minutos do sincronizador do IXC
+        # podia sobrepor um clique manual em "recalcular" para o MESMO período/regional (ambos
+        # `regional=None`, o caso mais comum), cada um criando seu próprio `CalculationRun` e
+        # aplicando `detect_post_payment_warranty_debits` sem enxergar o que o outro ainda não
+        # tinha commitado. Um conflito aqui vira `HTTPException(409)`, capturada pelo `except`
+        # abaixo igual a qualquer outro erro esperado deste caminho (ex.: período já pago) - não
+        # derruba o chamador (loop do sincronizador ou a correção de Tipo Geral).
+        with calculation_cycle_lock(db, now.month, now.year, None, user=None):
+            run = calculate_scores(
+                db,
+                reference_month=now.month,
+                reference_year=now.year,
+                regional=None,
+                executed_by=triggered_by,
+                allow_paid_revision=False,
+                execution_note=execution_note,
+            )
+            calculate_and_store_leadership_bonus(db, run)
+            prune_superseded_drafts(db, run)
+            db.commit()
+            logger.info("Recálculo automático do período %02d/%d concluído (run #%s).", now.month, now.year, run.id)
     except Exception:
         db.rollback()
         logger.exception("Falha ao recalcular automaticamente o período %02d/%d", now.month, now.year)

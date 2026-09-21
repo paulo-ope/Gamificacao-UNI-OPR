@@ -1,15 +1,25 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import is_admin_user
-from app.models import CALCULATION_RUN_STATUSES, CalculationRun, CollaboratorScore, LeadershipProfile, LeadershipRoleProfile, User
+from app.models import (
+    CALCULATION_RUN_STATUSES,
+    CalculationRun,
+    CalculationRunLock,
+    CollaboratorScore,
+    LeadershipProfile,
+    LeadershipRoleProfile,
+    User,
+)
 from app.services.audit_log import snapshot
 from app.services.leadership_bonus import serialize_profile, serialize_role_profile
 from app.services.regional import normalize_regional_grouped as normalize_regional
@@ -49,6 +59,122 @@ ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# --- Trava de exclusão mútua contra cálculo concorrente do mesmo ciclo (P0-4 da auditoria de -----
+# 2026-09-15): `/calculation-runs/calculate` e o recálculo automático (`recalculate_current_period`,
+# disparado pelo sincronizador do IXC e por correções de Tipo Geral) chamam `calculate_scores` sem
+# NENHUMA proteção contra duas execuções do MESMO ciclo (mesmo mês/ano/regional) em paralelo. O app
+# roda como um único processo `uvicorn` (sem `--workers`), mas os handlers síncronos das rotas
+# rodam no threadpool do FastAPI e o sincronizador do IXC roda em paralelo a eles (`asyncio` +
+# `run_in_threadpool`) - um clique manual em "recalcular" pode literalmente sobrepor o ciclo
+# automático de 20 em 20 minutos, cada um com sua própria `Session`/conexão. Sem trava, os dois
+# criam um `CalculationRun` e um lote de `CollaboratorScore` cada um, e os dois podem aplicar
+# `point_balance.detect_post_payment_warranty_debits` em duplicidade (suas guardas são `SELECT`
+# puro - só enxergam o que já foi COMMITADO, não o que a outra transação ainda não commitou).
+#
+# O `SELECT ... FOR UPDATE` que já existe em
+# `calculation_runs.py::change_calculation_run_status` (achado C5 da auditoria 2026-08-26) protege
+# a TRANSIÇÃO de status de um run que já existe - não cobre a CRIAÇÃO do rascunho, que é o caminho
+# do P0-4.
+
+CALCULATION_LOCK_STALE_AFTER = timedelta(minutes=30)
+CALCULATION_LOCK_GLOBAL_REGIONAL_KEY = "__ALL__"
+
+
+def _calculation_lock_key(reference_month: int, reference_year: int, normalized_regional: str | None) -> str:
+    return f"{reference_year:04d}-{reference_month:02d}:{normalized_regional or CALCULATION_LOCK_GLOBAL_REGIONAL_KEY}"
+
+
+def acquire_calculation_lock(
+    db: Session,
+    reference_month: int,
+    reference_year: int,
+    regional: str | None,
+    user: User | None = None,
+) -> str:
+    """Adquire a trava exclusiva do ciclo (mês/ano/regional) - ver `CalculationRunLock`.
+
+    A garantia é o `UniqueConstraint(lock_key)` do banco, não este código Python: insere e
+    COMMITA imediatamente, numa transação própria e curta, para que a trava fique visível a
+    QUALQUER outra conexão (outro processo, outra thread) assim que adquirida - não espera o
+    commit final do cálculo inteiro, que só acontece bem depois (`leadership_bonus`/auditoria
+    inclusos). Se outra transação já tem a mesma chave commitada, o `INSERT` estoura
+    `IntegrityError` e aqui vira um 409 controlado - nunca deixa duas computações do mesmo ciclo
+    rodarem ao mesmo tempo.
+
+    Antes de tentar, rouba (apaga) uma trava mais velha que `CALCULATION_LOCK_STALE_AFTER`: sem
+    isso, um processo derrubado no meio do cálculo (kill -9, OOM, deploy) travaria o ciclo pra
+    sempre, já que ninguém mais chamaria `release_calculation_lock`.
+    """
+    normalized_regional = normalize_regional(regional) if regional else None
+    lock_key = _calculation_lock_key(reference_month, reference_year, normalized_regional)
+
+    db.execute(
+        delete(CalculationRunLock)
+        .where(CalculationRunLock.lock_key == lock_key)
+        .where(CalculationRunLock.locked_at < now_utc() - CALCULATION_LOCK_STALE_AFTER)
+    )
+    db.commit()
+
+    db.add(
+        CalculationRunLock(
+            lock_key=lock_key,
+            reference_month=reference_month,
+            reference_year=reference_year,
+            regional=normalized_regional,
+            locked_at=now_utc(),
+            locked_by=user.id if user else None,
+        )
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        scope_label = f" (regional {normalized_regional})" if normalized_regional else ""
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Já existe um cálculo em andamento para {reference_month:02d}/{reference_year}"
+                f"{scope_label}. Aguarde a conclusão e tente novamente."
+            ),
+        )
+    return lock_key
+
+
+def release_calculation_lock(db: Session, lock_key: str) -> None:
+    """Libera a trava adquirida por `acquire_calculation_lock`, numa transação própria.
+
+    Roda mesmo quando quem chamou já deu `db.rollback()` no cálculo que falhou: a trava foi
+    commitada numa transação SEPARADA em `acquire_calculation_lock`, então continua existindo no
+    banco até ser apagada aqui explicitamente - um rollback do cálculo em si nunca a desfaz
+    sozinho. É esta chamada (sempre em `finally`, ver `calculation_cycle_lock`) que garante que
+    uma falha no meio do cálculo não deixa a trava presa indefinidamente.
+    """
+    db.execute(delete(CalculationRunLock).where(CalculationRunLock.lock_key == lock_key))
+    db.commit()
+
+
+@contextmanager
+def calculation_cycle_lock(
+    db: Session,
+    reference_month: int,
+    reference_year: int,
+    regional: str | None,
+    user: User | None = None,
+) -> Iterator[None]:
+    """`with calculation_cycle_lock(db, month, year, regional, user=user):` em volta de TODO o
+    trecho que calcula e commita um ciclo (`calculate_scores` + bônus de liderança + auditoria +
+    commit final) - em ambos os pontos de entrada (`/calculation-runs/calculate` e
+    `recalculate_current_period`). Levanta 409 (via `acquire_calculation_lock`) antes de fazer
+    qualquer trabalho se o mesmo ciclo já está sendo calculado em outro lugar; sempre libera a
+    trava ao sair do bloco, com sucesso ou com exceção.
+    """
+    lock_key = acquire_calculation_lock(db, reference_month, reference_year, regional, user=user)
+    try:
+        yield
+    finally:
+        release_calculation_lock(db, lock_key)
 
 
 def normalize_run_status(value: str | None) -> str:

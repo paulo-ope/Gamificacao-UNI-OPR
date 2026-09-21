@@ -615,6 +615,31 @@ class CalculationRun(Base):
     )
 
 
+class CalculationRunLock(Base):
+    """Trava de exclusão mútua para a CRIAÇÃO de um rascunho de fechamento (P0-4 da auditoria
+    2026-09-15: `/calculation-runs/calculate` não tinha proteção nenhuma contra duas execuções do
+    mesmo ciclo em paralelo - o `SELECT ... FOR UPDATE` que já existe em
+    `calculation_runs.py::change_calculation_run_status` só protege a TRANSIÇÃO de status de um
+    run que já existe, não a criação de um novo).
+
+    `lock_key` é o único campo que importa para a exclusão mútua (`UniqueConstraint` = a garantia
+    atômica, aplicada pelo banco, não por lock em memória - funciona entre processos/threads
+    diferentes). `regional=None` (ciclo "empresa toda") vira o literal `__ALL__` na chave porque
+    `NULL` não é tratado como igual a `NULL` por `UNIQUE` em nenhum dos dois dialetos usados
+    (Postgres em produção, SQLite em teste) - duas linhas com `regional=NULL` não colidiriam.
+    """
+
+    __tablename__ = "calculation_run_locks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    lock_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    reference_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    regional: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    locked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    locked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
 class CollaboratorScore(Base):
     __tablename__ = "collaborator_scores"
 
