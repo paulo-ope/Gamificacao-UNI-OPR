@@ -11,7 +11,7 @@
       "name": "frontend",
       "runtimeExecutable": "docker",
       "runtimeArgs": ["compose", "up", "frontend"],
-      "port": 3100
+      "port": 3000
     }
   ]
 }
