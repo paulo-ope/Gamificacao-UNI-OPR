@@ -62,8 +62,22 @@ function weekdayOf(dayIso: string): number {
 
 // Mesmo criterio de normalizacao do backend (casefold + colapsa espaco) para casar o responsavel
 // do caso com o responsavel da celula do calendario, independente de acento/maiusculo.
-function dailyCaseKey(responsibleName: string, referenceDate: string): string {
-  return `${responsibleName.trim().toLowerCase().replace(/\s+/g, " ")}|${referenceDate}`;
+function normalizeKeyPart(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Inclui a regional na chave - sem isso, dois colaboradores com o MESMO nome em regionais
+// diferentes (nome duplicado/coincidente) casavam o caso de um na celula do outro: a bolinha de
+// status aparecia (ex.: amarela, "aguardando matriz") pra quem nunca teve justificativa nenhuma,
+// só porque o nome batia com o de outra pessoa na mesma data (achado real, 2026-09-21). Backend
+// também identifica o caso por (responsavel, regional) - nunca só pelo nome - ver
+// `get_or_create_daily_case`/`get_or_create_monthly_case` em cases.py.
+function dailyCaseKey(responsibleName: string, regional: string | null, referenceDate: string): string {
+  return `${normalizeKeyPart(responsibleName)}|${normalizeKeyPart(regional ?? "")}|${referenceDate}`;
+}
+
+function monthlyCaseKey(responsibleName: string, regional: string | null): string {
+  return `${normalizeKeyPart(responsibleName)}|${normalizeKeyPart(regional ?? "")}`;
 }
 
 // "pending" (caso aberto, ainda não justificado) fica de fora deste mapa de propósito: ele usa o
@@ -354,7 +368,7 @@ export function OperationsMonthlyCalendar({
           // encontrou a produção batendo a meta - marca como "resolved_auto" (sem bolinha) pra
           // distinguir de "resolved" de verdade (decisão da matriz, mantém a bolinha verde).
           const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
-          next.set(dailyCaseKey(item.responsible_name, item.reference_date), status);
+          next.set(dailyCaseKey(item.responsible_name, item.regional, item.reference_date), status);
         }
         if (page * pageSize >= result.total || result.items.length === 0) break;
         page += 1;
@@ -386,7 +400,7 @@ export function OperationsMonthlyCalendar({
           if (!item.responsible_name) continue;
           // Mesmo critério do caso diário acima.
           const status = item.status === "resolved" && item.reviewed_by == null ? "resolved_auto" : item.status;
-          next.set(item.responsible_name.trim().toLowerCase().replace(/\s+/g, " "), status);
+          next.set(monthlyCaseKey(item.responsible_name, item.regional), status);
         }
         if (page * pageSize >= result.total || result.items.length === 0) break;
         page += 1;
@@ -1102,7 +1116,7 @@ export function OperationsMonthlyCalendar({
                               collaborator.team_model,
                               day.weekday,
                             );
-                            const dailyCaseStatus = dailyCaseStatusByKey.get(dailyCaseKey(collaborator.responsible, day.date));
+                            const dailyCaseStatus = dailyCaseStatusByKey.get(dailyCaseKey(collaborator.responsible, collaborator.reference_regional, day.date));
                             const cell: SelectedCell = {
                               day: day.date,
                               regional: regional.regional,
@@ -1268,7 +1282,7 @@ export function OperationsMonthlyCalendar({
                             </button>
                             {(() => {
                               const monthlyCaseStatus = monthlyCaseStatusByKey.get(
-                                collaborator.responsible.trim().toLowerCase().replace(/\s+/g, " "),
+                                monthlyCaseKey(collaborator.responsible, collaborator.reference_regional),
                               );
                               if (monthlyCaseStatus === "resolved_auto") {
                                 // Mesmo motivo do caso diário acima - resolvido sozinho não deixa

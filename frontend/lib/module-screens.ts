@@ -81,6 +81,7 @@ const GAMIFICATION_SCREEN_PERMISSIONS: ScreenPermissionMap = {
 // Espelha `canAdminReasons`/`canAudit` em `app/gestao/page.tsx`.
 const MANAGEMENT_SCREEN_PERMISSIONS: ScreenPermissionMap = {
   reasons: ["management:admin"],
+  exclusions: ["management:admin"],
   audit: ["management:audit_structure:read"],
 };
 

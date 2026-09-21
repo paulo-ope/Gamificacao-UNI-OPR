@@ -448,6 +448,7 @@ class OperationRegionalMatrixItem(BaseModel):
     completed_on_time: int | None = None
     completed_out_of_time: int | None = None
     sla_rate: float | None = None
+    average_closing_hours: float | None = None
 
 
 class OperationRegionalMatrix(BaseModel):

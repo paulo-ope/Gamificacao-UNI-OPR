@@ -5,7 +5,18 @@ from sqlalchemy.orm import Session
 from app.api.routes.auth import serialize_user
 from app.core.security import hash_password, require_any_permission
 from app.db.session import get_db
-from app.models import AccessProfile, AuditLog, Collaborator, User, UserAccessProfile
+from app.models import (
+    AccessProfile,
+    AuditLog,
+    CalculationRun,
+    CalculationRunLock,
+    Collaborator,
+    ImportRun,
+    ImportServiceOrderAudit,
+    PointBalanceEntry,
+    User,
+    UserAccessProfile,
+)
 from app.schemas import AdminForcePasswordResetOut, UserCreate, UserOut, UserUpdate
 from app.services.account_security import admin_force_first_access, admin_force_password_reset
 from app.services.audit_log import record_audit_log, snapshot
@@ -189,7 +200,27 @@ def delete_user(
     before = _user_audit_snapshot(item)
     response = serialize_user(item)
     record_audit_log(db, user, "delete", "users", item.id, before, None)
+    # Estas colunas referenciam users.id sem ON DELETE SET NULL no banco (diferente de
+    # created_by/updated_by de outras tabelas, que ja tem a clausula) - sem zera-las antes,
+    # o DELETE falha com FK violation (500) sempre que o usuario aprovou/pagou um fechamento,
+    # importou uma planilha ou girou a trava de calculo em algum momento.
     db.execute(update(AuditLog).where(AuditLog.user_id == item.id).values(user_id=None))
+    db.execute(
+        update(CalculationRun)
+        .where(CalculationRun.status_changed_by == item.id)
+        .values(status_changed_by=None)
+    )
+    db.execute(update(CalculationRun).where(CalculationRun.approved_by == item.id).values(approved_by=None))
+    db.execute(update(CalculationRun).where(CalculationRun.paid_by == item.id).values(paid_by=None))
+    db.execute(update(CalculationRun).where(CalculationRun.executed_by == item.id).values(executed_by=None))
+    db.execute(update(CalculationRunLock).where(CalculationRunLock.locked_by == item.id).values(locked_by=None))
+    db.execute(update(PointBalanceEntry).where(PointBalanceEntry.created_by == item.id).values(created_by=None))
+    db.execute(update(ImportRun).where(ImportRun.imported_by == item.id).values(imported_by=None))
+    db.execute(
+        update(ImportServiceOrderAudit)
+        .where(ImportServiceOrderAudit.created_by == item.id)
+        .values(created_by=None)
+    )
     db.delete(item)
     db.commit()
     return response

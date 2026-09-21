@@ -22,9 +22,11 @@ from app.models import User
 from app.modules.management import cases as cases_engine
 from app.modules.management.models import (
     CLOSED_CASE_STATUSES,
+    GENERATION_EXCLUSION_SCOPES,
     OPEN_CASE_STATUSES,
     ManagementCase,
     ManagementCaseComment,
+    ManagementCaseGenerationExclusion,
     ManagementCaseReason,
     ManagementOperationalMember,
 )
@@ -39,6 +41,10 @@ from app.modules.management.schemas import (
     ManagementCaseDiagnosticsOut,
     ManagementCaseGenerateRequest,
     ManagementCaseGenerateResult,
+    ManagementCaseGenerationExclusionCreate,
+    ManagementCaseGenerationExclusionOut,
+    ManagementCaseGenerationExclusionUpdate,
+    ManagementCaseGenerationGapsOut,
     ManagementCaseJustification,
     ManagementDailyCaseRequest,
     ManagementMonthlyCaseRequest,
@@ -570,6 +576,14 @@ def open_daily_case(
             status_code=409,
             detail="O modelo de equipe deste colaborador não exige justificativa para dias abaixo da meta.",
         )
+    exclusion = cases_engine.active_generation_exclusion_for_daily_request(
+        db, responsible_name=payload.responsible_name, regional=payload.regional, day=payload.reference_date
+    )
+    if exclusion is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Este dia está com a cobrança de caso suspensa: {exclusion.reason}",
+        )
     item, was_created = cases_engine.get_or_create_daily_case(
         db,
         responsible_name=payload.responsible_name,
@@ -612,6 +626,18 @@ def open_monthly_case(
         raise HTTPException(
             status_code=409,
             detail="O modelo de equipe deste colaborador não exige justificativa para produção abaixo da meta.",
+        )
+    exclusion = cases_engine.active_generation_exclusion_for_monthly_request(
+        db,
+        responsible_name=payload.responsible_name,
+        regional=payload.regional,
+        reference_year=payload.reference_year,
+        reference_month=payload.reference_month,
+    )
+    if exclusion is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Este mês está com a cobrança de caso suspensa: {exclusion.reason}",
         )
     item, was_created = cases_engine.get_or_create_monthly_case(
         db,
@@ -856,6 +882,111 @@ def update_reason(
     return item
 
 
+# --- Exclusões de geração de caso (colaborador/regional, período opcional) ----------------------
+#
+# Pedido do usuário (2026-09-21): suspender a cobrança automática E manual pra um colaborador
+# específico (permanente ou só num período de férias/atestado) ou pra uma regional inteira, sem
+# precisar mudar o modelo de equipe (afeta todo mundo que usa ele) nem desativar o cadastro do
+# colaborador (remove ele de tudo, não só da cobrança). Ver `cases_engine.active_generation_exclusion_for_*`.
+
+
+def _exclusion_out(item: ManagementCaseGenerationExclusion) -> ManagementCaseGenerationExclusionOut:
+    return ManagementCaseGenerationExclusionOut(
+        id=item.id,
+        scope_type=item.scope_type,
+        member_id=item.member_id,
+        member_responsible_name=item.member.responsible_name if item.member else None,
+        member_regional=item.member.regional if item.member else None,
+        regional=item.regional,
+        date_from=item.date_from,
+        date_to=item.date_to,
+        reason=item.reason,
+        active=item.active,
+        created_by=item.created_by,
+        created_by_name=item.created_by_user.name if item.created_by_user else None,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+@router.get("/case-generation-exclusions", response_model=list[ManagementCaseGenerationExclusionOut])
+def list_case_generation_exclusions(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_permission("management:admin")),
+):
+    stmt = (
+        select(ManagementCaseGenerationExclusion)
+        .options(
+            selectinload(ManagementCaseGenerationExclusion.member),
+            selectinload(ManagementCaseGenerationExclusion.created_by_user),
+        )
+        .order_by(ManagementCaseGenerationExclusion.created_at.desc())
+    )
+    if not include_inactive:
+        stmt = stmt.where(ManagementCaseGenerationExclusion.active.is_(True))
+    return [_exclusion_out(item) for item in db.scalars(stmt).all()]
+
+
+@router.post("/case-generation-exclusions", response_model=ManagementCaseGenerationExclusionOut, status_code=201)
+def create_case_generation_exclusion(
+    payload: ManagementCaseGenerationExclusionCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:admin")),
+):
+    if payload.scope_type not in GENERATION_EXCLUSION_SCOPES:
+        raise HTTPException(status_code=400, detail=f"scope_type deve ser um de {GENERATION_EXCLUSION_SCOPES}.")
+    member = None
+    if payload.scope_type == "member":
+        member = db.get(ManagementOperationalMember, payload.member_id)
+        if member is None:
+            raise HTTPException(status_code=404, detail="Colaborador (member_id) não encontrado.")
+    item = ManagementCaseGenerationExclusion(
+        scope_type=payload.scope_type,
+        member_id=payload.member_id if payload.scope_type == "member" else None,
+        regional=payload.regional if payload.scope_type == "regional" else None,
+        date_from=payload.date_from,
+        date_to=payload.date_to,
+        reason=payload.reason.strip(),
+        created_by=user.id,
+    )
+    db.add(item)
+    db.flush()
+    record_audit_log(db, user, "create", "management_case_generation_exclusions", item.id, None, snapshot(item))
+    db.commit()
+    db.refresh(item)
+    return _exclusion_out(item)
+
+
+@router.patch("/case-generation-exclusions/{exclusion_id}", response_model=ManagementCaseGenerationExclusionOut)
+def update_case_generation_exclusion(
+    exclusion_id: int,
+    payload: ManagementCaseGenerationExclusionUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:admin")),
+):
+    """Só data/motivo/ativo são editáveis - trocar o escopo (colaborador<->regional, ou de QUEM/
+    QUAL regional) é sempre uma exclusão nova, pra manter o histórico de auditoria claro sobre o
+    que valeu em cada período, em vez de reescrever o que uma exclusão antiga significava."""
+    item = db.get(ManagementCaseGenerationExclusion, exclusion_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Exclusão não encontrada.")
+    before = snapshot(item)
+    updates = payload.model_dump(exclude_unset=True)
+    date_from = updates.get("date_from", item.date_from)
+    date_to = updates.get("date_to", item.date_to)
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(status_code=400, detail="date_to não pode ser anterior a date_from.")
+    if "reason" in updates:
+        updates["reason"] = updates["reason"].strip()
+    for field, value in updates.items():
+        setattr(item, field, value)
+    record_audit_log(db, user, "update", "management_case_generation_exclusions", item.id, before, snapshot(item))
+    db.commit()
+    db.refresh(item)
+    return _exclusion_out(item)
+
+
 # --- Configuração dos limiares ------------------------------------------------------------------
 
 
@@ -888,6 +1019,18 @@ def get_auto_generate_settings(
     raw_last_run = get_setting(db, AUTO_GENERATE_LAST_RUN_DATE_KEY, "")
     last_run_date = date.fromisoformat(raw_last_run) if raw_last_run else None
     return ManagementAutoGenerateSettingsOut(enabled=auto_generate_enabled(), last_run_date=last_run_date)
+
+
+@router.get("/settings/case-generation-gaps", response_model=ManagementCaseGenerationGapsOut)
+def get_case_generation_gaps(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("management:read")),
+):
+    """Modelos de equipe que cobram justificativa mas não têm regra de sábado/domingo habilitada
+    - nesses dias a geração automática pula o colaborador inteiro, mesmo com produção zero (ver
+    `cases_engine.case_generation_gaps`)."""
+    items = cases_engine.case_generation_gaps(db, user=user)
+    return ManagementCaseGenerationGapsOut(items=items)
 
 
 @router.put("/settings/auto-generate", response_model=ManagementAutoGenerateSettingsOut)

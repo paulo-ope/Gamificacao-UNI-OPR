@@ -60,6 +60,8 @@ rota nem na tela — ver [AGENTS.md](../AGENTS.md).
 - Checklist de revisão: `docs/code_review.md`.
 - Manual de backend/infra: `docs/manual_programacao_senior.md`.
 - Manual de frontend: `docs/manual_frontend_senior.md`.
+- Passo a passo prático de commit, push, PR e deploy:
+  [manual-commit-push-deploy.md](manual-commit-push-deploy.md).
 - Estado atual do trabalho, decisões recentes e próximos passos: **sempre em
   [docs/STATUS.md](STATUS.md)**, nunca neste arquivo.
 
@@ -117,6 +119,9 @@ arquivos antes de continuar o trabalho.
   correção foi feita ainda — ver `docs/STATUS.md` para o que já foi corrigido
   depois desta auditoria e o que continua pendente.
 - `manual_programacao_senior.md` / `manual_frontend_senior.md` / `code_review.md` — manuais de padrão de código.
+- `manual-commit-push-deploy.md` — manual prático (comandos reais, não normativo) de
+  commit, push, abertura/merge de PR e deploy na VM de produção, incluindo os
+  cuidados do checkout compartilhado por várias sessões em paralelo.
 - **`api-completa.md` — documento único com toda a referência de API (374 endpoints REST +
   38 tools MCP `opr_*`), pronto pra compartilhar com outro time (ex.: Portal de
   Resultados).** Consolida os arquivos abaixo com sumário e âncoras por módulo.

@@ -6,6 +6,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { ManagementCaseDiagnosticsPanel, ManagementCasesPanel } from "@/components/management/management-cases-panel";
+import { ManagementCaseGenerationExclusionsPanel } from "@/components/management/management-case-generation-exclusions-panel";
 import { MANAGEMENT_NAV_ITEMS, type ManagementTab } from "@/components/management/management-module-sidebar";
 import { ManagementReasonsPanel } from "@/components/management/management-reasons-panel";
 import { StructureAuditPanel } from "@/components/management/structure-audit-panel";
@@ -418,6 +419,8 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
         {tab === "audit" && canAudit ? <StructureAuditPanel /> : null}
 
         {tab === "reasons" && canAdminReasons ? <ManagementReasonsPanel /> : null}
+
+        {tab === "exclusions" && canAdminReasons ? <ManagementCaseGenerationExclusionsPanel /> : null}
 
         {tab === "structure" ? (
           <div className="grid gap-5">

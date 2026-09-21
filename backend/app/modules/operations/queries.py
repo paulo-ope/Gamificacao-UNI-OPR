@@ -716,11 +716,11 @@ def _regional_matrix_item(
     *,
     opened: int,
     backlog: tuple[int, int],
-    completed: tuple[int, int, int],
+    completed: tuple[int, int, int, float | None, int],
     include_sla: bool,
 ) -> dict:
     backlog_total, overdue_backlog = backlog
-    completed_total, on_time, out_of_time = completed
+    completed_total, on_time, out_of_time, elapsed_sum, elapsed_count = completed
     measurable = on_time + out_of_time
     return {
         "regional": label,
@@ -731,6 +731,12 @@ def _regional_matrix_item(
         "completed_on_time": on_time if include_sla else None,
         "completed_out_of_time": out_of_time if include_sla else None,
         "sla_rate": (round((on_time / measurable) * 100, 1) if measurable else None) if include_sla else None,
+        # Mesma métrica de `operations-sla-matrix-table.tsx`/`overview-sla-technology-gauges.tsx`
+        # (TMA - tempo médio de atendimento), aqui por regional agrupada. Segue o mesmo escopo de
+        # `completed`/`sla_rate`: respeita todos os filtros, inclusive modelo de equipe.
+        "average_closing_hours": (
+            round(elapsed_sum / elapsed_count, 2) if include_sla and elapsed_count else None
+        ),
     }
 
 
@@ -802,6 +808,8 @@ def regional_matrix(
             func.count(OperationOrder.id),
             func.sum(case((OperationOrder.sla_status == "on_time", 1), else_=0)),
             func.sum(case((OperationOrder.sla_status == "out_of_time", 1), else_=0)),
+            func.sum(OperationOrder.elapsed_hours),
+            func.sum(case((OperationOrder.elapsed_hours.is_not(None), 1), else_=0)),
         )
         .where(
             *_dimension_conditions(db, user, filters),
@@ -815,8 +823,8 @@ def regional_matrix(
         str(label): (int(total or 0), int(overdue or 0)) for label, total, overdue in backlog_rows
     }
     completed_by_regional = {
-        str(label): (int(total or 0), int(on_time or 0), int(out_of_time or 0))
-        for label, total, on_time, out_of_time in completed_rows
+        str(label): (int(total or 0), int(on_time or 0), int(out_of_time or 0), elapsed_sum, int(elapsed_count or 0))
+        for label, total, on_time, out_of_time, elapsed_sum, elapsed_count in completed_rows
     }
 
     # Ordem alfabética de propósito: a tabela existe pra alguém procurar a própria filial nela.
@@ -827,7 +835,7 @@ def regional_matrix(
             label,
             opened=opened_by_regional.get(label, 0),
             backlog=backlog_by_regional.get(label, (0, 0)),
-            completed=completed_by_regional.get(label, (0, 0, 0)),
+            completed=completed_by_regional.get(label, (0, 0, 0, None, 0)),
             include_sla=include_sla,
         )
         for label in labels
@@ -842,9 +850,14 @@ def regional_matrix(
             sum(overdue for _, overdue in backlog_by_regional.values()),
         ),
         completed=(
-            sum(total for total, _, _ in completed_by_regional.values()),
-            sum(on_time for _, on_time, _ in completed_by_regional.values()),
-            sum(out_of_time for _, _, out_of_time in completed_by_regional.values()),
+            sum(total for total, _, _, _, _ in completed_by_regional.values()),
+            sum(on_time for _, on_time, _, _, _ in completed_by_regional.values()),
+            sum(out_of_time for _, _, out_of_time, _, _ in completed_by_regional.values()),
+            sum(
+                (elapsed_sum for _, _, _, elapsed_sum, _ in completed_by_regional.values() if elapsed_sum is not None),
+                0.0,
+            ),
+            sum(elapsed_count for _, _, _, _, elapsed_count in completed_by_regional.values()),
         ),
         include_sla=include_sla,
     )
@@ -903,9 +916,9 @@ def backlog_daily_trend(db: Session, date_from: date, date_to: date, user: User,
     evita recalcular "quantas O.S. estavam abertas em cada dia passado" ao vivo.
 
     Mesma convenção de `_backlog_filters`: ignora `team_models`/`responsibles`/`os_types` (o
-    snapshot nem guarda essas duas últimas dimensões) - só `regionals`/`sectors` recortam, além do
-    escopo regional do próprio usuário. `date_from`/`date_to` aqui são o período pedido pela tela,
-    não o do filtro de O.S. - só delimitam quais fotografias entram na resposta.
+    snapshot nem guarda essas duas últimas dimensões) - só `regionals`/`regional_groups`/`sectors`
+    recortam, além do escopo regional do próprio usuário. `date_from`/`date_to` aqui são o período
+    pedido pela tela, não o do filtro de O.S. - só delimitam quais fotografias entram na resposta.
 
     Limitação real, não é bug: a fotografia só existe a partir do dia em que o job entrou em
     produção (`coverage_from`) - pedir um período anterior a isso simplesmente não traz pontos
@@ -926,6 +939,19 @@ def backlog_daily_trend(db: Session, date_from: date, date_to: date, user: User,
         conditions_base.append(OperationBacklogSnapshot.id == -1)
     if regionals := filters.get("regionals"):
         conditions_base.append(OperationBacklogSnapshot.regional.in_(regionals))
+    if selected_regional_groups := filters.get("regional_groups"):
+        # Mesma expansão de `_dimension_conditions`: a fotografia guarda a filial granular, então
+        # o filtro "Regional" (único exibido na Visão Geral) precisa ser traduzido pra filiais
+        # antes do IN(...) - sem isso o gráfico de backlog simplesmente ignorava o filtro
+        # selecionado na tela. Grupo desconhecido zera o resultado, não vira "sem filtro" silencioso.
+        expanded_regionals: set[str] = set()
+        for group in selected_regional_groups:
+            expanded_regionals.update(granular_regionals_for_group(group))
+        conditions_base.append(
+            OperationBacklogSnapshot.regional.in_(sorted(expanded_regionals))
+            if expanded_regionals
+            else OperationBacklogSnapshot.id == -1
+        )
     if sectors := filters.get("sectors"):
         conditions_base.append(OperationBacklogSnapshot.sector.in_(sectors))
 

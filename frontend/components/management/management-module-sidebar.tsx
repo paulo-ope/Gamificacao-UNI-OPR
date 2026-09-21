@@ -1,8 +1,8 @@
 "use client";
 
-import { BriefcaseBusiness, ClipboardList, ListChecks, ShieldAlert, Tag } from "lucide-react";
+import { BriefcaseBusiness, ClipboardList, ListChecks, ShieldAlert, ShieldOff, Tag } from "lucide-react";
 
-export type ManagementTab = "structure" | "cases" | "diagnostics" | "reasons" | "audit";
+export type ManagementTab = "structure" | "cases" | "diagnostics" | "reasons" | "exclusions" | "audit";
 
 // Exportado para a navegação global do ecossistema (ver `lib/module-screens.ts`).
 export const MANAGEMENT_NAV_ITEMS: Array<{ value: ManagementTab; label: string; description: string; icon: typeof BriefcaseBusiness }> = [
@@ -11,6 +11,7 @@ export const MANAGEMENT_NAV_ITEMS: Array<{ value: ManagementTab; label: string; 
   { value: "diagnostics", label: "Diagnóstico", description: "Ranking por motivo, colaborador e regional", icon: ClipboardList },
   { value: "audit", label: "Auditoria da estrutura", description: "Inconsistências antes da capacidade regional", icon: ShieldAlert },
   { value: "reasons", label: "Motivos de justificativa", description: "Catálogo de motivos pré-cadastrados", icon: Tag },
+  { value: "exclusions", label: "Exclusões de cobrança", description: "Colaborador/regional sem cobrança de caso, permanente ou por período", icon: ShieldOff },
 ];
 
 // O menu hambúrguer próprio deste módulo foi retirado em 2026-09-03: as telas de cada módulo

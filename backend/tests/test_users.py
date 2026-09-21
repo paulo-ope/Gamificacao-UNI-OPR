@@ -3,7 +3,15 @@ users.collaborator_id link (identidade do portal): role allowlist now includes c
 regional_manager_viewer, and the link must be validated (collaborator exists, one user per
 collaborator)."""
 
-from app.models import AuditLog, User
+from app.models import (
+    AuditLog,
+    CalculationRun,
+    CalculationRunLock,
+    ImportRun,
+    ImportServiceOrderAudit,
+    PointBalanceEntry,
+    User,
+)
 
 
 def test_create_user_accepts_collaborator_role(client):
@@ -159,3 +167,53 @@ def test_delete_user_audit_log_never_stores_password_hash(client, db_session, ad
     assert "password_hash" not in entry.before_data
     assert entry.after_data is None
     assert password_hash not in str(entry.before_data)
+
+
+def test_delete_user_referenced_by_calculation_run_and_imports_does_not_fail(client, db_session, make_collaborator):
+    """Producao usa Postgres, que aplica ON DELETE NO ACTION por padrao nas FKs de
+    calculation_runs/calculation_run_locks/point_balance_entries/imports/import_service_order_audits
+    para users.id (diferente de created_by/updated_by de outras tabelas, que ja tem SET NULL) -
+    apagar um usuario que aprovou/pagou um fechamento, importou uma planilha ou girou a trava de
+    calculo derrubava a request com IntegrityError (500). SQLite (usado aqui) nao aplica a FK,
+    entao este teste garante e documenta o UPDATE explicito que zera essas colunas antes do
+    DELETE, e nao apenas confia na constraint do banco."""
+    created = client.post(
+        "/api/users",
+        json={"name": "Aprovador", "email": "aprovador@pytest.local", "password": "x", "role": "admin", "active": True},
+    )
+    user_id = created.json()["id"]
+
+    collaborator = make_collaborator()
+    run = CalculationRun(
+        reference_month=1,
+        reference_year=2026,
+        status_changed_by=user_id,
+        approved_by=user_id,
+        paid_by=user_id,
+        executed_by=user_id,
+    )
+    lock = CalculationRunLock(lock_key="__ALL__:1:2026", reference_month=1, reference_year=2026, locked_by=user_id)
+    entry = PointBalanceEntry(collaborator_id=collaborator.id, entry_type="manual_adjustment", points=1, created_by=user_id)
+    import_run = ImportRun(filename="planilha.csv", imported_by=user_id)
+    db_session.add_all([run, lock, entry, import_run])
+    db_session.flush()
+    audit = ImportServiceOrderAudit(import_run_id=import_run.id, action="create", created_by=user_id)
+    db_session.add(audit)
+    db_session.commit()
+
+    response = client.delete(f"/api/users/{user_id}")
+    assert response.status_code == 200
+
+    db_session.refresh(run)
+    db_session.refresh(lock)
+    db_session.refresh(entry)
+    db_session.refresh(import_run)
+    db_session.refresh(audit)
+    assert run.status_changed_by is None
+    assert run.approved_by is None
+    assert run.paid_by is None
+    assert run.executed_by is None
+    assert lock.locked_by is None
+    assert entry.created_by is None
+    assert import_run.imported_by is None
+    assert audit.created_by is None
