@@ -55,6 +55,54 @@ INTEGRATION_DOCS_TAGS = (
     "intelligence",
 )
 
+# Descrição por módulo, mostrada no Swagger acima de cada seção. Cada linha corresponde a um
+# módulo real do ecossistema (ver docs/00-TRILHA-0.md) - mantida curta de propósito, o detalhe
+# fica no docstring de cada endpoint.
+_TAG_DESCRIPTIONS: dict[str, str] = {
+    "operations": "Operação Analítica: O.S. importadas do IXC, SLA, backlog, garantia, produtividade, rede/login/ONU.",
+    "gamification": "Gamificação Operacional: remuneração variável, pontuação e fechamento de produtividade a partir das O.S.",
+    "dashboard": "Indicadores agregados do dashboard da Gamificação Operacional.",
+    "scoring": "Regras de pontuação (grupos, exceções por assunto) usadas no cálculo de fechamento.",
+    "rules": "Regras de saúde/penalidade aplicadas no cálculo de pontuação.",
+    "service-orders": "Consulta das O.S. já importadas para a Gamificação Operacional.",
+    "calculation-runs": "Execuções (runs) de fechamento de pontuação: status, histórico, auditoria (só leitura aqui - a execução em si é escrita, não exposta).",
+    "leadership": "Bônus de liderança calculado sobre o fechamento do período.",
+    "point-balance": "Saldo de pontos e garantia por colaborador, pós-pagamento.",
+    "collaborators": "Cadastro de colaboradores (técnicos, operadores) e estrutura organizacional.",
+    "audit": "Log de auditoria de alterações na Gamificação Operacional.",
+    "support": "SGP Suporte: atendimentos, TMA/TMR, motivos, e o Atendimento IXC (indicador preditivo de incidente).",
+    "scheduling": "Agendamento: tempo de resposta, produtividade e fila de reagendamento.",
+    "localiza": "UNI Localiza: localização de login/cliente a partir do IXC - dado sensível de cliente, tratar com cuidado extra.",
+    "management": "Gestão Integrada: estrutura operacional, casos de produtividade abaixo da meta, justificativas.",
+    "admin": "Administração: usuários, perfis de acesso, permissões e módulos do ecossistema.",
+    "admin-ai-governance": "Governança de acesso de IA: quais endpoints/campos ficam expostos a agentes de IA e tokens emitidos.",
+    "intelligence": "UNI Intelligence: cockpit operacional, monitores, alertas e publicações.",
+}
+
+_OPENAPI_DESCRIPTION = """\
+Documentação de integração externa do UNI Workspace - leitura corporativa, sem nenhuma operação de
+escrita (a estrutura deste schema só inclui métodos `GET`, mesmo quando o módulo tem endpoint de
+escrita em outro lugar da API real).
+
+### Autenticação
+1. Login: `POST /api/auth/login` com e-mail e senha da identidade de integração -> devolve um
+   `access_token` (Bearer JWT).
+2. Use `Authorization: Bearer <access_token>` em toda chamada. O token expira (ver
+   `AUTH_TOKEN_EXPIRE_MINUTES`) - quando expirar, faça login de novo. Não existe refresh token
+   separado: o mecanismo de renovação É o login novamente.
+3. Alternativa só para ESTA página de documentação (não para os endpoints de dado): `?token=` na
+   URL ou header `x-api-key`, com um token de integração emitido em Administração > Gestão API/MCP.
+
+### Permissões da identidade de integração
+Cada conta tem um conjunto fixo de permissões (`GET .../auth/login` devolve a lista em `user.permissions`).
+Uma chamada para um dado fora do conjunto autorizado responde `403`, não `404` nem dado vazio.
+
+### Cobertura
+Ver `docs/integracao-uni/cobertura-validacao.md` no repositório para o que está verificado em
+produção versus só documentado no código.
+"""
+
+
 _UNAUTHORIZED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail=(
@@ -105,12 +153,18 @@ def require_integration_docs_access(
 def build_integration_openapi_schema(request: Request) -> dict:
     """Schema OpenAPI completo do app, filtrado só para os endpoints de integração externa."""
     app = request.app
+    allowed_tags = set(INTEGRATION_DOCS_TAGS)
     full_schema = get_openapi(
         title=f"{app.title} - Integração UNI",
         version=app.version,
         routes=app.routes,
+        description=_OPENAPI_DESCRIPTION,
+        tags=[
+            {"name": tag, "description": _TAG_DESCRIPTIONS[tag]}
+            for tag in INTEGRATION_DOCS_TAGS
+            if tag in _TAG_DESCRIPTIONS
+        ],
     )
-    allowed_tags = set(INTEGRATION_DOCS_TAGS)
     filtered_paths: dict = {}
     for path, methods in full_schema.get("paths", {}).items():
         kept_methods = {
