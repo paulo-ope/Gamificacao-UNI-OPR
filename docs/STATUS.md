@@ -44,6 +44,22 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Gamificação → Reincidência — "Intervalo mínimo" (`min_hours_between`) não era salvo ao editar
+  uma regra existente (2026-09-28, relato do usuário: definia 12h, salvava e o valor não ficava).**
+  - **Causa raiz**: o payload do `PUT /recurrence-classification-rules/{id}` montado em
+    `frontend/app/gamificacao/page.tsx` (`onSaveRecurrenceRule`) omitia `min_hours_between`.
+    Backend (schema, endpoint, coluna) já suportava o campo; criar regra e importar configuração
+    já enviavam. O badge "Mínimo: Nh" mostrava o estado local, não o valor gravado, então parecia
+    salvo até recarregar.
+  - **Corrigido**: `min_hours_between` incluído no payload. PR
+    [#39](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/39) mesclado em `master` e
+    **deploy feito em produção** (rebuild do frontend na VM, confirmado pelo usuário).
+  - **Validado ao vivo**: no build antigo o campo voltava vazio após recarregar (bug
+    reproduzido); com o build novo o PUT enviou `12` e o valor persistiu após recarregar.
+  - **Armadilha para quem testar**: o frontend roda build de produção (sem hot-reload), então
+    qualquer correção de frontend só aparece depois de `docker compose build frontend` +
+    `up -d`, local ou na VM.
+
 - **Matriz de indicadores por filial (Operação Analítica → aba Matriz) — coluna de cidade
   desalinhada com os próprios números (2026-09-21, achado do usuário via screenshot real: "a
   cidade está desalinhada com seus números", confirmado como deslocamento de 1 coluna).**
