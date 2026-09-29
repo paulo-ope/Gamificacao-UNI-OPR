@@ -1445,6 +1445,7 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
                         classification: rule.classification,
                         discount_points: rule.discount_points,
                         max_days: rule.max_days,
+                        min_hours_between: rule.min_hours_between,
                         require_same_subject: rule.require_same_subject,
                         require_same_diagnosis: rule.require_same_diagnosis,
                         priority: rule.priority,
