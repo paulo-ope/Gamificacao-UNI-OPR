@@ -158,6 +158,14 @@ export function useClosureActions({
           );
         });
     }
+    let cpkPenaltyEnabled = true;
+    if (summary.run?.reference_year && summary.run?.reference_month) {
+      try {
+        cpkPenaltyEnabled = (await api.cpkPenalty(summary.run.reference_year, summary.run.reference_month)).penalty_enabled;
+      } catch {
+        // sem a regra, mantém o padrão (descontando) - o export não deve travar por isso.
+      }
+    }
     const healthByRegional = new Map(summary.health_by_regional.map((item) => [normalizeRegional(item.regional), item]));
     const paymentRows = summary.ranking.filter((score) => {
       const matchesRegional = selectedRegionals.length === 0 || selectedRegionals.includes(normalizeRegional(score.regional));
@@ -204,6 +212,7 @@ export function useClosureActions({
 
       const titleRow = sheet.addRow([`Pagamento - ${regionalName(regional)}`]);
       titleRow.font = { bold: true, size: 13 };
+      sheet.addRow([`CPK descontando: ${cpkPenaltyEnabled ? "Sim" : "Não (só aumento)"}`]);
       sheet.addRow([]);
 
       const regionalPaymentRows = paymentRows.filter((score) => normalizeRegional(score.regional) === regional);
@@ -216,7 +225,8 @@ export function useClosureActions({
         ],
         regionalPaymentRows.map((score) => {
           const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
-          const cpkLabel = regionalHealth?.cpk_status ? CPK_STATUS_LABEL[regionalHealth.cpk_status] ?? "-" : "-";
+          const cpkBase = regionalHealth?.cpk_status ? CPK_STATUS_LABEL[regionalHealth.cpk_status] ?? "-" : "-";
+          const cpkLabel = regionalHealth?.cpk_status === "fora_meta" && !cpkPenaltyEnabled ? `${cpkBase} (sem desconto)` : cpkBase;
           return [
             score.collaborator_name,
             formatNumber(score.service_orders_count),

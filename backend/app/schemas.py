@@ -687,6 +687,16 @@ class CpkSyncRequest(BaseModel):
     month: int = Field(ge=1, le=12)
 
 
+class CpkPenaltyOut(BaseModel):
+    year: int
+    month: int
+    penalty_enabled: bool
+
+
+class CpkPenaltyUpdate(CpkSyncRequest):
+    penalty_enabled: bool
+
+
 class GamificationConfigImport(BaseModel):
     name: str | None = None
     settings: dict[str, str] = {}

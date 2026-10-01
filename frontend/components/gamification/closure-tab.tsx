@@ -16,10 +16,12 @@ import {
   Wallet,
   XCircle
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AppSwitch } from "@/components/ui/switch";
+import { api } from "@/lib/api";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { DashboardCharts } from "@/components/gamification/dashboard-charts";
 import { DeferUntilVisible } from "@/components/ui/defer-until-visible";
@@ -139,6 +141,37 @@ export function ClosureTab({
   onRankingTabChange
 }: ClosureTabProps) {
   const [detailSection, setDetailSection] = useState<DetailSection>("pending");
+  const [cpkPenaltyEnabled, setCpkPenaltyEnabled] = useState<boolean | null>(null);
+  const [cpkPenaltyNote, setCpkPenaltyNote] = useState<string | null>(null);
+  const runYear = summary.run?.reference_year;
+  const runMonth = summary.run?.reference_month;
+
+  useEffect(() => {
+    setCpkPenaltyNote(null);
+    if (!runYear || !runMonth) {
+      setCpkPenaltyEnabled(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .cpkPenalty(runYear, runMonth)
+      .then((result) => !cancelled && setCpkPenaltyEnabled(result.penalty_enabled))
+      .catch(() => !cancelled && setCpkPenaltyEnabled(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [runYear, runMonth]);
+
+  async function changeCpkPenalty(next: boolean) {
+    if (!runYear || !runMonth) return;
+    try {
+      const result = await api.saveCpkPenalty(runYear, runMonth, next);
+      setCpkPenaltyEnabled(result.penalty_enabled);
+      setCpkPenaltyNote("Regra salva. Recalcule o período para aplicar aos valores do pagamento.");
+    } catch (error) {
+      setCpkPenaltyNote(error instanceof Error ? error.message : "Não foi possível salvar a regra de CPK.");
+    }
+  }
 
   const sections: Array<{ key: DetailSection; label: string; badge: string; badgeTone: "warning" | "ok" | "neutral" | "accent" }> = [
     {
@@ -227,6 +260,16 @@ export function ClosureTab({
               ) : null}
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+              {summary.run && cpkPenaltyEnabled !== null && can("settings:write") && summary.run.status !== "paid" ? (
+                <div className="flex flex-col items-start gap-1">
+                  <AppSwitch
+                    checked={cpkPenaltyEnabled}
+                    onCheckedChange={changeCpkPenalty}
+                    label={cpkPenaltyEnabled ? "CPK descontando (fora da meta)" : "CPK sem desconto (só aumento)"}
+                  />
+                  {cpkPenaltyNote ? <p className="max-w-xs text-xs text-slate-500">{cpkPenaltyNote}</p> : null}
+                </div>
+              ) : null}
               {currentUser.role !== "viewer" ? (
                 <Button type="button" variant="outline" onClick={onExportPaymentWorkbook} className="w-full bg-white sm:w-auto">
                   <Download className="h-4 w-4" />

@@ -4,11 +4,18 @@ from sqlalchemy.orm import Session
 
 from app.core.security import require_permission
 from app.db.session import get_db
-from app.models import CpkRegionalSnapshot, User
-from app.schemas import CpkRegionalSnapshotOut, CpkSyncRequest, GamificationConfigImport, GamificationConfigOut
+from app.models import CalculationRun, CpkRegionalSnapshot, User
+from app.schemas import (
+    CpkPenaltyOut,
+    CpkPenaltyUpdate,
+    CpkRegionalSnapshotOut,
+    CpkSyncRequest,
+    GamificationConfigImport,
+    GamificationConfigOut,
+)
 from app.services.audit_log import record_audit_log
 from app.services.cpk_client import CpkApiError
-from app.services.cpk_health import sync_cpk_snapshot
+from app.services.cpk_health import is_cpk_penalty_enabled, set_cpk_penalty_enabled, sync_cpk_snapshot
 from app.services.gamification_config import apply_config, ensure_default_logic_config, serialize_current_config
 
 router = APIRouter(prefix="/gamification", tags=["gamification"])
@@ -92,7 +99,52 @@ def sync_cpk(
     return list(rows)
 
 
-@router.get("/cpk/snapshot", response_model=list[CpkRegionalSnapshotOut])
+@router.get("/cpk/penalty", response_model=CpkPenaltyOut)
+def get_cpk_penalty(
+    year: int,
+    month: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scoring:read")),
+):
+    """Se o CPK fora da meta desconta do multiplicador na competência (o aumento por estar na
+    meta vale sempre)."""
+    return {"year": year, "month": month, "penalty_enabled": is_cpk_penalty_enabled(db, year, month)}
+
+
+@router.put("/cpk/penalty", response_model=CpkPenaltyOut)
+def save_cpk_penalty(
+    payload: CpkPenaltyUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("settings:write")),
+):
+    """Liga/desliga o desconto de CPK fora da meta numa competência. Só afeta cálculos feitos
+    depois - o fechamento do período precisa ser recalculado para refletir a mudança."""
+    paid_run = db.scalar(
+        select(CalculationRun.id)
+        .where(
+            CalculationRun.reference_year == payload.year,
+            CalculationRun.reference_month == payload.month,
+            CalculationRun.status == "paid",
+        )
+        .limit(1)
+    )
+    if paid_run:
+        raise HTTPException(status_code=409, detail="Este período já está pago e não pode mudar a regra de CPK.")
+    try:
+        before = {"penalty_enabled": is_cpk_penalty_enabled(db, payload.year, payload.month)}
+        set_cpk_penalty_enabled(db, payload.year, payload.month, payload.penalty_enabled)
+        record_audit_log(
+            db, user, "update", "cpk_penalty", f"{payload.year}-{payload.month:02d}", before,
+            {"penalty_enabled": payload.penalty_enabled},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {"year": payload.year, "month": payload.month, "penalty_enabled": payload.penalty_enabled}
+
+
+@router.get("/cpk/snapshot",response_model=list[CpkRegionalSnapshotOut])
 def get_cpk_snapshot(
     year: int,
     month: int,
