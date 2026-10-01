@@ -44,6 +44,20 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Gamificação → CPK: seletor "Regra de CPK" por competência (2026-09-30, pedido do usuário; evolui o
+  PR #41, que só tinha a chave liga/desliga do desconto).**
+  - **Regras** (por mês, padrão `both`): `both` soma +0,2x na meta e desconta -0,2x fora; `penalty_only`
+    só desconta; `bonus_only` só soma (o que foi usado em setembro/2026); `none` CPK não interfere.
+    "Sem base" nunca interfere. Guardado em `app_settings` (`cpk_rule_by_period`, `AAAA-MM:regra`),
+    **sem migration**. A lista antiga `cpk_penalty_disabled_periods` é lida como `bonus_only` e
+    migrada ao trocar a regra - setembro já configurado não reverte.
+  - **Onde**: `cpk_health.py` (`get_cpk_rule`/`set_cpk_rule`); `GET/PUT /api/gamification/cpk/rule`
+    (substitui `/cpk/penalty`); seletor no Fechamento; planilha mostra "Regra de CPK: ..." e a coluna
+    nova **"Ajuste CPK"** (`+0,2x`, `-0,2x`, `0x`, `0x (no piso)`).
+  - **Pegadinha**: trocar a regra não muda o fechamento sozinho - é preciso **recalcular o período**.
+    Regional no piso (0x) não recebe o ajuste (regra antiga de `calculation.py`), por isso o "(no piso)".
+  - **Estado**: PR aberto contra `master`; ainda não mesclado nem em produção.
+
 - **Gamificação → CPK: desconto de "fora da meta" desligável por competência (2026-09-30, pedido do
   usuário: setembro/2026 só conta o aumento, não subtrai).**
   - **Regra**: `na_meta` continua somando +0,2x; `fora_meta` subtraía 0,2x e agora pode ser zerado

@@ -7,10 +7,18 @@ import { useCallback } from "react";
 import { formatMoney, formatNumber, formatPoints, leadershipAverageSourceLabel, leadershipRoleLabel } from "@/lib/gamificacao-helpers";
 import { api } from "@/lib/api";
 import { normalizeRegional, regionalName } from "@/lib/regional";
-import type { AuthUser, DashboardSummary } from "@/lib/types";
+import { CPK_RULE_LABEL, type AuthUser, type CpkRule, type DashboardSummary } from "@/lib/types";
 
 const SECTION_HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0F172A" } };
 const TABLE_HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+
+function cpkAdjustmentLabel(adjustment: number, status: string | null | undefined, rule: CpkRule, multiplier: number): string {
+  if (adjustment) return `${adjustment > 0 ? "+" : "-"}${formatNumber(Math.abs(adjustment))}x`;
+  const ruleWouldApply = (status === "na_meta" && (rule === "both" || rule === "bonus_only")) ||
+    (status === "fora_meta" && (rule === "both" || rule === "penalty_only"));
+  // Regional no piso (multiplicador 0x por SLA/saude) nao recebe ajuste de CPK - ver calculation.py.
+  return ruleWouldApply && multiplier <= 0 ? "0x (no piso)" : "0x";
+}
 
 const CPK_STATUS_LABEL: Record<string, string> = {
   na_meta: "Na meta",
@@ -158,10 +166,10 @@ export function useClosureActions({
           );
         });
     }
-    let cpkPenaltyEnabled = true;
+    let cpkRule: CpkRule = "both";
     if (summary.run?.reference_year && summary.run?.reference_month) {
       try {
-        cpkPenaltyEnabled = (await api.cpkPenalty(summary.run.reference_year, summary.run.reference_month)).penalty_enabled;
+        cpkRule = (await api.cpkRule(summary.run.reference_year, summary.run.reference_month)).rule;
       } catch {
         // sem a regra, mantém o padrão (descontando) - o export não deve travar por isso.
       }
@@ -212,7 +220,7 @@ export function useClosureActions({
 
       const titleRow = sheet.addRow([`Pagamento - ${regionalName(regional)}`]);
       titleRow.font = { bold: true, size: 13 };
-      sheet.addRow([`CPK descontando: ${cpkPenaltyEnabled ? "Sim" : "Não (só aumento)"}`]);
+      sheet.addRow([`Regra de CPK: ${CPK_RULE_LABEL[cpkRule]}`]);
       sheet.addRow([]);
 
       const regionalPaymentRows = paymentRows.filter((score) => normalizeRegional(score.regional) === regional);
@@ -221,12 +229,14 @@ export function useClosureActions({
         "Pagamento de técnicos",
         [
           "Colaborador", "O.S", "Pontos brutos", "Pontos anulados", "Pontos líquidos", "Desconto de saldo",
-          "Desconto de garantia", "SLA da base (%)", "CPK da base", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"
+          "Desconto de garantia", "SLA da base (%)", "CPK da base", "Ajuste CPK", "Multiplicador saúde", "Pontos finais", "Valor a ser pago"
         ],
         regionalPaymentRows.map((score) => {
           const regionalHealth = healthByRegional.get(normalizeRegional(score.regional));
-          const cpkBase = regionalHealth?.cpk_status ? CPK_STATUS_LABEL[regionalHealth.cpk_status] ?? "-" : "-";
-          const cpkLabel = regionalHealth?.cpk_status === "fora_meta" && !cpkPenaltyEnabled ? `${cpkBase} (sem desconto)` : cpkBase;
+          const cpkLabel = regionalHealth?.cpk_status ? CPK_STATUS_LABEL[regionalHealth.cpk_status] ?? "-" : "-";
+          const cpkAdjustment = regionalHealth
+            ? cpkAdjustmentLabel(regionalHealth.cpk_adjustment ?? 0, regionalHealth.cpk_status, cpkRule, score.health_multiplier)
+            : "-";
           return [
             score.collaborator_name,
             formatNumber(score.service_orders_count),
@@ -237,6 +247,7 @@ export function useClosureActions({
             formatPoints(garantiaDiscountByCollaborator.get(score.collaborator_id) ?? 0),
             regionalHealth ? `${formatNumber(regionalHealth.sla_rate)}%` : "-",
             cpkLabel,
+            cpkAdjustment,
             `${formatNumber(score.health_multiplier)}x`,
             formatPoints(score.final_points),
             formatMoney(score.estimated_payment)
@@ -246,7 +257,7 @@ export function useClosureActions({
           "Total", "", "", "",
           "", formatPoints(regionalPaymentRows.reduce((sum, score) => sum + score.balance_adjustment_points, 0)),
           formatPoints(regionalPaymentRows.reduce((sum, score) => sum + (garantiaDiscountByCollaborator.get(score.collaborator_id) ?? 0), 0)),
-          "", "", "", "",
+          "", "", "", "", "",
           formatMoney(regionalPaymentRows.reduce((sum, score) => sum + score.estimated_payment, 0))
         ]
       );

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -687,14 +688,17 @@ class CpkSyncRequest(BaseModel):
     month: int = Field(ge=1, le=12)
 
 
-class CpkPenaltyOut(BaseModel):
+CpkRule = Literal["both", "penalty_only", "bonus_only", "none"]
+
+
+class CpkRuleOut(BaseModel):
     year: int
     month: int
-    penalty_enabled: bool
+    rule: CpkRule
 
 
-class CpkPenaltyUpdate(CpkSyncRequest):
-    penalty_enabled: bool
+class CpkRuleUpdate(CpkSyncRequest):
+    rule: CpkRule
 
 
 class GamificationConfigImport(BaseModel):

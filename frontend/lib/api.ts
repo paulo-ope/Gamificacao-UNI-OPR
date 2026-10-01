@@ -22,6 +22,7 @@ import type {
   CollaboratorPointBalance,
   CollaboratorMonthlyHistoryItem,
   CpkRegionalSnapshot,
+  CpkRule,
   DashboardSummary,
   DashboardBootstrap,
   DashboardFilteredBreakdown,
@@ -821,12 +822,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ year, month })
     }),
-  cpkPenalty: (year: number, month: number) =>
-    request<{ year: number; month: number; penalty_enabled: boolean }>(`/gamification/cpk/penalty?year=${year}&month=${month}`),
-  saveCpkPenalty: (year: number, month: number, penalty_enabled: boolean) =>
-    request<{ year: number; month: number; penalty_enabled: boolean }>("/gamification/cpk/penalty", {
+  cpkRule: (year: number, month: number) =>
+    request<{ year: number; month: number; rule: CpkRule }>(`/gamification/cpk/rule?year=${year}&month=${month}`),
+  saveCpkRule: (year: number, month: number, rule: CpkRule) =>
+    request<{ year: number; month: number; rule: CpkRule }>("/gamification/cpk/rule", {
       method: "PUT",
-      body: JSON.stringify({ year, month, penalty_enabled })
+      body: JSON.stringify({ year, month, rule })
     }),
   cpkSnapshot: (year: number, month: number) =>
     request<CpkRegionalSnapshot[]>(`/gamification/cpk/snapshot?year=${year}&month=${month}`),

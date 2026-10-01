@@ -20,7 +20,6 @@ import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AppSwitch } from "@/components/ui/switch";
 import { api } from "@/lib/api";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { DashboardCharts } from "@/components/gamification/dashboard-charts";
@@ -37,7 +36,7 @@ import {
   unregisteredServiceOrders
 } from "@/lib/gamificacao-helpers";
 import { normalizeRegional, regionalName } from "@/lib/regional";
-import type { AuthUser, CollaboratorScore, DashboardSummary, PenaltyDistributionItem, RegionalHealthItem } from "@/lib/types";
+import { CPK_RULE_LABEL, type AuthUser, type CollaboratorScore, type CpkRule, type DashboardSummary, PenaltyDistributionItem, RegionalHealthItem } from "@/lib/types";
 
 const SECTION_HELP = {
   summary: "Consolida os valores principais do período, separando técnicos, liderança e total a pagar.",
@@ -141,7 +140,7 @@ export function ClosureTab({
   onRankingTabChange
 }: ClosureTabProps) {
   const [detailSection, setDetailSection] = useState<DetailSection>("pending");
-  const [cpkPenaltyEnabled, setCpkPenaltyEnabled] = useState<boolean | null>(null);
+  const [cpkRule, setCpkRule] = useState<CpkRule | null>(null);
   const [cpkPenaltyNote, setCpkPenaltyNote] = useState<string | null>(null);
   const runYear = summary.run?.reference_year;
   const runMonth = summary.run?.reference_month;
@@ -149,29 +148,30 @@ export function ClosureTab({
   useEffect(() => {
     setCpkPenaltyNote(null);
     if (!runYear || !runMonth) {
-      setCpkPenaltyEnabled(null);
+      setCpkRule(null);
       return;
     }
     let cancelled = false;
     api
-      .cpkPenalty(runYear, runMonth)
-      .then((result) => !cancelled && setCpkPenaltyEnabled(result.penalty_enabled))
-      .catch(() => !cancelled && setCpkPenaltyEnabled(null));
+      .cpkRule(runYear, runMonth)
+      .then((result) => !cancelled && setCpkRule(result.rule))
+      .catch(() => !cancelled && setCpkRule(null));
     return () => {
       cancelled = true;
     };
   }, [runYear, runMonth]);
 
-  async function changeCpkPenalty(next: boolean) {
+  async function changeCpkRule(next: CpkRule) {
     if (!runYear || !runMonth) return;
     try {
-      const result = await api.saveCpkPenalty(runYear, runMonth, next);
-      setCpkPenaltyEnabled(result.penalty_enabled);
+      const result = await api.saveCpkRule(runYear, runMonth, next);
+      setCpkRule(result.rule);
       setCpkPenaltyNote("Regra salva. Recalcule o período para aplicar aos valores do pagamento.");
     } catch (error) {
       setCpkPenaltyNote(error instanceof Error ? error.message : "Não foi possível salvar a regra de CPK.");
     }
   }
+
 
   const sections: Array<{ key: DetailSection; label: string; badge: string; badgeTone: "warning" | "ok" | "neutral" | "accent" }> = [
     {
@@ -260,13 +260,22 @@ export function ClosureTab({
               ) : null}
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-              {summary.run && cpkPenaltyEnabled !== null && can("settings:write") && summary.run.status !== "paid" ? (
+              {summary.run && cpkRule !== null && can("settings:write") && summary.run.status !== "paid" ? (
                 <div className="flex flex-col items-start gap-1">
-                  <AppSwitch
-                    checked={cpkPenaltyEnabled}
-                    onCheckedChange={changeCpkPenalty}
-                    label={cpkPenaltyEnabled ? "CPK descontando (fora da meta)" : "CPK sem desconto (só aumento)"}
-                  />
+                  <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+                    Regra de CPK
+                    <select
+                      value={cpkRule}
+                      onChange={(event) => changeCpkRule(event.target.value as CpkRule)}
+                      className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm font-normal text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {(Object.keys(CPK_RULE_LABEL) as CpkRule[]).map((rule) => (
+                        <option key={rule} value={rule}>
+                          {CPK_RULE_LABEL[rule]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   {cpkPenaltyNote ? <p className="max-w-xs text-xs text-slate-500">{cpkPenaltyNote}</p> : null}
                 </div>
               ) : null}

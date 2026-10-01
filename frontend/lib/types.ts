@@ -1843,6 +1843,15 @@ export type HealthRule = {
   active: boolean;
 };
 
+export type CpkRule = "both" | "penalty_only" | "bonus_only" | "none";
+
+export const CPK_RULE_LABEL: Record<CpkRule, string> = {
+  both: "Soma e desconta",
+  penalty_only: "Só desconta fora da meta",
+  bonus_only: "Só soma quem está na meta",
+  none: "Sem CPK"
+};
+
 export type CpkRegionalSnapshot = {
   regional: string;
   status: "na_meta" | "fora_meta" | "sem_base";

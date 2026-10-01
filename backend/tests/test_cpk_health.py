@@ -1,4 +1,5 @@
 """Regression tests for backend/app/services/cpk_health.py and its wiring into calculation.py."""
+import pytest
 from sqlalchemy import select
 
 from app.models import AppSetting, CpkRegionalSnapshot
@@ -183,24 +184,65 @@ def test_apply_cpk_adjustment_falls_back_to_cache_when_sync_fails(db_session, mo
     assert result["UNI - JARU"]["multiplier"] == 1.2
 
 
-def test_cpk_penalty_can_be_disabled_per_period_keeping_the_bonus(db_session):
-    """Setembro/2026: so o aumento por estar na meta vale; fora da meta nao subtrai. Outros
-    meses continuam com o desconto padrao."""
-    for month in (8, 9):
-        db_session.add_all([
-            CpkRegionalSnapshot(reference_year=2026, reference_month=month, regional="UNI - JARU", status="na_meta"),
-            CpkRegionalSnapshot(reference_year=2026, reference_month=month, regional="UNI - JI PARANA", status="fora_meta"),
-        ])
+def _seed_na_e_fora(db_session, month):
+    db_session.add_all([
+        CpkRegionalSnapshot(reference_year=2026, reference_month=month, regional="UNI - JARU", status="na_meta"),
+        CpkRegionalSnapshot(reference_year=2026, reference_month=month, regional="UNI - JI PARANA", status="fora_meta"),
+        CpkRegionalSnapshot(reference_year=2026, reference_month=month, regional="UNI - MACHADINHO DOESTE", status="sem_base"),
+    ])
     db_session.flush()
 
-    assert cpk_health.is_cpk_penalty_enabled(db_session, 2026, 9) is True
-    cpk_health.set_cpk_penalty_enabled(db_session, 2026, 9, False)
 
-    sept = cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 9)
-    assert sept["UNI - JARU"] == 0.2
-    assert sept["UNI - JI PARANA"] == 0.0
-    aug = cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 8)
-    assert aug["UNI - JI PARANA"] == -0.2
+@pytest.mark.parametrize(
+    "rule, na_meta, fora_meta",
+    [
+        ("both", 0.2, -0.2),
+        ("penalty_only", 0.0, -0.2),
+        ("bonus_only", 0.2, 0.0),
+        ("none", 0.0, 0.0),
+    ],
+)
+def test_cpk_rule_controls_bonus_and_penalty(db_session, rule, na_meta, fora_meta):
+    """Seletor 'Regra de CPK': cada opcao liga/desliga o aumento (na meta) e o desconto (fora da
+    meta) isoladamente; 'sem base' nunca interfere."""
+    _seed_na_e_fora(db_session, 9)
+    cpk_health.set_cpk_rule(db_session, 2026, 9, rule)
 
-    cpk_health.set_cpk_penalty_enabled(db_session, 2026, 9, True)
-    assert cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 9)["UNI - JI PARANA"] == -0.2
+    adjustments = cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 9)
+
+    assert adjustments["UNI - JARU"] == na_meta
+    assert adjustments["UNI - JI PARANA"] == fora_meta
+    assert adjustments["UNI - MACHADINHO DOESTE"] == 0.0
+
+
+def test_cpk_rule_is_per_period_and_defaults_to_both(db_session):
+    _seed_na_e_fora(db_session, 8)
+    _seed_na_e_fora(db_session, 9)
+    assert cpk_health.get_cpk_rule(db_session, 2026, 9) == "both"
+
+    cpk_health.set_cpk_rule(db_session, 2026, 9, "bonus_only")
+
+    assert cpk_health.get_cpk_rule(db_session, 2026, 8) == "both"
+    assert cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 8)["UNI - JI PARANA"] == -0.2
+    assert cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 9)["UNI - JI PARANA"] == 0.0
+
+    cpk_health.set_cpk_rule(db_session, 2026, 9, "both")
+    assert cpk_health.get_cpk_rule(db_session, 2026, 9) == "both"
+
+
+def test_cpk_rule_rejects_unknown_value(db_session):
+    with pytest.raises(ValueError):
+        cpk_health.set_cpk_rule(db_session, 2026, 9, "qualquer")
+
+
+def test_legacy_disabled_periods_setting_means_bonus_only(db_session):
+    """Setembro foi salvo pela v1 (lista 'cpk_penalty_disabled_periods'): deve continuar valendo
+    como 'so soma quem esta na meta' e ser migrado ao trocar a regra."""
+    db_session.add(AppSetting(key="cpk_penalty_disabled_periods", value="2026-09"))
+    _seed_na_e_fora(db_session, 9)
+    assert cpk_health.get_cpk_rule(db_session, 2026, 9) == "bonus_only"
+    assert cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 9)["UNI - JI PARANA"] == 0.0
+
+    cpk_health.set_cpk_rule(db_session, 2026, 9, "none")
+
+    assert cpk_health.get_cpk_rule(db_session, 2026, 9) == "none"
