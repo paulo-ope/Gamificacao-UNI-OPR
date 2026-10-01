@@ -53,7 +53,12 @@ regressão.
     atual** - para mexer em setembro é preciso trocar o mês para 9. A regra continua valendo só para o mês
     escolhido, e é preciso recalcular o período depois de trocar.
   - Existe outra aba de nome parecido ("Liderança e multiplicadores"): é outra coisa.
-  - **Estado**: em PR; só vale em produção depois de mesclar e fazer rebuild do **frontend** na VM.
+  - **Estado**: PR [#44](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/44) mesclado em `master`
+    (`7cc99c4`) e **em produção desde 2026-10-01** (rebuild do frontend feito pelo usuário na VM). Visto
+    por esta sessão: `/api/health` 200 e o chunk do build anterior passou a dar 404 (build novo no ar).
+    Não conferido: o commit exato na VM e a tela em produção (fica atrás do login). Rollback: só
+    frontend, voltar para o commit anterior da VM (esperado `6eddc8d`/`b6f0a44`) e `docker compose build
+    frontend && docker compose up -d`.
 
 - **Gamificação → CPK: seletor "Regra de CPK" por competência (2026-09-30, pedido do usuário; evolui o
   PR #41, que só tinha a chave liga/desliga do desconto).**
