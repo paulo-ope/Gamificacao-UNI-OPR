@@ -39,7 +39,7 @@ export const SIMPLE_SECTIONS: Array<{ value: ConfigSection; label: string; help:
 export const ADVANCED_SECTIONS: Array<{ value: ConfigSection; label: string; help: string }> = [
   ...SIMPLE_SECTIONS,
   { value: "recurrence", label: "Reincidência", help: "Fluxo e regras completas." },
-  { value: "sla", label: "SLA/Saúde", help: "Prazo e multiplicadores." },
+  { value: "sla", label: "Multiplicadores", help: "SLA, saúde e regra de CPK." },
   { value: "integration", label: "Integração IXC", help: "Sincronização automática e recálculo." },
   { value: "advanced", label: "Avançado", help: "JSON, histórico e restauração." }
 ];

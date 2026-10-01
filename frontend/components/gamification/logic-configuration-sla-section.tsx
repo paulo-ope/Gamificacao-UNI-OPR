@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { numericInputValue, parseNumericInput } from "@/lib/numeric-input";
 import type { HealthRule, SlaPenaltyRule, SlaPenaltyType } from "@/lib/types";
+import { CpkRuleCard } from "@/components/gamification/logic-configuration-cpk-rule-card";
 import { HEALTH_BELOW_MINIMUM_MULTIPLIER_SETTING, replaceById, slaValueFieldState } from "@/components/gamification/logic-configuration-helpers";
 
 type Props = {
@@ -25,6 +26,8 @@ type Props = {
   localSettings: Record<string, string>;
   setLocalSettings: Dispatch<SetStateAction<Record<string, string>>>;
   saveSettings: (patch: Record<string, string>) => Promise<void>;
+  cpkPeriod: { year: number; month: number };
+  setCpkPeriod: Dispatch<SetStateAction<{ year: number; month: number }>>;
 };
 
 export function SlaSection({
@@ -38,9 +41,12 @@ export function SlaSection({
   saveHealthRule,
   localSettings,
   setLocalSettings,
-  saveSettings
+  saveSettings,
+  cpkPeriod,
+  setCpkPeriod
 }: Props) {
   return (
+    <>
     <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
       <div className="panel-header">
         <div>
@@ -237,5 +243,7 @@ export function SlaSection({
         </div>
       </div>
     </section>
+    <CpkRuleCard cpkPeriod={cpkPeriod} setCpkPeriod={setCpkPeriod} />
+    </>
   );
 }
