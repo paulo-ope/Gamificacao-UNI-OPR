@@ -13,7 +13,14 @@ from app.services.scoring_detail import _safe_float, get_setting
 
 CPK_BONUS_POINTS_SETTING = "cpk_bonus_points"
 CPK_SYNC_ENABLED_SETTING = "cpk_sync_enabled"
-CPK_PENALTY_DISABLED_PERIODS_SETTING = "cpk_penalty_disabled_periods"
+CPK_PENALTY_DISABLED_PERIODS_SETTING = "cpk_penalty_disabled_periods"  # legado (v1): equivale a bonus_only
+CPK_RULE_BY_PERIOD_SETTING = "cpk_rule_by_period"
+
+CPK_RULE_BOTH = "both"
+CPK_RULE_PENALTY_ONLY = "penalty_only"
+CPK_RULE_BONUS_ONLY = "bonus_only"
+CPK_RULE_NONE = "none"
+CPK_RULES = (CPK_RULE_BOTH, CPK_RULE_PENALTY_ONLY, CPK_RULE_BONUS_ONLY, CPK_RULE_NONE)
 
 # Nome da regional como a API de CPK devolve (normalizado via normalize_key: sem acento, maiusculo,
 # espacos colapsados - mas mantendo apostrofos/hifens) -> nome interno da gamificacao (mesmo usado
@@ -94,35 +101,50 @@ def _period_key(ano: int, mes: int) -> str:
     return f"{ano:04d}-{mes:02d}"
 
 
-def _penalty_disabled_periods(db: Session) -> set[str]:
+def _legacy_bonus_only_periods(db: Session) -> set[str]:
+    """Meses gravados pela primeira versao (lista de competencias SEM desconto) - equivalem a
+    'bonus_only'. Continuam valendo para nao reverter setembro/2026 ja configurado."""
     raw = get_setting(db, CPK_PENALTY_DISABLED_PERIODS_SETTING, "")
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
-def is_cpk_penalty_enabled(db: Session, ano: int, mes: int) -> bool:
-    """O desconto por CPK fora da meta vale por padrao; pode ser desligado por competencia
-    (ex.: 2026-09 paga so o aumento de quem esta na meta, sem subtrair de quem esta fora)."""
-    return _period_key(ano, mes) not in _penalty_disabled_periods(db)
+def _rules_by_period(db: Session) -> dict[str, str]:
+    rules = {period: CPK_RULE_BONUS_ONLY for period in _legacy_bonus_only_periods(db)}
+    raw = get_setting(db, CPK_RULE_BY_PERIOD_SETTING, "")
+    for item in raw.split(","):
+        period, _, rule = item.strip().partition(":")
+        if period and rule in CPK_RULES:
+            rules[period] = rule
+    return rules
 
 
-def set_cpk_penalty_enabled(db: Session, ano: int, mes: int, enabled: bool) -> None:
-    periods = _penalty_disabled_periods(db)
-    if enabled:
-        periods.discard(_period_key(ano, mes))
+def get_cpk_rule(db: Session, ano: int, mes: int) -> str:
+    """Regra de CPK da competencia: both (soma e desconta - padrao), penalty_only (so desconta
+    fora da meta), bonus_only (so soma quem esta na meta) ou none (CPK nao interfere)."""
+    return _rules_by_period(db).get(_period_key(ano, mes), CPK_RULE_BOTH)
+
+
+def set_cpk_rule(db: Session, ano: int, mes: int, rule: str) -> None:
+    if rule not in CPK_RULES:
+        raise ValueError(f"Regra de CPK invalida: {rule}")
+    rules = _rules_by_period(db)
+    key = _period_key(ano, mes)
+    if rule == CPK_RULE_BOTH:
+        rules.pop(key, None)
     else:
-        periods.add(_period_key(ano, mes))
-    value = ",".join(sorted(periods))
-    setting = db.scalar(select(AppSetting).where(AppSetting.key == CPK_PENALTY_DISABLED_PERIODS_SETTING))
+        rules[key] = rule
+    _save_setting(db, CPK_RULE_BY_PERIOD_SETTING, ",".join(f"{p}:{r}" for p, r in sorted(rules.items())),
+                  "Regra de CPK por competencia (AAAA-MM:regra); competencia ausente = both")
+    # A lista antiga deixa de valer: tudo passa a viver em CPK_RULE_BY_PERIOD_SETTING.
+    _save_setting(db, CPK_PENALTY_DISABLED_PERIODS_SETTING, "", None)
+
+
+def _save_setting(db: Session, key: str, value: str, description: str | None) -> None:
+    setting = db.scalar(select(AppSetting).where(AppSetting.key == key))
     if setting:
         setting.value = value
     else:
-        db.add(
-            AppSetting(
-                key=CPK_PENALTY_DISABLED_PERIODS_SETTING,
-                value=value,
-                description="Competencias (AAAA-MM) em que o CPK fora da meta NAO desconta do multiplicador",
-            )
-        )
+        db.add(AppSetting(key=key, value=value, description=description))
     db.flush()
 
 
@@ -146,7 +168,9 @@ def get_cpk_adjustment_by_regional(db: Session, ano: int, mes: int) -> dict[str,
     por regional: +cpk_bonus_points (na meta), -cpk_bonus_points (fora da meta), ou 0.0 (sem
     snapshot pra esse periodo, ou regional sem base suficiente/mes ainda em andamento)."""
     bonus = _safe_float(get_setting(db, CPK_BONUS_POINTS_SETTING, "0.2"), 0.2)
-    penalty_enabled = is_cpk_penalty_enabled(db, ano, mes)
+    rule = get_cpk_rule(db, ano, mes)
+    applies_bonus = rule in (CPK_RULE_BOTH, CPK_RULE_BONUS_ONLY)
+    applies_penalty = rule in (CPK_RULE_BOTH, CPK_RULE_PENALTY_ONLY)
     rows = list(
         db.scalars(
             select(CpkRegionalSnapshot).where(
@@ -158,9 +182,9 @@ def get_cpk_adjustment_by_regional(db: Session, ano: int, mes: int) -> dict[str,
     adjustments: dict[str, float] = {}
     for row in rows:
         if row.status == "na_meta":
-            adjustments[row.regional] = bonus
+            adjustments[row.regional] = bonus if applies_bonus else 0.0
         elif row.status == "fora_meta":
-            adjustments[row.regional] = -bonus if penalty_enabled else 0.0
+            adjustments[row.regional] = -bonus if applies_penalty else 0.0
         else:
             adjustments[row.regional] = 0.0
     return adjustments
