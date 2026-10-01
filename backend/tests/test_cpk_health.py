@@ -181,3 +181,26 @@ def test_apply_cpk_adjustment_falls_back_to_cache_when_sync_fails(db_session, mo
     result = calculation._apply_cpk_adjustment(db_session, {"UNI - JARU": {"multiplier": 1.0}}, 7, 2026)
 
     assert result["UNI - JARU"]["multiplier"] == 1.2
+
+
+def test_cpk_penalty_can_be_disabled_per_period_keeping_the_bonus(db_session):
+    """Setembro/2026: so o aumento por estar na meta vale; fora da meta nao subtrai. Outros
+    meses continuam com o desconto padrao."""
+    for month in (8, 9):
+        db_session.add_all([
+            CpkRegionalSnapshot(reference_year=2026, reference_month=month, regional="UNI - JARU", status="na_meta"),
+            CpkRegionalSnapshot(reference_year=2026, reference_month=month, regional="UNI - JI PARANA", status="fora_meta"),
+        ])
+    db_session.flush()
+
+    assert cpk_health.is_cpk_penalty_enabled(db_session, 2026, 9) is True
+    cpk_health.set_cpk_penalty_enabled(db_session, 2026, 9, False)
+
+    sept = cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 9)
+    assert sept["UNI - JARU"] == 0.2
+    assert sept["UNI - JI PARANA"] == 0.0
+    aug = cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 8)
+    assert aug["UNI - JI PARANA"] == -0.2
+
+    cpk_health.set_cpk_penalty_enabled(db_session, 2026, 9, True)
+    assert cpk_health.get_cpk_adjustment_by_regional(db_session, 2026, 9)["UNI - JI PARANA"] == -0.2

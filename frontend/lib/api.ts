@@ -821,6 +821,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ year, month })
     }),
+  cpkPenalty: (year: number, month: number) =>
+    request<{ year: number; month: number; penalty_enabled: boolean }>(`/gamification/cpk/penalty?year=${year}&month=${month}`),
+  saveCpkPenalty: (year: number, month: number, penalty_enabled: boolean) =>
+    request<{ year: number; month: number; penalty_enabled: boolean }>("/gamification/cpk/penalty", {
+      method: "PUT",
+      body: JSON.stringify({ year, month, penalty_enabled })
+    }),
   cpkSnapshot: (year: number, month: number) =>
     request<CpkRegionalSnapshot[]>(`/gamification/cpk/snapshot?year=${year}&month=${month}`),
   calculate: (

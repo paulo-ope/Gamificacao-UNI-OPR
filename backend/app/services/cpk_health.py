@@ -6,13 +6,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import CpkRegionalSnapshot
+from app.models import AppSetting, CpkRegionalSnapshot
 from app.services.cpk_client import get_cpk_client
 from app.services.regional import ROLIM_REGIONAL, SAO_FRANCISCO_REGIONAL, normalize_key
 from app.services.scoring_detail import _safe_float, get_setting
 
 CPK_BONUS_POINTS_SETTING = "cpk_bonus_points"
 CPK_SYNC_ENABLED_SETTING = "cpk_sync_enabled"
+CPK_PENALTY_DISABLED_PERIODS_SETTING = "cpk_penalty_disabled_periods"
 
 # Nome da regional como a API de CPK devolve (normalizado via normalize_key: sem acento, maiusculo,
 # espacos colapsados - mas mantendo apostrofos/hifens) -> nome interno da gamificacao (mesmo usado
@@ -89,6 +90,42 @@ def sync_cpk_snapshot(db: Session, ano: int, mes: int) -> dict[str, int]:
     return {"synced": synced, "skipped_unmapped": len(skipped_unmapped)}
 
 
+def _period_key(ano: int, mes: int) -> str:
+    return f"{ano:04d}-{mes:02d}"
+
+
+def _penalty_disabled_periods(db: Session) -> set[str]:
+    raw = get_setting(db, CPK_PENALTY_DISABLED_PERIODS_SETTING, "")
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def is_cpk_penalty_enabled(db: Session, ano: int, mes: int) -> bool:
+    """O desconto por CPK fora da meta vale por padrao; pode ser desligado por competencia
+    (ex.: 2026-09 paga so o aumento de quem esta na meta, sem subtrair de quem esta fora)."""
+    return _period_key(ano, mes) not in _penalty_disabled_periods(db)
+
+
+def set_cpk_penalty_enabled(db: Session, ano: int, mes: int, enabled: bool) -> None:
+    periods = _penalty_disabled_periods(db)
+    if enabled:
+        periods.discard(_period_key(ano, mes))
+    else:
+        periods.add(_period_key(ano, mes))
+    value = ",".join(sorted(periods))
+    setting = db.scalar(select(AppSetting).where(AppSetting.key == CPK_PENALTY_DISABLED_PERIODS_SETTING))
+    if setting:
+        setting.value = value
+    else:
+        db.add(
+            AppSetting(
+                key=CPK_PENALTY_DISABLED_PERIODS_SETTING,
+                value=value,
+                description="Competencias (AAAA-MM) em que o CPK fora da meta NAO desconta do multiplicador",
+            )
+        )
+    db.flush()
+
+
 def get_cpk_status_by_regional(db: Session, ano: int, mes: int) -> dict[str, str]:
     """Le o status bruto ja sincronizado ("na_meta"/"fora_meta"/"sem_base") sem aplicar
     cpk_bonus_points - usado so pra exibicao (extrato do colaborador, dashboard), separado do
@@ -109,6 +146,7 @@ def get_cpk_adjustment_by_regional(db: Session, ano: int, mes: int) -> dict[str,
     por regional: +cpk_bonus_points (na meta), -cpk_bonus_points (fora da meta), ou 0.0 (sem
     snapshot pra esse periodo, ou regional sem base suficiente/mes ainda em andamento)."""
     bonus = _safe_float(get_setting(db, CPK_BONUS_POINTS_SETTING, "0.2"), 0.2)
+    penalty_enabled = is_cpk_penalty_enabled(db, ano, mes)
     rows = list(
         db.scalars(
             select(CpkRegionalSnapshot).where(
@@ -122,7 +160,7 @@ def get_cpk_adjustment_by_regional(db: Session, ano: int, mes: int) -> dict[str,
         if row.status == "na_meta":
             adjustments[row.regional] = bonus
         elif row.status == "fora_meta":
-            adjustments[row.regional] = -bonus
+            adjustments[row.regional] = -bonus if penalty_enabled else 0.0
         else:
             adjustments[row.regional] = 0.0
     return adjustments

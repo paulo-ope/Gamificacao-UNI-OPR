@@ -44,6 +44,26 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Gamificação → CPK: desconto de "fora da meta" desligável por competência (2026-09-30, pedido do
+  usuário: setembro/2026 só conta o aumento, não subtrai).**
+  - **Regra**: `na_meta` continua somando +0,2x; `fora_meta` subtraía 0,2x e agora pode ser zerado
+    por competência (`AAAA-MM`). Padrão segue descontando. Guardado em `app_settings`
+    (`cpk_penalty_disabled_periods`), **sem migration**.
+  - **Onde**: `cpk_health.py` (`is_cpk_penalty_enabled` / `set_cpk_penalty_enabled`, lido por
+    `get_cpk_adjustment_by_regional`); `GET/PUT /api/gamification/cpk/penalty` (escrita exige
+    `settings:write`, auditada, recusa período já pago); chave "CPK descontando / sem desconto" no
+    Fechamento, ao lado de "Exportar pagamento"; a planilha mostra "CPK descontando: Sim/Não" e
+    "(sem desconto)" na coluna CPK da base.
+  - **Pegadinha**: os valores ficam gravados no cálculo - mudar a chave **não** altera o fechamento
+    sozinho; é preciso **recalcular o período** e só então exportar.
+  - **Validado local** (08/2026, mesmos dados): R$ 14.653,68 com desconto vs R$ 16.515,50 sem.
+    Não validado: abrir a planilha exportada. Banco local não tem setembro (cópia termina em 08/2026).
+  - **Estado**: PR [#41](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/41) aberto contra
+    `master`, **ainda não mesclado nem em produção**. Rollback: sem migration, basta voltar o código
+    (commit anterior em `master`: `54bb7c1`); a config gravada é ignorada pela versão antiga.
+  - **Pendente do usuário**: mesclar, fazer deploy na VM, ligar "sem desconto" no fechamento de
+    09/2026, recalcular e exportar. SSH da VM: porta 22 recusa; a 2222 está aberta (não confirmado se é SSH).
+
 - **Gamificação → Reincidência — "Intervalo mínimo" (`min_hours_between`) não era salvo ao editar
   uma regra existente (2026-09-28, relato do usuário: definia 12h, salvava e o valor não ficava).**
   - **Causa raiz**: o payload do `PUT /recurrence-classification-rules/{id}` montado em
