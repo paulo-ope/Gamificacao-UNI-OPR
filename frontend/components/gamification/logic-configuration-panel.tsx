@@ -1036,6 +1036,8 @@ export function LogicConfigurationPanel({
               localSettings={localSettings}
               setLocalSettings={setLocalSettings}
               saveSettings={saveSettings}
+              cpkPeriod={cpkPeriod}
+              setCpkPeriod={setCpkPeriod}
             />
           ) : null}
 

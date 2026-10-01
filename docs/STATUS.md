@@ -44,6 +44,17 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Gamificação → "Regra de CPK" saiu do Fechamento e foi para Configuração > "Multiplicadores"
+  (2026-10-01, pedido do usuário).** A aba "SLA/Saúde" (modo Avançado) foi renomeada para
+  **"Multiplicadores"** (mesmo `value` interno `sla`, sem quebrar nada) e ganhou o cartão "Regra de CPK por
+  competência" no fim, com ano/mês de referência e o seletor das 4 regras. O Fechamento não tem mais o
+  seletor. Só frontend; a API `/cpk/rule` e a regra são as mesmas.
+  - **Pegadinha**: o cartão usa o mesmo período (ano/mês) da sincronização de CPK, que abre no **mês
+    atual** - para mexer em setembro é preciso trocar o mês para 9. A regra continua valendo só para o mês
+    escolhido, e é preciso recalcular o período depois de trocar.
+  - Existe outra aba de nome parecido ("Liderança e multiplicadores"): é outra coisa.
+  - **Estado**: em PR; só vale em produção depois de mesclar e fazer rebuild do **frontend** na VM.
+
 - **Gamificação → CPK: seletor "Regra de CPK" por competência (2026-09-30, pedido do usuário; evolui o
   PR #41, que só tinha a chave liga/desliga do desconto).**
   - **Regras** (por mês, padrão `both`): `both` soma +0,2x na meta e desconta -0,2x fora; `penalty_only`
