@@ -56,7 +56,14 @@ regressão.
     nova **"Ajuste CPK"** (`+0,2x`, `-0,2x`, `0x`, `0x (no piso)`).
   - **Pegadinha**: trocar a regra não muda o fechamento sozinho - é preciso **recalcular o período**.
     Regional no piso (0x) não recebe o ajuste (regra antiga de `calculation.py`), por isso o "(no piso)".
-  - **Estado**: PR aberto contra `master`; ainda não mesclado nem em produção.
+  - **Estado**: PR [#42](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/42) mesclado em `master`
+    (`6eddc8d`) e **em produção desde 2026-09-30** (build + `docker compose up -d` feitos pelo usuário na
+    VM; depois disso `/api/health` e o site responderam 200 e a rota nova `/cpk/rule` respondeu 401 sem
+    login, não 404). Não conferido por esta sessão: o commit exato na VM (`git log`) e a tela/planilha em
+    produção. Rollback: sem migration, voltar o código para o commit anterior da VM (esperado `d99d978`,
+    do PR #41); a config gravada é ignorada pela versão antiga.
+  - **Pendente do usuário**: em 09/2026 conferir que a regra está em "Só soma quem está na meta",
+    recalcular o período e só então exportar o pagamento oficial.
 
 - **Gamificação → CPK: desconto de "fora da meta" desligável por competência (2026-09-30, pedido do
   usuário: setembro/2026 só conta o aumento, não subtrai).**
@@ -72,11 +79,11 @@ regressão.
     sozinho; é preciso **recalcular o período** e só então exportar.
   - **Validado local** (08/2026, mesmos dados): R$ 14.653,68 com desconto vs R$ 16.515,50 sem.
     Não validado: abrir a planilha exportada. Banco local não tem setembro (cópia termina em 08/2026).
-  - **Estado**: PR [#41](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/41) aberto contra
-    `master`, **ainda não mesclado nem em produção**. Rollback: sem migration, basta voltar o código
-    (commit anterior em `master`: `54bb7c1`); a config gravada é ignorada pela versão antiga.
-  - **Pendente do usuário**: mesclar, fazer deploy na VM, ligar "sem desconto" no fechamento de
-    09/2026, recalcular e exportar. SSH da VM: porta 22 recusa; a 2222 está aberta (não confirmado se é SSH).
+  - **Estado**: PR [#41](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/41) mesclado em `master`
+    (`d99d978`) e já foi para produção (o usuário exportou setembro com "sem desconto"); a chave foi
+    substituída pelo seletor de 4 regras do PR #42 (acima), que lê a config antiga como `bonus_only`.
+    Acesso à VM: só pelo JumpServer (`ssh -p 2222 paulo@noc.souuni.com`, senha/MFA do usuário); a sessão
+    do Claude não tem acesso.
 
 - **Gamificação → Reincidência — "Intervalo mínimo" (`min_hours_between`) não era salvo ao editar
   uma regra existente (2026-09-28, relato do usuário: definia 12h, salvava e o valor não ficava).**
