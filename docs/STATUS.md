@@ -81,9 +81,11 @@ regressão.
     soma de finalizadas, e tempo médio ponderado por finalizadas (`aggregateSlaItems` em
     `frontend/lib/operations-sla.ts`). **Não** é a média simples dos percentuais (que distorceria: Rádio
     com poucas O.S. pesaria o mesmo que Fibra Urbana).
-  - **Estado**: PR [#50](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/50) aberto contra `master`
-    (branch `claude/sla-media-selecionada`). vitest `operations-sla.test.ts` 5/5 e `tsc --noEmit` limpos.
-    Conferência visual local (frontend reconstruído) fica com o usuário; ainda não está em produção.
+  - **Estado**: PR [#50](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/50) mesclado em `master`
+    (`a4eea06`) e **em produção desde 2026-10-05** (rebuild só do frontend feito pelo usuário na VM; sem
+    migration). vitest `operations-sla.test.ts` 5/5 e `tsc --noEmit` limpos. Não conferido por esta sessão:
+    o commit exato na VM e a tela em produção (fica atrás do login). Rollback: só frontend, voltar a VM ao
+    commit anterior da `master` e `docker compose build frontend`.
     O projeto não tem `eslint.config.*`, então lint não roda (anterior a esta mudança).
 
 - **Infra → 500 na Operação Analítica por `/dev/shm` do Postgres cheio (2026-10-05, incidente em
