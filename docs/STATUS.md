@@ -72,6 +72,19 @@ regressão.
     thread em testes de portal/reset e no teardown de fixtures com `client` (existem também no `master`).
   - **Setembro/2026**: sem fechamento pago; decisão do usuário foi pagar com o rascunho 4530 (marcar como
     pago congela; garantias descobertas depois entram no saldo do próximo fechamento).
+- **Operação Analítica → Visão Geral: gauge "Média selecionada" nos blocos de SLA por tecnologia
+  (2026-10-05, pedido do usuário).** Cada bloco ("SLA de Ativação", "SLA de Suporte", "SLA de Alteração
+  de Endereço") ganhou um 4º gauge. O usuário marca grupos (clique no gauge ou no rótulo) e o 4º gauge
+  consolida os marcados; com os 3 marcados, é a média geral do assunto. Seleção é estado local de cada
+  bloco. Só frontend, sem backend/migration/API nova.
+  - **Regra de cálculo (decisão do usuário)**: média **ponderada pelo volume** - SLA = soma de no prazo /
+    soma de finalizadas, e tempo médio ponderado por finalizadas (`aggregateSlaItems` em
+    `frontend/lib/operations-sla.ts`). **Não** é a média simples dos percentuais (que distorceria: Rádio
+    com poucas O.S. pesaria o mesmo que Fibra Urbana).
+  - **Estado**: PR [#50](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/50) aberto contra `master`
+    (branch `claude/sla-media-selecionada`). vitest `operations-sla.test.ts` 5/5 e `tsc --noEmit` limpos.
+    Conferência visual local (frontend reconstruído) fica com o usuário; ainda não está em produção.
+    O projeto não tem `eslint.config.*`, então lint não roda (anterior a esta mudança).
 
 - **Infra → 500 na Operação Analítica por `/dev/shm` do Postgres cheio (2026-10-05, incidente em
   produção).** Sintoma: `catalog-subjects`, `team-configuration` e `subject-type-mappings` davam 500 em
