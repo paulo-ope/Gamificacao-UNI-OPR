@@ -44,6 +44,26 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Infra → 500 na Operação Analítica por `/dev/shm` do Postgres cheio (2026-10-05, incidente em
+  produção).** Sintoma: `catalog-subjects`, `team-configuration` e `subject-type-mappings` davam 500 em
+  100-300 ms; `filters` dava 504 (1 min) e `overview` 200 em 59 s; `/auth/me` ficava pendente e o cockpit
+  não abria. Causa: `psycopg.errors.DiskFull: could not resize shared memory segment ... No space left on
+  device` - **não é o disco da VM** (69%), é o `/dev/shm` do container `db` (64 MB, padrão do Docker),
+  estourando em queries paralelas sobre `operations_orders`.
+  - **Correção**: PR [#46](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/46) mesclado em `master`
+    (`33051da`) - `shm_size: "512mb"` e `max_parallel_workers_per_gather=1` (configurável por
+    `POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER`) no serviço `db` do `docker-compose.yml`. **Em produção**:
+    conferido na VM (`/dev/shm` 512M, `show max_parallel_workers_per_gather` = 1); o usuário confirmou que
+    os 500 sumiram. Só o container `db` é recriado (`docker compose up -d db`); **nunca `down -v`**.
+  - O backend estava `unhealthy` há 3 dias (healthcheck `/api/health` de 3 s, endpoint síncrono que
+    disputa o threadpool com as queries presas) e voltou a `healthy` sozinho depois de recriar o `db`.
+  - **Pendente, sem urgência** (não é regressão, foi observado): backend com ~4,2 GB de RAM em platô
+    (4,241 → 4,246 GiB), swap da VM 100% cheio e db com ~25 TB de leitura acumulada. Suspeitos no código:
+    `_period_orders`/`filtered_orders` e outros `select(OperationOrder)` que carregam as O.S. do período
+    como objetos ORM completos (`modules/operations/queries.py`), e `filter_options`, que faz ~25
+    `SELECT DISTINCT` sobre `operations_orders` por chamada. Se a lentidão voltar: `mem_limit` no backend,
+    `/api/health` como `async def` e cache curto de `filter_options`.
+
 - **Gamificação → "Regra de CPK" saiu do Fechamento e foi para Configuração > "Multiplicadores"
   (2026-10-01, pedido do usuário).** A aba "SLA/Saúde" (modo Avançado) foi renomeada para
   **"Multiplicadores"** (mesmo `value` interno `sla`, sem quebrar nada) e ganhou o cartão "Regra de CPK por
