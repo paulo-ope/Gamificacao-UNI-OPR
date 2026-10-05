@@ -44,6 +44,34 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Gamificação → fechamento de período encerrado estável e rastreável, fase 1 (2026-10-05).** Origem:
+  setembro/2026 (encerrado, não pago) foi recalculado 3x por "revisão" e o a pagar de técnicos andou
+  R$ 19.956,93 (rasc. 4345) → 20.577,83 (4395) → 20.259,19 (4530). Investigado em produção: O.S. (10.286) e
+  pontos brutos (103.326) idênticos, `point_value` 0,35 e `rules_version_id` 11 iguais; o que subiu foram os
+  **pontos anulados** (20.176 → 20.386 → 21.014) e as O.S. de garantia/reincidência (737 → 766 → 839),
+  porque O.S. novas passam a apontar para serviços de setembro. SLA fora constante (1.792) e multiplicador
+  por regional idêntico entre 4395 e 4530 (a variação 4345 → 4395 não foi comparada). Não é bug: recalcular
+  mês ainda não pago relê o estado de hoje; o que congela é marcar como **pago**.
+  - **PR [#48](https://github.com/paulo-ope/Gamificacao-UNI-OPR/pull/48) mesclado em `master`** (sem
+    migration; **ainda não aplicado na VM** - precisa `docker compose build backend frontend && docker
+    compose up -d`): revisão de período encerrado (pago ou mês que já virou em Porto Velho) só por
+    administrador e com motivo escrito (mín. 10 caracteres); `result_summary.calculation_context` grava
+    horário de Porto Velho, regra e status de CPK por regional e a comparação com o fechamento vigente
+    (a pagar, anulados, garantia); rascunhos do mesmo período são cancelados quando a revisão os substitui
+    (só `draft`); CPK de mês com `mes_fechado` em todas as regionais não ressincroniza mais (o snapshot era
+    sobrescrito sem histórico; sync manual continua forçando); extrato PDF ganhou "Fechamento nº" e
+    "Apurado em" em horário de Porto Velho; a tela pede o motivo e mostra o diff.
+  - **Pendente (fases 2 e 3, não iniciadas)**: (2) **corte determinístico** de garantia/reincidência por
+    competência (O.S. posteriores ao corte vão para o saldo do próximo fechamento em vez de anular o mês
+    encerrado) - muda regra de pontuação e **depende de decidir o dia de corte** com a operação; (3)
+    congelar a lista de O.S. do extrato ao pagar (hoje é gerada ao vivo, então o resumo pode divergir da
+    lista num rascunho antigo). Avisar quando um mês encerrado passa de N dias sem pagar também ficou de fora.
+  - **Observações sem correção**: cadastro de regional duplicado por caixa (`UNI - ROLIM DE MOURA` e
+    `UNI - Rolim de Moura`) e `NAO IDENTIFICADO` aparecem em `collaborator_scores`; a queda de pagamento por
+    ponto anulado parece maior que 1 ponto (não investigado). Em ambiente Windows há erros de SQLite em
+    thread em testes de portal/reset e no teardown de fixtures com `client` (existem também no `master`).
+  - **Setembro/2026**: sem fechamento pago; decisão do usuário foi pagar com o rascunho 4530 (marcar como
+    pago congela; garantias descobertas depois entram no saldo do próximo fechamento).
 - **Operação Analítica → Visão Geral: gauge "Média selecionada" nos blocos de SLA por tecnologia
   (2026-10-05, pedido do usuário).** Cada bloco ("SLA de Ativação", "SLA de Suporte", "SLA de Alteração
   de Endereço") ganhou um 4º gauge. O usuário marca grupos (clique no gauge ou no rótulo) e o 4º gauge
