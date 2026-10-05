@@ -103,7 +103,9 @@ def _apply_cpk_adjustment(
     snapshot mais recente na API da frota antes de aplicar - se a API falhar (fora do ar, rede),
     o erro e apenas logado e o calculo segue com o ultimo snapshot ja salvo (nunca trava o
     calculo de folha por causa de um sistema externo)."""
-    if get_setting(db, cpk_health.CPK_SYNC_ENABLED_SETTING, "false") == "true":
+    if get_setting(db, cpk_health.CPK_SYNC_ENABLED_SETTING, "false") == "true" and not cpk_health.is_cpk_period_final(
+        db, year, month
+    ):
         try:
             cpk_health.sync_cpk_snapshot(db, year, month)
         except CpkApiError as exc:
@@ -362,6 +364,22 @@ def calculate_scores(
         )
     }
     result_summary["score_summaries"] = cached_score_summaries
+    # Entradas voláteis que explicam por que o MESMO período dá valores diferentes em dias
+    # diferentes (o CPK é sobrescrito a cada sync e a garantia depende de O.S. posteriores) -
+    # gravadas aqui para o fechamento carregar a própria explicação. Horário em Porto Velho.
+    result_summary["calculation_context"] = {
+        "timezone": "America/Porto_Velho",
+        "calculated_at": now_porto_velho().isoformat(timespec="seconds"),
+        "cpk_rule": cpk_health.get_cpk_rule(db, year, month),
+        "cpk_period_final": cpk_health.is_cpk_period_final(db, year, month),
+        "cpk_by_regional": {
+            regional_name: {
+                "status": entry.get("cpk_status"),
+                "adjustment": float(entry.get("cpk_adjustment") or 0.0),
+            }
+            for regional_name, entry in health_by_regional.items()
+        },
+    }
     registered_details = [
         item
         for item in order_details

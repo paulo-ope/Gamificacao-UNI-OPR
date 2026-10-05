@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
 from xml.sax.saxutils import escape
@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import CalculationRun, Collaborator, CollaboratorScore, PointBalanceEntry
-from app.services.calculation_closure import now_porto_velho
+from app.services.calculation_closure import PORTO_VELHO_TZ, now_porto_velho
 from app.services.point_balance import pending_entries_for_collaborator
 from app.services.regional import normalize_regional_grouped as normalize_regional
 from app.services.scoring_detail import get_collaborator_service_orders_detail
@@ -64,6 +64,16 @@ def _format_datetime(value: datetime | None) -> str:
     if not value:
         return "-"
     return value.strftime("%d/%m/%Y %H:%M")
+
+
+def _format_porto_velho(value: datetime | None) -> str:
+    """Data/hora SEMPRE em horário de Porto Velho. O banco guarda UTC (e o SQLite dos testes devolve
+    datetime sem fuso - tratado como UTC), então converter aqui evita o extrato mostrar o horário do
+    servidor como se fosse o local."""
+    if not value:
+        return "-"
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(PORTO_VELHO_TZ).strftime("%d/%m/%Y %H:%M")
 
 
 def _p(value: Any, style: ParagraphStyle) -> Paragraph:
@@ -189,6 +199,9 @@ def build_collaborator_statement_pdf(
             ["Colaborador", collaborator.name, "Período", period_label],
             ["Cargo/função", collaborator.role or "Não informado", "Regional", normalize_regional(collaborator.regional) or "Não informado"],
             ["Situação do fechamento", RUN_STATUS_LABEL.get(run.status, run.status), "Emitido em", _format_datetime(now_porto_velho())],
+            # Dados do fechamento "até" este instante: garantia e reincidência dependem de O.S.
+            # posteriores, então o mesmo mês apurado em dias diferentes pode ter valores diferentes.
+            ["Fechamento nº", f"#{run.id}", "Apurado em", _format_porto_velho(run.executed_at or run.created_at)],
         ],
         colWidths=[38 * mm, 58 * mm, 32 * mm, 52 * mm],
     )

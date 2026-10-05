@@ -97,6 +97,24 @@ def sync_cpk_snapshot(db: Session, ano: int, mes: int) -> dict[str, int]:
     return {"synced": synced, "skipped_unmapped": len(skipped_unmapped)}
 
 
+def is_cpk_period_final(db: Session, ano: int, mes: int) -> bool:
+    """`True` quando o mês já tem snapshot local e TODAS as regionais vieram da API com
+    `mes_fechado=True`. Um mês assim não deve ser ressincronizado a cada recálculo: o snapshot é
+    sobrescrito no lugar (uma linha por regional), então reler a API mudava o multiplicador de um
+    fechamento já fechado sem deixar rastro do valor anterior (achado de 2026-10-05, Gamificação
+    09/2026 recalculada três vezes). Para forçar uma nova leitura continua valendo a sincronização
+    manual da tela de configuração."""
+    rows = list(
+        db.scalars(
+            select(CpkRegionalSnapshot.mes_fechado).where(
+                CpkRegionalSnapshot.reference_year == ano,
+                CpkRegionalSnapshot.reference_month == mes,
+            )
+        )
+    )
+    return bool(rows) and all(rows)
+
+
 def _period_key(ano: int, mes: int) -> str:
     return f"{ano:04d}-{mes:02d}"
 

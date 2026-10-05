@@ -39,6 +39,7 @@ import { api } from "@/lib/api";
 import { useClosureActions } from "@/hooks/use-closure-actions";
 import { useClosureData } from "@/hooks/use-closure-data";
 import { useConfirm } from "@/hooks/use-confirm";
+import { usePrompt } from "@/hooks/use-prompt";
 import { formatMoney, formatNumber, formatPoints, leadershipAverageSourceLabel, leadershipRoleLabel } from "@/lib/gamificacao-helpers";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type {
@@ -62,7 +63,8 @@ import type {
   ScoringSubjectRule,
   ServiceOrderSubjectSummary,
   SlaPenaltyRule,
-  UnmappedSubject
+  UnmappedSubject,
+  RevisionRunResult,
 } from "@/lib/types";
 
 type AnalysisPeriod = { reference_month?: number; reference_year?: number; regional?: string | null };
@@ -117,6 +119,7 @@ export default function GamificacaoPage() {
 // `currentUser?.` por causa disso.
 function GamificacaoPageContent({ user }: { user: AuthUser }) {
   const { confirm, ConfirmDialog } = useConfirm();
+  const { promptText, PromptDialog } = usePrompt();
   // Não é mais sobre autenticação (a casca já garante isso) - só sinaliza que o bootstrap inicial
   // (dashboard + período de referência) terminou, pra não disparar o primeiro `loadAll` cedo demais.
   const [bootstrapReady, setBootstrapReady] = useState(false);
@@ -875,28 +878,58 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
   // desses dois motivos - qualquer outro erro sobe normalmente.
   const CLOSED_PERIOD_MESSAGE_MARKERS = ["já está marcado como pago", "não é mais o mês corrente"];
 
+  // Resumo, em texto, do que a revisão mudou contra o fechamento vigente do período (calculado e
+  // gravado pelo backend em `result_summary.calculation_context.compared_to`). É o que responde na
+  // hora "por que o valor mudou?" - sem isto a revisão só avisava que foi criada.
+  function describeRevisionComparison(run: RevisionRunResult | undefined): string | null {
+    const compared = run?.result_summary?.calculation_context?.compared_to;
+    if (!compared) return null;
+    const signed = (value: number, format: (n: number) => string) => `${value > 0 ? "+" : ""}${format(value)}`;
+    return (
+      `Comparado ao fechamento #${compared.run_id}: a pagar ${signed(compared.estimated_payment_delta, formatMoney)}, ` +
+      `pontos anulados ${signed(compared.penalty_points_delta, formatNumber)}, ` +
+      `O.S. de garantia/reincidência ${signed(compared.warranty_service_orders_delta, (n) => String(n))}.`
+    );
+  }
+
   async function calculateWithRevisionPrompt(
     value: number | null,
-    period: { reference_month?: number; reference_year?: number; regional?: string | null },
-    revisionExecutionNote: string
-  ): Promise<boolean> {
+    period: { reference_month?: number; reference_year?: number; regional?: string | null }
+  ): Promise<{ wasRevision: boolean; comparison: string | null }> {
     try {
       await api.calculate(value, period);
-      return false;
+      return { wasRevision: false, comparison: null };
     } catch (err) {
       const messageText = err instanceof Error ? err.message : "";
       const isClosedPeriod = CLOSED_PERIOD_MESSAGE_MARKERS.some((marker) => messageText.includes(marker));
       if (!isClosedPeriod) throw err;
+      // Só administrador revisa período encerrado (o backend também exige) - avisar antes de pedir
+      // um motivo que não adiantaria nada.
+      if (user.role !== "admin" && !can("admin:users:write")) {
+        throw new Error("Este período está encerrado. Somente um administrador pode criar uma revisão dele.");
+      }
       const shouldCreateRevision = await confirm({
         title: "Período já encerrado",
-        description: `${messageText} Deseja criar uma revisão em rascunho sem alterar o fechamento original?`,
-        confirmLabel: "Criar revisão"
+        description:
+          `${messageText} Uma revisão recalcula com os dados de hoje e pode mudar o valor a pagar ` +
+          "(garantias e reincidências novas entram). O fechamento original não é alterado.",
+        confirmLabel: "Continuar"
       });
       if (!shouldCreateRevision) {
         throw new Error("Recálculo cancelado para preservar o período encerrado.");
       }
-      await api.calculate(value, period, { create_revision: true, execution_note: revisionExecutionNote });
-      return true;
+      const reason = await promptText({
+        title: "Motivo da revisão",
+        description: "Fica registrado no fechamento e na auditoria. Mínimo de 10 caracteres.",
+        label: "Por que este período encerrado precisa ser recalculado?",
+        placeholder: "Ex.: garantias descobertas após o fechamento de setembro",
+        confirmLabel: "Criar revisão"
+      });
+      if (!reason || reason.trim().length < 10) {
+        throw new Error("Recálculo cancelado: informe um motivo com pelo menos 10 caracteres.");
+      }
+      const run = await api.calculate(value, period, { create_revision: true, execution_note: reason.trim() });
+      return { wasRevision: true, comparison: describeRevisionComparison(run) };
     }
   }
 
@@ -905,6 +938,7 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
     calculationInFlightRef.current = true;
     try {
       let wasRevision = false;
+      let revisionComparison: string | null = null;
       await withFeedback(async () => {
         const safePeriod = {
           reference_month: analysisPeriod.reference_month ?? summary?.run?.reference_month ?? bootstrap?.reference_month ?? undefined,
@@ -918,10 +952,16 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
         if (value !== null) {
           await api.updateSetting("point_value", value.toFixed(2));
         }
-        wasRevision = await calculateWithRevisionPrompt(value, safePeriod, "Revisão criada pela interface para um período já encerrado.");
+        const outcome = await calculateWithRevisionPrompt(value, safePeriod);
+        wasRevision = outcome.wasRevision;
+        revisionComparison = outcome.comparison;
         setAnalysisPeriod(safePeriod);
         await loadAll(safePeriod, { refreshRuleBasics: false });
-      }, () => (wasRevision ? "Revisão em rascunho criada para o período encerrado." : "Pontuação recalculada com matriz operacional."));
+      }, () =>
+        wasRevision
+          ? `Revisão em rascunho criada para o período encerrado.${revisionComparison ? ` ${revisionComparison}` : ""}`
+          : "Pontuação recalculada com matriz operacional."
+      );
     } finally {
       calculationInFlightRef.current = false;
     }
@@ -964,6 +1004,7 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
 
   async function calculatePeriod(month: number, year: number) {
     let wasRevision = false;
+    let revisionComparison: string | null = null;
     await withFeedback(async () => {
       const value = parseOptionalNumber(pointValue);
       const requestedPeriod = {
@@ -974,11 +1015,17 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
       if (value !== null) {
         await api.updateSetting("point_value", value.toFixed(2));
       }
-      wasRevision = await calculateWithRevisionPrompt(value, requestedPeriod, "Revisão criada pela seleção de período para um período já encerrado.");
+      const outcome = await calculateWithRevisionPrompt(value, requestedPeriod);
+      wasRevision = outcome.wasRevision;
+      revisionComparison = outcome.comparison;
       const period = { reference_month: month, reference_year: year, regional: summary?.run?.regional };
       setAnalysisPeriod(period);
       await loadAll(period, { refreshRuleBasics: false });
-    }, () => (wasRevision ? "Revisão em rascunho criada para o período encerrado." : "Período recalculado com janela de reincidência."));
+    }, () =>
+      wasRevision
+        ? `Revisão em rascunho criada para o período encerrado.${revisionComparison ? ` ${revisionComparison}` : ""}`
+        : "Período recalculado com janela de reincidência."
+    );
   }
 
   async function viewPeriod(month: number, year: number) {
@@ -2007,6 +2054,7 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
         ) : null}
       </AppDrawer>
       {ConfirmDialog}
+      {PromptDialog}
     </div>
   );
 }

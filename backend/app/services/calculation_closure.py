@@ -6,7 +6,7 @@ from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -424,6 +424,124 @@ def pick_run_by_status_priority(db: Session, base_stmt) -> CalculationRun | None
         if run:
             return run
     return None
+
+
+# Revisão de período encerrado (pago, ou mês que já virou no fuso de Porto Velho) mexe num total
+# que a operação já considera decidido - achado real de 2026-10-05: setembro/2026 foi recalculado
+# três vezes por revisão e o "a pagar" andou R$ 620 e R$ 318 sem ninguém saber por quê. Por isso a
+# revisão exige administrador e um motivo escrito, e fica registrada com o que mudou.
+REVISION_NOTE_MIN_LENGTH = 10
+
+
+def _period_runs_stmt(reference_month: int, reference_year: int, regional: str | None):
+    stmt = (
+        select(CalculationRun)
+        .where(CalculationRun.reference_month == reference_month)
+        .where(CalculationRun.reference_year == reference_year)
+    )
+    return stmt.where(CalculationRun.regional.is_(None)) if regional is None else stmt.where(CalculationRun.regional == regional)
+
+
+def is_period_closed_for_scoring(db: Session, reference_month: int, reference_year: int, regional: str | None) -> bool:
+    """`True` para período pago ou que já não é o mês corrente (mesmo critério de
+    `ensure_period_not_closed`, sem levantar erro)."""
+    db.flush()
+    return find_paid_run_for_period(db, reference_month, reference_year, regional) is not None or is_period_in_the_past(
+        reference_month, reference_year
+    )
+
+
+def ensure_revision_allowed(
+    db: Session,
+    user: User,
+    reference_month: int,
+    reference_year: int,
+    regional: str | None,
+    note: str | None,
+) -> None:
+    """Revisão explícita de período encerrado: só administrador, e com motivo escrito.
+
+    Revisão de mês corrente ainda não encerrado continua livre (é só um recálculo)."""
+    selected_regional = normalize_regional(regional) if regional else None
+    if not is_period_closed_for_scoring(db, reference_month, reference_year, selected_regional):
+        return
+    if not is_admin_user(user):
+        raise HTTPException(
+            status_code=403,
+            detail="Somente administrador pode criar revisão de um período encerrado.",
+        )
+    if len((note or "").strip()) < REVISION_NOTE_MIN_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Informe o motivo da revisão (mínimo de "
+                f"{REVISION_NOTE_MIN_LENGTH} caracteres) para recalcular um período encerrado."
+            ),
+        )
+
+
+def _run_totals(db: Session, run_id: int) -> dict[str, float]:
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(CollaboratorScore.penalty_points), 0.0),
+            func.coalesce(func.sum(CollaboratorScore.final_points), 0.0),
+            func.coalesce(func.sum(CollaboratorScore.estimated_payment), 0.0),
+        ).where(CollaboratorScore.calculation_run_id == run_id)
+    ).one()
+    return {
+        "penalty_points": round(float(row[0]), 2),
+        "final_points": round(float(row[1]), 2),
+        "estimated_payment": round(float(row[2]), 2),
+    }
+
+
+def record_revision_comparison(db: Session, run: CalculationRun) -> dict[str, Any] | None:
+    """Compara a revisão recém-criada com o fechamento vigente do mesmo período (pago, senão o
+    rascunho mais recente não cancelado) e grava o resultado em
+    `result_summary.calculation_context.compared_to` - é o que responde, depois, "por que o valor
+    mudou?" sem precisar reconstruir a partir do banco. Chamar ANTES de cancelar os rascunhos
+    substituídos."""
+    db.flush()
+    base_stmt = _period_runs_stmt(run.reference_month, run.reference_year, run.regional).where(CalculationRun.id != run.id)
+    previous = pick_run_by_status_priority(db, base_stmt)
+    if previous is None:
+        return None
+    before = _run_totals(db, previous.id)
+    after = _run_totals(db, run.id)
+    previous_cards = (previous.result_summary or {}).get("cards", {}) if isinstance(previous.result_summary, dict) else {}
+    current_cards = (run.result_summary or {}).get("cards", {}) if isinstance(run.result_summary, dict) else {}
+    comparison = {
+        "run_id": previous.id,
+        "status": previous.status,
+        "estimated_payment": before["estimated_payment"],
+        "estimated_payment_delta": round(after["estimated_payment"] - before["estimated_payment"], 2),
+        "penalty_points_delta": round(after["penalty_points"] - before["penalty_points"], 2),
+        "final_points_delta": round(after["final_points"] - before["final_points"], 2),
+        "warranty_service_orders_delta": int(current_cards.get("warranty_service_orders") or 0)
+        - int(previous_cards.get("warranty_service_orders") or 0),
+    }
+    summary = dict(run.result_summary) if isinstance(run.result_summary, dict) else {}
+    context = dict(summary.get("calculation_context") or {})
+    context["compared_to"] = comparison
+    summary["calculation_context"] = context
+    run.result_summary = summary
+    return comparison
+
+
+def cancel_superseded_drafts(db: Session, run: CalculationRun, user: User) -> list[int]:
+    """Cancela os RASCUNHOS anteriores do mesmo período quando uma revisão de período encerrado
+    os substitui - sem isto cada recálculo deixava mais um rascunho vivo (setembro/2026 chegou a 6)
+    e ficava impossível saber qual era o oficial. Só rascunho: conferência/aprovado/pago nunca são
+    tocados."""
+    db.flush()
+    stmt = _period_runs_stmt(run.reference_month, run.reference_year, run.regional).where(
+        CalculationRun.status == "draft", CalculationRun.id != run.id
+    )
+    cancelled: list[int] = []
+    for old in db.scalars(stmt):
+        update_run_status(db, old, "cancelled", user, f"Substituído pela revisão #{run.id}.")
+        cancelled.append(old.id)
+    return cancelled
 
 
 def ensure_period_not_closed(

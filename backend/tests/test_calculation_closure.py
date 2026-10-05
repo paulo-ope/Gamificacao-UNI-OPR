@@ -112,7 +112,7 @@ def test_same_collaborator_cannot_be_paid_twice_via_aggregate_and_regional_runs(
         # deste teste e a protecao contra pagamento duplicado, nao o bloqueio de periodo passado.
         resp = client.post(
             "/api/calculation-runs/calculate",
-            json={"reference_month": 6, "reference_year": 2026, "regional": regional, "create_revision": True},
+            json={"reference_month": 6, "reference_year": 2026, "regional": regional, "create_revision": True, "execution_note": "Revisão de teste automatizado do período."},
         )
         assert resp.status_code == 200, resp.text
         return resp.json()
@@ -175,7 +175,7 @@ def test_calculate_scores_zeroes_estimated_payment_for_unregistered_collaborator
 
     resp = client.post(
         "/api/calculation-runs/calculate",
-        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True},
+        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True, "execution_note": "Revisão de teste automatizado do período."},
     )
     assert resp.status_code == 200, resp.text
     run = resp.json()
@@ -213,7 +213,7 @@ def test_calculate_scores_populates_financial_breakdowns_from_cached_score_conte
 
     resp = client.post(
         "/api/calculation-runs/calculate",
-        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True},
+        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True, "execution_note": "Revisão de teste automatizado do período."},
     )
     assert resp.status_code == 200, resp.text
     summary = resp.json()["result_summary"]
@@ -253,7 +253,7 @@ def test_lost_payment_card_applies_the_same_health_multiplier_as_the_real_paymen
 
     resp = client.post(
         "/api/calculation-runs/calculate",
-        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True},
+        json={"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True, "execution_note": "Revisão de teste automatizado do período."},
     )
     assert resp.status_code == 200, resp.text
     result = resp.json()

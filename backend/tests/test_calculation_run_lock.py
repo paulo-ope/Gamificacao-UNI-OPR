@@ -161,7 +161,7 @@ def test_sequential_recalculation_of_the_same_cycle_is_never_blocked_by_a_previo
     rascunhos antigos é outra funcionalidade, `prune_superseded_drafts`, desligada por padrão). A
     trava só bloqueia SOBREPOSIÇÃO, nunca repetição sequencial."""
     _seed_minimal_period(db_session, make_collaborator)
-    payload = {"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True}
+    payload = {"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True, "execution_note": "Revisão de teste automatizado do período."}
 
     first = client.post("/api/calculation-runs/calculate", json=payload)
     assert first.status_code == 200, first.text
@@ -177,7 +177,7 @@ def test_lock_does_not_interfere_with_the_existing_paid_period_rule(client, db_s
     revisão explícita, `ensure_period_not_closed`) continua funcionando exatamente como antes - a
     nova trava não pode mascarar essa mensagem nem ficar presa depois do primeiro cálculo."""
     _seed_minimal_period(db_session, make_collaborator)
-    payload = {"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True}
+    payload = {"reference_month": 6, "reference_year": 2026, "regional": "UNI SUL", "create_revision": True, "execution_note": "Revisão de teste automatizado do período."}
 
     first = client.post("/api/calculation-runs/calculate", json=payload)
     assert first.status_code == 200, first.text
