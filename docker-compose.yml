@@ -3,6 +3,12 @@ services:
     image: postgres:16-alpine
     container_name: opr-gamification-db
     restart: unless-stopped
+    # O /dev/shm padrão do Docker é 64MB. Queries paralelas do Postgres (agregações sobre
+    # operations_orders) alocam memória compartilhada ali e estouravam com "could not resize shared
+    # memory segment ... No space left on device", virando 500 na Operação Analítica (2026-10-05).
+    shm_size: "512mb"
+    # Menos workers paralelos por query: cada worker consome shm e RAM, e a VM é pequena (7,8GB).
+    command: ["postgres", "-c", "max_parallel_workers_per_gather=${POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER:-1}"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-opr_gamification}
       POSTGRES_USER: ${POSTGRES_USER:-opr}
