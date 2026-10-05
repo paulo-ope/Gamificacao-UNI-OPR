@@ -24,7 +24,16 @@ from app.services.calculation import (
     serialize_run,
 )
 from app.services.audit_log import record_audit_log
-from app.services.calculation_closure import calculation_cycle_lock, serialize_run_status, update_run_status
+from app.services.calculation_closure import (
+    calculation_cycle_lock,
+    cancel_superseded_drafts,
+    ensure_revision_allowed,
+    is_period_closed_for_scoring,
+    record_revision_comparison,
+    serialize_run_status,
+    update_run_status,
+)
+from app.services.regional import normalize_regional_grouped
 from app.services.leadership_bonus import calculate_and_store_leadership_bonus
 
 router = APIRouter(prefix="/calculation-runs", tags=["calculation-runs"])
@@ -106,6 +115,24 @@ def calculate(
     # liberá-la depois que ESTE cálculo estiver de fato commitado.
     with calculation_cycle_lock(db, payload.reference_month, payload.reference_year, payload.regional, user=user):
         try:
+            # Revisão de período encerrado: só administrador e com motivo escrito (ver
+            # `ensure_revision_allowed`). Antes de calcular, para não gastar o cálculo à toa.
+            revising_closed_period = False
+            if payload.create_revision:
+                ensure_revision_allowed(
+                    db,
+                    user,
+                    payload.reference_month,
+                    payload.reference_year,
+                    payload.regional,
+                    payload.execution_note,
+                )
+                revising_closed_period = is_period_closed_for_scoring(
+                    db,
+                    payload.reference_month,
+                    payload.reference_year,
+                    normalize_regional_grouped(payload.regional) if payload.regional else None,
+                )
             with performance_step("calculation-runs.calculate", "calculate_scores"):
                 run = calculate_scores(
                     db,
@@ -117,6 +144,11 @@ def calculate(
                     allow_paid_revision=payload.create_revision,
                     execution_note=payload.execution_note,
                 )
+            if revising_closed_period:
+                # Comparar ANTES de cancelar os rascunhos substituídos (a comparação usa o
+                # fechamento vigente do período).
+                record_revision_comparison(db, run)
+                cancel_superseded_drafts(db, run, user)
             with performance_step("calculation-runs.calculate", "leadership_bonus"):
                 calculate_and_store_leadership_bonus(db, run)
             with performance_step("calculation-runs.calculate", "audit_log"):

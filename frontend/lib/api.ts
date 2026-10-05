@@ -121,7 +121,8 @@ import type {
   SupportOpaSyncStatus,
   SlaPenaltyRule,
   UnmappedSubject,
-  WorkspaceVisibleModule
+  WorkspaceVisibleModule,
+  RevisionRunResult,
 } from "@/lib/types";
 
 import { authHeader, getAuthToken, notifyUnauthorized, setAuthToken as setAuthTokenShared } from "@/lib/auth-token";
@@ -836,7 +837,7 @@ export const api = {
     period?: { reference_month?: number; reference_year?: number; regional?: string | null },
     options?: { create_revision?: boolean; execution_note?: string | null }
   ) =>
-    request("/calculation-runs/calculate", {
+    request<RevisionRunResult>("/calculation-runs/calculate", {
       method: "POST",
       body: JSON.stringify({
         point_value: pointValue ?? undefined,

@@ -2571,3 +2571,26 @@ export type SupportIxcTicketOsConversion = {
   classification: "alto" | "moderado" | "baixo" | "sem_dado";
   conversions: Record<string, number | null>;
 };
+
+/** Comparação gravada pelo backend ao criar uma revisão de período encerrado
+ *  (`result_summary.calculation_context.compared_to`) - ver `record_revision_comparison`. */
+export type RevisionComparison = {
+  run_id: number;
+  status: string;
+  estimated_payment: number;
+  estimated_payment_delta: number;
+  penalty_points_delta: number;
+  final_points_delta: number;
+  warranty_service_orders_delta: number;
+};
+
+export type RevisionRunResult = {
+  id: number;
+  result_summary?: {
+    calculation_context?: {
+      timezone?: string;
+      calculated_at?: string;
+      compared_to?: RevisionComparison;
+    };
+  } | null;
+};
