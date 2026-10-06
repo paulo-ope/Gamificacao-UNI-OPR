@@ -1651,7 +1651,7 @@ def ixc_n1_summary(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Protocolos do Suporte Interno N1 (grupo 105 do IXC) no período: operacional (motivo 90) e
+    """Protocolos do Suporte Interno N1 (grupos 105 e 117 do IXC) no período: operacional (motivo 90) e
     financeiro (motivo 29), série diária e quebra por atendente. Pedido do usuário, 2026-10-06."""
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
