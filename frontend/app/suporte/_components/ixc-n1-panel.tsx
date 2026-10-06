@@ -11,7 +11,7 @@ import { openingAnomalyThreshold } from "@/lib/operations-chart-options";
 import type { SupportIxcN1DailyPoint, SupportIxcN1Summary } from "@/lib/types";
 
 // Suporte Interno N1 (pedido do usuário, 2026-10-06): protocolos do IXC abertos por colaboradores do
-// grupo 105, separados em operacional (motivo 90) e financeiro (motivo 29). Toda a regra de quem é N1
+// grupos 105 e 117, separados em operacional (motivo 90) e financeiro (motivo 29). Toda a regra de quem é N1
 // e de qual motivo é qual vive no backend (`ixc_n1.py`) - esta tela só exibe o resultado.
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), {
@@ -301,7 +301,7 @@ export function IxcN1Panel() {
               <Users className="h-4 w-4 text-blue-600" aria-hidden />
               <div>
                 <p className="text-sm font-semibold text-slate-900">Por atendente</p>
-                <p className="text-xs text-slate-500">Colaboradores do grupo {summary.group_id} do IXC que abriram protocolos no período.</p>
+                <p className="text-xs text-slate-500">Colaboradores {summary.group_ids.length === 1 ? "do grupo" : "dos grupos"} {summary.group_ids.join(" e ")} do IXC que abriram protocolos no período.</p>
               </div>
             </div>
             {summary.attendants.length ? (

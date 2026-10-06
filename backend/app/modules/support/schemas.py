@@ -448,12 +448,13 @@ class SupportIxcN1Attendant(BaseModel):
 
 
 class SupportIxcN1Summary(BaseModel):
-    """`ixc_n1.n1_summary`: protocolos do Suporte Interno N1 (grupo 105 do IXC), operacional (motivo
-    90) e financeiro (motivo 29)."""
+    """`ixc_n1.n1_summary`: protocolos do Suporte Interno N1 (grupos 105 e 117 do IXC), operacional
+    (motivo 90) e financeiro (motivo 29)."""
 
     date_from: date
     date_to: date
-    group_id: str
+    # Grupos do IXC (`usuarios.id_grupo`) cujos usuários entram na contagem.
+    group_ids: list[str]
     operational: int
     financial: int
     total: int

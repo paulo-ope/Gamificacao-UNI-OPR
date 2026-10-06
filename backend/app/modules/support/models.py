@@ -276,9 +276,9 @@ class SupportIxcTicket(Base):
 class SupportIxcUser(Base):
     """Usuário do IXC (`usuarios`) que abriu algum protocolo - só quem aparece em
     `SupportIxcTicket.opened_by_user_id`, não o cadastro inteiro. Guarda o grupo (`id_grupo`), que é
-    o que define o Suporte Interno N1 (grupo 105, confirmado pelo usuário em 2026-10-06 - ver
-    `ixc_n1.N1_IXC_GROUP_ID`). O grupo é o ATUAL do usuário no IXC, atualizado a cada importação em
-    que ele aparece: quem sair do N1 deixa de contar, inclusive no histórico."""
+    o que define o Suporte Interno N1 (grupos 105 e 117, confirmados pelo usuário em 2026-10-06 - ver
+    `ixc_n1.N1_IXC_GROUP_IDS`). O grupo é o ATUAL do usuário no IXC, atualizado a cada importação em
+    que ele aparece: quem sair desses grupos deixa de contar, inclusive no histórico."""
 
     __tablename__ = "support_ixc_users"
     __table_args__ = (UniqueConstraint("ixc_user_id", name="uq_support_ixc_users_ixc_user_id"),)

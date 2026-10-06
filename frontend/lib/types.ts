@@ -2410,7 +2410,7 @@ export type SupportIxcTicketThemeOption = {
   subject_ids: string[];
 };
 
-// Suporte Interno N1 (2026-10-06): protocolos do grupo 105 do IXC, operacional (motivo 90) e
+// Suporte Interno N1 (2026-10-06): protocolos dos grupos 105 e 117 do IXC, operacional (motivo 90) e
 // financeiro (motivo 29) - ver `ixc_n1.n1_summary` no backend.
 export type SupportIxcN1DailyPoint = {
   day: string;
@@ -2430,7 +2430,8 @@ export type SupportIxcN1Attendant = {
 export type SupportIxcN1Summary = {
   date_from: string;
   date_to: string;
-  group_id: string;
+  // Grupos do IXC (`usuarios.id_grupo`) cujos usuários entram na contagem.
+  group_ids: string[];
   operational: number;
   financial: number;
   total: number;

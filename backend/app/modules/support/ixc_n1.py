@@ -3,9 +3,11 @@
 Pedido do usuário (2026-10-06), na aba "Atendimento Suporte Interno N1" do SGP Suporte:
 - "operacional" = motivo 90 (`Registro de Atendimento Operacional`);
 - "financeiro" = motivo 29 (`Registro de Informação Financeira`);
-- só conta protocolo aberto por colaborador do N1, que no IXC é o grupo de usuários 105
-  (`usuarios.id_grupo`) - confirmado pelo usuário contra a lista de 38 usuários do grupo. O setor do
-  ticket (`id_ticket_setor`) NÃO serve de critério: quase todos caem em Retenção/Comercial.
+- só conta protocolo aberto por colaboradores dos grupos de usuários 105 e 117 do IXC
+  (`usuarios.id_grupo`). O 105 foi confirmado pelo usuário contra a lista de 38 usuários do grupo; o
+  117 (9 usuários, entre eles Bruno Rossow e Maycon Batista) foi incluído inteiro a pedido do usuário
+  em 2026-10-06, que informou que os demais do 117 são N2 e podem entrar na contagem. O setor do ticket
+  (`id_ticket_setor`) NÃO serve de critério: quase todos caem em Retenção/Comercial.
 
 Quem abriu o protocolo vem de `su_ticket.id_usuarios` (`SupportIxcTicket.opened_by_user_id`) e o grupo
 de `SupportIxcUser`, mantido por `sync_ixc_users`. Protocolos sem operador (`id_usuarios = 0`) não
@@ -28,7 +30,8 @@ from .models import SupportIxcTicket, SupportIxcUser, utc_now
 
 logger = logging.getLogger(__name__)
 
-N1_IXC_GROUP_ID = "105"
+# Grupos do IXC cujos usuários entram na contagem (ver docstring do módulo).
+N1_IXC_GROUP_IDS = ("105", "117")
 N1_OPERATIONAL_SUBJECT_ID = "90"
 N1_FINANCIAL_SUBJECT_ID = "29"
 N1_SUBJECT_IDS = (N1_OPERATIONAL_SUBJECT_ID, N1_FINANCIAL_SUBJECT_ID)
@@ -95,7 +98,7 @@ def sync_ixc_users(db: Session, client: IxcClient, *, seen_user_ids: set[str] | 
 
 def _n1_base(query):
     return query.join(SupportIxcUser, SupportIxcUser.ixc_user_id == SupportIxcTicket.opened_by_user_id).where(
-        SupportIxcUser.group_id == N1_IXC_GROUP_ID,
+        SupportIxcUser.group_id.in_(N1_IXC_GROUP_IDS),
         SupportIxcTicket.subject_id.in_(N1_SUBJECT_IDS),
     )
 
@@ -171,7 +174,7 @@ def n1_summary(db: Session, *, date_from: date, date_to: date) -> dict[str, Any]
     return {
         "date_from": date_from,
         "date_to": date_to,
-        "group_id": N1_IXC_GROUP_ID,
+        "group_ids": list(N1_IXC_GROUP_IDS),
         "operational": totals["operational"],
         "financial": totals["financial"],
         "total": totals["operational"] + totals["financial"],
