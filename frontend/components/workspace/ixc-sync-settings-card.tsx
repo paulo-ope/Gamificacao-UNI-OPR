@@ -1,5 +1,6 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -107,18 +108,18 @@ export function IxcSyncSettingsCard({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <div className="grid gap-1">
+        <Field className="grid gap-1">
           <Label className="text-xs text-slate-500">Intervalo de sincronização (min)</Label>
           <Input value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)} disabled={!canEdit} />
-        </div>
-        <div className="grid gap-1">
+        </Field>
+        <Field className="grid gap-1">
           <Label className="text-xs text-slate-500">Varredura de backlog (min)</Label>
           <Input value={backlogIntervalMinutes} onChange={(event) => setBacklogIntervalMinutes(event.target.value)} disabled={!canEdit} />
-        </div>
-        <div className="grid gap-1">
+        </Field>
+        <Field className="grid gap-1">
           <Label className="text-xs text-slate-500">Janela de reimportação (dias)</Label>
           <Input value={lookbackDays} onChange={(event) => setLookbackDays(event.target.value)} disabled={!canEdit} />
-        </div>
+        </Field>
       </div>
 
       <div className="grid gap-3 rounded-2xl border border-slate-200 p-3 sm:grid-cols-2">
@@ -130,14 +131,14 @@ export function IxcSyncSettingsCard({
               label="Status de login"
             />
           </div>
-          <div className="grid gap-1">
+          <Field className="grid gap-1">
             <Label className="text-xs text-slate-500">Intervalo (min)</Label>
             <Input
               value={loginStatusIntervalMinutes}
               onChange={(event) => setLoginStatusIntervalMinutes(event.target.value)}
               disabled={!canEdit}
             />
-          </div>
+          </Field>
         </div>
         <div className="grid gap-2">
           <div className="flex items-center gap-3">
@@ -147,14 +148,14 @@ export function IxcSyncSettingsCard({
               label="Sinal ONU/PON"
             />
           </div>
-          <div className="grid gap-1">
+          <Field className="grid gap-1">
             <Label className="text-xs text-slate-500">Intervalo (min)</Label>
             <Input
               value={onuSignalIntervalMinutes}
               onChange={(event) => setOnuSignalIntervalMinutes(event.target.value)}
               disabled={!canEdit}
             />
-          </div>
+          </Field>
         </div>
         <p className="text-xs text-slate-400 sm:col-span-2">
           Loops independentes da sincronização de O.S. acima - desligue quando não estiver

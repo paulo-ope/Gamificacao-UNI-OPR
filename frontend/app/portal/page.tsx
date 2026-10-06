@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import {
   BookOpen,
   Building2,
@@ -359,9 +360,9 @@ export default function PortalPage() {
   }
 
   return (
-    <main className="min-h-screen bg-background pb-[calc(5.5rem+env(safe-area-inset-bottom))] text-slate-950 md:pb-0">
+    <main className="workspace-surface min-h-screen pb-[calc(5.5rem+env(safe-area-inset-bottom))] text-slate-950 md:pb-0">
       <header className="sticky top-0 z-20 border-b bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-3 py-3 sm:px-4">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-4">
           <div className="flex min-w-0 items-center gap-3">
             <Image alt="UNI Internet" className="h-9 w-14 shrink-0 object-contain object-left" height={36} priority src="/brand/uni-logo.png" width={56} />
             <div className="min-w-0">
@@ -371,7 +372,7 @@ export default function PortalPage() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <label className="sr-only" htmlFor="portal-period">Fechamento</label>
-            <select
+            <Select
               className="h-8 max-w-24 rounded-md border border-slate-200 bg-white px-2 text-sm font-medium text-slate-700 outline-none ring-offset-2 focus:ring-2 focus:ring-uni-royal"
               id="portal-period"
               value={selectedPeriod
@@ -393,7 +394,7 @@ export default function PortalPage() {
                   {String(item.reference_month).padStart(2, "0")}/{item.reference_year}
                 </option>
               ))}
-            </select>
+            </Select>
             <Button aria-label="Meu perfil" className="px-2 sm:px-3" size="sm" variant={activeTab === "profile" ? "default" : "outline"} onClick={() => setActiveTab("profile")}>
               <CircleUserRound className="h-4 w-4" />
               <span className="hidden sm:inline">Perfil</span>
@@ -403,7 +404,7 @@ export default function PortalPage() {
             </Button>
           </div>
         </div>
-        <nav className="mx-auto hidden max-w-6xl gap-2 px-4 pb-3 md:flex">
+        <nav className="mx-auto hidden max-w-6xl flex-wrap gap-2 px-4 pb-3 md:flex">
           {availableTabs.map((tab) => {
             const Icon = tab.icon;
             return (

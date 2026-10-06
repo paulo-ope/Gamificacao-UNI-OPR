@@ -11,9 +11,8 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), {
   loading: () => <div className="h-[300px] animate-pulse rounded-xl bg-slate-100" aria-label="Carregando gráfico" />,
 });
 
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { InfoHint } from "@/components/gamification/info-hint";
-import { CATEGORICAL_SLOTS, UNI_MIDNIGHT, UNI_ROYAL, UNI_TURQUOISE } from "@/lib/chart-palette";
+import { ChartPanel, BarComparison } from "@/components/gamification/chart-panel";
+import { CATEGORICAL_SLOTS } from "@/lib/chart-palette";
 import { formatAnnulledPoints, formatMoney, formatPoints } from "@/lib/format";
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import type { CollaboratorScore, PenaltyDistributionItem, RegionalHealthItem } from "@/lib/types";
@@ -70,175 +69,28 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
     .slice(0, 15)
     .sort((a, b) => a.final_points - b.final_points);
 
-  // Estilo "lista de barras" moderno: nome completo ACIMA da barra (dentro da área do gráfico,
-  // sem truncar nem colidir com o valor), barra fina com gradiente do manual da marca UNI
-  // (royal → turquoise). Substitui o layout antigo de rótulos truncados num eixo lateral.
-  const UNI_BAR_GRADIENT = {
-    type: "linear",
-    x: 0,
-    y: 0,
-    x2: 1,
-    y2: 0,
-    colorStops: [
-      { offset: 0, color: UNI_ROYAL },
-      { offset: 1, color: UNI_TURQUOISE }
-    ]
-  };
-
-  const rankingOption = {
-    tooltip: {
-      trigger: "axis",
-      formatter: (params: Array<{ dataIndex: number; value: number }>) => {
-        const item = rankingData[params[0]?.dataIndex ?? 0];
-        return [`<strong>${item?.collaborator_name ?? ""}</strong>`, `Pontos finais: ${formatPoints(item?.final_points ?? 0)}`].join("<br />");
-      }
-    },
-    grid: { left: 8, right: 96, top: 8, bottom: 8 },
-    xAxis: { type: "value", show: false },
-    yAxis: {
-      type: "category",
-      data: rankingData.map((item) => item.collaborator_name),
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: {
-        show: true,
-        inside: true,
-        verticalAlign: "bottom",
-        align: "left",
-        padding: [0, 0, 6, -2],
-        color: "#334155",
-        fontSize: 11,
-        fontWeight: 600
-      }
-    },
-    series: [
-      {
-        type: "bar",
-        barWidth: 10,
-        data: rankingData.map((item) => item.final_points),
-        itemStyle: { color: UNI_BAR_GRADIENT, borderRadius: [5, 5, 5, 5] },
-        showBackground: true,
-        backgroundStyle: { color: "#f1f5f9", borderRadius: [5, 5, 5, 5] },
-        label: {
-          show: true,
-          position: "right",
-          distance: 6,
-          color: UNI_MIDNIGHT,
-          fontWeight: 600,
-          formatter: ({ value }: { value: number }) => formatPoints(value)
-        }
-      }
-    ]
-  };
-
   const penaltyData = [...penalties]
     .filter((item) => item.value > 0 || item.service_orders_count > 0)
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
     .sort((a, b) => a.value - b.value);
 
-  const penaltyOption = {
-    tooltip: {
-      trigger: "axis",
-      confine: true,
-      extraCssText: "max-width: 280px; white-space: normal;",
-      formatter: (params: Array<{ dataIndex: number }>) => {
-        const item = penaltyData[params[0]?.dataIndex ?? 0];
-        return [
-          `<strong>${item?.name ?? ""}</strong>`,
-          `O.S: ${item?.service_orders_count ?? 0}`,
-          `Pontos anulados: ${formatAnnulledPoints(item?.value ?? 0)}`
-        ].join("<br />");
-      }
-    },
-    // Mesmo estilo "lista de barras" do ranking: nome completo do motivo ACIMA da barra (sem
-    // truncar), valor à direita da barra - elimina de vez a colisão entre rótulo truncado e valor
-    // que existia no layout antigo de eixo lateral (achado real, ver print do usuário).
-    grid: { left: 8, right: 150, top: 8, bottom: 8 },
-    xAxis: { type: "value", show: false },
-    yAxis: {
-      type: "category",
-      data: penaltyData.map((item) => item.name),
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: {
-        show: true,
-        inside: true,
-        verticalAlign: "bottom",
-        align: "left",
-        padding: [0, 0, 6, -2],
-        color: "#334155",
-        fontSize: 11,
-        fontWeight: 600
-      }
-    },
-    series: [
-      {
-        type: "bar",
-        barWidth: 10,
-        data: penaltyData.map((item) => item.value),
-        itemStyle: {
-          color: {
-            type: "linear",
-            x: 0,
-            y: 0,
-            x2: 1,
-            y2: 0,
-            colorStops: [
-              { offset: 0, color: "#dc2626" },
-              { offset: 1, color: "#f87171" }
-            ]
-          },
-          borderRadius: [5, 5, 5, 5]
-        },
-        showBackground: true,
-        backgroundStyle: { color: "#f1f5f9", borderRadius: [5, 5, 5, 5] },
-        label: {
-          show: true,
-          position: "right",
-          distance: 6,
-          color: "#7f1d1d",
-          fontWeight: 600,
-          formatter: ({ dataIndex }: { dataIndex: number }) => {
-            const item = penaltyData[dataIndex];
-            return `${item.service_orders_count} O.S · ${formatAnnulledPoints(item.value)}`;
-          }
-        }
-      }
-    ]
-  };
-
   const healthOption = {
-    tooltip: { trigger: "axis", confine: true, extraCssText: "max-width: 280px; white-space: normal;" },
-    legend: { top: 0, textStyle: { color: "#475569" } },
-    grid: { left: 40, right: 16, top: 42, bottom: 58 },
-    xAxis: {
-      type: "category",
-      data: health.map((item) => item.regional),
-      axisLabel: { color: "#334155", interval: 0, rotate: 18 }
-    },
-    yAxis: { type: "value", min: 0, max: 100, axisLabel: { formatter: "{value}%", color: "#475569" } },
-    // Paleta categórica de dado (lib/chart-palette.ts), não azul/vermelho arbitrário - os azuis de
-    // marca ficam para a interface, nunca para identidade de série (achado da auditoria de layout,
-    // 2026-09-15/16).
+    aria: { enabled: true },
+    tooltip: { trigger: "axis", confine: true },
+    legend: { top: 0, textStyle: { color: "#475569", fontSize: 11 } },
+    grid: { left: 8, right: 24, top: 42, bottom: 28, containLabel: true },
+    yAxis: { type: "category", inverse: true, data: health.map((item) => regionalName(item.regional).replace(/^UNI\s*-\s*/i, "")), axisLabel: { width: 100, overflow: "truncate", color: "#475569", fontSize: 11 }, axisTick: { show: false }, axisLine: { show: false } },
+    xAxis: { type: "value", min: 0, max: 100, axisLabel: { formatter: "{value}%", color: "#64748b", fontSize: 11 }, splitLine: { lineStyle: { color: "#f1f5f9" } } },
     color: [CATEGORICAL_SLOTS[0], CATEGORICAL_SLOTS[7]],
     series: [
-      {
-        name: "SLA",
-        type: "bar",
-        data: health.map((item) => item.sla_rate),
-        itemStyle: { borderRadius: [4, 4, 0, 0] }
-      },
-      {
-        name: "Reincidência",
-        type: "bar",
-        data: health.map((item) => item.recurrence_rate),
-        itemStyle: { borderRadius: [4, 4, 0, 0] }
-      }
+      { name: "SLA", type: "bar", barMaxWidth: 12, data: health.map((item) => item.sla_rate), itemStyle: { borderRadius: [0, 3, 3, 0] } },
+      { name: "Reincidência", type: "bar", barMaxWidth: 12, data: health.map((item) => item.recurrence_rate), itemStyle: { borderRadius: [0, 3, 3, 0] } }
     ]
   };
 
   const scatterOption = {
+    aria: { enabled: true },
     legend: { top: 0, textStyle: { color: "#475569" } },
     tooltip: {
       trigger: "item",
@@ -309,6 +161,7 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
   };
 
   const healthScatterOption = {
+    aria: { enabled: true },
     tooltip: {
       trigger: "item",
       confine: true,
@@ -387,69 +240,22 @@ export function DashboardCharts({ ranking, penalties, health }: DashboardChartsP
   };
 
   return (
-    <section className="grid gap-4 lg:grid-cols-3">
-      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-3">
-        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-base font-semibold text-foreground">Dispersão saúde da base x pontuação</CardTitle>
-            <InfoHint ariaLabel="Ajuda sobre Dispersão saúde da base x pontuação" description="Compara a qualidade da base com a pontuação final gerada por regional." />
-          </div>
-        </CardHeader>
-        <div className="px-2 py-4">
-          <ReactECharts option={healthScatterOption} style={{ height: 320 }} />
-        </div>
-      </Card>
-
-      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-3">
-        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-base font-semibold text-foreground">Dispersão de produtividade</CardTitle>
-            <InfoHint ariaLabel="Ajuda sobre Dispersão de produtividade" description="Relaciona volume, pontuação, reincidência e outros fatores por colaborador ou grupo." />
-          </div>
-        </CardHeader>
-        <div className="px-2 py-4">
-          <ReactECharts option={scatterOption} style={{ height: 320 }} />
-        </div>
-      </Card>
-
-      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-2">
-        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-base font-semibold text-foreground">Top 15 por pontos finais</CardTitle>
-            <InfoHint ariaLabel="Ajuda sobre Top 15 por pontos finais" description="Mostra quem terminou o período com maior pontuação final depois das anulações e multiplicadores." />
-          </div>
-        </CardHeader>
-        <div className="px-2 py-4">
-          <ReactECharts option={rankingOption} style={{ height: Math.max(220, rankingData.length * 38) }} />
-        </div>
-      </Card>
-
-      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
-        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-base font-semibold text-foreground">Distribuição de pontos anulados</CardTitle>
-            <InfoHint ariaLabel="Ajuda sobre Distribuição de pontos anulados" description="Mostra os principais motivos de anulação por quantidade de O.S e volume de pontos." />
-          </div>
-        </CardHeader>
-        <div className="px-2 py-4">
-          <ReactECharts option={penaltyOption} style={{ height: Math.max(220, penaltyData.length * 42) }} />
-        </div>
-      </Card>
-
-      <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm lg:col-span-3">
-        <CardHeader className="border-b bg-slate-50/70 px-4 py-4 sm:px-5">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-base font-semibold text-foreground">Saúde operacional por regional/base</CardTitle>
-            <InfoHint ariaLabel="Ajuda sobre Saúde operacional por regional/base" description="Mostra como SLA e reincidência influenciam a leitura de saúde operacional da base." />
-          </div>
-        </CardHeader>
-        <div className="px-2 py-4">
-          <ReactECharts option={healthOption} style={{ height: 300 }} />
-        </div>
-      </Card>
+    <section className="grid min-w-0 gap-4 xl:grid-cols-2" aria-label="Análise visual da gamificação">
+      <ChartPanel title="Top 15 por pontos finais" description="Pontuação após anulações, multiplicadores e ajustes de garantia." columns={["Colaborador", "Pontos finais", "Valor a pagar"]} rows={[...rankingData].reverse().map((item) => [item.collaborator_name, formatPoints(item.final_points), formatMoney(item.estimated_payment)])}>
+        <BarComparison items={[...rankingData].reverse().map((item) => ({ label: item.collaborator_name, value: item.final_points, formatted: formatPoints(item.final_points), detail: regionalName(item.regional) }))} />
+      </ChartPanel>
+      <ChartPanel title="Distribuição de pontos anulados" description="Os dez motivos com maior volume de pontos anulados no recorte." columns={["Motivo", "O.S", "Pontos anulados"]} rows={[...penaltyData].reverse().map((item) => [item.name, item.service_orders_count, formatAnnulledPoints(item.value)])}>
+        <BarComparison tone="red" items={[...penaltyData].reverse().map((item) => ({ label: item.name, value: item.value, formatted: formatAnnulledPoints(item.value), detail: String(item.service_orders_count) + " O.S" }))} />
+      </ChartPanel>
+      <ChartPanel title="Saúde da base × pontuação" description="Cada círculo representa uma filial. O tamanho indica o volume de O.S." columns={["Filial", "Saúde / SLA", "Pontos finais", "O.S"]} rows={healthScatterItems.map((item) => [regionalName(item.regional), item.health_score.toFixed(2) + "%", formatPoints(item.final_points), item.total_orders])}>
+        <ReactECharts option={healthScatterOption} style={{ height: 320 }} />
+      </ChartPanel>
+      <ChartPanel title="Produtividade dos colaboradores" description="Volume de O.S e pontos finais. A legenda permite comparar os grupos com e sem reincidência." columns={["Colaborador", "O.S", "Pontos finais", "Reincidências"]} rows={scatterItems.map((item) => [item.collaborator_name, item.service_orders_count, formatPoints(item.final_points), item.recurrence_service_orders ?? item.warranty_service_orders ?? 0])}>
+        <ReactECharts option={scatterOption} style={{ height: 320 }} />
+      </ChartPanel>
+      <ChartPanel className="xl:col-span-2" title="Saúde operacional por filial" description="SLA e reincidência na mesma escala percentual. Consulte os dados para ver todos os nomes e valores." columns={["Filial", "SLA", "Reincidência"]} rows={health.map((item) => [regionalName(item.regional), item.sla_rate.toFixed(2) + "%", item.recurrence_rate.toFixed(2) + "%"])}>
+        <div className="max-h-[520px] overflow-y-auto"><ReactECharts option={healthOption} style={{ height: Math.max(280, health.length * 48 + 80) }} /></div>
+      </ChartPanel>
     </section>
   );
 }
-
-
-

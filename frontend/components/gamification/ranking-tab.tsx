@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, CheckCircle2, CircleDollarSign, ClipboardList, HelpCircle, MapPin, Search, Trophy, UsersRound, XCircle } from "lucide-react";
+import { BarChart3, CheckCircle2, CircleDollarSign, ClipboardList, HelpCircle, MapPin, Search, Trophy, UsersRound, X, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,17 +31,17 @@ const STAT_TONE_CLASS: Record<StatRow["tone"], string> = {
 
 function StatStrip({ rows }: { rows: StatRow[] }) {
   return (
-    <div className="grid divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
       {rows.map((row) => {
         const Icon = row.icon;
         return (
-          <div key={row.label} className="flex items-center gap-2 px-3 py-2.5">
+          <div key={row.label} className="flex min-w-0 flex-col items-start gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-panel last:odd:col-span-2 sm:flex-row sm:gap-3 sm:p-4 xl:last:odd:col-span-1">
             <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${STAT_TONE_CLASS[row.tone]}`}>
               <Icon className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0">
-              <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{row.label}</div>
-              <div className="truncate text-sm font-semibold text-slate-950">{row.value}</div>
+              <div className="text-xs font-medium leading-5 text-slate-500">{row.label}</div>
+              <div className="mt-1 break-words text-lg font-semibold tabular-nums text-slate-950">{row.value}</div>
             </div>
           </div>
         );
@@ -102,20 +102,20 @@ export function RankingTab({
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
-        <div className="shrink-0 border-b bg-gradient-to-r from-slate-50 via-white to-white px-4 py-4">
+        <div className="shrink-0 border-b bg-slate-50/50 p-4 sm:p-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
               <Badge className="w-fit border-slate-200 bg-white text-slate-700">
                 <Trophy className="h-3.5 w-3.5" />
                 Ranking operacional
               </Badge>
-              <h2 className="mt-2 text-xl font-semibold text-slate-950">Colaboradores por resultado final</h2>
+              <h2 className="mt-2 text-xl font-semibold text-slate-950">{rankingTab === "collaborators" ? "Colaboradores por resultado final" : "Resultados da liderança"}</h2>
               <p className="mt-1 text-sm text-slate-500">
                 Referência {summary.run?.reference_month}/{summary.run?.reference_year}. Valor global{" "}
                 {formatMoney(summary.run?.point_value ?? summary.point_value)}.
               </p>
             </div>
-            <div className="grid gap-2 xl:min-w-[420px]">
+            <div className="grid w-full gap-2 xl:w-80 xl:shrink-0">
               <MultiSelect
                 values={selectedRegionals}
                 onChange={onSelectedRegionalsChange}
@@ -128,18 +128,20 @@ export function RankingTab({
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <Input
-                  className="h-9 pl-9"
+                  className="h-10 pl-9 pr-10"
+                  aria-label={rankingTab === "collaborators" ? "Buscar colaborador" : "Buscar líder ou perfil"}
                   value={rankingSearch}
                   onChange={(event) => onRankingSearchChange(event.target.value)}
                   placeholder={rankingTab === "collaborators" ? "Buscar colaborador" : "Buscar líder ou perfil"}
                 />
+                {rankingSearch ? <button type="button" aria-label="Limpar busca do ranking" onClick={() => onRankingSearchChange("")} className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-lg text-slate-500 hover:text-primary"><X className="h-4 w-4" /></button> : null}
               </div>
             </div>
           </div>
 
           <Tabs value={rankingTab} onValueChange={onRankingTabChange} className="mt-4 grid gap-4">
-            <div className="rounded-xl border border-slate-200 bg-white p-2">
-              <TabsList className="flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
+            <div>
+              <TabsList aria-label="Tipo de ranking" className="h-auto">
                 <TabsTrigger value="collaborators">Colaboradores</TabsTrigger>
                 <TabsTrigger value="leaders">Liderança</TabsTrigger>
               </TabsList>
@@ -198,8 +200,8 @@ export function RankingTab({
                   </Badge>
                 </div>
                 <Table>
-                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                    <TableRow className="border-slate-200 hover:bg-slate-50">
                       <TableHead>Líder</TableHead>
                       <TableHead>Perfil</TableHead>
                       <TableHead>Filiais cobertas</TableHead>

@@ -162,7 +162,7 @@ export function OverviewFilterBar({
             <span className="block text-sm font-semibold text-slate-900">Filtros</span>
             <span className="block truncate text-[11px] text-slate-500">{periodLabel}</span>
           </span>
-          <ChevronDown className={cn("h-4 w-4 shrink-0 text-slate-400 transition-transform", expanded && "rotate-180")} />
+          <ChevronDown className={cn("h-4 w-4 shrink-0 text-slate-500 transition-transform", expanded && "rotate-180")} />
         </button>
 
         {/* Resumo em chips: só quando fechada - aberta, os próprios campos já mostram a seleção. */}
@@ -187,13 +187,15 @@ export function OverviewFilterBar({
           o filho com `overflow-hidden` é quem faz o conteúdo sumir de verdade quando a linha do
           grid vai a 0fr. */}
       <div
+        aria-hidden={!expanded}
+        style={{ visibility: expanded ? "visible" : "hidden" }}
         className={cn(
           "grid transition-[grid-template-rows] duration-200 ease-out",
           expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
         )}
       >
         <div className="overflow-hidden">
-          <div className="border-t border-slate-100 p-4 pt-3">
+          <div className="max-h-[min(52dvh,32rem)] overflow-y-auto overscroll-contain border-t border-slate-100 p-4 pt-3">
             {/* Grid em vez de `flex-wrap`: com controles de larguras diferentes, o wrap deixava a
                 última linha com um campo esticado e sem alinhamento com a linha de cima. */}
             <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
@@ -209,7 +211,7 @@ export function OverviewFilterBar({
               </div>
               {listKeys.map((key) => (
                 <div key={key} className="min-w-0">
-                  <p className="pb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">{LIST_FIELDS[key].label}</p>
+                  <p className="pb-1 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500">{LIST_FIELDS[key].label}</p>
                   <MultiSelect
                     values={filters[key] ?? []}
                     options={options?.[key] ?? []}
@@ -227,16 +229,16 @@ export function OverviewFilterBar({
 
             {supportKeys.length ? (
               <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3">
-                <p className="mb-2 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500">
                   Filtros do SGP Suporte{" "}
-                  <span className="font-normal normal-case tracking-normal text-slate-400">
+                  <span className="font-normal normal-case tracking-normal text-slate-500">
                     · recortam só os blocos de atendimento
                   </span>
                 </p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {supportKeys.map((key) => (
                     <div key={key} className="min-w-0">
-                      <p className="pb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">{SUPPORT_FIELDS[key].label}</p>
+                      <p className="pb-1 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500">{SUPPORT_FIELDS[key].label}</p>
                       <MultiSelect<SupportOpaFilterOption>
                         values={filters[key] ?? []}
                         options={supportOptions?.[SUPPORT_FIELDS[key].options] ?? []}

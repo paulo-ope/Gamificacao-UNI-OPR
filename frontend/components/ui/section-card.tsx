@@ -24,16 +24,16 @@ export function SectionCard({ eyebrow, title, subtitle, badge, actions, children
     // filial" com o texto do tooltip cortado ao passar o mouse numa fatia perto da borda). Nada
     // aqui sangra até a borda arredondada (header/conteúdo sempre têm padding), então não havia
     // nada de fato sendo "clipado" de propósito - só um efeito colateral do clipe.
-    <Card className={cn("rounded-2xl border-slate-200 bg-white shadow-sm", className)} style={style}>
-      <CardHeader className="flex flex-row items-start justify-between gap-3 pb-0">
+    <Card className={cn("rounded-2xl border-slate-200 bg-white shadow-panel", className)} style={style}>
+      <CardHeader className="flex flex-col items-start justify-between gap-3 pb-0 sm:flex-row">
         <div className="min-w-0">
-          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">{eyebrow}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-primary">{eyebrow}</p>
           <h3 className="mt-1 text-base font-semibold text-slate-950">{title}</h3>
-          {subtitle ? <p className="mt-1 text-[11px] text-slate-500">{subtitle}</p> : null}
+          {subtitle ? <p className="mt-1 text-xs leading-5 text-slate-500">{subtitle}</p> : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex max-w-full flex-wrap items-center gap-2">
           {badge ? (
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[9px] font-semibold text-slate-500">
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
               {badge}
             </span>
           ) : null}

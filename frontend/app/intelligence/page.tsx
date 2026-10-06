@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import Link from "next/link";
 import {
   ArrowDown,
@@ -596,27 +597,27 @@ function PublicacoesTab({
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <p className="mb-1 text-[11px] font-semibold text-slate-500">Tipo</p>
-              <select
+              <Select
                 className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
                 value={form.content_type}
                 onChange={(event) => setForm((current) => ({ ...current, content_type: event.target.value }))}
               >
                 {CONTENT_TYPES.map((type) => <option key={type} value={type}>{labelFor(CONTENT_TYPE_LABELS, type)}</option>)}
-              </select>
+              </Select>
             </div>
             <div>
               <p className="mb-1 text-[11px] font-semibold text-slate-500">Severidade</p>
-              <select
+              <Select
                 className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
                 value={form.severity}
                 onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value }))}
               >
                 {SEVERITIES.map((severity) => <option key={severity} value={severity}>{labelFor(SEVERITY_LABELS, severity)}</option>)}
-              </select>
+              </Select>
             </div>
             <div>
               <p className="mb-1 text-[11px] font-semibold text-slate-500">Destino (profile)</p>
-              <select
+              <Select
                 className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
                 value={form.profile_key}
                 onChange={(event) => setForm((current) => ({ ...current, profile_key: event.target.value }))}
@@ -625,7 +626,7 @@ function PublicacoesTab({
                 {(profiles.length ? profiles : FALLBACK_PROFILES).map((profile) => (
                   <option key={profile.key} value={profile.key}>{profile.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div>
               <p className="mb-1 text-[11px] font-semibold text-slate-500">Válido até (opcional)</p>
@@ -649,11 +650,11 @@ function PublicacoesTab({
         title="Publicações"
         subtitle={`${items.length} registro(s)`}
         actions={
-          <select className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <Select className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
             <option value="">Todos os status</option>
             <option value="ACTIVE">Ativos</option>
             <option value="DISMISSED">Encerrados</option>
-          </select>
+          </Select>
         }
       >
         <div className="grid gap-2">
@@ -895,7 +896,7 @@ function ProfilesTab({
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Finalidade</p>
-                <select
+                <Select
                   className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
                   value={draft.purpose}
                   onChange={(event) => setDraft((current) => (current ? { ...current, purpose: event.target.value } : current))}
@@ -903,7 +904,7 @@ function ProfilesTab({
                   {(catalog?.profile_purposes ?? [draft.purpose]).map((purpose) => (
                     <option key={purpose} value={purpose}>{labelFor(PROFILE_PURPOSE_LABELS, purpose)}</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Atualização (segundos)</p>
@@ -930,33 +931,33 @@ function ProfilesTab({
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Tema padrão</p>
-                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.theme ?? "LIGHT")} onChange={(event) => updateDisplayConfig("theme", event.target.value)}>
+                <Select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.theme ?? "LIGHT")} onChange={(event) => updateDisplayConfig("theme", event.target.value)}>
                   <option value="LIGHT">Claro</option><option value="DARK">Escuro</option><option value="AUTO">Automático</option>
-                </select>
+                </Select>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Densidade</p>
-                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.density ?? "COMFORTABLE")} onChange={(event) => updateDisplayConfig("density", event.target.value)}>
+                <Select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.density ?? "COMFORTABLE")} onChange={(event) => updateDisplayConfig("density", event.target.value)}>
                   <option value="COMPACT">Compacta</option><option value="COMFORTABLE">Confortável</option><option value="TV">TV</option>
-                </select>
+                </Select>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Composição do painel</p>
-                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.layout_mode ?? "MOSAIC")} onChange={(event) => updateDisplayConfig("layout_mode", event.target.value)}>
+                <Select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.layout_mode ?? "MOSAIC")} onChange={(event) => updateDisplayConfig("layout_mode", event.target.value)}>
                   <option value="MOSAIC">Mosaico equilibrado</option><option value="FOCUS">Foco em alertas</option><option value="DENSE">Máxima informação</option>
-                </select>
+                </Select>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Quantidade de alertas</p>
-                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={Number(draft.display_config.alert_limit ?? 4)} onChange={(event) => updateDisplayConfig("alert_limit", Number(event.target.value))}>
+                <Select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={Number(draft.display_config.alert_limit ?? 4)} onChange={(event) => updateDisplayConfig("alert_limit", Number(event.target.value))}>
                   {[4, 6, 8, 12].map((value) => <option key={value} value={value}>{value}</option>)}
-                </select>
+                </Select>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Ordenação dos alertas</p>
-                <select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.alert_sort ?? "RECENT")} onChange={(event) => updateDisplayConfig("alert_sort", event.target.value)}>
+                <Select className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm" value={String(draft.display_config.alert_sort ?? "RECENT")} onChange={(event) => updateDisplayConfig("alert_sort", event.target.value)}>
                   <option value="RECENT">Mais recentes</option><option value="SEVERITY">Maior severidade</option><option value="IMPACT">Maior impacto</option>
-                </select>
+                </Select>
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Manter normalizados por (minutos)</p>
@@ -1206,7 +1207,7 @@ function ParamValueEditor({
   }
   if (field === "group_by") {
     return (
-      <select
+      <Select
         className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
         value={String(value ?? groupByOptions[0] ?? "regional")}
         onChange={(event) => onChange(event.target.value)}
@@ -1214,7 +1215,7 @@ function ParamValueEditor({
         {groupByOptions.map((option) => (
           <option key={option} value={option}>{labelFor(GROUP_BY_LABELS, option)}</option>
         ))}
-      </select>
+      </Select>
     );
   }
   if (field === "target_monitor_key") {
@@ -1448,7 +1449,7 @@ function AlertRulesTab({
           </p>
           <Input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Nome (ex.: Aglomeração de O.S. urbana)" />
           <Input value={newKey} onChange={(event) => setNewKey(event.target.value)} placeholder="Identificador único, sem espaços (ex.: aglomeracao-urbana)" />
-          <select
+          <Select
             className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
             value={newType}
             onChange={(event) => setNewType(event.target.value)}
@@ -1456,7 +1457,7 @@ function AlertRulesTab({
             {(catalog?.rule_types ?? []).map((type) => (
               <option key={type.key} value={type.key}>{labelFor(RULE_TYPE_LABELS, type.key)}</option>
             ))}
-          </select>
+          </Select>
           <Button type="button" size="sm" variant="outline" onClick={() => void createRule()} disabled={creating}>Criar regra</Button>
         </div>
       </SectionCard>
@@ -1482,7 +1483,7 @@ function AlertRulesTab({
               </div>
               <div>
                 <p className="mb-1 text-[11px] font-semibold text-slate-500">Severidade</p>
-                <select
+                <Select
                   className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm"
                   value={draft.severity}
                   onChange={(event) => setDraft((current) => (current ? { ...current, severity: event.target.value as AlertRule["severity"] } : current))}
@@ -1490,7 +1491,7 @@ function AlertRulesTab({
                   {(catalog?.severities ?? []).map((severity) => (
                     <option key={severity} value={severity}>{labelFor(SEVERITY_LABELS, severity)}</option>
                   ))}
-                </select>
+                </Select>
                 <p className="mt-1 text-[10px] leading-snug text-slate-400">{RULE_TOP_LEVEL_HELP.severity}</p>
               </div>
               <div>

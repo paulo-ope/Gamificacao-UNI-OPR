@@ -2,12 +2,13 @@
 
 import * as Popover from "@radix-ui/react-popover";
 import { Download, Loader2, Settings2, ShieldAlert, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AppCheckbox } from "@/components/ui/checkbox";
+import { DRILL_PAGE_SIZE, Pagination } from "@/components/ui/pagination";
 import { AppRadio } from "@/components/ui/radio";
 import {
   TableBody,
@@ -328,6 +329,20 @@ export function OperationsWarrantyAnalytics({
 }) {
   const tone = rateTone(data.percentage);
 
+  // A lista de garantias já chega inteira no payload (até o limite da consulta), então a paginação é
+  // local: 15 por página e o CSV continua exportando TODAS as carregadas. Volta pra página 1 sempre
+  // que os filtros trocam a lista.
+  const [warrantyPage, setWarrantyPage] = useState(1);
+  useEffect(() => {
+    setWarrantyPage(1);
+  }, [data.items]);
+  const warrantyTotalPages = Math.max(1, Math.ceil(data.items.length / DRILL_PAGE_SIZE));
+  const currentWarrantyPage = Math.min(warrantyPage, warrantyTotalPages);
+  const pagedWarranties = data.items.slice(
+    (currentWarrantyPage - 1) * DRILL_PAGE_SIZE,
+    currentWarrantyPage * DRILL_PAGE_SIZE,
+  );
+
   return (
     <div className="space-y-4">
       <Card>
@@ -487,8 +502,9 @@ export function OperationsWarrantyAnalytics({
         <CardContent>
           {data.items_truncated ? (
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Exibindo (e exportando) as {data.items.length} garantias mais recentes. Reduza o
-              período ou aplique mais filtros para ver a lista completa.
+              A consulta carregou apenas as {data.items.length} garantias mais recentes (use a paginação abaixo
+              para vê-las; o CSV exporta todas elas). Reduza o período ou aplique mais filtros para ver a lista
+              completa.
             </div>
           ) : null}
           {data.items.length === 0 ? (
@@ -513,7 +529,7 @@ export function OperationsWarrantyAnalytics({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {data.items.map((item) => (
+                  {pagedWarranties.map((item) => (
                     <TableRow key={`${item.origin_order_code}-${item.return_order_code}`}>
                       <TableCell>{item.contract_id || "—"}</TableCell>
                       <TableCell>{item.customer_name || "—"}</TableCell>
@@ -535,6 +551,16 @@ export function OperationsWarrantyAnalytics({
               </table>
             </div>
           )}
+          {data.items.length > 0 ? (
+            <Pagination
+              className="mt-3"
+              page={currentWarrantyPage}
+              totalPages={warrantyTotalPages}
+              totalItems={data.items.length}
+              itemLabel="garantias"
+              onPageChange={setWarrantyPage}
+            />
+          ) : null}
         </CardContent>
       </Card>
     </div>

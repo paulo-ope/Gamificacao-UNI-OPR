@@ -1,5 +1,8 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { ModalFrame } from "@/components/ui/modal-frame";
+import { Select } from "@/components/ui/select";
 import { Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -21,22 +24,22 @@ type Props = {
 
 export function PersonEditorDrawer({ personDraft, peopleStructure, saving, canWriteUsers, onChange, onCancel, onSave }: Props) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/30 p-4">
+    <ModalFrame onClose={onCancel} title="Estrutura do colaborador" className="fixed inset-0 z-[70] flex items-end justify-end bg-transparent p-4">
       <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
         <h3 className="text-lg font-semibold text-slate-950">Estrutura do colaborador</h3>
         <p className="mt-1 text-sm text-slate-500">{personDraft.name}</p>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <div className="grid gap-2">
+          <Field className="grid gap-2">
             <Label>CPF</Label>
             <Input
               value={personDraft.cpf}
               placeholder="Preencher somente se for alterar"
               onChange={(event) => onChange({ cpf: event.target.value })}
             />
-          </div>
-          <div className="grid gap-2">
+          </Field>
+          <Field className="grid gap-2">
             <Label>Status</Label>
-            <select
+            <Select
               value={personDraft.structure_status}
               className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               onChange={(event) => onChange({ structure_status: event.target.value })}
@@ -44,11 +47,11 @@ export function PersonEditorDrawer({ personDraft, peopleStructure, saving, canWr
               {peopleStructure.statuses.map((status) => (
                 <option key={status} value={status}>{STRUCTURE_STATUS_LABELS[status] || status}</option>
               ))}
-            </select>
-          </div>
-          <div className="grid gap-2">
+            </Select>
+          </Field>
+          <Field className="grid gap-2">
             <Label>Tipo de colaborador</Label>
-            <select
+            <Select
               value={personDraft.employee_type}
               className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               onChange={(event) => onChange({ employee_type: event.target.value })}
@@ -57,11 +60,11 @@ export function PersonEditorDrawer({ personDraft, peopleStructure, saving, canWr
               {peopleStructure.employee_types.map((type) => (
                 <option key={type} value={type}>{EMPLOYEE_TYPE_LABELS[type] || type}</option>
               ))}
-            </select>
-          </div>
-          <div className="grid gap-2">
+            </Select>
+          </Field>
+          <Field className="grid gap-2">
             <Label>Tipo de equipe</Label>
-            <select
+            <Select
               value={personDraft.team_type}
               className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               onChange={(event) => onChange({ team_type: event.target.value })}
@@ -70,11 +73,11 @@ export function PersonEditorDrawer({ personDraft, peopleStructure, saving, canWr
               {peopleStructure.team_types.map((type) => (
                 <option key={type} value={type}>{TEAM_TYPE_LABELS[type] || type}</option>
               ))}
-            </select>
-          </div>
-          <div className="grid gap-2">
+            </Select>
+          </Field>
+          <Field className="grid gap-2">
             <Label>Supervisor</Label>
-            <select
+            <Select
               value={personDraft.supervisor_user_id}
               className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               onChange={(event) => onChange({ supervisor_user_id: event.target.value ? Number(event.target.value) : "" })}
@@ -83,11 +86,11 @@ export function PersonEditorDrawer({ personDraft, peopleStructure, saving, canWr
               {peopleStructure.supervisors.map((option) => (
                 <option key={option.id} value={option.id}>{option.name}</option>
               ))}
-            </select>
-          </div>
-          <div className="grid gap-2">
+            </Select>
+          </Field>
+          <Field className="grid gap-2">
             <Label>Gerente regional</Label>
-            <select
+            <Select
               value={personDraft.regional_manager_user_id}
               className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               onChange={(event) => onChange({ regional_manager_user_id: event.target.value ? Number(event.target.value) : "" })}
@@ -96,12 +99,12 @@ export function PersonEditorDrawer({ personDraft, peopleStructure, saving, canWr
               {peopleStructure.regional_managers.map((option) => (
                 <option key={option.id} value={option.id}>{option.name}</option>
               ))}
-            </select>
-          </div>
-          <div className="grid gap-2 md:col-span-2">
+            </Select>
+          </Field>
+          <Field className="grid gap-2 md:col-span-2">
             <Label>Observação</Label>
             <Input value={personDraft.structure_notes} onChange={(event) => onChange({ structure_notes: event.target.value })} />
-          </div>
+          </Field>
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={onCancel}>Cancelar</Button>
@@ -110,6 +113,6 @@ export function PersonEditorDrawer({ personDraft, peopleStructure, saving, canWr
           </Button>
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }

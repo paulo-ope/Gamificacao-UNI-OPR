@@ -1,5 +1,6 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
 import type { Dispatch, SetStateAction } from "react";
 
 import { AppSwitch } from "@/components/gamification/config-ui";
@@ -42,7 +43,7 @@ export function IntegrationSection({
 }: Props) {
   return (
     <>
-    <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-panel">
       <div className="panel-header">
         <div>
           <h3 className="panel-title">Integração IXC</h3>
@@ -68,7 +69,7 @@ export function IntegrationSection({
             </span>
           </div>
         </div>
-        <div className="grid gap-2">
+        <Field className="grid gap-2">
           <Label>Intervalo entre sincronizações (minutos)</Label>
           <Input
             inputMode="numeric"
@@ -77,7 +78,7 @@ export function IntegrationSection({
             onBlur={(event) => saveSettings({ [IXC_SYNC_INTERVAL_MINUTES_KEY]: event.target.value })}
             placeholder="Ex.: 20"
           />
-        </div>
+        </Field>
         <div className="grid gap-2 md:col-span-2">
           <Label>Recalcular pontuação automaticamente</Label>
           <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -103,7 +104,7 @@ export function IntegrationSection({
       </div>
     </section>
 
-    <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-panel">
       <div className="panel-header">
         <div>
           <h3 className="panel-title">Integração CPK</h3>
@@ -130,7 +131,7 @@ export function IntegrationSection({
             </span>
           </div>
         </div>
-        <div className="grid gap-2">
+        <Field className="grid gap-2">
           <Label>Bônus/penalidade no multiplicador (pontos)</Label>
           <Input
             inputMode="decimal"
@@ -139,23 +140,23 @@ export function IntegrationSection({
             onBlur={(event) => saveSettings({ [CPK_BONUS_POINTS_KEY]: event.target.value })}
             placeholder="Ex.: 0.2"
           />
-        </div>
-        <div className="grid gap-2">
+        </Field>
+        <Field className="grid gap-2">
           <Label>Ano de referência</Label>
           <Input
             inputMode="numeric"
             value={cpkPeriod.year}
             onChange={(event) => setCpkPeriod({ ...cpkPeriod, year: Number(event.target.value) || cpkPeriod.year })}
           />
-        </div>
-        <div className="grid gap-2">
+        </Field>
+        <Field className="grid gap-2">
           <Label>Mês de referência</Label>
           <Input
             inputMode="numeric"
             value={cpkPeriod.month}
             onChange={(event) => setCpkPeriod({ ...cpkPeriod, month: Number(event.target.value) || cpkPeriod.month })}
           />
-        </div>
+        </Field>
         <div className="md:col-span-2">
           <Button variant="outline" onClick={() => void syncCpk()} disabled={cpkSyncing}>
             {cpkSyncing ? "Sincronizando..." : "Sincronizar agora"}

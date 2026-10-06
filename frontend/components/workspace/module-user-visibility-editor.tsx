@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { Trash2, UserPlus } from "lucide-react";
 import { useState } from "react";
 
@@ -68,7 +69,7 @@ export function ModuleUserVisibilityEditor({
 
       {open ? (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
-          <select
+          <Select
             className="h-9 rounded-md border border-input bg-white px-2 text-xs"
             value={selectedUserId}
             onChange={(event) => setSelectedUserId(event.target.value ? Number(event.target.value) : "")}
@@ -79,15 +80,15 @@ export function ModuleUserVisibilityEditor({
                 {user.name} ({user.email})
               </option>
             ))}
-          </select>
-          <select
+          </Select>
+          <Select
             className="h-9 rounded-md border border-input bg-white px-2 text-xs"
             value={visible ? "visible" : "hidden"}
             onChange={(event) => setVisible(event.target.value === "visible")}
           >
             <option value="hidden">Ocultar para este usuário</option>
             <option value="visible">Liberar para este usuário</option>
-          </select>
+          </Select>
           <Button type="button" size="sm" disabled={disabled || saving || selectedUserId === ""} onClick={submit}>
             Salvar
           </Button>

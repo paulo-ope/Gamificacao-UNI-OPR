@@ -1,5 +1,7 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import {
   BadgeCheck,
   BriefcaseBusiness,
@@ -296,8 +298,8 @@ export function LeadershipBonusPanel({
   }, [selectedRoleProfile]);
 
   return (
-    <section className="grid gap-5">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+    <section className="grid min-w-0 grid-cols-1 gap-5">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
         <SummaryCard
           icon={<Users2 className="h-4 w-4" />}
           label="Lideranças ativas"
@@ -341,7 +343,7 @@ export function LeadershipBonusPanel({
         </div>
       ) : null}
 
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-panel">
         <div className="border-b border-slate-200 px-5 py-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
@@ -364,7 +366,7 @@ export function LeadershipBonusPanel({
         </div>
 
         <div className="p-5">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="grid gap-4">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="grid min-w-0 grid-cols-1 gap-4">
             <TabsList className="grid h-auto grid-cols-1 gap-2 rounded-2xl bg-slate-50 p-1 md:grid-cols-3">
               <TabsTrigger value="role-profiles" className="rounded-xl px-4 py-2.5">Perfis e multiplicadores</TabsTrigger>
               <TabsTrigger value="leaders" className="rounded-xl px-4 py-2.5">Líderes</TabsTrigger>
@@ -374,8 +376,8 @@ export function LeadershipBonusPanel({
             <TabsContent value="role-profiles" className="mt-0">
               <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
-                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                    <TableRow className="border-slate-200 hover:bg-slate-50">
                       <TableHead>Perfil / cargo</TableHead>
                       <TableHead>Escopo do cálculo</TableHead>
                       <TableHead>Multiplicador padrão</TableHead>
@@ -424,8 +426,8 @@ export function LeadershipBonusPanel({
             <TabsContent value="leaders" className="mt-0">
               <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
-                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                    <TableRow className="border-slate-200 hover:bg-slate-50">
                       <TableHead>Líder</TableHead>
                       <TableHead>Perfil / cargo</TableHead>
                       <TableHead>Filiais</TableHead>
@@ -501,8 +503,8 @@ export function LeadershipBonusPanel({
             <TabsContent value="branches" className="mt-0">
               <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
                 <Table>
-                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                    <TableRow className="border-slate-200 hover:bg-slate-50">
                       <TableHead>Filial</TableHead>
                       <TableHead>Líder responsável</TableHead>
                       <TableHead>Perfil</TableHead>
@@ -557,7 +559,7 @@ export function LeadershipBonusPanel({
 
           <div className="grid gap-5 overflow-y-auto px-6 py-6">
             <div className="grid gap-4 md:grid-cols-3">
-              <div className="grid gap-2">
+              <Field className="grid gap-2">
                 <Label>Nome do perfil</Label>
                 <Input
                   value={roleDraft.name}
@@ -565,10 +567,10 @@ export function LeadershipBonusPanel({
                   placeholder="Ex.: Supervisor"
                   disabled={readOnly}
                 />
-              </div>
-              <div className="grid gap-2">
+              </Field>
+              <Field className="grid gap-2">
                 <Label>Escopo do cálculo</Label>
-                <select
+                <Select
                   value={roleDraft.scope_type}
                   disabled={readOnly}
                   onChange={(event) => {
@@ -586,13 +588,13 @@ export function LeadershipBonusPanel({
                       {label}
                     </option>
                   ))}
-                </select>
+                </Select>
                 <p className="text-xs text-slate-500">{ROLE_SCOPE_HINTS[roleDraft.scope_type]}</p>
-              </div>
+              </Field>
             </div>
 
             <div className="grid gap-4 md:grid-cols-[180px_1fr] md:items-end">
-              <div className="grid gap-2">
+              <Field className="grid gap-2">
                 <Label>Multiplicador padrão</Label>
                 <Input
                   type="number"
@@ -604,7 +606,7 @@ export function LeadershipBonusPanel({
                   }
                   disabled={readOnly}
                 />
-              </div>
+              </Field>
               <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
                 <AppCheckbox
                   checked={roleDraft.active}
@@ -681,7 +683,7 @@ export function LeadershipBonusPanel({
 
           <div className="grid gap-5 overflow-y-auto px-6 py-6">
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="grid gap-2">
+              <Field className="grid gap-2">
                 <Label>Nome do líder</Label>
                 <Input
                   value={leaderDraft.name}
@@ -689,10 +691,10 @@ export function LeadershipBonusPanel({
                   placeholder="Ex.: Maria Silva"
                   disabled={readOnly}
                 />
-              </div>
-              <div className="grid gap-2">
+              </Field>
+              <Field className="grid gap-2">
                 <Label>Perfil / cargo</Label>
-                <select
+                <Select
                   value={leaderDraft.role_profile_id ?? ""}
                   disabled={readOnly}
                   onChange={(event) => {
@@ -716,11 +718,11 @@ export function LeadershipBonusPanel({
                       {profile.name} ({ROLE_SCOPE_LABELS[profile.scope_type]})
                     </option>
                   ))}
-                </select>
-              </div>
-              <div className="grid gap-2">
+                </Select>
+              </Field>
+              <Field className="grid gap-2">
                 <Label>Média calculada por</Label>
-                <select
+                <Select
                   value={leaderDraft.average_source}
                   disabled={readOnly}
                   onChange={(event) =>
@@ -736,9 +738,9 @@ export function LeadershipBonusPanel({
                       {label}
                     </option>
                   ))}
-                </select>
+                </Select>
                 <p className="text-xs text-slate-500">{AVERAGE_SOURCE_HINTS[leaderDraft.average_source]}</p>
-              </div>
+              </Field>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
@@ -778,7 +780,7 @@ export function LeadershipBonusPanel({
                     {leaderDraft.use_custom_multiplier ? "Personalizado" : selectedRoleProfile?.name ?? "Perfil não definido"}
                   </div>
                 </div>
-                <div className="grid gap-2">
+                <Field className="grid gap-2">
                   <Label>Multiplicador efetivo</Label>
                   <Input
                     type="number"
@@ -797,7 +799,7 @@ export function LeadershipBonusPanel({
                       }));
                     }}
                   />
-                </div>
+                </Field>
               </div>
             </div>
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import {
   type LucideIcon,
   ArrowDownRight,
@@ -67,6 +68,7 @@ export type OpaModuleTab =
   | "data"
   | "sync"
   | "ixc_tickets"
+  | "ixc_n1"
   | "operation"
   | "queues"
   | "agents"
@@ -89,6 +91,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "data", label: "Dados", description: "Tabela analítica", icon: Database },
   { value: "sync", label: "Sincronização", description: "Status do OPA", icon: RefreshCw },
   { value: "ixc_tickets", label: "Atendimento IXC", description: "Indicador antecipado", icon: TriangleAlert },
+  { value: "ixc_n1", label: "Atendimento Suporte Interno N1", description: "Operacional e financeiro", icon: Headphones },
   { value: "operation", label: "Operação", description: "Planejado", icon: BarChart3 },
   { value: "queues", label: "Filas", description: "Planejado", icon: GitBranch },
   { value: "reasons", label: "Motivos", description: "Planejado", icon: ListFilter },
@@ -96,7 +99,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "history", label: "Histórico", description: "Planejado", icon: History },
 ];
 
-export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "attendants", "data", "sync", "ixc_tickets"];
+export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "attendants", "data", "sync", "ixc_tickets", "ixc_n1"];
 
 const OPA_STATUS_LABELS: Record<string, string> = {
   AG: "Aguardando atendimento",
@@ -542,14 +545,14 @@ export function OpaGlobalFilters({
           <div className="col-span-full grid gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-lg md:grid-cols-2 xl:grid-cols-4">
             <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
               Data usada
-              <select
+              <Select
                 value={filters.date_basis ?? "opened_at"}
                 onChange={(event) => onFilterChange({ date_basis: event.target.value as "opened_at" | "closed_at", page: 1 })}
                 className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               >
                 <option value="opened_at">Abertura</option>
                 <option value="closed_at">Encerramento</option>
-              </select>
+              </Select>
             </label>
             <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
               Busca
@@ -564,7 +567,7 @@ export function OpaGlobalFilters({
               <FilterMultiSelect label="Etiqueta" value={filters.tag_id} options={options?.tags ?? []} onChange={(value) => onFilterChange({ tag_id: value, page: 1 })} />
               <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
                 Participação bot/humano
-                <select
+                <Select
                   value={filters.bot_human ?? ""}
                   onChange={(event) => onFilterChange({ bot_human: (event.target.value || undefined) as SupportOpaBotHumanFilter | undefined, page: 1 })}
                   className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
@@ -576,7 +579,7 @@ export function OpaGlobalFilters({
                   <option value="bot_only">Só bot (sem humano)</option>
                   <option value="handoff">Handoff bot → humano</option>
                   <option value="unclassified">Não classificado</option>
-                </select>
+                </Select>
               </label>
               <div className="grid min-w-0 gap-1.5 md:col-span-2">
                 <span className="text-[11px] font-medium text-slate-600">

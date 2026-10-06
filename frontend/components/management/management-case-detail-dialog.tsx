@@ -1,5 +1,7 @@
 "use client";
 
+import { ModalFrame } from "@/components/ui/modal-frame";
+import { Select } from "@/components/ui/select";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -138,7 +140,7 @@ export function CaseDetailDialog({
   // depois, pintava por cima deste dialog mesmo com z-index igual, deixando o formulario de
   // justificativa visualmente atras e impossivel de clicar (achado real, 2026-08-13).
   return createPortal(
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+    <ModalFrame onClose={onClose} title="Detalhe do caso" className="fixed inset-0 z-[80] flex items-center justify-center bg-transparent p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
       <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
           <div>
@@ -215,7 +217,7 @@ export function CaseDetailDialog({
                     {item.justification_text ? "Revisar justificativa" : "Justificar este caso"}
                   </p>
                   <div className="mt-3 grid gap-3">
-                    <select
+                    <Select
                       className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
                       value={reasonId}
                       onChange={(event) => setReasonId(event.target.value)}
@@ -226,7 +228,7 @@ export function CaseDetailDialog({
                           {reason.name}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                     {selectedReason?.description ? (
                       <p className="-mt-1 text-xs text-slate-500">{selectedReason.description}</p>
                     ) : null}
@@ -337,7 +339,7 @@ export function CaseDetailDialog({
           )}
         </div>
       </div>
-    </div>,
+    </ModalFrame>,
     document.body
   );
 }

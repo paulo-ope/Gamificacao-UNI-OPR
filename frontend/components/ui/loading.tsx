@@ -16,8 +16,8 @@ export interface LoadingProps {
 
 export function Loading({ label = "Carregando...", className }: LoadingProps) {
   return (
-    <div className={cn("flex items-center justify-center gap-2 text-sm text-slate-500", className)} aria-busy="true">
-      <Loader2 className="h-4 w-4 animate-spin" />
+    <div className={cn("flex items-center justify-center gap-2 text-sm text-slate-500", className)} role="status" aria-busy="true">
+      <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
       {label}
     </div>
   );

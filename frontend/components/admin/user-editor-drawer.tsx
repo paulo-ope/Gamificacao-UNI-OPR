@@ -1,5 +1,7 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { ModalFrame } from "@/components/ui/modal-frame";
 import { KeyRound, Save } from "lucide-react";
 
 import { AppCheckbox } from "@/components/ui/checkbox";
@@ -35,7 +37,7 @@ export function UserEditorDrawer({
   onOpenPermissionOverrides,
 }: Props) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/30 p-4">
+    <ModalFrame onClose={onCancel} title="Editar usuário" className="fixed inset-0 z-[70] flex items-end justify-end bg-transparent p-4">
       <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-lg font-semibold text-slate-950">{userDraft.id === "new" ? "Novo usuário" : "Editar usuário"}</h3>
@@ -46,15 +48,15 @@ export function UserEditorDrawer({
           ) : null}
         </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <div className="grid gap-2 md:col-span-2">
+          <Field className="grid gap-2 md:col-span-2">
             <Label>Nome</Label>
             <Input value={userDraft.name} onChange={(event) => onChange({ name: event.target.value })} />
-          </div>
-          <div className="grid gap-2">
+          </Field>
+          <Field className="grid gap-2">
             <Label>E-mail</Label>
             <Input type="email" value={userDraft.email} onChange={(event) => onChange({ email: event.target.value })} />
-          </div>
-          <div className="grid gap-2">
+          </Field>
+          <Field className="grid gap-2">
             <Label>{userDraft.id === "new" ? "Senha inicial" : "Nova senha"}</Label>
             <Input
               type="password"
@@ -62,7 +64,7 @@ export function UserEditorDrawer({
               placeholder={userDraft.id === "new" ? "Obrigatória" : "Em branco mantém a atual"}
               onChange={(event) => onChange({ password: event.target.value })}
             />
-          </div>
+          </Field>
           <div className="grid gap-2 md:col-span-2">
             <Label>Regionais permitidas</Label>
             <MultiSelect
@@ -115,6 +117,6 @@ export function UserEditorDrawer({
           </Button>
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }

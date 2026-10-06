@@ -131,7 +131,7 @@ function appliedRuleText(order: AuditableOrder) {
 function DetailItem({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
     <div className="min-w-0 rounded-md border bg-slate-50 px-3 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-1 text-sm font-medium text-slate-950">{safeText(value)}</div>
     </div>
   );
@@ -151,7 +151,7 @@ function RuleDecisionCard({
   return (
     <div className="rounded-xl border bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">{title}</div>
+        <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">{title}</div>
         <Badge className={toneBadgeClass(tone)}>{status}</Badge>
       </div>
       <p className="mt-3 text-sm leading-6 text-slate-700">{detail}</p>
@@ -231,7 +231,7 @@ function TimelineOrderCard({
     <article className={isCurrent ? "rounded-lg border border-blue-300 bg-blue-50 p-3" : "rounded-lg border bg-white p-3"}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{formatDateTime(item.opened_at)}</div>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{formatDateTime(item.opened_at)}</div>
           <div className="mt-1 text-sm font-semibold text-slate-950">
             O.S {item.os_code} {isCurrent ? "(selecionada)" : ""}
           </div>
@@ -403,7 +403,7 @@ export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calcu
               <section className={`rounded-xl border p-4 ${auditTone(order)}`}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-[10px] font-bold uppercase tracking-[0.14em] opacity-80">Resumo da decisão</div>
+                    <div className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-80">Resumo da decisão</div>
                     <div className="mt-1 text-xl font-semibold text-slate-950">{outcome}</div>
                     <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700">{mainReason}</p>
                     <p className="mt-1 text-sm text-slate-700">
@@ -425,7 +425,7 @@ export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calcu
               </section>
 
               <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Identificação</div>
+                <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Identificação</div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
                   <Info label="ID da O.S" value={order.os_code} />
                   <Info label="Cliente" value={order.customer_name} />
@@ -508,7 +508,7 @@ export function OrderAuditSheet({ order: initialOrder, open, onOpenChange, calcu
               {recurrenceAudit ? (
                 <Collapsible className="rounded-xl border bg-white">
                   <CollapsibleTrigger className="flex w-full items-center justify-between px-4 py-3 text-left">
-                    <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                    <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
                       Análise detalhada de reincidência
                     </span>
                     <ChevronDown className="h-4 w-4 text-slate-400" />

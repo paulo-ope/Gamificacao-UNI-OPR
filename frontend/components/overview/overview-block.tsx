@@ -4,6 +4,7 @@ import { Lock, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { SectionCard } from "@/components/ui/section-card";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export type OverviewBlockState = {
   /** Carregando pela primeira vez (recarga com dado na tela não deve piscar skeleton). */
@@ -83,7 +84,7 @@ function OverviewBlockBody({
   }
   if (state?.error) {
     return (
-      <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+      <p role="alert" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
         <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
         <span>{state.error}</span>
       </p>
@@ -99,7 +100,7 @@ function OverviewBlockBody({
     );
   }
   if (state?.empty) {
-    return <p className="py-6 text-center text-sm text-slate-500">{emptyLabel}</p>;
+    return <EmptyState variant="plain" title={emptyLabel} description="Ajuste o período ou os filtros para consultar outro recorte." />;
   }
   return <>{children}</>;
 }

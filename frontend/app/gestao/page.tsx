@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import Link from "next/link";
 import { BriefcaseBusiness, CheckCircle2, ExternalLink, Filter, Loader2, RefreshCw, Search, ShieldAlert, X } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -462,11 +463,11 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
                 <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
                 <Input className="pl-9" placeholder="Buscar colaborador ou regional" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
               </div>
-              <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.regional} onChange={(event) => setFilters({ ...filters, regional: event.target.value })}>
+              <Select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.regional} onChange={(event) => setFilters({ ...filters, regional: event.target.value })}>
                 <option value="">Todas as regionais (operacional)</option>
                 {regionals.map((regional) => <option key={regional} value={regional}>{regional}</option>)}
-              </select>
-              <select
+              </Select>
+              <Select
                 className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
                 value={filters.collaborator_regional}
                 onChange={(event) => setFilters({ ...filters, collaborator_regional: event.target.value })}
@@ -474,15 +475,15 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
               >
                 <option value="">Todas as regionais (origem)</option>
                 {originRegionals.map((regional) => <option key={regional} value={regional}>{regional}</option>)}
-              </select>
-              <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.supervisor_user_id} onChange={(event) => setFilters({ ...filters, supervisor_user_id: event.target.value })}>
+              </Select>
+              <Select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.supervisor_user_id} onChange={(event) => setFilters({ ...filters, supervisor_user_id: event.target.value })}>
                 <option value="">Todos os supervisores</option>
                 {options.supervisors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-              <select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
+              </Select>
+              <Select className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm" value={filters.status} onChange={(event) => setFilters({ ...filters, status: event.target.value })}>
                 <option value="">Todos os status</option>
                 {Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
+              </Select>
               <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Filtrar
@@ -502,7 +503,7 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
           {canManage && selectedMemberIds.size > 0 ? (
             <div className="flex flex-wrap items-center gap-2 border-b border-violet-200 bg-violet-50/60 px-4 py-2.5 text-sm">
               <span className="font-medium text-slate-700">{selectedMemberIds.size} colaborador(es) selecionado(s)</span>
-              <select
+              <Select
                 className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs"
                 value={bulkAction}
                 onChange={(event) => setBulkAction(event.target.value as typeof bulkAction)}
@@ -510,25 +511,25 @@ function ManagementPageContent({ user }: { user: AuthUser }) {
                 <option value="team_model">Aplicar modelo de equipe</option>
                 <option value="supervisor">Aplicar supervisor</option>
                 <option value="shift">Aplicar escala 12x36</option>
-              </select>
+              </Select>
               {bulkAction === "team_model" ? (
-                <select
+                <Select
                   className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs"
                   value={bulkTeamModelId}
                   onChange={(event) => setBulkTeamModelId(event.target.value)}
                 >
                   <option value="">Selecione o modelo</option>
                   {options.team_models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
+                </Select>
               ) : bulkAction === "supervisor" ? (
-                <select
+                <Select
                   className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs"
                   value={bulkSupervisorId}
                   onChange={(event) => setBulkSupervisorId(event.target.value)}
                 >
                   <option value="">Selecione o supervisor</option>
                   {options.supervisors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
+                </Select>
               ) : (
                 <>
                   <span className="text-xs text-slate-500">1 dia sim, 1 não - todos com a MESMA data-âncora:</span>
@@ -699,10 +700,10 @@ function MemberRow({
       </TableCell>
       <TableCell className="min-w-52">
         {canManage ? (
-          <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm" value={member.supervisor_user_id ?? ""} disabled={isSaving} onChange={(event) => void onUpdate(member.id, { supervisor_user_id: event.target.value ? Number(event.target.value) : null })}>
+          <Select className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm" value={member.supervisor_user_id ?? ""} disabled={isSaving} onChange={(event) => void onUpdate(member.id, { supervisor_user_id: event.target.value ? Number(event.target.value) : null })}>
             <option value="">Sem supervisor</option>
             {options.supervisors.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
+          </Select>
         ) : canClaim && !member.supervisor_user_id ? (
           <Button type="button" size="sm" variant="outline" disabled={isSaving} onClick={() => void onClaim(member.id)}>
             {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
@@ -714,16 +715,16 @@ function MemberRow({
       </TableCell>
       <TableCell className="min-w-52">
         {canManage ? (
-          <select className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm" value={member.team_model_id ?? ""} disabled={isSaving} onChange={(event) => void onUpdate(member.id, { team_model_id: event.target.value ? Number(event.target.value) : null })}>
+          <Select className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm" value={member.team_model_id ?? ""} disabled={isSaving} onChange={(event) => void onUpdate(member.id, { team_model_id: event.target.value ? Number(event.target.value) : null })}>
             <option value="">Sem modelo</option>
             {options.team_models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
+          </Select>
         ) : <span className="text-sm text-slate-600">{member.team_model_name ?? "Sem modelo"}</span>}
       </TableCell>
       <TableCell className="min-w-48">
         {canManage ? (
           <div className="grid gap-1.5">
-            <select
+            <Select
               className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm"
               value={member.shift_pattern === "alternating" ? "alternating" : "standard"}
               disabled={isSaving}
@@ -738,7 +739,7 @@ function MemberRow({
             >
               <option value="standard">Padrão (seg-sex/sáb/dom)</option>
               <option value="alternating">12x36 (dia sim, dia não)</option>
-            </select>
+            </Select>
             {member.shift_pattern === "alternating" ? (
               <input
                 type="date"
@@ -792,14 +793,14 @@ function MemberRow({
             ) : null}
           </div>
           {canManage ? (
-            <select
+            <Select
               className="h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-600"
               value={member.status}
               disabled={isSaving}
               onChange={(event) => void onUpdate(member.id, { status: event.target.value })}
             >
               {Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
+            </Select>
           ) : null}
           {member.collaborator_team_type ? (
             <span className="text-xs text-slate-500">{teamTypeLabels[member.collaborator_team_type] ?? member.collaborator_team_type}</span>

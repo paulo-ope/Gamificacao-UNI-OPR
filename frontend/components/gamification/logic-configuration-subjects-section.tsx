@@ -66,7 +66,7 @@ export function SubjectsSection({
   setVisibleSubjectRulesCount,
 }: Props) {
   return (
-    <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-panel">
       <div className="panel-header">
         <div>
           <h3 className="panel-title">2. Assuntos</h3>
@@ -137,8 +137,8 @@ export function SubjectsSection({
       </FilterToolbar>
       <DataTableFrame>
       <Table>
-        <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-          <TableRow className="border-slate-700 hover:bg-slate-900">
+        <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+          <TableRow className="border-slate-200 hover:bg-slate-50">
             <TableHead className="w-10">
               <AppCheckbox checked={allVisibleSubjectsSelected} onCheckedChange={toggleAllVisibleSubjects} ariaLabel={allVisibleSubjectsSelected ? "Desmarcar todos" : "Selecionar todos"} />
             </TableHead>

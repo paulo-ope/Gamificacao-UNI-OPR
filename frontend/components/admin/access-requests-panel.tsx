@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { Ban, IdCard, Loader2, Mail } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -79,7 +80,7 @@ export function AccessRequestsPanel({
                           Sugestão por CPF/IXC: {item.suggested_collaborator_name}
                         </span>
                       ) : null}
-                      <select
+                      <Select
                         value={approveCollaboratorByRequest[item.id] ?? (item.suggested_collaborator_id ? String(item.suggested_collaborator_id) : "")}
                         className="h-9 w-full max-w-[220px] rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700"
                         onChange={(event) => onApproveCollaboratorChange(item.id, event.target.value)}
@@ -93,7 +94,7 @@ export function AccessRequestsPanel({
                               {person.id === item.suggested_collaborator_id ? " (sugestão)" : ""}
                             </option>
                           ))}
-                      </select>
+                      </Select>
                       <div className="flex justify-end gap-2">
                         <Button
                           aria-label={`Aprovar solicitação de ${item.name}`}

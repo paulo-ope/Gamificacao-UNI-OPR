@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DRILL_PAGE_SIZE, Pagination } from "@/components/ui/pagination";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api } from "@/lib/api";
@@ -48,10 +49,16 @@ export function OpaDrilldownSheet({
   const [overview, setOverview] = useState<SupportOpaOverview | null>(null);
   const [page, setPage] = useState<SupportOpaAttendancePage | null>(null);
   const [loading, setLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A página pertence a um recorte (`key`): ao clicar em outro ponto do gráfico, `pageState.key`
+  // deixa de bater e a lista volta sozinha pra página 1, sem efeito extra nem busca duplicada.
+  const [pageState, setPageState] = useState<{ key: string | null; page: number }>({ key: null, page: 1 });
 
   const key = drilldown ? JSON.stringify([baseFilters, drilldown.filters]) : null;
+  const currentPage = pageState.key === key ? pageState.page : 1;
 
+  // Indicadores do recorte: uma busca por recorte, não por página.
   useEffect(() => {
     if (!drilldown) return;
     let cancelled = false;
@@ -60,14 +67,10 @@ export function OpaDrilldownSheet({
     setError(null);
     setOverview(null);
     setPage(null);
-    Promise.all([
-      api.supportOpaOverview(merged),
-      api.supportOpaAttendances({ ...merged, page: 1, page_size: 25, sort_by: "opened_at", sort_dir: "desc" }),
-    ])
-      .then(([overviewData, pageData]) => {
-        if (cancelled) return;
-        setOverview(overviewData);
-        setPage(pageData);
+    api
+      .supportOpaOverview(merged)
+      .then((overviewData) => {
+        if (!cancelled) setOverview(overviewData);
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
@@ -83,6 +86,30 @@ export function OpaDrilldownSheet({
     // refaria a chamada a cada render por identidade nova.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
+
+  // Lista de atendimentos: uma busca por recorte E por página (15 por página, do mais recente).
+  useEffect(() => {
+    if (!drilldown) return;
+    let cancelled = false;
+    const merged: SupportOpaAttendanceFilters = { ...baseFilters, ...drilldown.filters };
+    setPageLoading(true);
+    api
+      .supportOpaAttendances({ ...merged, page: currentPage, page_size: DRILL_PAGE_SIZE, sort_by: "opened_at", sort_dir: "desc" })
+      .then((pageData) => {
+        if (!cancelled) setPage(pageData);
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setError(reason instanceof Error ? reason.message : "Falha ao carregar o detalhamento.");
+      })
+      .finally(() => {
+        if (!cancelled) setPageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, currentPage]);
 
   const items = page?.items ?? [];
   const coverageNote = tmrCoverageNote(overview?.tmr_all_responses_coverage);
@@ -128,7 +155,7 @@ export function OpaDrilldownSheet({
                   {number(page?.total ?? 0)} no recorte
                 </Badge>
               </div>
-              <div className="overflow-x-auto p-3">
+              <div className={`overflow-x-auto p-3 transition-opacity ${pageLoading ? "opacity-60" : ""}`} aria-busy={pageLoading}>
                 <Table className="min-w-[560px]">
                   <TableHeader>
                     <TableRow>
@@ -160,7 +187,7 @@ export function OpaDrilldownSheet({
                         </TableCell>
                       </TableRow>
                     ))}
-                    {!items.length ? (
+                    {!items.length && !pageLoading ? (
                       <TableRow>
                         <TableCell colSpan={5} className="py-8 text-center text-sm text-slate-500">
                           Nenhum atendimento neste recorte.
@@ -170,10 +197,18 @@ export function OpaDrilldownSheet({
                   </TableBody>
                 </Table>
               </div>
-              {page && page.total > items.length ? (
-                <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">
-                  Mostrando os {number(items.length)} mais recentes de {number(page.total)}.
-                </p>
+              {page && page.total > 0 ? (
+                <div className="border-t border-slate-100 px-4 py-3">
+                  <Pagination
+                    size="compact"
+                    page={page.page}
+                    totalPages={page.total_pages}
+                    totalItems={page.total}
+                    itemLabel="atendimentos"
+                    disabled={pageLoading}
+                    onPageChange={(next) => setPageState({ key, page: next })}
+                  />
+                </div>
               ) : null}
             </section>
           </div>

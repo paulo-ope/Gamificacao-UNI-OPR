@@ -1,5 +1,7 @@
 ﻿"use client";
 
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import {
   Award,
   CheckCircle2,
@@ -580,9 +582,9 @@ export function CollaboratorOrdersSheet({
 
               <section className="rounded-md border bg-white">
                 <div className="grid gap-3 border-b p-4 xl:grid-cols-[1fr_1fr_1fr_1fr_auto] xl:items-end">
-                  <div className="grid gap-1">
+                  <Field className="grid gap-1">
                     <Label>Tipo Geral</Label>
-                    <select
+                    <Select
                       className="h-9 min-w-0 rounded-md border border-input bg-white px-3 text-sm"
                       value={osType}
                       onChange={(event) => {
@@ -596,11 +598,11 @@ export function CollaboratorOrdersSheet({
                           {type}
                         </option>
                       ))}
-                    </select>
-                  </div>
-                  <div className="grid gap-1">
+                    </Select>
+                  </Field>
+                  <Field className="grid gap-1">
                     <Label>Assunto</Label>
-                    <select
+                    <Select
                       className="h-9 min-w-0 rounded-md border border-input bg-white px-3 text-sm"
                       value={osSubject}
                       onChange={(event) => setOsSubject(event.target.value)}
@@ -611,11 +613,11 @@ export function CollaboratorOrdersSheet({
                           {subject}
                         </option>
                       ))}
-                    </select>
-                  </div>
-                  <div className="grid gap-1">
+                    </Select>
+                  </Field>
+                  <Field className="grid gap-1">
                     <Label>SLA</Label>
-                    <select
+                    <Select
                       className="h-9 min-w-0 rounded-md border border-input bg-white px-3 text-sm"
                       value={statusSla}
                       onChange={(event) => setStatusSla(event.target.value)}
@@ -626,11 +628,11 @@ export function CollaboratorOrdersSheet({
                           {sla}
                         </option>
                       ))}
-                    </select>
-                  </div>
-                  <div className="grid gap-1">
+                    </Select>
+                  </Field>
+                  <Field className="grid gap-1">
                     <Label>Grupo</Label>
-                    <select
+                    <Select
                       className="h-9 rounded-md border border-input bg-white px-3 text-sm"
                       value={groupId}
                       onChange={(event) => setGroupId(event.target.value)}
@@ -641,8 +643,8 @@ export function CollaboratorOrdersSheet({
                           {group.name}
                         </option>
                       ))}
-                    </select>
-                  </div>
+                    </Select>
+                  </Field>
                   <Button variant="outline" onClick={exportCsv}>
                     <Download className="h-4 w-4" />
                     Exportar
@@ -668,8 +670,8 @@ export function CollaboratorOrdersSheet({
 
               <section className="table-frame overflow-hidden rounded-md border bg-white">
                   <Table className="table-fixed text-xs md:text-sm">
-                    <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                      <TableRow className="border-slate-700 hover:bg-slate-900">
+                    <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                      <TableRow className="border-slate-200 hover:bg-slate-50">
                         <TableHead className="w-[88px]">ID da O.S</TableHead>
                         <TableHead className="w-[120px]">Data</TableHead>
                         <TableHead className="w-[16%]">Cliente</TableHead>

@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,14 @@ import { cn } from "@/lib/utils";
  * "Página X de Y" e botões Anterior/Próxima. Este componente cobre os três casos sem mudar
  * comportamento: mesma prop de página/total, mesmos estados de desabilitado.
  */
+/**
+ * Itens por página dos detalhamentos (O.S. de SLA em risco, de abertura, atendimentos do OPA e
+ * garantias). Antes eles mostravam só as 25 mais recentes, sem como ver o resto - pedido do usuário
+ * (2026-10-06): páginas de 15, da mais recente para a mais antiga. 15 respeita o mínimo de 10 que os
+ * endpoints de O.S. aceitam em `page_size`.
+ */
+export const DRILL_PAGE_SIZE = 15;
+
 export interface PaginationProps {
   page: number;
   totalPages: number;
@@ -65,9 +74,10 @@ export function Pagination({
         Página {page} de {safeTotalPages}
         {typeof totalItems === "number" ? ` · ${totalItems} ${itemLabel ?? "itens"}` : null}
       </p>
-      <div className={cn("flex items-center", size === "compact" ? "gap-1.5" : "gap-2")}>
+      <div className={cn("flex flex-wrap items-center", size === "compact" ? "gap-1.5" : "gap-2")}>
         {pageSizeOptions && onPageSizeChange ? (
-          <select
+          <Select
+            aria-label="Itens por página"
             value={String(pageSize ?? pageSizeOptions[0])}
             disabled={disabled}
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
@@ -78,7 +88,7 @@ export function Pagination({
                 {size}/página
               </option>
             ))}
-          </select>
+          </Select>
         ) : null}
         <Button
           type="button"

@@ -1,5 +1,7 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import { Ban, Loader2, Mail } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -69,9 +71,9 @@ export function InvitesPanel({
 
         {canWriteUsers ? (
           <div className="grid gap-3 border-b border-slate-200 p-5 sm:grid-cols-[1fr_1fr_auto]">
-            <div className="grid gap-1.5">
+            <Field className="grid gap-1.5">
               <Label>Colaborador</Label>
-              <select
+              <Select
                 value={inviteCollaboratorId}
                 className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
                 onChange={(event) => onInviteCollaboratorIdChange(event.target.value)}
@@ -84,9 +86,9 @@ export function InvitesPanel({
                       {person.name}
                     </option>
                   ))}
-              </select>
-            </div>
-            <div className="grid gap-1.5">
+              </Select>
+            </Field>
+            <Field className="grid gap-1.5">
               <Label>E-mail do convite</Label>
               <Input
                 type="email"
@@ -94,7 +96,7 @@ export function InvitesPanel({
                 value={inviteEmail}
                 onChange={(event) => onInviteEmailChange(event.target.value)}
               />
-            </div>
+            </Field>
             <div className="flex items-end">
               <Button type="button" disabled={creatingInvite || !inviteEmail.trim() || !inviteCollaboratorId} onClick={onCreateInvite}>
                 {creatingInvite ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}

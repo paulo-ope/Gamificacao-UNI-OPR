@@ -19,6 +19,8 @@ import {
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { ClosureProgress } from "@/components/gamification/closure-progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { DashboardCharts } from "@/components/gamification/dashboard-charts";
@@ -170,11 +172,10 @@ export function ClosureTab({
   };
 
   return (
-    <div className="grid gap-4">
-      <section className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
-        <div className="uni-gradient h-[3px] w-full" />
-        <div className="grid gap-5 p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <div className="grid gap-5">
+      <section className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-panel">
+        <div className="grid gap-5 p-4 sm:p-6">
+          <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-start 2xl:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 {closure.isClosed ? (
@@ -206,10 +207,10 @@ export function ClosureTab({
                 ) : null}
               </div>
               <div className="mt-3">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-uni-royal">Fechamento</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-uni-royal">Fechamento</p>
                 <div className="mt-1 flex items-center gap-2">
                   <h2 className="text-2xl font-semibold leading-tight text-slate-950">
-                    {closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}
+                    Resumo financeiro da competência
                   </h2>
                   <InfoHint
                     ariaLabel={`Ajuda sobre ${closure.isClosed || closure.ready ? "Resumo financeiro da competência" : "Regras pendentes antes do pagamento"}`}
@@ -271,10 +272,10 @@ export function ClosureTab({
                   {["draft", "review", "approved"].includes(summary.run.status) ? (
                     <Button
                       type="button"
-                      variant="destructive"
+                      variant="outline"
                       onClick={() => onAdvanceRunStatus("cancelled", "Fechamento cancelado.")}
                       disabled={busy}
-                      className="w-full sm:w-auto"
+                      className="w-full border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50 sm:w-auto"
                     >
                       <XCircle className="h-4 w-4" />
                       Cancelar
@@ -285,19 +286,21 @@ export function ClosureTab({
             </div>
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(260px,340px)]">
-            <div>
-              <div className="flex items-center gap-2 text-sm text-slate-500">
-                <span className="inline-block h-3 w-[3px] rounded-full bg-[var(--uni-cyan)]" />
+          <ClosureProgress status={summary.run?.status} />
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+            <div className="uni-gradient flex min-w-0 flex-col justify-center rounded-2xl p-5 text-white sm:p-6">
+              <div className="flex items-center gap-2 text-sm text-blue-100">
+                <Wallet className="h-4 w-4" />
                 Total a pagar no período
               </div>
-              <div className="mt-1 truncate text-[40px] font-semibold leading-none text-slate-950">
+              <div className="mt-3 break-words text-3xl font-semibold leading-tight tabular-nums sm:text-4xl">
                 {formatMoney(closureFinancials.totalAmount)}
               </div>
-              <div className="mt-2 text-sm text-slate-500">
-                <span className="font-semibold text-slate-800">{formatMoney(closureFinancials.technicianAmount)}</span> técnicos
+              <div className="mt-5 border-t border-white/15 pt-4 text-sm leading-6 text-blue-100">
+                <span className="font-semibold text-white">{formatMoney(closureFinancials.technicianAmount)}</span> técnicos
                 {" + "}
-                <span className="font-semibold text-slate-800">{formatMoney(closureFinancials.leadershipAmount)}</span> liderança
+                <span className="font-semibold text-white">{formatMoney(closureFinancials.leadershipAmount)}</span> liderança
               </div>
             </div>
 
@@ -362,44 +365,39 @@ export function ClosureTab({
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <Tabs value={detailSection} onValueChange={(value) => setDetailSection(value as DetailSection)} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-panel">
         <div className="border-b bg-[linear-gradient(180deg,#ffffff_0%,#f8fbff_100%)] px-5 py-4">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-uni-royal">Conferência</p>
+          <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-uni-royal">Conferência</p>
           <div className="mt-1 flex items-center gap-2">
             <h2 className="text-[16px] font-semibold leading-tight text-slate-950">Detalhamento do fechamento</h2>
             <InfoHint ariaLabel="Ajuda sobre Detalhamento do fechamento" description={SECTION_HELP.details} />
           </div>
-          <div className="mt-3 flex overflow-hidden rounded-xl border border-slate-200">
+          <TabsList aria-label="Detalhamento do fechamento" className="mt-4 grid h-auto w-full grid-cols-2 gap-1 sm:grid-cols-4">
             {sections.map((section) => {
               const active = detailSection === section.key;
               return (
-                <button
+                <TabsTrigger
                   key={section.key}
-                  type="button"
-                  onClick={() => setDetailSection(section.key)}
-                  className={
-                    active
-                      ? "flex flex-1 items-center justify-center gap-2 border-l border-slate-200 bg-[var(--uni-royal)] px-3 py-2 text-[12px] font-semibold text-white first:border-l-0"
-                      : "flex flex-1 items-center justify-center gap-2 border-l border-slate-200 bg-white px-3 py-2 text-[12px] font-semibold text-slate-500 transition hover:bg-slate-50 first:border-l-0"
-                  }
+                  value={section.key}
+                  className="min-w-0 flex-wrap gap-1.5 px-2 py-2.5 text-xs"
                 >
                   {section.label}
                   <span
-                    className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                      active ? "bg-white/20 text-white" : badgeToneClass[section.badgeTone]
+                    className={`rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
+                      active ? "bg-blue-50 text-primary" : badgeToneClass[section.badgeTone]
                     }`}
                   >
                     {section.badge}
                   </span>
-                </button>
+                </TabsTrigger>
               );
             })}
-          </div>
+          </TabsList>
         </div>
 
         <div className="p-5">
           {detailSection === "pending" ? (
-            <div>
+            <TabsContent value="pending" className="mt-0">
               <div className="mb-3 flex items-center gap-2">
                 <InfoHint ariaLabel="Ajuda sobre Alertas e pendências" description={SECTION_HELP.alerts} />
                 <span className="text-sm text-slate-500">
@@ -445,11 +443,11 @@ export function ClosureTab({
                   Todas as O.S do período possuem regra de assunto ou diagnóstico aplicada.
                 </div>
               )}
-            </div>
+            </TabsContent>
           ) : null}
 
           {detailSection === "leadership" ? (
-            <div>
+            <TabsContent value="leadership" className="mt-0">
               <div className="mb-3 flex items-center gap-2">
                 <InfoHint ariaLabel="Ajuda sobre Bonificação de liderança" description={SECTION_HELP.leadership} />
                 <span className="text-sm text-slate-500">Bonificação de liderança</span>
@@ -485,16 +483,16 @@ export function ClosureTab({
                   Ver ranking de líderes
                 </Button>
               </div>
-            </div>
+            </TabsContent>
           ) : null}
 
           {detailSection === "financial" ? (
-            <div>
+            <TabsContent value="financial" className="mt-0">
               <div className="mb-3 flex items-center gap-2">
                 <InfoHint ariaLabel="Ajuda sobre Detalhamento financeiro" description={SECTION_HELP.financial} />
                 <span className="text-sm text-slate-500">Detalhamento financeiro por dimensão operacional</span>
               </div>
-              <div className="grid min-w-0 gap-4 xl:grid-cols-3">
+              <div className="grid min-w-0 gap-4 2xl:grid-cols-2">
                 <FinancialTable
                   title="Valor a ser pago por regional"
                   rows={filteredFinancials.cost_by_regional}
@@ -520,11 +518,11 @@ export function ClosureTab({
                   helpText={SECTION_HELP.financialSubjects}
                 />
               </div>
-            </div>
+            </TabsContent>
           ) : null}
 
           {detailSection === "analysis" ? (
-            <div>
+            <TabsContent value="analysis" className="mt-0">
               <div className="mb-3 flex items-center gap-2">
                 <InfoHint ariaLabel="Ajuda sobre Análise operacional e gráficos" description={SECTION_HELP.chartArea} />
                 <span className="text-sm text-slate-500">Análise operacional e gráficos</span>
@@ -561,7 +559,7 @@ export function ClosureTab({
                   const Icon = item.icon;
                   return (
                     <div key={item.label} className="rounded-md border bg-white px-3 py-2 shadow-sm">
-                      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         <Icon className="h-3.5 w-3.5" />
                         <span className="truncate">{item.label}</span>
                       </div>
@@ -577,10 +575,10 @@ export function ClosureTab({
                   <DashboardCharts ranking={filteredRanking} penalties={chartPenalties} health={chartHealth} />
                 </DeferUntilVisible>
               </div>
-            </div>
+            </TabsContent>
           ) : null}
         </div>
-      </section>
+      </Tabs>
     </div>
   );
 }

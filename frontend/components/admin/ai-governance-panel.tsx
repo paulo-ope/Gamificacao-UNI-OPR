@@ -1,5 +1,7 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import { Key, Plus, RefreshCw, Save, ScrollText, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -352,7 +354,7 @@ export function AiGovernancePanel({ user, profiles }: { user: AuthUser; profiles
               <p className="mt-1 text-sm text-slate-500">Fonte real: introspecção do banco. Desabilitar um campo aqui bloqueia imediatamente API, MCP e IA.</p>
             </div>
             <div className="flex items-center gap-2">
-              <select
+              <Select
                 value={fieldEntityFilter}
                 onChange={(event) => setFieldEntityFilter(event.target.value)}
                 className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
@@ -363,7 +365,7 @@ export function AiGovernancePanel({ user, profiles }: { user: AuthUser; profiles
                     {entity}
                   </option>
                 ))}
-              </select>
+              </Select>
               <Button type="button" variant="outline" onClick={() => void loadFields()} disabled={busy}>
                 <RefreshCw className="h-4 w-4" /> Atualizar
               </Button>
@@ -416,9 +418,9 @@ export function AiGovernancePanel({ user, profiles }: { user: AuthUser; profiles
             <p className="mt-1 text-sm text-slate-500">
               Opcional: um perfil sem nenhuma restrição aqui usa só o estado geral de Endpoints/Campos acima. Restringir cria uma allow-list só para este perfil.
             </p>
-            <div className="mt-3 max-w-sm">
+            <Field className="mt-3 max-w-sm">
               <Label>Perfil</Label>
-              <select
+              <Select
                 value={selectedProfileId ?? ""}
                 onChange={(event) => setSelectedProfileId(event.target.value ? Number(event.target.value) : null)}
                 className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
@@ -428,8 +430,8 @@ export function AiGovernancePanel({ user, profiles }: { user: AuthUser; profiles
                     {profile.name}
                   </option>
                 ))}
-              </select>
-            </div>
+              </Select>
+            </Field>
           </div>
           {selectedProfileId !== null ? (
             <div className="grid gap-4 p-5 lg:grid-cols-2">
@@ -485,11 +487,11 @@ export function AiGovernancePanel({ user, profiles }: { user: AuthUser; profiles
           {canManageTokens ? (
             <div className="grid gap-3 border-b border-slate-200 p-5">
               <div className="flex flex-wrap items-end gap-3">
-                <div className="grid gap-2">
+                <Field className="grid gap-2">
                   <Label>Nome do token</Label>
                   <Input value={newTokenName} onChange={(event) => setNewTokenName(event.target.value)} placeholder='Ex.: "Claude Desktop - Fulano"' />
-                </div>
-                <div className="grid gap-2">
+                </Field>
+                <Field className="grid gap-2">
                   <Label>Expira em (dias, opcional)</Label>
                   <Input
                     type="number"
@@ -499,7 +501,7 @@ export function AiGovernancePanel({ user, profiles }: { user: AuthUser; profiles
                     placeholder="Sem expiração"
                     className="w-40"
                   />
-                </div>
+                </Field>
                 <Button type="button" onClick={() => void createToken()} disabled={busy}>
                   <Plus className="h-4 w-4" /> Emitir token
                 </Button>

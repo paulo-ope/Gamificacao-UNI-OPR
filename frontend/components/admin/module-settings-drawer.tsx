@@ -1,5 +1,6 @@
 "use client";
 
+import { ModalFrame } from "@/components/ui/modal-frame";
 import { useState } from "react";
 import { RotateCcw, Save, X } from "lucide-react";
 
@@ -52,8 +53,8 @@ export function ModuleSettingsDrawer({ module, saving, onClose, onSave }: Props)
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/35 sm:items-center sm:p-4"
+    <ModalFrame onClose={onClose} title="Parametrizar módulo"
+      className="fixed inset-0 z-[70] flex items-end justify-center bg-transparent sm:items-center sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="module-settings-title"
@@ -185,6 +186,6 @@ export function ModuleSettingsDrawer({ module, saving, onClose, onSave }: Props)
           </div>
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }

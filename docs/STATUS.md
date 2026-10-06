@@ -44,6 +44,58 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **SGP Suporte → aba "Atendimento Suporte Interno N1", modernização visual do frontend e paginação dos
+  detalhamentos (2026-10-06, pedidos do usuário).** Três commits locais na branch
+  `claude/frontend-modernizacao-codex` (criada a partir de `claude/status-sla-media-producao`):
+  `88e2145` (visual), `41209e1` (N1), `4278e3a` (paginação). **Nada enviado ao remoto, sem PR, nada em
+  produção.** Cada commit passa `tsc --noEmit` sozinho; vitest 94/94 no último.
+  - **N1 (backend + frontend).** Conta protocolos do IXC (`su_ticket`) abertos por colaboradores do **grupo
+    de usuários 105** (`usuarios.id_grupo`, 24 ativos + 14 inativos; **decisão do usuário**, o nome do grupo
+    não é exposto pela API do IXC e não foi confirmado) nos motivos **90** (operacional, "Registro de
+    Atendimento Operacional") e **29** (financeiro, "Registro de Informação Financeira"). O setor do ticket
+    não serve de critério (quase tudo cai em Retenção/Comercial; nenhum em "Suporte Interno"). Protocolos
+    com `id_usuarios = 0` ficam de fora (~37% dos motivos 29/90: 47.137 de 75.177 têm operador).
+    - Novo: `SupportIxcTicket.opened_by_user_id`, tabela `support_ixc_users` (nome/grupo/situação),
+      migração `20260922_0109` (**ainda não aplicada na VM**), `modules/support/ixc_n1.py`,
+      `GET /api/support/ixc/n1/summary` (`support:read`; período máx. 366 dias). Tela: cards com variação
+      contra o período anterior, gráfico (barras do total, linhas por tipo, tracejada do período anterior,
+      mesmo desenho do fluxo diário de Operação) e tabela por atendente recolhida em 5.
+    - A migração preenche o histórico **só dos motivos 29 e 90**, a partir do `raw_payload` (um UPDATE no
+      histórico inteiro leria o JSON de ~550 mil linhas; ver incidente de disco). Os demais tickets antigos
+      ficam com `opened_by_user_id` nulo; toda importação nova grava o operador de todos.
+    - O grupo é o **atual** do usuário no IXC, atualizado a cada importação em que ele aparece (quem sair do
+      grupo 105 deixa de contar, inclusive no histórico). `sync_ixc_users` roda depois do commit da
+      importação: falha ali não desfaz os protocolos.
+    - **Validação**: 6 testes novos (`test_ixc_n1.py`); migração (sobe/desce/sobe) e query testadas num
+      Postgres descartável (volta `date`, não texto). No Docker local a migração foi aplicada e os 88
+      usuários do IXC gravados manualmente; 01-06/10 deu 697 operacional + 594 financeiro. **Não conferido**:
+      a tela no navegador (só `tsc`, testes e resposta HTTP 200 das páginas) e a contagem contra o IXC.
+    - **Cuidados**: Bruno Rossow e Maycon Batista (grupo 117) e Emi Pereira (grupo 32) abrem muitos
+      protocolos desses motivos e **não são contados** (não estão no 105). Dias com zero em 25 e 26/09 podem
+      ser lacuna do backfill, não ausência de atendimento. "Finalizadas" ficou fora do gráfico de propósito:
+      os códigos de `status`/`su_status` do ticket (C, F, T, OSAB...) não estão documentados e `su_ticket`
+      não tem data de fechamento.
+  - **Modernização visual.** Vem da pasta "Gamificação Codex" (04 a 06/10, doc em
+    `frontend/docs/FRONTEND_MODERNIZACAO.md`): tokens, `Select`/`Field`/`ModalFrame`, busca de telas por
+    Ctrl/Cmd K, Visão Geral com KPIs antes dos filtros, gamificação reorganizada. Aplicada por **mesclagem de
+    3 vias** (base `ff6f748`, o commit de onde a pasta partiu) sobre o projeto: 102 arquivos, nenhum
+    conflito, sem mudar chamadas de API. Preservados: revisão de período encerrado com motivo (`8f4ec07`) e
+    gauge "Média selecionada" (`2504ed2`). Build de produção e 90 testes da pasta Codex passaram numa cópia
+    temporária. A pasta original não foi alterada. Ficaram **fora** do commit: `.env.local` da pasta Codex e
+    `next-env.d.ts` (artefato gerado pelo Next, alterna entre `.next/types` e `.next/dev/types`).
+  - **Paginação.** Os detalhamentos que cortavam em "as 25 mais recentes" agora paginam de 15 em 15, da mais
+    recente para a mais antiga (`DRILL_PAGE_SIZE` em `components/ui/pagination.tsx`): Operação > Andamento
+    (SLA em risco e dimensões) e Aberturas (a página mantém o recorte), detalhamento do OPA no Suporte e
+    Garantias (paginação local; o CSV exporta todas as carregadas). Sem mudança no backend, que já paginava.
+    Só se procurou por textos "mais recentes"; outra aba que ainda corte sem página não foi mapeada.
+  - **Fora desses commits e ainda não commitado**: a frente "pontos de atenção/recomendações da Visão Geral"
+    (`operations/attention.py`, `overview-attention-points.tsx`, `overview-recommendations.tsx`,
+    `overview-screen.tsx`, `operations-api.ts`, `api-operacao-analitica.md`), de outra sessão.
+  - **Para aplicar na VM**: rebuild de backend e frontend; a migração roda no entrypoint. Depois da primeira
+    importação de atendimentos IXC (ou chamando `sync_ixc_users`), a tabela por atendente passa a mostrar
+    nomes; antes disso fica vazia. Rollback: `alembic downgrade 20260921_0108` e voltar ao commit anterior.
+  - Em Windows persistem erros de SQLite em thread no teardown da fixture `client` e em
+    `test_portal_access_requests` (já existiam, não são desta mudança).
 - **Gamificação → fechamento de período encerrado estável e rastreável, fase 1 (2026-10-05).** Origem:
   setembro/2026 (encerrado, não pago) foi recalculado 3x por "revisão" e o a pagar de técnicos andou
   R$ 19.956,93 (rasc. 4345) → 20.577,83 (4395) → 20.259,19 (4530). Investigado em produção: O.S. (10.286) e

@@ -14,10 +14,10 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { normalizeRegional, regionalName } from "@/lib/regional";
 import { cn } from "@/lib/utils";
 
-export const configSectionClass = "rounded-2xl border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]";
-export const configCardClass = "rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]";
+export const configSectionClass = "rounded-2xl border border-slate-200 bg-white shadow-panel";
+export const configCardClass = "rounded-2xl border border-slate-200 bg-white p-4 shadow-panel";
 export const configSoftCardClass = "rounded-2xl border border-slate-200 bg-slate-50 p-4";
-export const configSelectClass = "h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+export const configSelectClass = "field-control h-11 w-full px-3 text-sm";
 
 export function AppInput({ className, ...props }: InputProps) {
   return <Input className={cn("h-11 rounded-xl", className)} {...props} />;
@@ -54,10 +54,10 @@ export function MetricCard({
   }[tone];
 
   return (
-    <div className={cn("relative overflow-hidden rounded-xl p-4 shadow-sm", toneClass)}>
+    <div className={cn("relative min-w-0 overflow-hidden rounded-xl border border-slate-200/70 p-4 shadow-panel", toneClass)}>
       <span className={cn("absolute inset-x-0 top-0 h-1", accentClass)} />
       <p className="text-xs font-medium text-slate-500">{title}</p>
-      <p className="mt-2 text-3xl font-semibold tabular-nums">{value}</p>
+      <p className="mt-2 break-words text-xl font-semibold tabular-nums sm:text-2xl">{value}</p>
       {helper ? <p className="mt-2 text-xs text-slate-600">{helper}</p> : null}
       {note ? <p className="mt-1 text-[11px] text-slate-500">{note}</p> : null}
     </div>
@@ -344,9 +344,9 @@ export function ToolbarSearch({
   className?: string;
 }) {
   return (
-    <div className={cn("relative min-w-[280px] flex-1", className)}>
+    <div className={cn("relative min-w-0 w-full sm:min-w-[240px] flex-1", className)}>
       <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-slate-400" />
-      <AppInput value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="pl-9" />
+      <AppInput value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} aria-label={placeholder} className="pl-9" />
     </div>
   );
 }
@@ -356,7 +356,7 @@ export function ToolbarCount({ children }: { children: ReactNode }) {
 }
 
 export function DataTableFrame({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("overflow-hidden rounded-b-[24px] border-t border-slate-200", className)} {...props} />;
+  return <div className={cn("min-w-0 overflow-hidden rounded-b-2xl border-t border-slate-200", className)} {...props} />;
 }
 
 // Substitui as versões duplicadas de "iniciais em círculo colorido" que existiam soltas em
@@ -375,7 +375,7 @@ const AVATAR_COLOR_CLASSES = [
 ];
 
 const AVATAR_SIZE_CLASSES: Record<"sm" | "md" | "lg", string> = {
-  sm: "h-6 w-6 text-[10px]",
+  sm: "h-6 w-6 text-[11px]",
   md: "h-8 w-8 text-[11px]",
   lg: "h-11 w-11 text-sm",
 };

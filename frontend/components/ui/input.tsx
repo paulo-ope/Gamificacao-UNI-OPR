@@ -1,15 +1,20 @@
+"use client";
+
 import * as React from "react";
+import { useFieldControlId } from "@/components/ui/field";
 
 import { cn } from "@/lib/utils";
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {}
 
-const Input = React.forwardRef<HTMLInputElement, InputProps>(({ className, type, ...props }, ref) => {
+const Input = React.forwardRef<HTMLInputElement, InputProps>(({ className, type, id, ...props }, ref) => {
+  const controlId = useFieldControlId(id);
   return (
     <input
       type={type}
+      id={controlId}
       className={cn(
-        "flex h-9 w-full rounded-md border border-input bg-white px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+        "field-control flex h-10 w-full min-w-0 px-3 py-2 file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1 file:text-xs file:font-semibold file:text-secondary-foreground",
         className
       )}
       ref={ref}

@@ -204,6 +204,8 @@ function EditableDateField({
       </button>
       <input
         type="text"
+        aria-label={fieldLabel}
+        aria-invalid={invalid || undefined}
         inputMode="numeric"
         placeholder="dd/mm/aaaa"
         value={text}
@@ -332,6 +334,8 @@ export function DateRangePicker({
               <button
                 key={toDateValue(day)}
                 type="button"
+                aria-label={shortDateLabel(toDateValue(day))}
+                aria-pressed={Boolean(selected)}
                 disabled={disabled}
                 onClick={() => pick(day)}
                 className={[
@@ -365,7 +369,7 @@ export function DateRangePicker({
           </button>
         </Popover.Trigger>
         <Popover.Portal>
-          <Popover.Content align="start" sideOffset={8} className="z-[70] w-[min(32rem,calc(100vw-2rem))] rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl">
+          <Popover.Content align="start" sideOffset={8} collisionPadding={12} className="z-[80] max-h-[var(--radix-popover-content-available-height)] w-[min(32rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-floating">
             <div className="mb-2 grid grid-cols-2 gap-2 rounded-lg bg-slate-50 p-1">
               <EditableDateField
                 fieldLabel="Início"

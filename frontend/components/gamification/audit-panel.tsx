@@ -1,5 +1,7 @@
 ﻿"use client";
 
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import * as Popover from "@radix-ui/react-popover";
 import {
   AlertTriangle,
@@ -364,12 +366,12 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border-slate-200 bg-white shadow-sm">
       <div className="flex shrink-0 flex-col gap-3 border-b bg-white px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">
+          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-uni-royal">
             <ShieldCheck className="h-3.5 w-3.5" />
             Gamificação · Auditoria operacional
           </p>
-          <h2 className="mt-1 text-base font-semibold text-slate-950">Conferência das O.S e regras aplicadas</h2>
-          <p className="mt-1 text-[11px] text-slate-500">Base, regra aplicada, pontos anulados e resultado final em uma tela operacional.</p>
+          <h2 className="mt-1 text-xl font-semibold text-slate-950">Conferência das O.S e regras aplicadas</h2>
+          <p className="mt-1 text-sm text-slate-500">Base, regra aplicada, pontos anulados e resultado final em uma tela operacional.</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {activeFilterChips.length > 0 ? (
@@ -398,7 +400,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
       </div>
 
       {audit ? (
-        <div className="grid shrink-0 gap-2 overflow-x-auto border-b bg-white px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+        <div className="grid shrink-0 gap-3 border-b bg-slate-50/50 p-4 grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           <SummaryMetric
             icon={ClipboardList}
             // Rotulo curto de proposito: este tile vive numa faixa de 7 colunas e o texto e
@@ -445,7 +447,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           lado (sem o antigo colapso "Filtros avançados", que escondia Regional/Colaborador/SLA). */}
       <div className="shrink-0 border-b bg-slate-50 px-4 py-3">
         <div className="flex flex-col gap-1.5">
-          <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Status da O.S</div>
+          <div className="text-xs font-medium text-slate-600">Status da O.S</div>
           <div className="inline-flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1">
             {[
               ["all", "Todas"],
@@ -460,6 +462,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
               <button
                 key={value}
                 type="button"
+                aria-pressed={mode === value}
                 onClick={() => setMode(value as FilterMode)}
                 className={
                   mode === value
@@ -473,32 +476,32 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           </div>
         </div>
 
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <div className="grid gap-1">
-            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Agrupar por</Label>
-            <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={groupMode} onChange={(event) => setGroupMode(event.target.value as GroupMode)}>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+          <Field className="grid gap-1">
+            <Label className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Agrupar por</Label>
+            <Select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={groupMode} onChange={(event) => setGroupMode(event.target.value as GroupMode)}>
               <option value="group">Grupo</option>
               <option value="subject">Assunto</option>
               <option value="regional">Regional</option>
               <option value="collaborator">Colaborador</option>
               <option value="status">Status</option>
-            </select>
-          </div>
+            </Select>
+          </Field>
 
-          <div className="grid gap-1">
-            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Grupo</Label>
-            <select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
+          <Field className="grid gap-1">
+            <Label className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Grupo</Label>
+            <Select className="h-8 rounded-md border border-input bg-white px-2 text-xs" value={groupId} onChange={(event) => setGroupId(event.target.value)}>
               <option value="">Todos os grupos</option>
               {activeGroups.map((group) => (
                 <option key={group.id} value={group.id}>
                   {group.name}
                 </option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
 
           <div className="grid gap-1">
-            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Assunto</Label>
+            <Label className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Assunto</Label>
             <Popover.Root open={subjectMenuOpen && subjectSuggestions.length > 0} onOpenChange={setSubjectMenuOpen}>
               <Popover.Anchor asChild>
                 <div className="relative">
@@ -545,7 +548,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           </div>
 
           <div className="grid gap-1">
-            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Regional</Label>
+            <Label className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Regional</Label>
             <AppCombobox
               value={regional}
               onChange={setRegional}
@@ -560,7 +563,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           </div>
 
           <div className="grid gap-1">
-            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Colaborador</Label>
+            <Label className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Colaborador</Label>
             <AppCombobox
               value={collaboratorId}
               onChange={setCollaboratorId}
@@ -575,7 +578,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
           </div>
 
           <div className="grid gap-1">
-            <Label className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">SLA</Label>
+            <Label className="text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">SLA</Label>
             <AppCombobox
               value={sla}
               onChange={setSla}
@@ -699,34 +702,34 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
 
               <div className="hidden shrink-0 grid-cols-5 gap-2 rounded-md border bg-white px-3 py-2 text-right text-xs sm:grid">
                 <div className="text-left">
-                  <div className="text-[10px] text-slate-500">Agrupamento</div>
+                  <div className="text-[11px] text-slate-500">Agrupamento</div>
                   <div className="flex items-center gap-2 truncate font-semibold text-slate-950">
                     <ClipboardCheck className="h-4 w-4 text-uni-royal" />
                     <span className="truncate">{activeGroup.label}</span>
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-slate-500">O.S</div>
+                  <div className="text-[11px] text-slate-500">O.S</div>
                   <div className="font-semibold">{formatInteger(activeGroup.orderCount)}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-slate-500">Sem regra</div>
+                  <div className="text-[11px] text-slate-500">Sem regra</div>
                   <div className="font-semibold text-amber-700">{formatInteger(activeGroup.unscored)}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-slate-500">Anul.</div>
+                  <div className="text-[11px] text-slate-500">Anul.</div>
                   <div className="font-semibold text-red-600">{formatInteger(activeGroup.penalized)}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-slate-500">Valor a ser pago</div>
+                  <div className="text-[11px] text-slate-500">Valor a ser pago</div>
                   <div className="font-semibold tabular-nums text-uni-royal">{formatMoney(activeGroup.estimatedPayment)}</div>
                 </div>
               </div>
 
               <div className="table-frame mt-2 min-h-0 flex-1 overflow-auto rounded-xl border bg-white">
                 <Table className="table-fixed border-collapse text-xs">
-                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm">
-                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50 shadow-sm">
+                    <TableRow className="border-slate-200 hover:bg-slate-50">
                       {[
                         ["O.S", "w-[76px]"],
                         ["Colaborador", "w-[180px]"],
@@ -739,7 +742,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                         ["Status", "w-[188px]"],
                         ["Auditoria", "w-[90px]"]
                       ].map(([label, width]) => (
-                        <TableHead key={label} className={`${width} h-auto px-2 py-2 text-[10px] tracking-wide text-slate-200`}>
+                        <TableHead key={label} className={`${width} h-auto px-2 py-2 text-[11px] tracking-wide text-slate-600`}>
                           {label}
                         </TableHead>
                       ))}
@@ -824,7 +827,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                   Exibindo {formatInteger(visibleOrders.length)} de {formatInteger(audit.total_orders ?? visibleOrders.length)} O.S filtradas.
                 </div>
                 <div className="flex items-center gap-2">
-                  <select
+                  <Select
                     className="h-8 rounded-md border border-input bg-white px-2 text-xs"
                     value={pageSize}
                     onChange={(event) => {
@@ -837,7 +840,7 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
                         {value} por página
                       </option>
                     ))}
-                  </select>
+                  </Select>
                   <Button variant="outline" size="sm" onClick={() => setPage((current) => Math.max(current - 1, 1))} disabled={(audit.page ?? page) <= 1}>
                     Anterior
                   </Button>
@@ -869,7 +872,6 @@ export function AuditPanel({ calculationRunId, groups, regionalOptions = [], col
     </Card>
   );
 }
-
 
 
 

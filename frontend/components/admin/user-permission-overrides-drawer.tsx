@@ -1,5 +1,6 @@
 "use client";
 
+import { ModalFrame } from "@/components/ui/modal-frame";
 import { useMemo, useState } from "react";
 import { RotateCcw, Search, X } from "lucide-react";
 
@@ -100,8 +101,8 @@ export function UserPermissionOverridesDrawer({ userId, userName, catalog, canWr
   const overrideCount = overview.data?.overrides.length ?? 0;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/35 sm:p-4"
+    <ModalFrame onClose={onClose} title="Permissões individuais"
+      className="fixed inset-0 z-[70] flex items-end justify-end bg-transparent sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="user-permission-overrides-title"
@@ -255,6 +256,6 @@ export function UserPermissionOverridesDrawer({ userId, userName, catalog, canWr
           )}
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }

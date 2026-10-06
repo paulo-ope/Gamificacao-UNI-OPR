@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { Check, Copy, Filter, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -155,7 +156,7 @@ export function LocalizaList({
             <DateRangePicker label="Período" dateFrom={dateFrom} dateTo={dateTo} presets={commonDateRangePresets()} onChange={onDateChange} />
             <div className="grid gap-1">
               <label className="text-[11px] font-medium text-slate-500">Status</label>
-              <select
+              <Select
                 value={status}
                 onChange={(event) => onStatusChange(event.target.value as LocationRequestStatus | "")}
                 className="h-10 rounded-md border border-input bg-white px-3 text-sm text-slate-700"
@@ -165,7 +166,7 @@ export function LocalizaList({
                     {option.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
         ) : null}

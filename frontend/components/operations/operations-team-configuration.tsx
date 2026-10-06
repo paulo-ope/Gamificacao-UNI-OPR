@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import {
   Clock3,
   Download,
@@ -1414,7 +1415,7 @@ export function OperationsTeamConfiguration({
                   className="pl-9"
                 />
               </div>
-              <select
+              <Select
                 value={regional}
                 onChange={(event) => setRegional(event.target.value)}
                 className="h-10 rounded-md border bg-white px-3 text-sm"
@@ -1425,7 +1426,7 @@ export function OperationsTeamConfiguration({
                     {item}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </CardHeader>
           <CardContent className="max-h-[620px] overflow-auto p-0">
@@ -1454,7 +1455,7 @@ export function OperationsTeamConfiguration({
                         </p>
                       </td>
                       <td className="px-3 py-2">
-                        <select
+                        <Select
                           disabled={!canAssignMembers}
                           value={member.team_model_id || ""}
                           onChange={(event) =>
@@ -1474,7 +1475,7 @@ export function OperationsTeamConfiguration({
                                 {model.name} · {model.daily_target}/dia
                               </option>
                             ))}
-                        </select>
+                        </Select>
                       </td>
                       <td>
                         {savingMember === key ? (

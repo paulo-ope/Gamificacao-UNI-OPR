@@ -9,6 +9,7 @@ import { InfoHint } from "@/components/gamification/info-hint";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Pagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type {
   OpeningsDrillField,
@@ -201,11 +202,13 @@ function DrillPanel({
   orders,
   isLoading,
   onClose,
+  onPageChange,
 }: {
   target: OpeningsDrillTarget;
   orders?: OperationOrderPage;
   isLoading: boolean;
   onClose?: () => void;
+  onPageChange?: (page: number) => void;
 }) {
   const items = orders?.items || [];
   const heading = drillPanelHeading(target);
@@ -218,8 +221,7 @@ function DrillPanel({
           </p>
           <CardTitle className="text-base font-semibold text-slate-950">{heading.title}</CardTitle>
           <p className="text-xs text-slate-500">
-            {orders ? `${orders.total} O.S. no recorte de abertura` : "Carregando..."}
-            {orders && orders.total > items.length ? ` · mostrando as ${items.length} mais recentes` : ""}
+            {orders ? `${orders.total} O.S. no recorte de abertura, da mais recente para a mais antiga` : "Carregando..."}
           </p>
         </div>
         <Button type="button" size="sm" variant="ghost" onClick={onClose} aria-label="Fechar detalhamento">
@@ -261,6 +263,17 @@ function DrillPanel({
             </TableBody>
           </Table>
         )}
+        {orders && orders.total > 0 && onPageChange ? (
+          <Pagination
+            className="px-4 pt-3"
+            page={orders.page}
+            totalPages={orders.total_pages}
+            totalItems={orders.total}
+            itemLabel="O.S."
+            disabled={isLoading}
+            onPageChange={onPageChange}
+          />
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -276,6 +289,7 @@ export function OperationsOpeningsAnalytics({
   drillOrders,
   drillLoading,
   onCloseDrill,
+  onDrillPageChange,
   granularity = "day",
   onGranularityChange,
   temporaryPeriod,
@@ -291,6 +305,7 @@ export function OperationsOpeningsAnalytics({
   drillOrders?: OperationOrderPage;
   drillLoading?: boolean;
   onCloseDrill?: () => void;
+  onDrillPageChange?: (page: number) => void;
   granularity?: OperationTrendGranularity;
   onGranularityChange?: (granularity: OperationTrendGranularity) => void;
   temporaryPeriod?: { label: string; date_from: string; date_to: string } | null;
@@ -569,6 +584,7 @@ export function OperationsOpeningsAnalytics({
           orders={drillOrders}
           isLoading={Boolean(drillLoading)}
           onClose={onCloseDrill}
+          onPageChange={onDrillPageChange}
         />
       ) : null}
 

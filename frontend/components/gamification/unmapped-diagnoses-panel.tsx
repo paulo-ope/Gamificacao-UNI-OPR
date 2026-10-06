@@ -157,7 +157,7 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
         Defina se o diagnóstico libera, anula ou exige revisão antes de recalcular a apuração.
       </div>
 
-      <div className="grid gap-3 border-b bg-white px-5 py-4 lg:grid-cols-[minmax(180px,1fr)_160px_auto_auto_auto] lg:items-end">
+      <div className="grid gap-3 border-b bg-white px-5 py-4 sm:grid-cols-2 2xl:grid-cols-[minmax(180px,1fr)_160px_auto_auto_auto] sm:items-end">
         <div className="grid gap-2">
           <Label>Ação para aplicar aos filtrados</Label>
           <AppCombobox
@@ -199,8 +199,8 @@ export function UnmappedDiagnosesPanel({ diagnoses, onConfigureDiagnosis, onConf
 
       <div className="table-frame">
         <Table>
-        <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-          <TableRow className="border-slate-700 hover:bg-slate-900">
+        <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+          <TableRow className="border-slate-200 hover:bg-slate-50">
             <TableHead>Diagnóstico</TableHead>
             <TableHead>Qtd O.S</TableHead>
             <TableHead>Assuntos relacionados</TableHead>

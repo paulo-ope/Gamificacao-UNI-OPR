@@ -10,9 +10,8 @@ import {
   AppModal,
   AppSwitch,
   FilterToolbar,
-  GuidanceCard,
+  MetricCard,
   PageHeader,
-  StepHeroCard,
   ToolbarCount,
   ToolbarSearch,
   configCardClass,
@@ -868,10 +867,10 @@ export function LogicConfigurationPanel({
           }
           action={
             <div className="flex flex-wrap rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
-              <Button variant={mode === "simple" ? "default" : "ghost"} onClick={() => setMode("simple")} className="h-9">
+              <Button variant={mode === "simple" ? "default" : "ghost"} aria-pressed={mode === "simple"} onClick={() => setMode("simple")} className="h-9">
                 Simples
               </Button>
-              <Button variant={mode === "advanced" ? "default" : "ghost"} onClick={() => setMode("advanced")} className="h-9">
+              <Button variant={mode === "advanced" ? "default" : "ghost"} aria-pressed={mode === "advanced"} onClick={() => setMode("advanced")} className="h-9">
                 <SlidersHorizontal className="h-4 w-4" />
                 Avançado
               </Button>
@@ -894,44 +893,24 @@ export function LogicConfigurationPanel({
           onDismissMessage={() => setMessage(null)}
         />
 
-        <div className="grid gap-3 border-t p-5 sm:grid-cols-2 xl:grid-cols-3">
-          <StepHeroCard step={mode === "simple" ? "S" : "A"} title={mode === "simple" ? "Modo simples" : "Modo avançado"} description={mode === "simple" ? "Governança operacional para a apuração diária e o fechamento." : "Regras técnicas, SLA, reincidência e restauração."} />
-          <GuidanceCard title="Diagnósticos monitorados" description={`${formatInteger(importedDiagnoses.length)} encontrados, sendo ${formatInteger(diagnosisConfiguredCount)} com regra e ${formatInteger(diagnosisUnconfiguredCount)} sem regra.`} />
-          <GuidanceCard title="Base atual" description={`Grupos ativos: ${formatInteger(groups.filter((group) => group.active).length)}. Assuntos configurados: ${formatInteger(subjectRules.length)}. Valor do ponto: ${pointValue ? formatMoney(Number(pointValue.replace(",", "."))) : "Não configurado"}.`} />
+        <div className="grid grid-cols-2 gap-3 border-t border-slate-100 p-4 xl:grid-cols-4">
+          <MetricCard title="Grupos ativos" value={groups.filter((group) => group.active).length} />
+          <MetricCard title="Assuntos configurados" value={subjectRules.length} />
+          <MetricCard title="Diagnósticos sem regra" value={diagnosisUnconfiguredCount} helper={formatInteger(diagnosisConfiguredCount) + " configurados"} tone={diagnosisUnconfiguredCount ? "warning" : "success"} />
+          <MetricCard title="Valor do ponto" value={pointValue ? formatMoney(Number(pointValue.replace(",", "."))) : "Não configurado"} />
         </div>
       </div>
 
-      <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
-        <div className="panel-header bg-white">
-          <div>
-            <h3 className="panel-title">Roteiro de configuração</h3>
-            <p className="panel-subtitle">
-              Comece pelo essencial da operação. Use o avançado apenas para regras técnicas, integrações e restauração.
-            </p>
-          </div>
-          <Badge className="border-slate-200 bg-slate-50 text-slate-700">
-            {mode === "simple" ? "Modo simples" : "Modo avançado"}
-          </Badge>
-        </div>
-        <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
+      <nav aria-label="Seções de configuração" className="rounded-2xl border border-slate-200 bg-white p-3 shadow-panel">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {(mode === "simple" ? SIMPLE_SECTIONS : ADVANCED_SECTIONS).map((section, index) => (
-            <Button
-              key={section.value}
-              variant={configSection === section.value ? "default" : "outline"}
-              className="h-auto justify-start gap-3 rounded-2xl px-4 py-4 text-left"
-              onClick={() => setConfigSection(section.value)}
-            >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-white/80 text-xs font-semibold text-slate-700">
-                {index + 1}
-              </span>
-              <span>
-                <span className="block text-sm font-semibold">{section.label}</span>
-                <span className="block text-xs font-normal opacity-80">{section.help}</span>
-              </span>
+            <Button key={section.value} variant="ghost" aria-pressed={configSection === section.value} className={configSection === section.value ? "h-auto items-start justify-start whitespace-normal rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-left text-primary hover:bg-blue-50" : "h-auto items-start justify-start whitespace-normal rounded-xl border border-transparent px-3 py-3 text-left text-slate-600"} onClick={() => setConfigSection(section.value)}>
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs text-slate-600">{index + 1}</span>
+              <span className="min-w-0"><span className="block text-sm font-semibold">{section.label}</span><span className="mt-0.5 block text-xs font-normal leading-4 text-slate-500">{section.help}</span></span>
             </Button>
           ))}
         </div>
-      </section>
+      </nav>
 
       <div className="grid gap-4">
           {configSection === "governance" ? (

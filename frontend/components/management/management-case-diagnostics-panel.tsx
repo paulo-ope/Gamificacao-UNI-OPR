@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { BarChart3 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -61,7 +62,7 @@ export function ManagementCaseDiagnosticsPanel() {
           value={filters.regional}
           onChange={(event) => setFilters({ ...filters, regional: event.target.value })}
         />
-        <select
+        <Select
           className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm"
           value={filters.status}
           onChange={(event) => setFilters({ ...filters, status: event.target.value })}
@@ -74,7 +75,7 @@ export function ManagementCaseDiagnosticsPanel() {
                 {label}
               </option>
             ))}
-        </select>
+        </Select>
       </div>
       {loading ? (
         <div className="grid gap-4 md:grid-cols-3">
