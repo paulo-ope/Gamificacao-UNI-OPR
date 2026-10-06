@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -191,7 +192,7 @@ export function StructureAuditPanel() {
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                 />
-                <select
+                <Select
                   className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
                   value={severityFilter}
                   onChange={(event) => setSeverityFilter(event.target.value)}
@@ -202,8 +203,8 @@ export function StructureAuditPanel() {
                       {SEVERITY_STYLES[severity].label}
                     </option>
                   ))}
-                </select>
-                <select
+                </Select>
+                <Select
                   className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
                   value={regionalFilter}
                   onChange={(event) => setRegionalFilter(event.target.value)}
@@ -214,8 +215,8 @@ export function StructureAuditPanel() {
                       {regional}
                     </option>
                   ))}
-                </select>
-                <select
+                </Select>
+                <Select
                   className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
                   value={typeFilter}
                   onChange={(event) => setTypeFilter(event.target.value)}
@@ -226,7 +227,7 @@ export function StructureAuditPanel() {
                       {typeLabel(type)}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
             </div>
 

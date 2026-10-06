@@ -116,7 +116,7 @@ export function MultiSelect<T = string>({
           type="button"
           aria-label={ariaLabel}
           className={cn(
-            "flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 text-left text-sm font-normal normal-case tracking-normal text-slate-800 outline-none focus:ring-2 focus:ring-blue-500",
+            "field-control flex h-10 w-full min-w-0 items-center justify-between gap-2 px-3 text-left text-sm font-normal normal-case tracking-normal",
             className,
           )}
         >
@@ -133,13 +133,14 @@ export function MultiSelect<T = string>({
           align="start"
           sideOffset={6}
           collisionPadding={12}
-          className="z-50 flex max-h-[min(28rem,var(--radix-popover-content-available-height))] w-[min(32rem,calc(100vw-2rem))] min-w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-2 shadow-xl"
+          className="z-[80] flex max-h-[min(28rem,var(--radix-popover-content-available-height))] w-[min(32rem,calc(100vw-2rem))] min-w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-2 shadow-floating data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <Command className="flex min-h-0 flex-1 flex-col border-0 shadow-none">
             <CommandInput
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Pesquisar..."
+              aria-label={`Pesquisar ${ariaLabel.toLocaleLowerCase("pt-BR")}`}
               className="h-9 shrink-0"
             />
             {filteredOptions.length ? (
@@ -158,7 +159,7 @@ export function MultiSelect<T = string>({
                 </Button>
               </div>
             ) : null}
-            <CommandList className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">
+            <CommandList role="listbox" aria-label={ariaLabel} aria-multiselectable="true" className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">
               {filteredOptions.map((option) => {
                 const value = getValue(option);
                 const selected = values.includes(value);
@@ -166,10 +167,24 @@ export function MultiSelect<T = string>({
                   <CommandItem
                     key={value}
                     role="option"
+                    tabIndex={0}
                     aria-selected={selected}
+                    onKeyDown={(event) => {
+                      if (event.key === " " || event.key === "Enter") {
+                        event.preventDefault();
+                        toggle(option);
+                      }
+                      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+                        event.preventDefault();
+                        const items = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+                        const index = items.indexOf(event.currentTarget);
+                        const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+                        items[next]?.focus();
+                      }
+                    }}
                     onClick={() => toggle(option)}
                     title={formatOption(option)}
-                    className="flex items-start justify-between gap-3 rounded-lg px-2.5 py-2 hover:bg-slate-50"
+                    className={cn("flex cursor-pointer items-start justify-between gap-3 rounded-lg px-2.5 py-2.5 hover:bg-slate-50 focus-visible:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary", selected && "bg-blue-50/60")}
                   >
                     <span className="min-w-0 flex-1 whitespace-normal break-words leading-snug">
                       {formatOption(option)}

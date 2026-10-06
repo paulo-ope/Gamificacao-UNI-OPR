@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { AlertTriangle, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -152,7 +153,7 @@ export function AuditTrailPanel({ title = "Trilha de ações (quem fez o quê, q
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por ação, entidade ou ID..." className="pl-9" />
         </div>
-        <select
+        <Select
           className="h-10 rounded-md border border-input bg-white px-3 text-sm"
           value={entityFilter}
           onChange={(event) => setEntityFilter(event.target.value)}
@@ -163,7 +164,7 @@ export function AuditTrailPanel({ title = "Trilha de ações (quem fez o quê, q
               {label}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
 
       {error ? (

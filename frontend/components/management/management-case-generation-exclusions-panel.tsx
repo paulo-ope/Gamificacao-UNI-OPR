@@ -1,5 +1,6 @@
 "use client";
 
+import { ModalFrame } from "@/components/ui/modal-frame";
 import { Loader2, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -186,12 +187,12 @@ export function ManagementCaseGenerationExclusionsPanel() {
 
       {draft
         ? createPortal(
-            <div
-              className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
+            <ModalFrame title="Exclusão de cobrança" onClose={() => setDraft(null)}
+              className="fixed inset-0 z-[80] flex items-center justify-center bg-transparent p-4 backdrop-blur-sm"
               role="dialog"
               aria-modal="true"
             >
-              <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+              <div className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
                 <div className="flex items-start justify-between gap-4">
                   <h4 className="text-base font-semibold text-slate-950">Nova exclusão</h4>
                   <Button type="button" variant="ghost" size="sm" onClick={() => setDraft(null)}>
@@ -304,7 +305,7 @@ export function ManagementCaseGenerationExclusionsPanel() {
                   </div>
                 </div>
               </div>
-            </div>,
+            </ModalFrame>,
             document.body
           )
         : null}

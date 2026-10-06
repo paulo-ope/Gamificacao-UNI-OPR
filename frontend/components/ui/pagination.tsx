@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -65,9 +66,10 @@ export function Pagination({
         Página {page} de {safeTotalPages}
         {typeof totalItems === "number" ? ` · ${totalItems} ${itemLabel ?? "itens"}` : null}
       </p>
-      <div className={cn("flex items-center", size === "compact" ? "gap-1.5" : "gap-2")}>
+      <div className={cn("flex flex-wrap items-center", size === "compact" ? "gap-1.5" : "gap-2")}>
         {pageSizeOptions && onPageSizeChange ? (
-          <select
+          <Select
+            aria-label="Itens por página"
             value={String(pageSize ?? pageSizeOptions[0])}
             disabled={disabled}
             onChange={(event) => onPageSizeChange(Number(event.target.value))}
@@ -78,7 +80,7 @@ export function Pagination({
                 {size}/página
               </option>
             ))}
-          </select>
+          </Select>
         ) : null}
         <Button
           type="button"

@@ -1,11 +1,13 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, Search, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Avatar, MetricCard } from "@/components/gamification/config-ui";
 import { CollaboratorBalanceHistorySheet } from "@/components/gamification/collaborator-balance-history-sheet";
+import { Loading } from "@/components/ui/loading";
 import { EmptyState } from "@/components/ui/empty-state";
 import { InfoHint } from "@/components/gamification/info-hint";
 import { Input } from "@/components/ui/input";
@@ -123,13 +125,14 @@ function BucketSection({
   const maxDebt = Math.max(1, ...groups.map((group) => Math.abs(group.totalPoints)));
 
   return (
-    <div className="grid gap-3">
+    <section className="grid min-w-0 gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-panel sm:p-5">
       <div className="flex items-center gap-2">
         <h4 className="text-sm font-semibold text-slate-950">{config.title}</h4>
         <InfoHint ariaLabel={`Ajuda sobre ${config.title}`} description={config.description} />
-        <span className="text-xs text-slate-400">({groups.length})</span>
+        <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">{groups.length} colaboradores</span>
       </div>
 
+      <p className="-mt-2 text-xs leading-5 text-slate-500">{config.description}</p>
       {groups.length > 0 ? (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
           <MetricCard title={config.countLabel} value={groups.length} />
@@ -144,8 +147,8 @@ function BucketSection({
 
       <div className="table-frame overflow-hidden rounded-xl border border-slate-200 bg-white">
         <Table>
-          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-            <TableRow className="border-slate-700 hover:bg-slate-900">
+          <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+            <TableRow className="border-slate-200 hover:bg-slate-50">
               <TableHead>Colaborador</TableHead>
               <TableHead>Garantias</TableHead>
               <TableHead>Impacto no pagamento</TableHead>
@@ -179,13 +182,13 @@ function BucketSection({
                     ) : null}
                   </TableCell>
                   <TableCell>
-                    <div className={isReviewOnly ? "font-medium text-violet-700" : "font-semibold text-red-600"}>
+                    <div className={isReviewOnly ? "font-medium text-violet-700" : group.totalPoints > 0 ? "font-semibold text-emerald-700" : "font-semibold text-red-600"}>
                       {isReviewOnly ? "Valor a definir" : formatSignedPoints(group.totalPoints)}
                     </div>
                     {!isReviewOnly && group.totalPoints !== 0 ? (
                       <div className="mt-1.5 h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
                         <div
-                          className={`h-full rounded-full ${severityPct > 60 ? "bg-red-500" : severityPct > 25 ? "bg-orange-400" : "bg-amber-300"}`}
+                          className={`h-full rounded-full ${group.totalPoints > 0 ? "bg-emerald-500" : severityPct > 60 ? "bg-red-500" : severityPct > 25 ? "bg-orange-400" : "bg-amber-300"}`}
                           style={{ width: `${severityPct}%` }}
                         />
                       </div>
@@ -215,7 +218,7 @@ function BucketSection({
           </TableBody>
         </Table>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -290,10 +293,11 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
   );
 
   return (
-    <div className="grid gap-4 p-3">
+    <div className="grid min-w-0 gap-4">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-panel sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-slate-950">Saldo de pontos</h3>
+          <h2 className="text-xl font-semibold text-slate-950">Saldo de pontos</h2>
           <InfoHint
             ariaLabel="Ajuda sobre saldo de pontos"
             description="Separado em três grupos: o que vai ser descontado se este fechamento for pago agora, o que já foi de fato descontado (só depois de pago) e o que está pendente mas com alvo num mês futuro. Clique em Detalhar para auditar todas as O.S de garantia de um colaborador."
@@ -305,14 +309,16 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-56 flex-1">
+      <p className="mt-2 text-sm text-slate-500">Acompanhe os ajustes de garantia deste período e consulte o histórico de cada colaborador.</p>
+      <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-4">
+        <div className="relative min-w-0 w-full sm:min-w-56 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar colaborador..." className="pl-9" />
+          <Input aria-label="Buscar colaborador no saldo" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar colaborador..." className="pl-9" />
         </div>
         <div className="flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1">
           <button
             type="button"
+            aria-pressed={statusFilter === "all"}
             onClick={() => setStatusFilter("all")}
             className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
               statusFilter === "all" ? "bg-uni-royal text-white" : "text-slate-600 hover:bg-slate-100"
@@ -322,6 +328,7 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
           </button>
           <button
             type="button"
+            aria-pressed={statusFilter === "review"}
             onClick={() => setStatusFilter("review")}
             className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
               statusFilter === "review" ? "bg-uni-royal text-white" : "text-slate-600 hover:bg-slate-100"
@@ -330,32 +337,35 @@ export function PointBalancePanel({ isAdmin, calculationRunId, referenceMonth, r
             <ShieldAlert className="h-3 w-3" />
             Em revisão
             {totalRequiresReview > 0 ? (
-              <span className={`ml-0.5 rounded-full px-1.5 text-[10px] ${statusFilter === "review" ? "bg-white/25" : "bg-blue-50 text-uni-royal"}`}>
+              <span className={`ml-0.5 rounded-full px-1.5 text-[11px] ${statusFilter === "review" ? "bg-white/25" : "bg-blue-50 text-uni-royal"}`}>
                 {totalRequiresReview}
               </span>
             ) : null}
           </button>
         </div>
-        <select
+        <Select
           value={sortMode}
           onChange={(event) => setSortMode(event.target.value as SortMode)}
-          className="h-9 rounded-full border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600"
+          className="h-10 w-full rounded-lg sm:w-auto"
+          aria-label="Ordenar saldo de pontos"
           title="Ordenar por"
         >
           <option value="severity">Maior dívida primeiro</option>
           <option value="recent">Mais recentes primeiro</option>
           <option value="name">Nome (A-Z)</option>
-        </select>
+        </Select>
       </div>
 
+      </section>
+
       {error ? (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           {error}
         </div>
       ) : null}
 
-      {sectionsData.map(({ config, groups }) => (
+      {loading && !entries.length ? <Loading label="Carregando saldo de pontos..." /> : sectionsData.map(({ config, groups }) => (
         <BucketSection key={config.bucket} config={config} groups={groups} onOpenHistory={setHistoryCollaboratorId} />
       ))}
 

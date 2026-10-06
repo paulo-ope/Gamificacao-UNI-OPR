@@ -1,8 +1,9 @@
 "use client";
 
 import { Bell, Loader2 } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -28,7 +29,7 @@ export function NotificationBell() {
   const [items, setItems] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const refreshCount = useCallback(() => {
     void api.notificationsUnreadCount().then((result) => setUnreadCount(result.unread_count)).catch(() => undefined);
@@ -44,26 +45,15 @@ export function NotificationBell() {
     };
   }, [refreshCount]);
 
-  useEffect(() => {
-    if (!open) return;
-    function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
-
-  async function toggleOpen() {
-    const next = !open;
+  async function changeOpen(next: boolean) {
     setOpen(next);
     if (next) {
       setLoading(true);
+      setError(null);
       try {
         setItems(await api.notifications(30));
       } catch {
-        setItems([]);
+        setError("Não foi possível carregar as notificações.");
       } finally {
         setLoading(false);
       }
@@ -92,17 +82,17 @@ export function NotificationBell() {
   }
 
   return (
-    <div className="relative" ref={containerRef}>
-      <Button type="button" variant="ghost" size="sm" className="relative h-9 w-9 p-0" onClick={() => void toggleOpen()} aria-label="Notificações">
+    <Popover.Root open={open} onOpenChange={(next) => void changeOpen(next)}>
+      <Popover.Trigger asChild><Button type="button" variant="ghost" size="sm" className="relative h-9 w-9 p-0" aria-label="Notificações">
         <Bell className="h-4.5 w-4.5" />
         {unreadCount > 0 ? (
           <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
             {unreadCount > 99 ? "99+" : unreadCount}
           </span>
         ) : null}
-      </Button>
-      {open ? (
-        <div className="absolute right-0 top-11 z-50 w-80 rounded-xl border border-slate-200 bg-white shadow-xl">
+      </Button></Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="end" sideOffset={8} collisionPadding={12} aria-label="Notificações" className="z-[80] w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-floating">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
             <p className="text-sm font-semibold text-slate-900">Notificações</p>
             {unreadCount > 0 ? (
@@ -111,13 +101,15 @@ export function NotificationBell() {
               </button>
             ) : null}
           </div>
-          <div className="max-h-96 overflow-y-auto">
+          <div className="max-h-[min(24rem,60dvh)] overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
               </div>
+            ) : error ? (
+              <div className="space-y-3 p-4"><p role="alert" className="text-sm text-red-700">{error}</p><Button variant="outline" size="sm" onClick={() => void changeOpen(true)}>Tentar novamente</Button></div>
             ) : items.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-slate-400">Nenhuma notificação ainda.</p>
+              <p className="px-4 py-8 text-center text-sm text-slate-500">Nenhuma notificação ainda.</p>
             ) : (
               items.map((notification) => (
                 <button
@@ -138,8 +130,8 @@ export function NotificationBell() {
               ))
             )}
           </div>
-        </div>
-      ) : null}
-    </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

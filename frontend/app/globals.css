@@ -13,25 +13,29 @@
     --uni-cyan: #02fffa;
     --uni-rich-black: #151f27;
 
-    --background: 216 100% 98%;
-    --foreground: 204 30% 12%;
+    --background: 220 27% 97%;
+    --foreground: 222 40% 15%;
     --card: 0 0% 100%;
     --card-foreground: 204 30% 12%;
     --popover: 0 0% 100%;
     --popover-foreground: 204 30% 12%;
-    --primary: 223 100% 59%;
+    --primary: 225 84% 52%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 171 70% 94%;
-    --secondary-foreground: 235 99% 27%;
+    --secondary: 225 65% 96%;
+    --secondary-foreground: 225 65% 35%;
     --muted: 216 45% 95%;
     --muted-foreground: 207 14% 38%;
-    --accent: 38 91% 56%;
-    --accent-foreground: 204 30% 12%;
+    --accent: 225 65% 96%;
+    --accent-foreground: 225 65% 35%;
     --destructive: 0 74% 48%;
     --destructive-foreground: 0 0% 100%;
-    --border: 222 56% 87%;
-    --input: 222 56% 87%;
-    --ring: 179 100% 50%;
+    --border: 220 22% 90%;
+    --input: 218 23% 82%;
+    --ring: 225 84% 52%;
+    --radius-control: 0.625rem;
+    --radius-panel: 1rem;
+    --shadow-panel: 0 2px 8px -4px rgb(15 23 42 / 0.12), 0 1px 2px rgb(15 23 42 / 0.03);
+    --shadow-floating: 0 20px 60px -16px rgb(15 23 42 / 0.24);
 
     /* Altura real do <header> fixo de `WorkspaceAppShell` (components/workspace/app-shell.tsx) -
        fonte ÚNICA para qualquer elemento sticky que precise começar logo abaixo dele (barra de
@@ -53,18 +57,55 @@
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans), Arial, sans-serif;
     letter-spacing: 0;
+    line-height: 1.5;
   }
 
   html,
   body {
     height: 100%;
-    overflow-x: hidden;
+    /* Sticky headers must use the viewport, not a hidden-overflow ancestor. */
+    overflow-x: clip;
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 3px;
+  }
+
+  ::selection { background: #dbe5ff; color: #142c76; }
+
+  button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  input, select, textarea { accent-color: hsl(var(--primary)); }
+
+  [aria-invalid="true"] {
+    border-color: hsl(var(--destructive));
   }
 }
 
 @layer components {
   .uni-gradient {
-    background: linear-gradient(135deg, var(--uni-midnight) 0%, var(--uni-impact) 52%, var(--uni-turquoise) 100%);
+    background: radial-gradient(ellipse at 100% 100%, #157879 0%, transparent 58%), linear-gradient(145deg, #101e46 0%, #143eae 100%);
+  }
+
+  .workspace-surface {
+    background: radial-gradient(ellipse at 75% 0%, #eaf0ff 0%, transparent 42%), hsl(var(--background));
+  }
+
+  .field-control {
+    @apply border border-input bg-white text-sm text-foreground transition-colors placeholder:text-slate-400 hover:border-slate-400 focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 disabled:opacity-70;
+    border-radius: var(--radius-control);
+  }
+
+  .field-control[aria-invalid="true"] {
+    @apply border-destructive focus-visible:ring-destructive/20;
+  }
+
+  .skip-link {
+    @apply fixed left-4 top-4 z-[110] -translate-y-24 rounded-lg bg-white px-4 py-3 font-semibold text-primary shadow-lg focus:translate-y-0;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded-lg bg-slate-200/70;
   }
 
   .panel {
@@ -86,4 +127,18 @@
   .table-frame {
     @apply w-full overflow-x-auto;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (pointer: coarse) {
+  button:not([role="checkbox"]):not([role="switch"]), [role="tab"], select { min-height: 44px; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px; }
 }

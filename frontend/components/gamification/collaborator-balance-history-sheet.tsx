@@ -96,7 +96,7 @@ function WarrantyTraceTimeline({
         title="Ver auditoria da O.S original"
       >
         <span className="truncate font-semibold text-slate-800">{entry.original_os_code}</span>
-        <span className="whitespace-nowrap text-[10px] text-slate-400">{originPeriod ? `pago ${originPeriod}` : "original"}</span>
+        <span className="whitespace-nowrap text-[11px] text-slate-400">{originPeriod ? `pago ${originPeriod}` : "original"}</span>
       </button>
       <div className="h-px w-3 shrink-0 bg-slate-300" />
       <button
@@ -106,7 +106,7 @@ function WarrantyTraceTimeline({
         title="Ver auditoria da O.S de garantia"
       >
         <span className="truncate font-semibold text-slate-800">{entry.related_os_code ?? "-"}</span>
-        <span className="whitespace-nowrap text-[10px] text-slate-400">garantia</span>
+        <span className="whitespace-nowrap text-[11px] text-slate-400">garantia</span>
       </button>
       <div className="h-px w-3 shrink-0 bg-slate-300" />
       <div className={`shrink-0 rounded-lg border px-2 py-1 text-center ${TIMELINE_STATUS_TONE[statusNode.tone]}`}>
@@ -328,8 +328,8 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Histórico mês a mês</div>
               <div className="table-frame overflow-hidden rounded-lg border border-slate-200">
                 <Table>
-                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                    <TableRow className="border-slate-200 hover:bg-slate-50">
                       <TableHead>Mês</TableHead>
                       <TableHead>Situação</TableHead>
                       <TableHead>O.S</TableHead>
@@ -378,8 +378,8 @@ export function CollaboratorBalanceHistorySheet({ collaboratorId, open, onOpenCh
           </div>
           <div className="table-frame overflow-hidden rounded-lg border border-slate-200">
             <Table>
-            <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-              <TableRow className="border-slate-700 hover:bg-slate-900">
+            <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+              <TableRow className="border-slate-200 hover:bg-slate-50">
                 <TableHead>Status</TableHead>
                 <TableHead>Tipo</TableHead>
                 <TableHead>Impacto no pagamento</TableHead>

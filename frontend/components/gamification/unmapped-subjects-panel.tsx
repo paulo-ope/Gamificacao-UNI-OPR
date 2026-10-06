@@ -189,7 +189,7 @@ export function UnmappedSubjectsPanel({
         Escolha o Tipo Geral e o grupo corretos de cada assunto e recalcule para atualizar ranking, auditoria e valor a ser pago.
       </div>
 
-      <div className="grid gap-3 border-b bg-white px-5 py-4 lg:grid-cols-[minmax(200px,1fr)_minmax(240px,1fr)_auto_auto_auto] lg:items-end">
+      <div className="grid gap-3 border-b bg-white px-5 py-4 sm:grid-cols-2 2xl:grid-cols-[minmax(200px,1fr)_minmax(240px,1fr)_auto_auto_auto] sm:items-end">
         <div className="grid gap-2">
           <Label>Aplicar Tipo Geral aos assuntos filtrados</Label>
           <AppCombobox
@@ -248,8 +248,8 @@ export function UnmappedSubjectsPanel({
 
       <div className="table-frame">
         <Table>
-          <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-            <TableRow className="border-slate-700 hover:bg-slate-900">
+          <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+            <TableRow className="border-slate-200 hover:bg-slate-50">
               <TableHead>Tipo Geral</TableHead>
               <TableHead>Assunto</TableHead>
               <TableHead>Qtd O.S</TableHead>

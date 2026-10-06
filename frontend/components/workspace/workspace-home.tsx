@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { WorkspaceModuleGrid } from "@/components/workspace/module-grid";
+import { WorkspaceLoading } from "@/components/ui/workspace-loading";
 import { Button } from "@/components/ui/button";
 import { useVisibleModules } from "@/hooks/use-visible-modules";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
@@ -31,23 +32,15 @@ export function WorkspaceHome() {
   }, [goesToOverview, router]);
 
   if (checking && !user) {
-    return (
-      <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">
-        Carregando UNI Workspace...
-      </main>
-    );
+    return <WorkspaceLoading label="Carregando UNI Workspace..." />;
   }
   if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} showPortalLink />;
   if (goesToOverview) {
-    return (
-      <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">
-        Abrindo a Visão Geral...
-      </main>
-    );
+    return <WorkspaceLoading label="Abrindo a Visão Geral..." />;
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
+    <main className="workspace-surface min-h-screen">
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4">
           <div className="flex items-center gap-3">

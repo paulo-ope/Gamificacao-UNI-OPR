@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -68,7 +69,7 @@ export function PeopleStructurePanel({
           <h3 className="text-lg font-semibold text-slate-950">Colaboradores</h3>
           <div className="flex flex-col gap-2 sm:flex-row">
             <Input value={personSearch} placeholder="Buscar pessoa" onChange={(event) => onPersonSearchChange(event.target.value)} />
-            <select
+            <Select
               value={personStatusFilter}
               className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               onChange={(event) => onPersonStatusFilterChange(event.target.value)}
@@ -77,7 +78,7 @@ export function PeopleStructurePanel({
               {(peopleStructure?.statuses || []).map((status) => (
                 <option key={status} value={status}>{STRUCTURE_STATUS_LABELS[status] || status}</option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
         <div className="overflow-x-auto p-5">

@@ -1,5 +1,7 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 
 import { Input } from "@/components/ui/input";
@@ -47,7 +49,7 @@ export function CpkRuleCard({ cpkPeriod, setCpkPeriod }: Props) {
   }
 
   return (
-    <section className="mt-4 rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+    <section className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-panel">
       <div className="panel-header">
         <div>
           <h3 className="panel-title">Regra de CPK por competência</h3>
@@ -58,25 +60,25 @@ export function CpkRuleCard({ cpkPeriod, setCpkPeriod }: Props) {
         </div>
       </div>
       <div className="grid gap-4 border-t border-slate-200 p-5 md:grid-cols-3">
-        <div className="grid gap-2">
+        <Field className="grid gap-2">
           <Label>Ano de referência</Label>
           <Input
             inputMode="numeric"
             value={cpkPeriod.year}
             onChange={(event) => setCpkPeriod({ ...cpkPeriod, year: Number(event.target.value) || cpkPeriod.year })}
           />
-        </div>
-        <div className="grid gap-2">
+        </Field>
+        <Field className="grid gap-2">
           <Label>Mês de referência</Label>
           <Input
             inputMode="numeric"
             value={cpkPeriod.month}
             onChange={(event) => setCpkPeriod({ ...cpkPeriod, month: Number(event.target.value) || cpkPeriod.month })}
           />
-        </div>
+        </Field>
         <div className="grid gap-2">
           <Label htmlFor="cpk-rule-select">Regra de CPK</Label>
-          <select
+          <Select
             id="cpk-rule-select"
             value={rule ?? ""}
             disabled={rule === null}
@@ -89,7 +91,7 @@ export function CpkRuleCard({ cpkPeriod, setCpkPeriod }: Props) {
                 {CPK_RULE_LABEL[option]}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         <div className="md:col-span-3">
           {rule ? <p className="text-sm text-slate-600">{CPK_RULE_HELP[rule]}</p> : null}

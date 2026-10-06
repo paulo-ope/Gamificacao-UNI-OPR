@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Inbox } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -23,7 +24,7 @@ export interface EmptyStateProps {
 }
 
 export function EmptyState({
-  icon,
+  icon = <Inbox className="h-6 w-6" aria-hidden="true" />,
   title,
   description,
   action,
@@ -37,15 +38,15 @@ export function EmptyState({
       className={cn(
         "text-center",
         variant === "card"
-          ? "rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 shadow-sm"
+          ? "rounded-2xl border border-dashed border-slate-300 bg-slate-50/50 px-6 py-12"
           : "py-14",
         className,
       )}
     >
-      {icon ? <div className="mx-auto w-fit text-slate-300">{icon}</div> : null}
+      {icon ? <div className="mx-auto flex w-fit items-center justify-center rounded-2xl border border-slate-200 bg-white p-3 text-slate-500 shadow-sm">{icon}</div> : null}
       <h3 className={titleClassName ?? cn("font-semibold text-slate-800", icon ? "mt-3" : undefined)}>{title}</h3>
       {description ? (
-        <p className={descriptionClassName ?? "mt-1 text-sm text-slate-500"}>{description}</p>
+        <p className={descriptionClassName ?? "mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500"}>{description}</p>
       ) : null}
       {action ? <div className="mt-4">{action}</div> : null}
     </div>

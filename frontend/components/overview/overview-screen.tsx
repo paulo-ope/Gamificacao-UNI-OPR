@@ -407,17 +407,7 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
 
   return (
     <div className="space-y-4">
-      <OverviewFilterBar
-        filters={filters}
-        visible={visible}
-        options={options.data}
-        supportOptions={supportOptions.data}
-        period={period}
-        defaultFilter={defaultFilter}
-        onChange={update}
-        onResetToDefault={resetToDefault}
-        onSaveAsDefault={defaultFilter?.can_manage ? saveAsDefault : undefined}
-      />
+
 
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px] text-slate-500">
         <span>
@@ -440,6 +430,30 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           ) : null}
         </div>
       </div>
+
+      <OverviewKpiStrip
+        overview={overview.error ? null : overview.data}
+        previous={previousOverview.error ? null : previousOverview.data}
+        previousLabel={previousLabel}
+        backlog={matrix.data?.total ?? null}
+        canSeeSla={canSeeSla}
+      />
+      {overview.error ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{overview.error}</p>
+      ) : null}
+
+
+      <OverviewFilterBar
+        filters={filters}
+        visible={visible}
+        options={options.data}
+        supportOptions={supportOptions.data}
+        period={period}
+        defaultFilter={defaultFilter}
+        onChange={update}
+        onResetToDefault={resetToDefault}
+        onSaveAsDefault={defaultFilter?.can_manage ? saveAsDefault : undefined}
+      />
 
       {/*
         Fixa (sticky) logo abaixo do cabeçalho do ecossistema (`app-shell.tsx`, `sticky top-0
@@ -472,16 +486,6 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         </div>
       ) : null}
 
-      <OverviewKpiStrip
-        overview={overview.error ? null : overview.data}
-        previous={previousOverview.error ? null : previousOverview.data}
-        previousLabel={previousLabel}
-        backlog={matrix.data?.total ?? null}
-        canSeeSla={canSeeSla}
-      />
-      {overview.error ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{overview.error}</p>
-      ) : null}
 
       {trends.error ? (
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{trends.error}</p>

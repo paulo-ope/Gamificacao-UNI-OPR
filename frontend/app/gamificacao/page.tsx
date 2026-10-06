@@ -2,6 +2,7 @@
 
 import {
   ClipboardList,
+  CalendarDays,
   HelpCircle,
   RefreshCw,
   Settings2,
@@ -1040,13 +1041,21 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
   if (can("orders:import") || can("scoring:write")) visibleTabs.add("pending");
   if (can("scoring:write")) visibleTabs.add("config");
   const isPaidPeriod = summary?.run?.status === "paid";
+  const activeScreen = GAMIFICATION_NAV_ITEMS.find((item) => item.value === activeTab);
 
   return (
-    <div className="min-w-0">
-      {can("calculation:run") ? (
-        <div className="mb-3 flex justify-end">
+    <div className="gamification-workspace min-w-0">
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs text-slate-500">Gamificação <span aria-hidden="true" className="mx-1.5">/</span> <span className="font-medium text-slate-800">{activeScreen?.label ?? "Fechamento"}</span></p>
+            <p className="mt-1 text-sm text-slate-600">{activeScreen?.description}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+          {summary?.run ? <Badge className="h-9 gap-2 px-3"><CalendarDays className="h-4 w-4" />{String(summary.run.reference_month).padStart(2, "0")}/{summary.run.reference_year}</Badge> : null}
+          {can("calculation:run") ? (
           <Button
             type="button"
+            variant="outline"
             onClick={recalculate}
             disabled={busy || loading}
             title={isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
@@ -1055,8 +1064,9 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
             <RefreshCw className={busy || loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
             {isPaidPeriod ? "Criar revisão" : "Recalcular pontuação"}
           </Button>
+          ) : null}
+          </div>
         </div>
-      ) : null}
 
       <StatusToast
         error={error}
@@ -1104,7 +1114,8 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
             </div>
           </section>
         ) : (
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-1 flex-col gap-3">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-w-0 flex-1 flex-col gap-4">
+            <TabsList aria-label="Abas da gamificação" className="h-auto max-w-full justify-start overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 lg:hidden">{GAMIFICATION_NAV_ITEMS.filter((item) => visibleTabs.has(item.value)).map((item) => <TabsTrigger key={item.value} value={item.value} className="shrink-0 gap-2 px-3 py-2"><item.icon className="h-4 w-4" />{item.label}</TabsTrigger>)}</TabsList>
             <TabsContent value="closure" className="mt-0 flex-1 pr-1">
               {activeTab === "closure" ? (
                 !summary ? (
@@ -1271,6 +1282,9 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
                     </div>
                   </section>
 
+                  <Tabs defaultValue="subjects" className="min-w-0 space-y-4">
+                    <TabsList aria-label="Tipo de pendência" className="h-auto gap-1 p-1"><TabsTrigger value="subjects" className="gap-2 px-4 py-2">Assuntos <Badge>{unmappedSubjects.length}</Badge></TabsTrigger><TabsTrigger value="diagnoses" className="gap-2 px-4 py-2">Diagnósticos <Badge>{unmappedDiagnoses.length}</Badge></TabsTrigger></TabsList>
+                    <TabsContent value="subjects" forceMount className="mt-0 data-[state=inactive]:hidden">
                   <UnmappedSubjectsPanel
                     groups={groups}
                     subjects={unmappedSubjects}
@@ -1315,6 +1329,8 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
                     }
                   />
 
+                    </TabsContent>
+                    <TabsContent value="diagnoses" forceMount className="mt-0 data-[state=inactive]:hidden">
                   <UnmappedDiagnosesPanel
                     diagnoses={unmappedDiagnoses}
                     onConfigureDiagnosis={(diagnosisName, payload) =>
@@ -1338,6 +1354,8 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
                       }, `${items.length} regra(s) de diagnóstico salvas em massa.`)
                     }
                   />
+                    </TabsContent>
+                  </Tabs>
                 </div>
                 )
               ) : null}
@@ -1345,7 +1363,7 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
 
             <TabsContent value="config" className="mt-0 flex-1 pr-1">
               {activeTab === "config" ? (
-                <Tabs value={configTab} onValueChange={setConfigTab} className="grid gap-4">
+                <Tabs value={configTab} onValueChange={setConfigTab} className="grid min-w-0 grid-cols-1 gap-4">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
                     <TabsList
                       className={`grid h-auto gap-2 rounded-2xl bg-slate-50 p-1 ${
@@ -2058,8 +2076,6 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
     </div>
   );
 }
-
-
 
 
 

@@ -45,22 +45,22 @@ function deltaPresentation(delta: SummaryMetricDelta) {
 export function SummaryMetric({ label, value, tone = "slate", icon: Icon, hint, delta, className }: SummaryMetricProps) {
   const deltaView = delta ? deltaPresentation(delta) : null;
   return (
-    <div className={cn("flex min-w-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm", className)}>
+    <div className={cn("flex min-w-0 items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-panel", className)}>
       {Icon ? (
-        <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", toneSoftBgClass(tone))}>
+        <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-xl", toneSoftBgClass(tone))}>
           <Icon className="h-4 w-4" />
         </div>
       ) : null}
       <div className="min-w-0">
-        <p className="truncate text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
-        <p className={cn("truncate text-sm font-semibold", toneTextClass(tone))}>{value}</p>
+        <p className="text-xs font-medium leading-5 text-slate-600">{label}</p>
+        <p className={cn("mt-1 break-words text-2xl font-semibold leading-8 tabular-nums", toneTextClass(tone))}>{value}</p>
         {deltaView ? (
-          <p className={cn("mt-0.5 flex items-center gap-1 truncate text-[10px] font-medium leading-4", deltaView.className)}>
+          <p className={cn("mt-2 flex items-start gap-1 text-xs font-medium leading-5", deltaView.className)}>
             <deltaView.Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
-            <span className="truncate">{deltaView.text}</span>
+            <span>{deltaView.text}</span>
           </p>
         ) : null}
-        {hint ? <p className="mt-0.5 truncate text-[10px] leading-4 text-slate-500">{hint}</p> : null}
+        {hint ? <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p> : null}
       </div>
     </div>
   );

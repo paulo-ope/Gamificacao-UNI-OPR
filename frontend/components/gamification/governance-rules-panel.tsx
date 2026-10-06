@@ -68,7 +68,7 @@ export function GovernanceRulesPanel({
   }
 
   return (
-    <Card className="rounded-2xl border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+    <Card className="rounded-2xl border-slate-200 bg-white shadow-panel">
       <CardHeader className="flex min-w-0 flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div>
           <CardTitle className="text-base font-semibold text-foreground">Governança da Apuração</CardTitle>
@@ -172,8 +172,8 @@ export function GovernanceRulesPanel({
         ) : null}
         <div className="table-frame overflow-hidden rounded-2xl border border-slate-200">
           <Table>
-            <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-              <TableRow className="border-slate-700 hover:bg-slate-900">
+            <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+              <TableRow className="border-slate-200 hover:bg-slate-50">
                 <TableHead>Saúde</TableHead>
                 <TableHead>SLA min.</TableHead>
                 <TableHead>Reinc. max.</TableHead>

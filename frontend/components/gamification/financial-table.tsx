@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -20,6 +21,7 @@ type FinancialTableProps = {
 };
 
 export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, helpText }: FinancialTableProps) {
+  const [showAll, setShowAll] = useState(false);
   const totalOrders = rows.reduce((total, row) => total + Number(row.orders ?? 0), 0);
   const totalPayment = rows.reduce((total, row) => total + Number(row.estimated_payment ?? 0), 0);
 
@@ -29,7 +31,7 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-semibold text-slate-950">{title}</h3>
+              <h3 className="text-sm font-semibold leading-5 text-slate-950">{title}</h3>
               <InfoHint ariaLabel={`Ajuda sobre ${title}`} description={helpText} />
             </div>
             <p className="mt-1 text-sm text-slate-500">{formatNumber(rows.length)} item(ns)</p>
@@ -40,6 +42,7 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
             size="sm"
             className="h-8 w-8 rounded-xl p-0 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
             onClick={onToggle}
+            aria-expanded={!collapsed}
             title={collapsed ? "Expandir todos" : "Recolher todos"}
             aria-label={collapsed ? "Expandir todos" : "Recolher todos"}
           >
@@ -55,15 +58,15 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
       {!collapsed ? (
         <div className="table-frame px-2 py-2">
           <Table>
-            <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-              <TableRow className="border-slate-700 hover:bg-slate-900">
+            <TableHeader className="sticky top-0 z-10 bg-slate-50">
+              <TableRow className="hover:bg-slate-50">
                 <TableHead>Dimensão</TableHead>
                 <TableHead>O.S</TableHead>
                 <TableHead>Valor a ser pago</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.slice(0, 8).map((row, index) => (
+              {(showAll ? rows : rows.slice(0, 8)).map((row, index) => (
                 <TableRow key={`${title}-${index}`}>
                   <TableCell className="min-w-52">
                     <div className="flex items-start gap-3">
@@ -88,6 +91,7 @@ export function FinancialTable({ title, rows, labelKey, collapsed, onToggle, hel
               ) : null}
             </TableBody>
           </Table>
+          {rows.length > 8 ? <div className="border-t border-slate-100 px-2 pt-3"><Button type="button" variant="ghost" size="sm" onClick={() => setShowAll((current) => !current)}>{showAll ? "Mostrar os primeiros 8" : `Ver todos os ${rows.length} registros`}</Button></div> : null}
         </div>
       ) : (
         <div className="border-t bg-slate-50/70 px-4 py-3 text-sm text-slate-500">Painel recolhido. Use a seta para abrir os itens do recorte atual.</div>

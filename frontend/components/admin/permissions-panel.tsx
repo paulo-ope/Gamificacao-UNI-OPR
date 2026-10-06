@@ -1,5 +1,7 @@
 "use client";
 
+import { ModalFrame } from "@/components/ui/modal-frame";
+import { Select } from "@/components/ui/select";
 import { useMemo, useState } from "react";
 import { KeyRound, Pencil, Plus, Search, ShieldAlert, Trash2, X } from "lucide-react";
 
@@ -282,13 +284,13 @@ export function PermissionsPanel({ permissions, canWritePermissions, saving, onC
       </div>
 
       {draft ? (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/35 p-0 sm:items-center sm:p-4"
+        <ModalFrame title="Permissão" onClose={() => setDraft(null)}
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-transparent p-0 sm:items-center sm:p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="permission-form-title"
         >
-          <div className="w-full max-w-xl rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl">
+          <div className="max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl">
             <div className="flex items-start justify-between gap-3">
               <h3 id="permission-form-title" className="text-lg font-semibold text-slate-950">
                 {editingKey ? `Editar permissão: ${editingKey}` : "Nova permissão própria"}
@@ -331,7 +333,7 @@ export function PermissionsPanel({ permissions, canWritePermissions, saving, onC
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="permission-module">Agrupar no módulo</Label>
-                <select
+                <Select
                   id="permission-module"
                   value={draft.module_key}
                   onChange={(event) => setDraft({ ...draft, module_key: event.target.value })}
@@ -343,7 +345,7 @@ export function PermissionsPanel({ permissions, canWritePermissions, saving, onC
                       {module.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="permission-description">Para que serve (opcional)</Label>
@@ -386,7 +388,7 @@ export function PermissionsPanel({ permissions, canWritePermissions, saving, onC
               </Button>
             </div>
           </div>
-        </div>
+        </ModalFrame>
       ) : null}
     </div>
   );

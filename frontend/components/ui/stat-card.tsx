@@ -27,12 +27,12 @@ export function SummaryCard({
     accent === "highlight" ? "text-uni-royal" : accent === "warning" ? "text-amber-700" : "text-slate-950";
 
   return (
-    <div className={cn("rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]", className)}>
-      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+    <div className={cn("rounded-2xl border border-slate-200 bg-white p-4 shadow-panel", className)}>
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500">
         {icon}
         {label}
       </div>
-      <div className={cn("mt-3 text-2xl font-semibold", accentClass)}>{value}</div>
+      <div className={cn("mt-3 text-3xl font-semibold tabular-nums", accentClass)}>{value}</div>
       <div className="mt-1 text-sm text-slate-500">{hint}</div>
     </div>
   );

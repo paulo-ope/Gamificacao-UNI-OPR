@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import {
   type LucideIcon,
   ArrowDownRight,
@@ -542,14 +543,14 @@ export function OpaGlobalFilters({
           <div className="col-span-full grid gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-lg md:grid-cols-2 xl:grid-cols-4">
             <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
               Data usada
-              <select
+              <Select
                 value={filters.date_basis ?? "opened_at"}
                 onChange={(event) => onFilterChange({ date_basis: event.target.value as "opened_at" | "closed_at", page: 1 })}
                 className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
               >
                 <option value="opened_at">Abertura</option>
                 <option value="closed_at">Encerramento</option>
-              </select>
+              </Select>
             </label>
             <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
               Busca
@@ -564,7 +565,7 @@ export function OpaGlobalFilters({
               <FilterMultiSelect label="Etiqueta" value={filters.tag_id} options={options?.tags ?? []} onChange={(value) => onFilterChange({ tag_id: value, page: 1 })} />
               <label className="grid min-w-0 gap-1.5 text-[11px] font-medium text-slate-600">
                 Participação bot/humano
-                <select
+                <Select
                   value={filters.bot_human ?? ""}
                   onChange={(event) => onFilterChange({ bot_human: (event.target.value || undefined) as SupportOpaBotHumanFilter | undefined, page: 1 })}
                   className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
@@ -576,7 +577,7 @@ export function OpaGlobalFilters({
                   <option value="bot_only">Só bot (sem humano)</option>
                   <option value="handoff">Handoff bot → humano</option>
                   <option value="unclassified">Não classificado</option>
-                </select>
+                </Select>
               </label>
               <div className="grid min-w-0 gap-1.5 md:col-span-2">
                 <span className="text-[11px] font-medium text-slate-600">

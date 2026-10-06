@@ -1,5 +1,7 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { Select } from "@/components/ui/select";
 import { AlertTriangle, Building2, CheckCircle2, IdCard, Loader2, Mail, Phone, Search, ShieldCheck, UserPlus, UserRound } from "lucide-react";
 import { useState } from "react";
 
@@ -220,9 +222,9 @@ export function IxcCpfInvitePanel({ people, invites, onInviteCreated }: Props) {
             ) : null}
 
             <div className="grid gap-4 border-t border-uni-royal/15 pt-4 sm:grid-cols-2">
-              <div className="grid gap-1.5">
+              <Field className="grid gap-1.5">
                 <Label>Vincular ao colaborador</Label>
-                <select
+                <Select
                   value={selectedCollaboratorId}
                   className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
                   onChange={(event) => setSelectedCollaboratorId(event.target.value)}
@@ -234,11 +236,11 @@ export function IxcCpfInvitePanel({ people, invites, onInviteCreated }: Props) {
                       {person.id === result.local_collaborator_id ? " (sugestão)" : ""}
                     </option>
                   ))}
-                </select>
+                </Select>
                 {suggestionUnavailable ? (
                   <p className="text-xs text-amber-700">O colaborador sugerido já tem conta ou convite - escolha outro, se aplicável.</p>
                 ) : null}
-              </div>
+              </Field>
               <div className="grid gap-1.5">
                 <Label htmlFor="ixc-invite-email">E-mail do convite</Label>
                 <Input id="ixc-invite-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />

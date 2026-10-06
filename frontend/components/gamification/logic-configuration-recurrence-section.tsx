@@ -1,5 +1,6 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
 import type { Dispatch, SetStateAction } from "react";
 import { Save, Trash2 } from "lucide-react";
 
@@ -61,7 +62,7 @@ export function RecurrenceSection({
   onDeleteRecurrenceRule
 }: Props) {
   return (
-    <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-panel">
       <div className="panel-header">
         <div>
           <h3 className="panel-title">5. Reincidência</h3>
@@ -186,7 +187,7 @@ export function RecurrenceSection({
               />
             </div>
             {(localSettings.warranty_mode ?? "score_full") === "score_reduced" ? (
-              <div className="grid gap-2">
+              <Field className="grid gap-2">
                 <Label>Redução (%)</Label>
                 <Input
                   inputMode="decimal"
@@ -195,7 +196,7 @@ export function RecurrenceSection({
                   onBlur={(event) => saveSettings({ warranty_reduction_percentage: event.target.value })}
                   placeholder="Ex.: 50"
                 />
-              </div>
+              </Field>
             ) : null}
           </div>
         </section>
@@ -208,14 +209,14 @@ export function RecurrenceSection({
           </div>
           <div className="grid gap-4 p-4">
             <div className="grid gap-3 md:grid-cols-[1fr_260px]">
-              <div className="grid gap-2">
+              <Field className="grid gap-2">
                 <Label>Nome da regra</Label>
                 <Input
                   value={newRecurrenceRule.name ?? ""}
                   onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, name: event.target.value })}
                   placeholder="Ex.: Reincidência de manutenção fibra"
                 />
-              </div>
+              </Field>
               <div className="grid gap-2">
                 <Label>Subtipo</Label>
                 <AppCombobox
@@ -329,7 +330,7 @@ export function RecurrenceSection({
                 </p>
               ) : null}
               <div className="flex flex-wrap items-end justify-between gap-3">
-                <div className="grid gap-2">
+                <Field className="grid gap-2">
                   <Label>Prioridade</Label>
                   <Input
                     type="number"
@@ -338,7 +339,7 @@ export function RecurrenceSection({
                     onChange={(event) => setNewRecurrenceRule({ ...newRecurrenceRule, priority: parseNumericInput(event.target.value) })}
                   />
                   <p className="text-[11px] text-slate-500">Regras com prioridade menor são conferidas primeiro quando mais de uma bate com a mesma O.S.</p>
-                </div>
+                </Field>
                 <div className="grid gap-2">
                   <Label>Intervalo mínimo</Label>
                   <div className="flex items-center gap-2">
@@ -529,7 +530,7 @@ export function RecurrenceSection({
                       <span className="text-xs text-slate-500">horas</span>
                     </div>
                   </div>
-                  <div className="grid gap-2">
+                  <Field className="grid gap-2">
                     <Label>Prioridade</Label>
                     <Input
                       type="number"
@@ -538,7 +539,7 @@ export function RecurrenceSection({
                         setRecurrenceRules(replaceById(recurrenceRules, rule.id, { priority: parseNumericInput(event.target.value) }))
                       }
                     />
-                  </div>
+                  </Field>
                 </div>
                 <p className="text-[11px] text-slate-500">
                   Intervalo mínimo: só conta como reincidência se a O.S posterior abrir pelo menos essas horas depois da original (evita marcar visitas quase simultâneas).

@@ -1,5 +1,8 @@
 "use client";
 
+import { Field } from "@/components/ui/field";
+import { ModalFrame } from "@/components/ui/modal-frame";
+import { Select } from "@/components/ui/select";
 import { useState } from "react";
 import { Save, Search, Trash2, X } from "lucide-react";
 
@@ -61,7 +64,7 @@ export function ProfileEditorDrawer({
   const deleteDisabled = saving || Boolean(deleteBlockedReason) || (needsReassign && !reassignProfileId);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-end bg-slate-950/35 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="profile-editor-title">
+    <ModalFrame onClose={onClose} title="Perfil de acesso" className="fixed inset-0 z-[70] flex items-end justify-end bg-transparent sm:p-4" role="dialog" aria-modal="true" aria-labelledby="profile-editor-title">
       <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-white shadow-xl sm:h-[92vh] sm:max-w-5xl sm:rounded-2xl">
         <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 sm:px-5">
           <div className="flex items-start justify-between gap-3">
@@ -85,10 +88,10 @@ export function ProfileEditorDrawer({
           <section aria-labelledby="profile-identification-title" className="rounded-lg border border-slate-200 p-4">
             <h4 id="profile-identification-title" className="font-semibold text-slate-950">Identificação do perfil</h4>
             <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
-              <div className="grid gap-2">
+              <Field className="grid gap-2">
                 <Label>Nome do perfil</Label>
                 <Input value={profileDraft.name} onChange={(event) => onChange({ name: event.target.value })} />
-              </div>
+              </Field>
               <label className="flex items-center gap-2 self-end rounded-md border border-slate-200 px-3 py-2.5 text-sm">
                 <AppCheckbox
                   checked={profileDraft.active}
@@ -98,10 +101,10 @@ export function ProfileEditorDrawer({
                 />
                 Perfil ativo
               </label>
-              <div className="grid gap-2 md:col-span-2">
+              <Field className="grid gap-2 md:col-span-2">
                 <Label>Descrição</Label>
                 <Input value={profileDraft.description} onChange={(event) => onChange({ description: event.target.value })} />
-              </div>
+              </Field>
             </div>
           </section>
 
@@ -208,7 +211,7 @@ export function ProfileEditorDrawer({
                         <span>
                           Mover {linkedUsers} {linkedUsers === 1 ? "pessoa" : "pessoas"} para
                         </span>
-                        <select
+                        <Select
                           value={reassignProfileId}
                           aria-label="Perfil que recebe as pessoas deste perfil"
                           className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm"
@@ -220,7 +223,7 @@ export function ProfileEditorDrawer({
                               {profile.name}
                             </option>
                           ))}
-                        </select>
+                        </Select>
                       </label>
                     ) : null}
                     <Button
@@ -254,6 +257,6 @@ export function ProfileEditorDrawer({
           </div>
         </div>
       </div>
-    </div>
+    </ModalFrame>
   );
 }

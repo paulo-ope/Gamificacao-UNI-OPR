@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import { Select } from "@/components/ui/select";
 import * as Popover from "@radix-ui/react-popover";
 import {
   Bookmark,
@@ -521,7 +522,7 @@ function SavedViewsPopover({
             </button>
           ) : null}
           <label className="relative mb-2 block">
-            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
+            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-500" />
             <Input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -540,7 +541,7 @@ function SavedViewsPopover({
                 >
                   <span className="min-w-0 truncate">
                     {saved.name}
-                    <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] uppercase text-slate-500">
+                    <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[11px] uppercase text-slate-500">
                       {saved.visibility === "global" ? "Global" : "Pessoal"}
                     </span>
                   </span>
@@ -589,7 +590,7 @@ function SavedViewsPopover({
                         Global
                       </label>
                     ) : (
-                      <div className="rounded-md bg-white px-2 py-1.5 text-xs text-slate-400">
+                      <div className="rounded-md bg-white px-2 py-1.5 text-xs text-slate-500">
                         Global indisponível para seu perfil
                       </div>
                     )}
@@ -869,7 +870,7 @@ export function OperationsFilterPanel({
               {isOperation ? (
                 <label className="grid gap-1.5 text-[11px] font-medium text-slate-600">
                   Opções de responsável
-                  <select
+                  <Select
                     value={filters?.responsible_mode || "all"}
                     onChange={(event) =>
                       onChange("responsible_mode", event.target.value)
@@ -878,7 +879,7 @@ export function OperationsFilterPanel({
                   >
                     <option value="all">Todas as O.S.</option>
                     <option value="completed">Somente O.S. finalizadas</option>
-                  </select>
+                  </Select>
                 </label>
               ) : null}
               {isSla ? (
@@ -944,7 +945,7 @@ export function OperationsFilterPanel({
                   <div className="grid grid-cols-2 gap-2">
                     <label className="grid gap-1 text-[10px] text-slate-500">
                       De (dia)
-                      <select
+                      <Select
                         value={filters?.custom_window_start_weekday || ""}
                         onChange={(event) =>
                           onChange(
@@ -960,7 +961,7 @@ export function OperationsFilterPanel({
                             {label}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     </label>
                     <label className="grid gap-1 text-[10px] text-slate-500">
                       De (hora)
@@ -977,7 +978,7 @@ export function OperationsFilterPanel({
                     </label>
                     <label className="grid gap-1 text-[10px] text-slate-500">
                       Até (dia)
-                      <select
+                      <Select
                         value={filters?.custom_window_end_weekday || ""}
                         onChange={(event) =>
                           onChange(
@@ -993,7 +994,7 @@ export function OperationsFilterPanel({
                             {label}
                           </option>
                         ))}
-                      </select>
+                      </Select>
                     </label>
                     <label className="grid gap-1 text-[10px] text-slate-500">
                       Até (hora)
@@ -1070,14 +1071,14 @@ export function OperationsFilterPanel({
                     ? `Sincronizando ${importProgress || "..."}`
                     : "Sincronizar dados"}
                 </Button>
-                <span className="max-w-64 text-right text-[10px] text-slate-400">
+                <span className="max-w-64 text-right text-[10px] text-slate-500">
                   {syncScopeLabel}
                 </span>
               </div>
             ) : null}
           </>
           <span className="inline-flex items-center gap-1 text-[10px] text-slate-500">
-            <Clock3 className="h-3 w-3 text-slate-400" />
+            <Clock3 className="h-3 w-3 text-slate-500" />
             {lastUpdateLabel(lastUpdatedAt)}
           </span>
         </div>

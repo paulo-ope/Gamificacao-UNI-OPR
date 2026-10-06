@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import {
   ArrowUpDown,
   Database,
@@ -1075,13 +1076,13 @@ function AttendanceDataTable({
             <Badge className="border-blue-100 bg-blue-50 text-blue-700">{number(page?.total ?? 0)} registros</Badge>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
-            <select
+            <Select
               value={String(filters.page_size ?? 25)}
               onChange={(event) => onChange({ page_size: Number(event.target.value), page: 1 })}
               className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700"
             >
               {[25, 50, 100, 200].map((size) => <option key={size} value={size}>{size}/página</option>)}
-            </select>
+            </Select>
           </div>
         </div>
       </div>

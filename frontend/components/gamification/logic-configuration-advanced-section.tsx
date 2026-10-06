@@ -16,7 +16,7 @@ type Props = {
 export function AdvancedSection({ saveSnapshot, exportConfig, busy, fileRef, resetDefault }: Props) {
   return (
     <section className="grid gap-4">
-      <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-panel">
         <div className="panel-header">
           <div>
             <h3 className="panel-title">Avançado</h3>

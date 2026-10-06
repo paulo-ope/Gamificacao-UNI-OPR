@@ -53,12 +53,21 @@ const config: Config = {
         card: {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))"
+        },
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))"
         }
       },
       borderRadius: {
-        lg: "8px",
-        md: "6px",
-        sm: "4px"
+        lg: "12px",
+        md: "var(--radius-control)",
+        sm: "6px",
+        panel: "var(--radius-panel)"
+      },
+      boxShadow: {
+        panel: "var(--shadow-panel)",
+        floating: "var(--shadow-floating)"
       }
     }
   },

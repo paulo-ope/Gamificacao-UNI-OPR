@@ -1,5 +1,6 @@
 "use client";
 
+import { Select } from "@/components/ui/select";
 import {
   CheckCircle2,
   FileDown,
@@ -287,7 +288,7 @@ export function ManagementCasesPanel({
               }}
             />
           </div>
-          <select
+          <Select
             className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
             value={filters.regional}
             onChange={(event) => setFilters({ ...filters, regional: event.target.value })}
@@ -298,8 +299,8 @@ export function ManagementCasesPanel({
                 {regional}
               </option>
             ))}
-          </select>
-          <select
+          </Select>
+          <Select
             className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
             value={filters.severity}
             onChange={(event) => setFilters({ ...filters, severity: event.target.value })}
@@ -310,8 +311,8 @@ export function ManagementCasesPanel({
                 {label}
               </option>
             ))}
-          </select>
-          <select
+          </Select>
+          <Select
             className="h-10 rounded-md border border-slate-200 bg-white px-3 text-sm"
             value={filters.status}
             onChange={(event) => setFilters({ ...filters, status: event.target.value })}
@@ -324,7 +325,7 @@ export function ManagementCasesPanel({
                   {label}
                 </option>
               ))}
-          </select>
+          </Select>
           <Button
             type="button"
             variant="outline"
@@ -359,7 +360,7 @@ export function ManagementCasesPanel({
           {canGenerate ? (
             <div className="ml-auto flex items-center gap-2">
               <span className="text-xs font-medium text-slate-500">Competência</span>
-              <select
+              <Select
                 className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm"
                 value={period.month}
                 onChange={(event) => setPeriod({ ...period, month: Number(event.target.value) })}
@@ -369,7 +370,7 @@ export function ManagementCasesPanel({
                     {String(month).padStart(2, "0")}
                   </option>
                 ))}
-              </select>
+              </Select>
               <Input
                 type="number"
                 className="h-9 w-24"

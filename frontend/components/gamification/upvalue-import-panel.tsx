@@ -3,6 +3,7 @@
 import { AlertTriangle, BarChart3, CalendarDays, Database, Eye, FileSpreadsheet, RefreshCw, Trash2, UploadCloud } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
+import { MetricCard } from "@/components/gamification/config-ui";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -253,9 +254,9 @@ export function UpvalueImportPanel({
               </span>
             ) : null}
           </div>
-          <h2 className="mt-3 text-xl font-semibold text-slate-950">Escolha o mês que alimenta ranking, auditoria e gráficos</h2>
+          <h2 className="mt-3 text-xl font-semibold text-slate-950">Período de análise</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Visualizadores podem trocar a análise. Importação, exclusão e recálculo ficam restritos aos perfis operacionais.
+            Selecione a competência para consultar os resultados. As ações disponíveis seguem as permissões do seu perfil.
           </p>
         </div>
         {canImport && canCalculate ? (
@@ -266,7 +267,12 @@ export function UpvalueImportPanel({
         ) : null}
       </div>
 
-      <div className="grid gap-5 p-5">
+      <div className="grid grid-cols-2 gap-3 border-b border-slate-100 p-4 sm:p-5 xl:grid-cols-3">
+        <MetricCard title="Competências disponíveis" value={loadingPeriods ? "…" : periods.length} />
+        <MetricCard title="O.S na competência ativa" value={loadingPeriods ? "…" : formatInteger(periods.find((period) => periodKey(period) === activePeriodKey)?.total_service_orders ?? 0)} />
+        <MetricCard title="Competência em uso" value={currentPeriod?.reference_month && currentPeriod.reference_year ? periodLabel({reference_month: currentPeriod.reference_month, reference_year: currentPeriod.reference_year}) : "Não selecionada"} />
+      </div>
+      <div className="grid gap-5 p-4 sm:p-5">
         <div className="rounded-lg border bg-white">
           <div className="flex flex-col gap-2 border-b bg-slate-50/70 px-4 py-3 md:flex-row md:items-center md:justify-between">
             <div>
@@ -297,10 +303,10 @@ export function UpvalueImportPanel({
 
           <div className="overflow-x-auto">
             <Table>
-              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                <TableRow className="border-slate-700 hover:bg-slate-900">
+              <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                <TableRow className="border-slate-200 hover:bg-slate-50">
                   <TableHead>Período</TableHead>
-                  <TableHead>O.S na base</TableHead>
+                  <TableHead className="text-right">O.S na base</TableHead>
                   <TableHead>Primeira O.S</TableHead>
                   <TableHead>Última O.S</TableHead>
                   <TableHead className="text-right">Controle</TableHead>
@@ -326,9 +332,9 @@ export function UpvalueImportPanel({
                             ) : null}
                           </div>
                         </TableCell>
-                        <TableCell>{formatInteger(period.total_service_orders)}</TableCell>
-                        <TableCell>{formatDateTime(period.first_order_at)}</TableCell>
-                        <TableCell>{formatDateTime(period.last_order_at)}</TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">{formatInteger(period.total_service_orders)}</TableCell>
+                        <TableCell className="min-w-40 text-xs text-slate-500">{formatDateTime(period.first_order_at)}</TableCell>
+                        <TableCell className="min-w-40 text-xs text-slate-500">{formatDateTime(period.last_order_at)}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex flex-wrap justify-end gap-2">
                             <Button
@@ -549,8 +555,8 @@ export function UpvalueImportPanel({
           <div className="rounded-md border">
             <div className="border-b px-4 py-3 text-sm font-semibold">Auditoria básica da última importação</div>
             <Table>
-              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                <TableRow className="border-slate-700 hover:bg-slate-900">
+              <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                <TableRow className="border-slate-200 hover:bg-slate-50">
                   <TableHead>Ação</TableHead>
                   <TableHead>O.S</TableHead>
                   <TableHead>Linha</TableHead>
@@ -621,8 +627,8 @@ export function UpvalueImportPanel({
               <div className="rounded-md border">
                 <div className="border-b px-4 py-3 text-sm font-semibold">Mapeamento sugerido</div>
                 <Table>
-                  <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                    <TableRow className="border-slate-700 hover:bg-slate-900">
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                    <TableRow className="border-slate-200 hover:bg-slate-50">
                       <TableHead>Campo do sistema</TableHead>
                       <TableHead>Coluna UpValue</TableHead>
                     </TableRow>
@@ -642,8 +648,8 @@ export function UpvalueImportPanel({
             <div className="rounded-md border">
               <div className="border-b px-4 py-3 text-sm font-semibold">Primeiras linhas</div>
               <Table>
-                <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                  <TableRow className="border-slate-700 hover:bg-slate-900">
+                <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                  <TableRow className="border-slate-200 hover:bg-slate-50">
                     {sampleColumns.map((column) => (
                       <TableHead key={column}>{column}</TableHead>
                     ))}
@@ -672,8 +678,8 @@ export function UpvalueImportPanel({
           <div className="rounded-md border">
             <div className="border-b px-4 py-3 text-sm font-semibold">Linhas ignoradas</div>
             <Table>
-              <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-                <TableRow className="border-slate-700 hover:bg-slate-900">
+              <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+                <TableRow className="border-slate-200 hover:bg-slate-50">
                   <TableHead>Linha</TableHead>
                   <TableHead>Motivo</TableHead>
                   <TableHead>Dados</TableHead>

@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import { ChevronDown, LogOut, Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { NotificationBell } from "@/components/workspace/notification-bell";
+import { NavigationSearch } from "@/components/workspace/navigation-search";
+import { WorkspaceLoading } from "@/components/ui/workspace-loading";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,13 +74,14 @@ export function WorkspaceAppShell({
     const header = headerRef.current;
     if (!header) return;
     const applyHeight = () => {
-      document.documentElement.style.setProperty("--workspace-header-height", `${header.offsetHeight}px`);
+      const height = Math.ceil(header.getBoundingClientRect().height);
+      if (height > 0) document.documentElement.style.setProperty("--workspace-header-height", `${height}px`);
     };
     applyHeight();
     const observer = new ResizeObserver(applyHeight);
     observer.observe(header);
     return () => observer.disconnect();
-  }, [user]);
+  });
   // Nasce COMPLETA (pedido do usuário em 2026-09-03): a barra lateral inteira é a navegação
   // principal do ecossistema, não um detalhe a ser descoberto. Recolher para a trilha de ícones
   // continua possível, mas é escolha de quem quer mais espaço - nunca o padrão.
@@ -109,18 +113,15 @@ export function WorkspaceAppShell({
   }
 
   if (checking && !user) {
-    return (
-      <main className="flex min-h-screen items-center justify-center text-sm text-slate-500">
-        Carregando UNI Workspace...
-      </main>
-    );
+    return <WorkspaceLoading />;
   }
   if (!user) return <WorkspaceLogin isLoading={checking} error={error} onLogin={login} showPortalLink />;
 
   const screens = visibleWorkspaceScreens(user.permissions);
 
   return (
-    <div className="min-h-screen bg-slate-50 lg:flex">
+    <div className="workspace-surface min-h-screen lg:flex">
+      <a href="#workspace-content" className="skip-link">Pular para o conteúdo</a>
       <aside
         className={cn(
           // `lg:sticky lg:top-0 lg:h-screen`: sem isso a barra é só mais um item do flex-row e
@@ -131,13 +132,13 @@ export function WorkspaceAppShell({
           // altura, crescendo sem limite conforme a página cresce - achado real, 2026-09-03).
           // `h-screen` fixa a altura na viewport (não mais na altura da coluna irmã) e `sticky`
           // mantém a barra visível enquanto a página rola.
-          "hidden shrink-0 border-r border-slate-200 bg-white transition-[width] duration-200 lg:sticky lg:top-0 lg:flex lg:h-screen lg:flex-col",
-          expanded ? "w-64" : "w-[68px]",
+          "hidden shrink-0 border-r border-slate-800 bg-[#101e38] text-slate-100 transition-[width] duration-200 lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col",
+          expanded ? "w-[264px]" : "w-[76px]",
         )}
       >
         <div
           className={cn(
-            "flex items-center gap-2 border-b border-slate-100 py-4",
+            "flex min-h-20 items-center gap-2 border-b border-white/10 py-4",
             expanded ? "px-4" : "justify-center px-2",
           )}
         >
@@ -147,14 +148,14 @@ export function WorkspaceAppShell({
             aria-expanded={expanded}
             aria-label={expanded ? "Recolher menu lateral" : "Expandir menu lateral"}
             title={expanded ? "Recolher menu" : "Expandir menu"}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
           >
             {expanded ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeftOpen className="h-5 w-5" />}
           </button>
           {expanded ? (
             <div className="min-w-0">
-              <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">UNI Workspace</p>
-              <p className="truncate text-sm font-semibold text-slate-950">Ecossistema Operacional</p>
+              <p className="text-base font-semibold text-white">UNI <span className="font-normal text-slate-300">Workspace</span></p>
+              <p className="mt-0.5 text-[11px] text-slate-400">Ecossistema operacional</p>
             </div>
           ) : null}
         </div>
@@ -167,16 +168,17 @@ export function WorkspaceAppShell({
           onExpandRequest={() => !expanded && toggleSidebar()}
         />
         {expanded ? (
-          <div className="border-t border-slate-100 px-4 py-3">
-            <p className="truncate text-[11px] font-semibold text-slate-700">{user.name}</p>
-            <p className="truncate text-[10px] text-slate-400">{user.email}</p>
+          <div className="flex items-center gap-3 border-t border-white/10 px-4 py-4">
+            <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">{user.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
+            <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-100">{user.name}</p>
+            <p className="mt-0.5 truncate text-[11px] text-slate-400">{user.email}</p></div>
           </div>
         ) : null}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header ref={headerRef} className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
+        <header ref={headerRef} className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+          <div className="flex min-h-20 flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
             <div className="flex min-w-0 items-center gap-3">
               <div className="lg:hidden">
                 <Sheet>
@@ -185,10 +187,10 @@ export function WorkspaceAppShell({
                       <Menu className="h-5 w-5" />
                     </Button>
                   </SheetTrigger>
-                  <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r bg-white p-0 text-slate-950 sm:max-w-sm">
-                    <SheetHeader className="shrink-0 border-slate-100">
-                      <SheetTitle className="text-slate-950">UNI Workspace</SheetTitle>
-                      <SheetDescription className="text-slate-500">Telas e módulos do ecossistema</SheetDescription>
+                  <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r border-slate-800 bg-[#101e38] p-0 text-slate-100 sm:max-w-sm [&>button]:text-slate-300 [&>button:hover]:bg-white/10">
+                    <SheetHeader className="shrink-0 border-white/10">
+                      <SheetTitle className="text-white">UNI Workspace</SheetTitle>
+                      <SheetDescription className="text-slate-400">Telas e módulos do ecossistema</SheetDescription>
                     </SheetHeader>
                     <ShellNavigation
                       activePath={activePath}
@@ -202,13 +204,14 @@ export function WorkspaceAppShell({
                 </Sheet>
               </div>
               <div className="min-w-0">
-                <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-uni-royal">{eyebrow}</p>
-                <h1 className="truncate text-base font-semibold text-slate-950">{title}</h1>
-                {subtitle ? <p className="truncate text-[11px] text-slate-500">{subtitle}</p> : null}
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">{eyebrow}</p>
+                <h1 className="text-lg font-semibold leading-7 text-slate-950">{title}</h1>
+                {subtitle ? <p className="hidden text-xs text-slate-500 2xl:block">{subtitle}</p> : null}
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="ml-auto flex max-w-full flex-wrap items-center gap-2">
               {actions}
+              <NavigationSearch modules={modules} permissions={user.permissions} />
               <NotificationBell />
               <Button type="button" variant="ghost" onClick={logout} aria-label="Sair">
                 <LogOut className="h-4 w-4" />
@@ -217,7 +220,7 @@ export function WorkspaceAppShell({
             </div>
           </div>
         </header>
-        <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 sm:py-6">
+        <main id="workspace-content" tabIndex={-1} className="min-w-0 flex-1 px-4 py-5 outline-none sm:px-6 sm:py-6 lg:px-8">
           {typeof children === "function" ? children(user) : children}
         </main>
       </div>
@@ -335,21 +338,21 @@ function ModuleNavEntry({
             onClick={() => setOpen((current) => !current)}
             aria-expanded={open}
             aria-label={`${open ? "Recolher" : "Expandir"} telas de ${module.name}`}
-            className="flex h-8 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
           >
             <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
           </button>
         ) : null}
       </div>
       {expanded && canExpand && open ? (
-        <ul className="mb-1 ml-6 mt-0.5 space-y-0.5 border-l border-slate-200 pl-2">
+        <ul className="mb-2 ml-6 mt-1 space-y-0.5 border-l border-white/15 pl-2">
           {screens.map((screen) => (
-            <ModuleScreenLink
-              key={screen.value}
+            <Suspense key={screen.value} fallback={null}><ModuleScreenLink
               href={moduleScreenHref(module.web_path, screen)}
               screen={screen}
+              isDefault={screen === screens[0]}
               closeOnNavigate={closeOnNavigate}
-            />
+            /></Suspense>
           ))}
         </ul>
       ) : null}
@@ -362,7 +365,7 @@ function ModuleNavEntry({
           }}
           aria-label={`Expandir telas de ${module.name}`}
           title={`Telas de ${module.name}`}
-          className="mx-auto mt-0.5 flex h-4 w-9 items-center justify-center rounded text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          className="mx-auto mt-0.5 flex h-6 w-9 items-center justify-center rounded text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
         >
           <ChevronDown className="h-3 w-3" />
         </button>
@@ -374,17 +377,23 @@ function ModuleNavEntry({
 function ModuleScreenLink({
   href,
   screen,
+  isDefault,
   closeOnNavigate,
 }: {
   href: string;
   screen: ModuleScreen;
+  isDefault: boolean;
   closeOnNavigate: boolean;
 }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const selected = pathname === href.split("?")[0] && (searchParams.get("tab") === screen.value || (!searchParams.get("tab") && isDefault));
   const link = (
     <Link
       href={href}
       title={screen.description}
-      className="block truncate rounded-lg px-2.5 py-1.5 text-[12px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-uni-royal"
+      aria-current={selected ? "page" : undefined}
+      className={cn("block rounded-lg px-3 py-2 text-xs leading-5 transition-colors hover:bg-white/10 hover:text-white", selected ? "bg-white/10 font-semibold text-white ring-1 ring-inset ring-white/10" : "text-slate-300")}
     >
       {screen.label}
     </Link>
@@ -396,11 +405,11 @@ function NavGroup({ label, expanded, children }: { label: string; expanded: bool
   return (
     <div className="mb-4 last:mb-0">
       {expanded ? (
-        <p className="px-3 pb-1 text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">{label}</p>
+        <p className="px-3 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">{label}</p>
       ) : (
         // Recolhido não cabe o rótulo do grupo: um divisor mantém a separação visível entre
         // "Telas" e "Módulos" sem texto cortado.
-        <div className="mx-2 mb-2 border-t border-slate-100 first:border-t-0" aria-hidden="true" />
+        <div className="mx-2 mb-2 border-t border-white/10 first:border-t-0" aria-hidden="true" />
       )}
       <div className="space-y-1">{children}</div>
     </div>
@@ -435,21 +444,21 @@ function NavItem({
       className={cn(
         "flex w-full items-center rounded-xl text-left transition-colors",
         expanded ? "gap-3 px-3 py-2.5" : "justify-center px-1 py-1.5",
-        selected ? "bg-uni-royal/10 text-uni-royal" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+        selected ? "bg-white/10 text-white ring-1 ring-inset ring-white/10" : "text-slate-300 hover:bg-white/5 hover:text-white",
       )}
     >
       <span
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-          selected ? "bg-uni-royal text-white" : "bg-slate-100 text-slate-500",
+          selected ? "bg-uni-royal text-white shadow-sm" : "bg-white/5 text-slate-400",
         )}
       >
         <Icon className="h-4 w-4" />
       </span>
       {expanded ? (
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold">{label}</span>
-          <span className={cn("block truncate text-[11px]", selected ? "text-uni-royal/70" : "text-slate-400")}>
+          <span className="block text-[13px] font-medium leading-5">{label}</span>
+          <span className={cn("block truncate text-[11px]", selected ? "text-blue-200" : "text-slate-400")}>
             {description}
           </span>
         </span>

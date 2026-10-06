@@ -46,7 +46,7 @@ export function CategoriesSection({
   busy
 }: Props) {
   return (
-    <section className="rounded-[24px] border border-slate-200 bg-white shadow-[0_10px_40px_rgba(15,23,42,0.05)]">
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-panel">
       <div className="panel-header">
         <div>
           <h3 className="panel-title">Tipos gerais da planilha</h3>
@@ -67,8 +67,8 @@ export function CategoriesSection({
         ))}
       </div>
       <Table>
-        <TableHeader className="sticky top-0 z-10 bg-slate-900 text-white shadow-sm [&_th]:text-slate-200">
-          <TableRow className="border-slate-700 hover:bg-slate-900">
+        <TableHeader className="sticky top-0 z-10 bg-slate-50 [&_th]:text-slate-600">
+          <TableRow className="border-slate-200 hover:bg-slate-50">
             <TableHead>Tipo Geral</TableHead>
             <TableHead>Assuntos</TableHead>
             <TableHead>O.S impactadas</TableHead>
@@ -179,7 +179,7 @@ export function CategoriesSection({
                         const stats = periodRuleStats(rule);
 
                         return (
-                          <div key={rule.id} className="grid gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] xl:grid-cols-[minmax(260px,1.3fr)_minmax(220px,0.8fr)_150px_150px] xl:items-center">
+                          <div key={rule.id} className="grid gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] lg:grid-cols-2 2xl:grid-cols-[minmax(220px,1.3fr)_minmax(180px,0.8fr)_130px_130px] 2xl:items-center">
                             <div className="min-w-0">
                               <div className="truncate text-sm font-semibold text-slate-950" title={rule.os_subject}>
                                 {rule.os_subject}
@@ -187,7 +187,7 @@ export function CategoriesSection({
                               <div className="text-xs text-slate-500">{formatInteger(stats.orders)} O.S impactadas</div>
                             </div>
                             <div className="min-w-0">
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Grupo atual</div>
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Grupo atual</div>
                               <div className="mt-1 truncate text-sm text-slate-700" title={selectedGroup?.name ?? "Sem grupo"}>
                                 {selectedGroup?.name ?? "Sem grupo"}
                               </div>
