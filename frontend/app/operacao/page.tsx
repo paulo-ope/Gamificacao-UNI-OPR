@@ -27,6 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { StatusToast } from "@/components/ui/status-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DRILL_PAGE_SIZE, Pagination } from "@/components/ui/pagination";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -489,11 +490,13 @@ function ProgressDrillPanel({
   orders,
   isLoading,
   onClose,
+  onPageChange,
 }: {
   target: ProgressDrillTarget;
   orders: OperationOrderPage;
   isLoading: boolean;
   onClose: () => void;
+  onPageChange: (page: number) => void;
 }) {
   const heading = progressDrillHeading(target);
   const items = orders.items;
@@ -507,10 +510,7 @@ function ProgressDrillPanel({
           <CardTitle className="text-base font-semibold text-slate-950">
             {heading.title}
           </CardTitle>
-          <p className="text-xs text-slate-500">
-            {orders.total} O.S. no total
-            {orders.total > items.length ? ` · mostrando as ${items.length} mais recentes` : ""}
-          </p>
+          <p className="text-xs text-slate-500">{orders.total} O.S. no total, da mais recente para a mais antiga</p>
         </div>
         <Button type="button" size="sm" variant="ghost" onClick={onClose} aria-label="Fechar detalhamento">
           <X className="h-4 w-4" /> Fechar
@@ -561,6 +561,17 @@ function ProgressDrillPanel({
             </TableBody>
           </Table>
         )}
+        {orders.total > 0 ? (
+          <Pagination
+            className="px-4 pt-3"
+            page={orders.page}
+            totalPages={orders.total_pages}
+            totalItems={orders.total}
+            itemLabel="O.S."
+            disabled={isLoading}
+            onPageChange={onPageChange}
+          />
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -619,6 +630,9 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
   const [openingsDrillOrders, setOpeningsDrillOrders] =
     useState<OperationOrderPage>(EMPTY_PAGE);
   const [openingsDrillLoading, setOpeningsDrillLoading] = useState(false);
+  const [openingsDrillExtra, setOpeningsDrillExtra] = useState<
+    { aging_bucket?: string; weekday?: number; hour?: number } | undefined
+  >(undefined);
   const [openingsGranularity, setOpeningsGranularity] =
     useState<OperationTrendGranularity>("day");
   const [openingsTemporaryPeriod, setOpeningsTemporaryPeriod] = useState<{
@@ -1330,7 +1344,7 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
     }
   }
 
-  async function loadProgressDrill(target: ProgressDrillTarget) {
+  async function loadProgressDrill(target: ProgressDrillTarget, page = 1) {
     // Mesmo padrão da aba Aberturas: expande inline dentro da própria aba Andamento, sem tocar em
     // `filters`/`activeTab` - sair do drill não deixa nada "grudado" no painel principal.
     if (!filters || !canViewOrderDetails) return;
@@ -1341,7 +1355,7 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
       const next = target.kind === "dimension" ? { ...base, [target.field]: [target.value] } : base;
       const slaRisk = target.kind === "sla_risk" ? target.bucket : undefined;
       setProgressDrillOrders(
-        await operationsApi.inProgressOrders(next, 1, 25, { key: "opened_at", direction: "desc" }, slaRisk),
+        await operationsApi.inProgressOrders(next, page, DRILL_PAGE_SIZE, { key: "opened_at", direction: "desc" }, slaRisk),
       );
     } catch (reason) {
       setError(
@@ -1370,6 +1384,7 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
   async function loadOpeningsDrill(
     target: OpeningsDrillTarget,
     extra?: { aging_bucket?: string; weekday?: number; hour?: number },
+    page = 1,
   ) {
     // Expande inline dentro da própria aba Aberturas - usa appliedFilters como base sem tocar em
     // `filters`/`activeTab`, pra sair do drill não deixar o recorte "grudado" no painel principal.
@@ -1377,6 +1392,8 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
     // abaixo, chamado pelos três pontos de entrada (dimensão, envelhecimento, mapa de calor).
     if (!appliedFilters || !canViewOrderDetails) return;
     setOpeningsDrill(target);
+    // Guardado pra trocar de página sem perder o recorte (envelhecimento/mapa de calor).
+    setOpeningsDrillExtra(extra);
     setOpeningsDrillLoading(true);
     try {
       const filters =
@@ -1384,8 +1401,8 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
       setOpeningsDrillOrders(
         await operationsApi.openingOrders(
           filters,
-          1,
-          25,
+          page,
+          DRILL_PAGE_SIZE,
           { key: "opened_at", direction: "desc" },
           extra,
         ),
@@ -1762,6 +1779,9 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
               drillOrders={openingsDrillOrders}
               drillLoading={openingsDrillLoading}
               onCloseDrill={closeOpeningsDrill}
+              onDrillPageChange={(page) =>
+                openingsDrill ? void loadOpeningsDrill(openingsDrill, openingsDrillExtra, page) : undefined
+              }
               granularity={openingsTemporaryData ? "day" : openingsGranularity}
               onGranularityChange={
                 openingsTemporaryData
@@ -1906,6 +1926,7 @@ function OperacaoPageContent({ user }: { user: AuthUser }) {
                 target={progressDrill}
                 orders={progressDrillOrders}
                 isLoading={progressDrillLoading}
+                onPageChange={(page) => void loadProgressDrill(progressDrill, page)}
                 onClose={closeProgressDrill}
               />
             ) : null}

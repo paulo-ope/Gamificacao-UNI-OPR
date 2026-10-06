@@ -13,6 +13,14 @@ import { cn } from "@/lib/utils";
  * "Página X de Y" e botões Anterior/Próxima. Este componente cobre os três casos sem mudar
  * comportamento: mesma prop de página/total, mesmos estados de desabilitado.
  */
+/**
+ * Itens por página dos detalhamentos (O.S. de SLA em risco, de abertura, atendimentos do OPA e
+ * garantias). Antes eles mostravam só as 25 mais recentes, sem como ver o resto - pedido do usuário
+ * (2026-10-06): páginas de 15, da mais recente para a mais antiga. 15 respeita o mínimo de 10 que os
+ * endpoints de O.S. aceitam em `page_size`.
+ */
+export const DRILL_PAGE_SIZE = 15;
+
 export interface PaginationProps {
   page: number;
   totalPages: number;
