@@ -68,6 +68,7 @@ export type OpaModuleTab =
   | "data"
   | "sync"
   | "ixc_tickets"
+  | "ixc_n1"
   | "operation"
   | "queues"
   | "agents"
@@ -90,6 +91,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "data", label: "Dados", description: "Tabela analítica", icon: Database },
   { value: "sync", label: "Sincronização", description: "Status do OPA", icon: RefreshCw },
   { value: "ixc_tickets", label: "Atendimento IXC", description: "Indicador antecipado", icon: TriangleAlert },
+  { value: "ixc_n1", label: "Atendimento Suporte Interno N1", description: "Operacional e financeiro", icon: Headphones },
   { value: "operation", label: "Operação", description: "Planejado", icon: BarChart3 },
   { value: "queues", label: "Filas", description: "Planejado", icon: GitBranch },
   { value: "reasons", label: "Motivos", description: "Planejado", icon: ListFilter },
@@ -97,7 +99,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "history", label: "Histórico", description: "Planejado", icon: History },
 ];
 
-export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "attendants", "data", "sync", "ixc_tickets"];
+export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "attendants", "data", "sync", "ixc_tickets", "ixc_n1"];
 
 const OPA_STATUS_LABELS: Record<string, string> = {
   AG: "Aguardando atendimento",

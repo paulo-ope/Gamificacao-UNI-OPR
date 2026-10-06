@@ -432,6 +432,40 @@ class SupportIxcTicketOut(BaseModel):
     subtema_inferido: str | None = None
 
 
+class SupportIxcN1DailyPoint(BaseModel):
+    day: date
+    operational: int
+    financial: int
+
+
+class SupportIxcN1Attendant(BaseModel):
+    user_id: str
+    name: str
+    active: bool
+    operational: int
+    financial: int
+    total: int
+
+
+class SupportIxcN1Summary(BaseModel):
+    """`ixc_n1.n1_summary`: protocolos do Suporte Interno N1 (grupo 105 do IXC), operacional (motivo
+    90) e financeiro (motivo 29)."""
+
+    date_from: date
+    date_to: date
+    group_id: str
+    operational: int
+    financial: int
+    total: int
+    previous_operational: int
+    previous_financial: int
+    daily: list[SupportIxcN1DailyPoint] = Field(default_factory=list)
+    # Período anterior de mesmo tamanho, um ponto por dia (inclusive zerados) - alinhado por posição
+    # com `daily`. Vazio só se o período não tiver como calcular o anterior.
+    previous_daily: list[SupportIxcN1DailyPoint] = Field(default_factory=list)
+    attendants: list[SupportIxcN1Attendant] = Field(default_factory=list)
+
+
 class SupportIxcTicketOverviewKpis(BaseModel):
     month: str
     cutoff_day: int

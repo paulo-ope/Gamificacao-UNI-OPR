@@ -42,7 +42,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_timeline_service
+from . import ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_timeline_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -70,6 +70,7 @@ from .schemas import (
     SupportIxcAnalyticsContextOut,
     SupportIxcAnalyticsPriorityItem,
     SupportIxcAnalyticsDriverItem,
+    SupportIxcN1Summary,
     SupportIxcTicketBurstWindow,
     SupportIxcTicketMomentum,
     SupportIxcTicketOsConversion,
@@ -1641,6 +1642,22 @@ def ixc_ticket_breakdown(
         )
 
     return {"level": level, "regional": regional, "city": city, "neighborhood": neighborhood, "items": items}
+
+
+@router.get("/ixc/n1/summary", response_model=SupportIxcN1Summary)
+def ixc_n1_summary(
+    date_from: date,
+    date_to: date,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Protocolos do Suporte Interno N1 (grupo 105 do IXC) no período: operacional (motivo 90) e
+    financeiro (motivo 29), série diária e quebra por atendente. Pedido do usuário, 2026-10-06."""
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
+    if (date_to - date_from).days > 366:
+        raise HTTPException(status_code=400, detail="O período máximo é de 366 dias.")
+    return ixc_n1.n1_summary(db, date_from=date_from, date_to=date_to)
 
 
 @router.get("/ixc/tickets/filter-options")

@@ -247,6 +247,12 @@ class SupportIxcTicket(Base):
     # motivo, se existir - existe.
     sector_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     sector_name: Mapped[str | None] = mapped_column(String(220), nullable=True, index=True)
+    # `su_ticket.id_usuarios` - quem abriu o protocolo (tabela `usuarios` do IXC; resolvido em
+    # `SupportIxcUser`). `NULL` quando o IXC devolve 0 (protocolo criado sem operador, p. ex. por
+    # integração). Pedido do usuário (2026-10-06): contar só protocolos do Suporte Interno N1.
+    # Preenchido por toda importação nova; o histórico anterior só foi retroalimentado para os
+    # motivos do N1 (migração `20260922_0109`).
+    opened_by_user_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     status: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     sub_status: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     channel_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
@@ -265,6 +271,24 @@ class SupportIxcTicket(Base):
     raw_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     first_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     last_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class SupportIxcUser(Base):
+    """Usuário do IXC (`usuarios`) que abriu algum protocolo - só quem aparece em
+    `SupportIxcTicket.opened_by_user_id`, não o cadastro inteiro. Guarda o grupo (`id_grupo`), que é
+    o que define o Suporte Interno N1 (grupo 105, confirmado pelo usuário em 2026-10-06 - ver
+    `ixc_n1.N1_IXC_GROUP_ID`). O grupo é o ATUAL do usuário no IXC, atualizado a cada importação em
+    que ele aparece: quem sair do N1 deixa de contar, inclusive no histórico."""
+
+    __tablename__ = "support_ixc_users"
+    __table_args__ = (UniqueConstraint("ixc_user_id", name="uq_support_ixc_users_ixc_user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ixc_user_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    name: Mapped[str | None] = mapped_column(String(220), nullable=True)
+    group_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class SupportIxcTaxonomyMapping(Base):

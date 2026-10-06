@@ -34,6 +34,7 @@ from app.services.ixc_client import (
 from app.services.regional import is_valid_regional, normalize_regional
 from app.services.text_normalize import normalize_place_name
 
+from .ixc_n1 import sync_ixc_users
 from .models import SupportIxcTicket, SupportIxcTicketRaw
 
 SUPPORT_IXC_TICKET_IMPORT_LOCK_KEY = 913_275_004
@@ -211,6 +212,8 @@ def _normalize_ticket_record(
         "subject_name": _clean(assunto.get("assunto")) or None,
         "sector_id": _clean(record.get("id_ticket_setor")) or None,
         "sector_name": _clean(setor.get("setor")) or None,
+        # `id_usuarios = 0` é protocolo sem operador (ex.: integração) - não é de nenhum colaborador.
+        "opened_by_user_id": _clean(record.get("id_usuarios")).lstrip("0") or None,
         "status": _clean(record.get("status")) or None,
         "sub_status": _clean(record.get("su_status")) or None,
         "channel_id": _clean(record.get("id_canal_atendimento")) or None,
@@ -369,4 +372,20 @@ def import_tickets_for_period(
                 result["unchanged"] += 1
 
         db.commit()
+
+        # Nome/grupo de quem abriu os protocolos (tela do Suporte Interno N1). Depois do commit de
+        # propósito: uma falha de rede aqui não pode desfazer a importação dos protocolos.
+        try:
+            sync_ixc_users(
+                db,
+                client,
+                seen_user_ids={
+                    user_id
+                    for user_id in (_clean(r.get("id_usuarios")).lstrip("0") for r in records)
+                    if user_id
+                },
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("Falha ao sincronizar usuários do IXC após a importação de atendimentos.")
         return result

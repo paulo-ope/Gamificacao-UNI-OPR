@@ -50,6 +50,7 @@ import {
 } from "@/app/suporte/_components/opa-module-components";
 import { BotHumanChart, RankingChart, TimeTrendChart, VolumeTrendChart } from "@/app/suporte/_components/opa-charts";
 import { OpaDrilldownSheet, type OpaDrilldown } from "@/app/suporte/_components/opa-drilldown";
+import { IxcN1Panel } from "@/app/suporte/_components/ixc-n1-panel";
 import { IxcTicketAnalyticsPanel } from "@/app/suporte/_components/ixc-ticket-analytics-panel";
 import { IxcTicketDrilldownPanel } from "@/app/suporte/_components/ixc-ticket-drilldown";
 import { IxcTicketFiltersBar } from "@/app/suporte/_components/ixc-ticket-filters-bar";
@@ -288,6 +289,9 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const [overviewRankingLoading, setOverviewRankingLoading] = useState(false);
   const [drilldown, setDrilldown] = useState<OpaDrilldown | null>(null);
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
+  // As abas do IXC ("Atendimento IXC" e "Atendimento Suporte Interno N1") são outra fonte de dado,
+  // com período próprio dentro do painel - os filtros globais do OPA Suite não se aplicam a elas.
+  const isIxcView = activeView === "ixc_tickets" || activeView === "ixc_n1";
   // Visão Geral (KPIs/gráfico/prioridades) é a entrada da aba "Atendimento IXC" - clicar numa
   // prioridade aprofunda pro drill-down já existente, pré-selecionando a regional clicada.
   const [ixcTicketFocusRegional, setIxcTicketFocusRegional] = useState<string | null>(null);
@@ -786,7 +790,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
        * sentido na aba "Atendimento IXC" - é outra fonte de dado, com seu próprio período dentro
        * do painel (ver IxcTicketOverviewPanel/IxcTicketDrilldownPanel) - pedido explícito do
        * usuário (2026-09-12). */}
-      {activeView !== "ixc_tickets" ? (
+      {!isIxcView ? (
       <OpaGlobalFilters
         period={period}
         filters={attendanceFilters}
@@ -804,7 +808,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
       />
       ) : null}
 
-      {activeView !== "ixc_tickets" ? (
+      {!isIxcView ? (
       <OpaSavedFiltersBar
         period={period}
         filters={attendanceFilters}
@@ -962,6 +966,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
               )}
             </div>
           ) : null}
+          {activeView === "ixc_n1" ? <IxcN1Panel /> : null}
           {activeView === "sync" ? (
             <div className="grid gap-5">
               <OpaSyncPanel
