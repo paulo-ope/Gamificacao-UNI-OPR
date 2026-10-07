@@ -82,6 +82,36 @@ def test_opa_sync_once_imports_lookback_days_and_records_success(monkeypatch, db
     assert _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY) == "0"
 
 
+def test_opa_sync_once_clears_previous_error_on_success(monkeypatch, db_session):
+    db_session.add(AppSetting(key=opa_scheduler.SUPPORT_OPA_SYNC_LAST_ERROR_KEY, value="QueuePool limit"))
+    db_session.add(AppSetting(key=opa_scheduler.SUPPORT_OPA_SYNC_LAST_ERROR_AT_KEY, value="2026-09-18T23:07:00+00:00"))
+    db_session.flush()
+
+    def fake_import(db, client, *, date_from, date_to, imported_by):
+        return {
+            "run_id": 1,
+            "status": "completed",
+            "date_from": date_from,
+            "date_to": date_to,
+            "fetched_count": 0,
+            "created_count": 0,
+            "updated_count": 0,
+            "unchanged_count": 0,
+            "rejected_count": 0,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(opa_scheduler, "SessionLocal", SessionLocalStub(db_session))
+    monkeypatch.setattr(opa_scheduler, "get_settings", lambda: _settings(opa_sync_lookback_days=0))
+    monkeypatch.setattr(opa_scheduler, "get_opa_client", lambda: "client")
+    monkeypatch.setattr(opa_scheduler, "import_opa_attendances", fake_import)
+
+    assert opa_scheduler.run_opa_sync_once(interval_minutes=20) is not None
+
+    assert not _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_LAST_ERROR_KEY)
+    assert not _setting_value(db_session, opa_scheduler.SUPPORT_OPA_SYNC_LAST_ERROR_AT_KEY)
+
+
 def test_opa_sync_once_records_failure_without_raising(monkeypatch, db_session):
     db_session.add(AppSetting(key=opa_scheduler.SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY, value="2"))
     db_session.flush()

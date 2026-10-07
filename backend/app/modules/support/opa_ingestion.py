@@ -783,6 +783,29 @@ def opa_import_lock_busy(db: Session) -> bool | None:
         return None
 
 
+def close_orphan_opa_import_runs(db: Session, *, lock_busy: bool | None) -> int:
+    """Marca como `interrupted` as runs presas em `running` quando ninguém está importando.
+
+    Uma run só vira `running` com o lock consultivo já adquirido, então, se o lock está
+    livre (`lock_busy is False`), nenhuma importação está de fato em andamento e toda run
+    `running` é órfã (processo morto antes do `finally`). Sem isto, a tela mostrava
+    "Sincronizando" e "rodando há centenas de horas" para sempre. `None` (fora do Postgres
+    ou checagem falhou) não prova nada, então não mexe em nada. Retorna quantas fechou."""
+    if lock_busy is not False:
+        return 0
+    result = db.execute(
+        update(SupportOpaImportRun)
+        .where(SupportOpaImportRun.status == "running")
+        .values(
+            status="interrupted",
+            finished_at=datetime.now(timezone.utc),
+            last_error="Run órfã: o processo foi interrompido antes de concluir.",
+        )
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
 def _opa_import_busy_message(db: Session) -> str:
     active_run = active_opa_import_run(db)
     if active_run is not None and active_run.mode == "scheduled":
@@ -855,28 +878,40 @@ def _persist_run_terminal_status(run: SupportOpaImportRun) -> None:
     (`db.rollback()`) a sessão inteira — incluindo o `run.status = "failed"` que
     `_process_attendance_pages` acabou de gravar — e a run fica presa em "running"
     pra sempre (o problema de visibilidade original, só que permanente).
+
+    No Postgres a sessão principal já segura a linha da run (flush sem commit), e esta
+    sessão separada esperaria por ela para sempre, travando a importação inteira
+    (deadlock no mesmo processo, achado real de 2026-10-07 após queda de DNS do OPA).
+    Por isso a espera tem limite: estourando, o status vai junto com o commit/rollback
+    da sessão principal, e uma run que sobrar em "running" é fechada como órfã.
     """
     with SessionLocal() as status_db:
-        status_db.execute(
-            update(SupportOpaImportRun)
-            .where(SupportOpaImportRun.id == run.id)
-            .values(
-                status=run.status,
-                last_error=run.last_error,
-                errors=run.errors,
-                pages_processed=run.pages_processed,
-                fetched_count=run.fetched_count,
-                created_count=run.created_count,
-                updated_count=run.updated_count,
-                unchanged_count=run.unchanged_count,
-                rejected_count=run.rejected_count,
-                next_skip=run.next_skip,
-                checkpoint_json=run.checkpoint_json,
-                finished_at=run.finished_at,
-                duration_ms=run.duration_ms,
+        if status_db.get_bind().dialect.name == "postgresql":
+            status_db.execute(text("SET LOCAL lock_timeout = '5s'"))
+        try:
+            status_db.execute(
+                update(SupportOpaImportRun)
+                .where(SupportOpaImportRun.id == run.id)
+                .values(
+                    status=run.status,
+                    last_error=run.last_error,
+                    errors=run.errors,
+                    pages_processed=run.pages_processed,
+                    fetched_count=run.fetched_count,
+                    created_count=run.created_count,
+                    updated_count=run.updated_count,
+                    unchanged_count=run.unchanged_count,
+                    rejected_count=run.rejected_count,
+                    next_skip=run.next_skip,
+                    checkpoint_json=run.checkpoint_json,
+                    finished_at=run.finished_at,
+                    duration_ms=run.duration_ms,
+                )
             )
-        )
-        status_db.commit()
+            status_db.commit()
+        except SQLAlchemyError:
+            status_db.rollback()
+            logger.warning("Não foi possível gravar à parte o status final da run OPA id=%s; vai com a sessão principal.", run.id)
 
 
 @contextlib.contextmanager

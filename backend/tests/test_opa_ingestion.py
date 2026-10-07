@@ -10,6 +10,7 @@ from app.modules.support.opa_ingestion import (
     OpaImportInterrupted,
     _opa_import_busy_message,
     active_opa_import_run,
+    close_orphan_opa_import_runs,
     import_opa_attendances,
     opa_import_lock_busy,
     resume_opa_import_run,
@@ -688,6 +689,43 @@ def test_active_opa_import_run_returns_most_recent_running_row(db_session):
     active = active_opa_import_run(db_session)
     assert active is not None
     assert active.mode == "manual"
+
+
+def test_close_orphan_runs_marks_running_as_interrupted_when_lock_is_free(db_session):
+    db_session.add(_running_run())
+    db_session.add(_running_run(started_at=datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)))
+    done = _running_run(status="completed")
+    db_session.add(done)
+    db_session.flush()
+
+    closed = close_orphan_opa_import_runs(db_session, lock_busy=False)
+
+    assert closed == 2
+    assert active_opa_import_run(db_session) is None
+    db_session.refresh(done)
+    assert done.status == "completed"
+    orphan = db_session.scalar(select(SupportOpaImportRun).where(SupportOpaImportRun.status == "interrupted"))
+    assert orphan.finished_at is not None
+
+
+@pytest.mark.parametrize("lock_busy", [True, None])
+def test_close_orphan_runs_leaves_running_untouched_when_lock_is_busy_or_unknown(db_session, lock_busy):
+    db_session.add(_running_run())
+    db_session.flush()
+
+    assert close_orphan_opa_import_runs(db_session, lock_busy=lock_busy) == 0
+    assert active_opa_import_run(db_session) is not None
+
+
+def test_opa_sync_status_ignores_orphan_run_when_lock_is_free(db_session, admin_user, monkeypatch):
+    db_session.add(_running_run())
+    db_session.flush()
+    monkeypatch.setattr("app.modules.support.router.opa_import_lock_busy", lambda db: False)
+
+    status = opa_sync_status(db=db_session, user=admin_user)
+
+    assert status["sync_in_progress"] is False
+    assert status["active_run_id"] is None
 
 
 def test_opa_import_lock_busy_is_none_outside_postgres(db_session):
