@@ -114,6 +114,12 @@ mesmo quando chamadas pela própria tela web (origem `"api"`), e registra o aces
 - `PUT /overview/visible-filters` — `operations:views:update_global`. Body `{filters: [...]}`
   com chaves do catálogo; lista vazia volta ao padrão (os 5 filtros de O.S.); chave desconhecida
   é 422.
+- `GET /overview/attention-points` — sessão autenticada. Pontos de atenção da Visão Geral: regras
+  determinísticas (`operations/attention.py`) sobre os números de `/overview` e
+  `/overview/regional-matrix` no recorte pedido (mesmos filtros). Resposta: `items` (regra,
+  severidade `critical|attention`, título, detalhe, valor, limiar, regional), `rules_checked`,
+  `rules_total` e `skipped_rules` (regras de SLA exigem `operations:view_sla`; a comparação com o
+  período anterior só roda se a janela anterior existir inteira no ano operacional).
 - `GET /overview/regional-matrix` — sessão autenticada. Quadro por regional com abertas,
   backlog, backlog vencido, concluídas e (se o usuário tiver `operations:view_sla`) taxa de
   SLA — sem a permissão, as colunas de prazo voltam em branco em vez da tabela inteira ser

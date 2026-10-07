@@ -138,24 +138,15 @@ export function WorkspaceAppShell({
       >
         <div
           className={cn(
-            "flex min-h-20 items-center gap-2 border-b border-white/10 py-4",
+            "flex min-h-20 items-center gap-3 border-b border-white/10 py-4",
             expanded ? "px-4" : "justify-center px-2",
           )}
         >
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            aria-expanded={expanded}
-            aria-label={expanded ? "Recolher menu lateral" : "Expandir menu lateral"}
-            title={expanded ? "Recolher menu" : "Expandir menu"}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
-          >
-            {expanded ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeftOpen className="h-5 w-5" />}
-          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/uni-symbol.png" alt="" aria-hidden="true" className="h-11 w-11 shrink-0 object-contain" />
           {expanded ? (
             <div className="min-w-0">
               <p className="text-base font-semibold text-white">UNI <span className="font-normal text-slate-300">Workspace</span></p>
-              <p className="mt-0.5 text-[11px] text-slate-400">Ecossistema operacional</p>
             </div>
           ) : null}
         </div>
@@ -167,6 +158,22 @@ export function WorkspaceAppShell({
           expanded={expanded}
           onExpandRequest={() => !expanded && toggleSidebar()}
         />
+        <div className={cn("border-t border-white/10", expanded ? "px-3 py-2" : "px-2 py-3")}>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Recolher menu lateral" : "Expandir menu lateral"}
+            title={expanded ? "Recolher menu" : "Expandir menu"}
+            className={cn(
+              "flex h-9 items-center rounded-lg text-xs font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-white",
+              expanded ? "w-full gap-2 px-2" : "mx-auto w-9 justify-center",
+            )}
+          >
+            {expanded ? <PanelLeftClose className="h-5 w-5 shrink-0" /> : <PanelLeftOpen className="h-5 w-5 shrink-0" />}
+            {expanded ? <span>Recolher menu</span> : null}
+          </button>
+        </div>
         {expanded ? (
           <div className="flex items-center gap-3 border-t border-white/10 px-4 py-4">
             <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">{user.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
@@ -248,7 +255,7 @@ function ShellNavigation({
 }) {
   return (
     <nav
-      className={cn("min-h-0 flex-1 overflow-y-auto", expanded ? "p-3" : "px-2 py-3")}
+      className={cn("sidebar-scroll min-h-0 flex-1 overflow-y-auto", expanded ? "p-3" : "px-2 py-3")}
       aria-label="Navegação do ecossistema"
     >
       <NavGroup label="Telas" expanded={expanded}>

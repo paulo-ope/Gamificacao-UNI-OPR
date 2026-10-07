@@ -32,7 +32,7 @@ from app.modules.ai_governance.audit import record_ai_access
 from app.modules.ai_governance.field_registry import ENTITY_LOGIN_CURRENT_STATUS, ENTITY_ONU_SIGNAL_CURRENT, ENTITY_OPERATION_ORDERS
 from app.modules.ai_governance.gate import enforce_ai_endpoint_for_user, enforce_date_field, enforce_filter_field, enforce_requested_fields
 
-from . import backfill, queries, services
+from . import attention, backfill, queries, services
 from .ixc_ingestion import import_current_month_period
 from .coordinate_quality import coordinate_quality_audit
 from .login_aggregate import login_aggregate, login_incident_analysis, login_outages, login_timeseries
@@ -93,6 +93,7 @@ from .schemas import (
     OverviewSupportFilterValues,
     OperationOverviewVisibleFilters,
     OperationOverviewVisibleFiltersUpdate,
+    OperationAttentionPoints,
     OperationRegionalMatrix,
     OperationSavedFilterCreate,
     OperationSavedFilterOut,
@@ -973,6 +974,44 @@ def update_overview_visible_filters(
     )
     db.commit()
     return _overview_visible_filters_response(db, user)
+
+
+@router.get("/overview/attention-points", response_model=OperationAttentionPoints)
+def overview_attention_points(
+    date_from: date,
+    date_to: date,
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Pontos de atenção da Visão Geral: regras determinísticas (ver `attention.py`) sobre os mesmos
+    números de `/overview`, `/overview/regional-matrix` e das O.S. abertas no período que seguem
+    em aberto, para o recorte pedido. As regras de SLA só
+    rodam com `operations:view_sla`; sem a permissão elas voltam em `skipped_rules`, não negadas."""
+    allowed_from, _ = validate_operations_period(date_from, date_to)
+    include_sla = "operations:view_sla" in permissions_for_user(user)
+    current = queries.overview(db, date_from, date_to, user, **selected_filters)
+    matrix = queries.regional_matrix(db, date_from, date_to, user, include_sla=include_sla, **selected_filters)
+    period_backlog = queries.period_open_backlog(db, date_from, date_to, user, **selected_filters)
+    window = attention.previous_window(date_from, date_to, allowed_from)
+    previous = queries.overview(db, window[0], window[1], user, **selected_filters) if window else None
+    result = attention.evaluate_attention_points(
+        overview=current,
+        previous_overview=previous,
+        matrix=matrix,
+        period_backlog=period_backlog,
+        include_sla=include_sla,
+    )
+    team_models_selected = bool(selected_filters.get("team_models"))
+    notes = attention.scope_notes(
+        team_models_selected=team_models_selected,
+        completed_without_model=(
+            0
+            if team_models_selected
+            else queries.completed_without_team_model(db, date_from, date_to, user, **selected_filters)
+        ),
+    )
+    return {"date_from": date_from, "date_to": date_to, **result, "notes": notes}
 
 
 @router.get("/overview/regional-matrix", response_model=OperationRegionalMatrix)

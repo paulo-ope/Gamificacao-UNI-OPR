@@ -451,6 +451,33 @@ class OperationRegionalMatrixItem(BaseModel):
     average_closing_hours: float | None = None
 
 
+class OperationAttentionPoint(BaseModel):
+    rule: str
+    severity: Literal["critical", "attention"]
+    title: str
+    detail: str
+    value: float
+    threshold: float
+    regional: str | None = None
+
+
+class OperationRecommendation(BaseModel):
+    rule: str
+    severity: Literal["critical", "attention"]
+    problem: str
+    action: str
+
+
+class OperationAttentionPoints(BaseModel):
+    date_from: date
+    date_to: date
+    items: list[OperationAttentionPoint]
+    recommendations: list[OperationRecommendation] = Field(default_factory=list)
+    rules_checked: int
+    rules_total: int
+    skipped_rules: list[str] = Field(default_factory=list)
+
+
 class OperationRegionalMatrix(BaseModel):
     date_from: date
     date_to: date

@@ -184,6 +184,9 @@ def run_opa_sync_once(interval_minutes: int | None = None) -> dict | None:
             ]
             upsert_setting(db, SUPPORT_OPA_SYNC_LAST_SUCCESS_AT_KEY, datetime.now(timezone.utc).isoformat())
             upsert_setting(db, SUPPORT_OPA_SYNC_CONSECUTIVE_FAILURES_KEY, "0")
+            # Sucesso encerra o erro anterior; sem isto o aviso de falha ficava para sempre.
+            upsert_setting(db, SUPPORT_OPA_SYNC_LAST_ERROR_KEY, "")
+            upsert_setting(db, SUPPORT_OPA_SYNC_LAST_ERROR_AT_KEY, "")
             _push_next_allowed_at_from_now(db, current_interval)
             db.commit()
             logger.info("Sincronização OPA concluída: %s", imports)

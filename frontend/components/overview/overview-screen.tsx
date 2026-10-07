@@ -3,6 +3,8 @@
 import { Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { OverviewAttentionPoints } from "@/components/overview/overview-attention-points";
+import { OverviewRecommendations } from "@/components/overview/overview-recommendations";
 import { OverviewFilterBar } from "@/components/overview/overview-filter-bar";
 import { Button } from "@/components/ui/button";
 import { AppSwitch } from "@/components/ui/switch";
@@ -64,6 +66,7 @@ const SHOW_PREVIOUS_PERIOD_STORAGE_KEY = "uni_overview_show_previous_period";
  * filial):
  * - KPIs e comparação: `/operations/overview` no período e na janela imediatamente anterior;
  * - fluxo diário: `/operations/overview/trends`;
+ * - pontos de atenção: `/operations/overview/attention-points` (regras em `operations/attention.py`);
  * - donut por filial e quadro: `/operations/overview/regional-matrix`;
  * - donut por modelo de equipe: `/operations/overview/work-schedule` (`by_model`);
  * - meta da filial: `/operations/capacity-summary`;
@@ -190,6 +193,10 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const matrix = useBlockQuery(() => operationsApi.overviewRegionalMatrix(opFilters!), [filterKey], {
     enabled: ready,
     fallbackError: "Não foi possível carregar o quadro por filial.",
+  });
+  const attention = useBlockQuery(() => operationsApi.overviewAttentionPoints(opFilters!), [filterKey], {
+    enabled: ready,
+    fallbackError: "Não foi possível carregar os pontos de atenção.",
   });
   const backlogTrend = useBlockQuery(() => operationsApi.overviewBacklogTrend(opFilters!), [filterKey], {
     enabled: ready,
@@ -632,6 +639,15 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           <OverviewGamificationCard data={gamification.data} state={{ loading: gamification.loading, error: gamification.error }} />
         ) : null}
       </div>
+
+      <OverviewAttentionPoints
+        data={attention.error ? null : attention.data}
+        state={{ loading: attention.loading, error: attention.error }}
+      />
+      <OverviewRecommendations
+        data={attention.error ? null : attention.data}
+        state={{ loading: attention.loading, error: attention.error }}
+      />
 
       <StatusToast
         error={feedback.error}

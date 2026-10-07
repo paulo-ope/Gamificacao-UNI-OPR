@@ -59,6 +59,7 @@ from .opa_ingestion import (
     _opa_import_busy_message,
     _run_result,
     active_opa_import_run,
+    close_orphan_opa_import_runs,
     import_months_status,
     opa_import_lock_busy,
     pending_tmr_backfill_count,
@@ -336,8 +337,9 @@ def _sync_status_response(db: Session) -> dict:
     except ValueError:
         failures = 0
 
-    active_run = active_opa_import_run(db)
     lock_busy = opa_import_lock_busy(db)
+    close_orphan_opa_import_runs(db, lock_busy=lock_busy)
+    active_run = active_opa_import_run(db)
     sync_in_progress = bool(active_run is not None or lock_busy)
     next_allowed_at = _parse_app_setting_datetime(get_setting(db, SUPPORT_OPA_SYNC_NEXT_ALLOWED_AT_KEY, ""))
     next_window_delayed = bool(
