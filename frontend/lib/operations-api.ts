@@ -867,6 +867,38 @@ export type OperationBranchCapacitySummary = {
   items: OperationBranchCapacitySummaryItem[];
 };
 
+export type OperationAttentionPoint = {
+  rule: string;
+  severity: "critical" | "attention";
+  title: string;
+  detail: string;
+  value: number;
+  threshold: number;
+  regional: string | null;
+};
+
+// Recomendação GERAL do recorte: uma por regra que disparou, texto fixo do backend (sem IA).
+export type OperationRecommendation = {
+  rule: string;
+  severity: "critical" | "attention";
+  problem: string;
+  action: string;
+};
+
+// `skipped_rules` lista o que NÃO foi verificado (sem permissão de SLA, sem janela anterior): o
+// card usa isso pra "nenhum achado" não parecer mais do que é.
+export type OperationAttentionPoints = {
+  date_from: string;
+  date_to: string;
+  items: OperationAttentionPoint[];
+  recommendations: OperationRecommendation[];
+  rules_checked: number;
+  rules_total: number;
+  skipped_rules: string[];
+  // Avisos sobre o escopo das regras (ex.: filtro de modelo de equipe, produção sem modelo).
+  notes: string[];
+};
+
 export type OperationRegionalMatrixItem = {
   regional: string;
   opened: number;
@@ -1059,6 +1091,10 @@ export const operationsApi = {
   overviewRegionalMatrix: (filters: OperationFilterState) =>
     request<OperationRegionalMatrix>(
       `/operations/overview/regional-matrix?${query(filters)}`,
+    ),
+  overviewAttentionPoints: (filters: OperationFilterState) =>
+    request<OperationAttentionPoints>(
+      `/operations/overview/attention-points?${query(filters)}`,
     ),
   overviewCollaboratorProduction: (filters: OperationFilterState) =>
     request<OperationOverviewCollaboratorProduction>(

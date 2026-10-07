@@ -873,6 +873,66 @@ def regional_matrix(
     }
 
 
+def period_open_backlog(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
+    """O.S. ABERTAS NO PERÍODO que ainda estão em aberto, e quantas delas já estão vencidas.
+
+    Diferente do `backlog` de `regional_matrix` (retrato de hoje, ignora o período, inclui resíduo de
+    anos anteriores), este recorte muda com o mês escolhido na Visão Geral: "do que entrou neste
+    período, quanto continua pendente e quanto já passou da meta". Alimenta a regra de backlog
+    vencido de `attention.py`. Mesmo escopo de `opened` do quadro por filial (`_opening_filters`):
+    demanda que entrou, sem recorte de executor, e agrupado pela mesma regional agrupada."""
+    start, end = local_period_utc_bounds(date_from, date_to)
+    regional_label = case(
+        *_REGIONAL_MATRIX_GROUP_WHENS,
+        else_=func.coalesce(OperationOrder.regional, "Não identificada"),
+    )
+    rows = db.execute(
+        select(
+            regional_label,
+            func.count(OperationOrder.id),
+            func.sum(case((OperationOrder.sla_status == "out_of_time", 1), else_=0)),
+        )
+        .where(
+            *_dimension_conditions(db, user, _opening_filters(filters)),
+            OperationOrder.opened_at.between(start, end),
+            OperationOrder.is_closed.is_(False),
+        )
+        .group_by(regional_label)
+    ).all()
+    by_regional = [
+        {"regional": str(label), "open": int(total or 0), "overdue": int(overdue or 0)}
+        for label, total, overdue in sorted(rows, key=lambda row: str(row[0]))
+    ]
+    return {
+        "open": sum(item["open"] for item in by_regional),
+        "overdue": sum(item["overdue"] for item in by_regional),
+        "by_regional": by_regional,
+    }
+
+
+def completed_without_team_model(db: Session, date_from: date, date_to: date, user: User, **filters) -> int:
+    """Finalizadas do período (mesmos filtros da Visão Geral, sem `team_models`) cujo responsável não
+    está atribuído a nenhum modelo de equipe. Existe para a Visão Geral avisar que o SLA "geral"
+    inclui produção que o filtro de modelo de equipe esconderia - o filtro com todos os modelos
+    marcados NÃO equivale a "sem filtro" (ver `_dimension_conditions`, `assigned_to_model`)."""
+    start, end = local_period_utc_bounds(date_from, date_to)
+    assigned = (
+        select(OperationResponsibleAssignment.id)
+        .where(func.lower(OperationResponsibleAssignment.responsible_name) == func.lower(OperationOrder.responsible))
+        .exists()
+    )
+    return int(
+        db.scalar(
+            select(func.count(OperationOrder.id)).where(
+                *_dimension_conditions(db, user, {**filters, "team_models": []}),
+                OperationOrder.closed_at.between(start, end),
+                ~assigned,
+            )
+        )
+        or 0
+    )
+
+
 def overview_collaborator_production(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
     """Finalizadas por responsável - o segundo nível do donut de modelo de equipe da Visão Geral.
 
