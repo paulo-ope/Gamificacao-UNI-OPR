@@ -157,23 +157,8 @@ export function WorkspaceAppShell({
           permissions={user.permissions}
           expanded={expanded}
           onExpandRequest={() => !expanded && toggleSidebar()}
+          onToggleSidebar={toggleSidebar}
         />
-        <div className={cn("border-t border-white/10", expanded ? "px-3 py-2" : "px-2 py-3")}>
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            aria-expanded={expanded}
-            aria-label={expanded ? "Recolher menu lateral" : "Expandir menu lateral"}
-            title={expanded ? "Recolher menu" : "Expandir menu"}
-            className={cn(
-              "flex h-9 items-center rounded-lg text-xs font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-white",
-              expanded ? "w-full gap-2 px-2" : "mx-auto w-9 justify-center",
-            )}
-          >
-            {expanded ? <PanelLeftClose className="h-5 w-5 shrink-0" /> : <PanelLeftOpen className="h-5 w-5 shrink-0" />}
-            {expanded ? <span>Recolher menu</span> : null}
-          </button>
-        </div>
         {expanded ? (
           <div className="flex items-center gap-3 border-t border-white/10 px-4 py-4">
             <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">{user.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
@@ -242,6 +227,7 @@ function ShellNavigation({
   permissions,
   expanded,
   onExpandRequest,
+  onToggleSidebar,
   closeOnNavigate = false,
 }: {
   activePath: string;
@@ -251,26 +237,56 @@ function ShellNavigation({
   expanded: boolean;
   /** Recolhido não há onde desenhar submenu: clicar em "expandir telas" abre a barra primeiro. */
   onExpandRequest?: () => void;
+  /** Setinha de recolher/expandir ao lado de "Visão Geral" (só na barra lateral; o drawer mobile não tem). */
+  onToggleSidebar?: () => void;
   closeOnNavigate?: boolean;
 }) {
+  const toggleButton = onToggleSidebar ? (
+    <button
+      type="button"
+      onClick={onToggleSidebar}
+      aria-expanded={expanded}
+      aria-label={expanded ? "Recolher menu lateral" : "Expandir menu lateral"}
+      title={expanded ? "Recolher menu" : "Expandir menu"}
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+    >
+      {expanded ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+    </button>
+  ) : null;
   return (
     <nav
       className={cn("sidebar-scroll min-h-0 flex-1 overflow-y-auto", expanded ? "p-3" : "px-2 py-3")}
       aria-label="Navegação do ecossistema"
     >
       <NavGroup label="Telas" expanded={expanded}>
-        {screens.map((screen) => (
-          <NavItem
-            key={screen.key}
-            href={screen.path}
-            label={screen.name}
-            description={screen.description}
-            icon={screen.icon}
-            selected={activePath === screen.path}
-            expanded={expanded}
-            closeOnNavigate={closeOnNavigate}
-          />
-        ))}
+        {screens.map((screen, index) => {
+          const item = (
+            <NavItem
+              key={screen.key}
+              href={screen.path}
+              label={screen.name}
+              description={screen.description}
+              icon={screen.icon}
+              selected={activePath === screen.path}
+              expanded={expanded}
+              closeOnNavigate={closeOnNavigate}
+            />
+          );
+          if (index !== 0 || !toggleButton) return item;
+          // Expandido: setinha pequena ao lado do primeiro item. Recolhido (76px) não há largura
+          // para os dois lado a lado, então ela fica logo abaixo, centralizada.
+          return expanded ? (
+            <div key={screen.key} className="flex items-center gap-1">
+              <div className="min-w-0 flex-1">{item}</div>
+              {toggleButton}
+            </div>
+          ) : (
+            <div key={screen.key} className="space-y-1">
+              {item}
+              <div className="flex justify-center">{toggleButton}</div>
+            </div>
+          );
+        })}
       </NavGroup>
       {modules.length ? (
         <NavGroup label="Módulos" expanded={expanded}>
