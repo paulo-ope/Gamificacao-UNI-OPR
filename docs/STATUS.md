@@ -13,7 +13,8 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-09-18** — branch `claude/suporte-sync-backfill-madrugada`
+**2026-10-07** — branch `claude/n1-incluir-grupo-117` (PR #54 mesclado na `master` e em produção; o
+texto abaixo sobre o checkout compartilhado é de 2026-09-18 e está desatualizado)
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
 compartilhado por várias sessões rodando em paralelo há alguns dias -
@@ -43,6 +44,42 @@ abaixo) - o erro de ambiente do SQLite-em-thread é intermitente, não indica
 regressão.
 
 ## O que foi feito recentemente
+
+- **Deploy de 2026-10-07 (PR #54, mesclado em `master` `3df4dce`; deploy feito na VM pelo usuário).** Três
+  commits: `dface07`, `59df45d`, `b520bef`. Na `master` também já estão os PRs #52 e #53 (aba N1 e grupo 117).
+  - **Pontos de atenção e recomendações na Visão Geral** (`operations/attention.py`,
+    `GET /api/operations/overview/attention-points`, blocos `overview-attention-points.tsx` e
+    `overview-recommendations.tsx`). **Não apareceram no deploy de 06/10 porque os arquivos nunca tinham sido
+    commitados** (ficaram só no checkout). Em produção só foi confirmado de fora: `/api/health` 200, logo 200 e a
+    rota nova responde 401 sem login (não 404); **a tela logada ainda precisa de conferência visual do usuário.**
+  - **Sincronização do OPA (Suporte).** (1) Sucesso apaga `last_error` (o aviso "A última sincronização falhou"
+    ficava para sempre). (2) `close_orphan_opa_import_runs` fecha como `interrupted` as runs presas em `running`
+    quando o lock consultivo do Postgres está livre (uma run só vira `running` com o lock adquirido) - era o que
+    mostrava "Sincronizando" e "rodando há 473h" e bloqueava importação manual. (3) `lock_timeout` de 5 s em
+    `_persist_run_terminal_status`: a sessão separada esperava para sempre pela linha que a sessão principal já
+    segurava (deadlock no mesmo processo, visto após queda de DNS do OPA). **O deadlock só ocorre no Postgres e não
+    foi reproduzido em teste (SQLite)** - o `lock_timeout` não foi exercitado de ponta a ponta.
+  - **Menu lateral:** logo `frontend/public/brand/uni-symbol.png`, botão de recolher movido para o rodapé, barra de
+    rolagem fina (`.sidebar-scroll`).
+  - **Não verificado / limitações.** Os 4 testes de endpoint de `test_operations_overview_attention_points.py` (e
+    ~100 outros de `operations`) dão erro no ambiente local (Python 3.14 + SQLite em thread), igual sem as mudanças;
+    os 20 de lógica passam. `docker compose exec backend` não tem pytest - rodar `python -m pytest` no host.
+- **Aberto: produção diária do Alyson (AUXILIAR) "não aparece" no Calendário Operacional.** Achado: o modelo de
+  equipe **AUXILIAR** (id 9) tem as 4 regras (`weekday/saturday/sunday/monthly`) com `enabled = false`
+  (os demais modelos têm dia útil ligado). `_classify_quantity` devolve `neutral` e a célula usa o estilo de "Sem
+  produção" (`text-slate-300`, quase invisível) mesmo com OS fechadas; o cabeçalho ainda mostra "META 4/DIA"
+  (ignora `enabled`). **Os dados estão corretos** (19 OS em out/2026, regional UNI - JARU; o cadastro dele é
+  MACHADINHO DOESTE). Correção de tela **escrita no checkout mas NÃO commitada e NÃO aprovada**:
+  `operations-monthly-calendar.tsx` (`performanceClass` legível quando há OS sem meta; cabeçalho "SEM META") e
+  `operations-calendar-helpers.ts` ("Sem meta neste dia"). Decisão pendente do usuário: manter e commitar ou
+  descartar; e, em paralelo, ligar as regras do AUXILIAR em Operação Analítica > equipes (configuração, em produção).
+- **Ambiente local (Docker) - o que pegou a sessão.** O frontend local roda como **build de produção**
+  (`node server.js`, sem bind mount): mudança no frontend só aparece depois de
+  `docker compose up -d --build frontend`. O banco local recebeu importação do OPA de 01/06 a 07/10 (277 mil
+  atendimentos) e 107 runs órfãs `running` foram marcadas `interrupted` (backup completo não versionado em
+  scratchpad, descartável). A aba "Atendimento IXC" leva ~28 s no banco local porque o painel espera todas as
+  chamadas (`Promise.all`) e `analytics/os-conversion` sozinha leva ~20 s - melhoria possível: carregar essa à
+  parte; não medido em produção.
 
 - **SGP Suporte → aba "Atendimento Suporte Interno N1", modernização visual do frontend e paginação dos
   detalhamentos (2026-10-06, pedidos do usuário).** Três commits locais na branch
