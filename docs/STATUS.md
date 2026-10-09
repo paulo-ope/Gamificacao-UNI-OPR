@@ -13,8 +13,8 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-09** — branch `claude/menu-lateral-seta-recolher` (PR único com o trabalho de 07-09/10, ver
-primeira entrada abaixo; o texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está
+**2026-10-09** — branch `claude/menu-lateral-seta-recolher` (PR #57 mesclado na `master` e **em produção**,
+ver primeira entrada abaixo; o texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está
 desatualizado)
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
@@ -66,7 +66,15 @@ regressão.
     `docs/opa-suite-api-referencia.md`.
   - **Renome "SGP Suporte" → "Suporte Interno"** (módulo, rótulos, Visão Geral, permissão `support:read`).
   - **Calendário da Operação:** produção sem meta avaliável fica legível e mostra "SEM META".
-  - **Pendente:** deploy na VM (backend + frontend); o "Pessoas" da busca depende de `admin:users:read`.
+  - **Deploy feito em 2026-10-09** (PR #57, merge `019f893`), na VM pelo dono do sistema. Checagem de
+    fumaça: `/api/health` 200 `{"status":"ok"}`, frontend 200 e `/suporte/tv` 200.
+  - **Pendente:** validação funcional logada em produção (ainda não confirmada): `alembic current` no
+    head, menu lateral ("Suporte Interno", sem "Pessoas" na Administração), Ctrl K › Pessoas, presença da
+    TV com número plausível (a TV depende do OPA responder em produção) e "SEM META" no calendário. O
+    "Pessoas" da busca depende de `admin:users:read`.
+  - **Falhas de teste do backend que já existiam** (não são deste PR): 121 failed + 332 errors, idênticos
+    na `master` e na branch (453 ids iguais) - `no such table` no arranque da aplicação sobre SQLite em
+    memória. Merece PR próprio.
 
 - **Deploy de 2026-10-07 (PR #54, mesclado em `master` `3df4dce`; deploy feito na VM pelo usuário).** Três
   commits: `dface07`, `59df45d`, `b520bef`. Na `master` também já estão os PRs #52 e #53 (aba N1 e grupo 117).
