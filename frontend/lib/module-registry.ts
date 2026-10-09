@@ -47,7 +47,7 @@ export const workspaceModules: readonly WorkspaceModule[] = [
   },
   {
     key: "support",
-    name: "SGP Suporte",
+    name: "Suporte Interno",
     description: "Atendimentos, tempos e motivos do suporte vindos do OPA Suite.",
     webPath: "/suporte",
     apiPrefix: "/api/support",

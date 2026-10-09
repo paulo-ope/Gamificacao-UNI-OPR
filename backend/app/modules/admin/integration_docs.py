@@ -71,7 +71,7 @@ _TAG_DESCRIPTIONS: dict[str, str] = {
     "point-balance": "Saldo de pontos e garantia por colaborador, pós-pagamento.",
     "collaborators": "Cadastro de colaboradores (técnicos, operadores) e estrutura organizacional.",
     "audit": "Log de auditoria de alterações na Gamificação Operacional.",
-    "support": "SGP Suporte: atendimentos, TMA/TMR, motivos, e o Atendimento IXC (indicador preditivo de incidente).",
+    "support": "Suporte Interno: atendimentos, TMA/TMR, motivos, e o Atendimento IXC (indicador preditivo de incidente).",
     "scheduling": "Agendamento: tempo de resposta, produtividade e fila de reagendamento.",
     "localiza": "UNI Localiza: localização de login/cliente a partir do IXC - dado sensível de cliente, tratar com cuidado extra.",
     "management": "Gestão Integrada: estrutura operacional, casos de produtividade abaixo da meta, justificativas.",

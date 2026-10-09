@@ -609,7 +609,7 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         )}
         {canSeeSupport ? (
           <OverviewShareDonut
-            eyebrow="SGP Suporte"
+            eyebrow="Suporte Interno"
             title="Atendimentos por canal"
             subtitle="Somente o período - os filtros de O.S. não se aplicam a atendimentos."
             items={attendancesByChannel}

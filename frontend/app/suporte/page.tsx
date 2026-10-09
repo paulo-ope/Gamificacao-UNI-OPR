@@ -248,14 +248,14 @@ export default function SupportPage() {
   return (
     <WorkspaceAppShell
       activePath="/suporte"
-      title="SGP Suporte"
+      title="Suporte Interno"
       subtitle="Atendimentos, tempos e motivos vindos do OPA Suite"
     >
       {(user) => (
         <Suspense
           fallback={
             <p className="py-16 text-center text-sm text-slate-500" aria-busy="true">
-              Carregando SGP Suporte...
+              Carregando Suporte Interno...
             </p>
           }
         >
@@ -418,7 +418,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
         await loadAttendantBreakdown(nextPeriod, nextFilters);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Falha ao carregar o SGP Suporte.");
+      setError(reason instanceof Error ? reason.message : "Falha ao carregar o Suporte Interno.");
     } finally {
       setLoading(false);
     }
@@ -645,6 +645,17 @@ function SupportPageContent({ user }: { user: AuthUser }) {
     updateUrl("data", appliedPeriod, nextFilters);
     void loadAttendances({ ...overviewFilters(appliedPeriod, nextFilters), page: 1 });
   }
+
+  // Link `?tab=data&attendant_id=` (busca global por pessoa) com o SGP já aberto: os filtros só eram
+  // semeados na montagem, então o atendente pedido ficava ignorado. Só age quando a URL traz um
+  // atendente diferente do filtro atual - na montagem ele já vem igual e nada acontece.
+  const requestedAttendantId = initialFilters.attendant_id;
+  useEffect(() => {
+    if (requestedAttendantId && requestedAttendantId !== attendanceFilters.attendant_id) {
+      navigateToAttendantData(requestedAttendantId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedAttendantId]);
 
   async function loadAttendanceTimeline(id: number) {
     setAttendanceTimelineLoading(true);

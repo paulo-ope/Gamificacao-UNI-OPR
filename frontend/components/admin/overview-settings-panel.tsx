@@ -30,7 +30,7 @@ const GROUP_LABEL: Record<OperationOverviewFilterOption["group"], { title: strin
     hint: "Recortam os indicadores, o quadro por filial e os gráficos de produção.",
   },
   support: {
-    title: "Filtros do SGP Suporte",
+    title: "Filtros do Suporte Interno",
     hint: "Recortam SÓ os blocos de atendimento - aceitam vários valores cada.",
   },
 };

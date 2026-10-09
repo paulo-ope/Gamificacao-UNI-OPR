@@ -28,6 +28,7 @@ export type Permission =
   | "operations:manage_team_models"
   | "operations:manage_own_team_members"
   | "operations:manage_subjects"
+  | "operations:manage_sla_groups"
   | "operations:view_order_details"
   | "operations:view_openings"
   | "operations:view_sla"

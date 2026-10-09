@@ -131,6 +131,97 @@ lista separada por vírgula na querystring.
 seção de Atendimentos, por reaproveitar o mesmo conjunto de filtros dessa família de
 rotas.
 
+### TV do SGP Suporte (`/tv/snapshot`)
+
+| Método | Path | Descrição | Permissão |
+|---|---|---|---|
+| GET | `/tv/snapshot` | Tudo o que a TV de Suporte (`/suporte/tv`) mostra, em uma chamada, sempre sobre **hoje** no fuso `America/Porto_Velho`. Sem parâmetros. Só agregados: nenhum atendimento individual nem nome de cliente. | `support:read` |
+
+Código: `opa_tv_service.py` (regra), `tv_schemas.py` (contrato). Os números reaproveitam
+`opa_overview_service` e os serviços IXC — a TV nunca mostra um valor diferente da tela de
+Suporte para a mesma métrica. Blocos do payload:
+
+- `kpis` — atendimentos de hoje (e total do dia anterior, **dia inteiro**, sem % de variação
+  porque hoje é parcial), encerrados, taxa de encerramento, `open_now`, TMR humano, 1ª
+  resposta e avaliação, mais `tmr_all_responses` (TMR geral, **inclui resposta de bot**):
+  `current_seconds`, `previous_seconds`, `target_seconds`, `status` (`ok` ≤ meta, `above` > meta,
+  `no_data`) e `coverage` (`count`/`total`).
+- `open_now` — atendimentos **sem encerramento abertos nas últimas 24 h** (não depende da virada
+  do dia; atendimento aberto há mais de 24 h e nunca encerrado não entra).
+- `hourly` — atendimentos abertos por hora local hoje contra a média do **mesmo dia da semana**
+  nas últimas 4 semanas. Só semanas com dado entram na média (`baseline_weeks_used`); semana sem
+  nenhum atendimento é lacuna de importação, não "zero". Horas futuras vêm `today: null`.
+- `top_reasons`, `channels`, `bot_human` — mesmas funções da Visão Geral, recortadas em hoje. (`bot_human` continua no payload, mas a TV **não o exibe mais** — o bloco "Bot e humano" foi retirado a pedido da gestão.)
+- `attendants` — top 5 por volume do dia, **só atendentes humanos** (o TMR de cada um é o **TMR geral**, que conta a resposta do bot — `average_tmr_seconds`, o mesmo critério do TMR principal; não é o TMR só-humano) (agente virtual fica de fora,
+  seja por cadastro manual ativo, seja por `tipo="bot"` da dimensão — mesma regra de
+  `resolve_attendant_type`).
+- `radar` — **só protocolos operacionais (assunto 90 do IXC, "Registro de Atendimento Operacional") e só de
+  hoje.** Código: `ixc_operational_radar.py`. Protocolos financeiros, renovação, plano, instalação etc.
+  ficam de fora (antes o radar contava tudo e ~40% era financeiro). Referência ("esperado"): a **mesma
+  janela do dia, no mesmo dia da semana, nas últimas 4 semanas**; semana sem nenhum protocolo operacional
+  no dia inteiro é lacuna de importação e não entra como zero (`baseline_weeks_used` diz quantas entraram).
+  **Horário:** o IXC entrega a data em hora local sem fuso e a importação a grava como se fosse UTC (`created_at` = hora de parede de Porto Velho com etiqueta UTC); o radar lê assim, **sem converter de novo** (converter deslocava tudo 4 h). Partes: `pace` (total de hoje até agora contra o esperado até esta
+  hora: `normal`/`attention` ≥ ×1,25/`critical` ≥ ×1,5, com excesso mínimo de 5), `bursts` (últimas 1, 2 e 6 h,
+  sempre dentro de hoje; ativa quando passa de `max(esperado + 2 desvios, ×1,35, +2)` e tem ≥ 3 protocolos) e
+  `cities_at_risk` (cidades com ≥ 5 protocolos hoje, ≥ ×1,5 e ≥ +3 sobre o esperado; top 3, com
+  `today_count`/`expected`). O campo `momentum` (tendência de 3 dias) foi **removido** do radar da TV: comparava
+  dias úteis com fim de semana e dava "+193%" sem haver escalada.
+- `n1` — protocolos do Suporte Interno N1 de hoje.
+- `sync` — `last_success_at` e `consecutive_failures` da sincronização do OPA (nunca a mensagem de
+  erro técnica).
+- `unavailable` — nomes dos blocos que falharam (ex.: `"radar.bursts"`). **Cada bloco falha
+  isolado**: o bloco vem `null` e o resto da TV continua. `null` significa "não sabemos", nunca
+  "tudo normal".
+
+**Filtro de departamento da TV.** O snapshot considera só os departamentos configurados
+(`support_tv_department_ids`, ids separados por vírgula em `app_settings`; **vazio = todos**). O
+filtro vale para todos os blocos do OPA (`kpis`, `open_now`, `hourly`, motivos, canais, bot/humano,
+atendentes, comparação com o dia anterior). O radar de incidente e o N1 vêm do IXC e **não** são
+afetados. O recorte aplicado volta em `department_filter` (`department_ids`/`department_names`).
+
+| Método | Path | Descrição | Permissão |
+|---|---|---|---|
+| GET | `/tv/config` | Departamentos escolhidos, lista de departamentos disponíveis (os que já apareceram em atendimentos importados) e a meta do TMR. | `support:sync_opa` |
+| PUT | `/tv/config` | Grava os departamentos (`department_ids`; lista vazia = todos). `422` se algum id não existir nos atendimentos importados ou se passar de 50. Grava auditoria (`support_tv_config`). | `support:sync_opa` |
+
+| Método | Path | Descrição | Permissão |
+|---|---|---|---|
+| GET | `/tv/presence` | Status (presença) dos atendentes da TV. A TV consulta a cada ~10 s, separado do snapshot (30 s). `502` com mensagem amigável se o OPA não responder. | `support:read` |
+
+Código: `opa_presence_service.py`. A presença vem do campo **`online`** de cada usuário em
+`GET /api/v1/usuario/` do OPA (confirmado ao vivo em 2026-10-08). Códigos: `on` online, `off`
+offline, `pause` em pausa, `au` ausente, `oc` ocupado, `call` em ligação. **O campo `status` do
+mesmo registro não é presença**: é só ativo (`A`) / inativo (`I`) do cadastro. Código desconhecido
+vira "Outros" e é listado em `unmapped_codes`.
+
+- **Quem conta:** usuário humano ativo que atendeu ao menos uma vez nos últimos 30 dias, nos
+  departamentos escolhidos na configuração da TV (qualquer departamento se não houver escolha). O
+  id do atendente no atendimento é o `_id` do usuário no OPA.
+- `available_percentage` = online ÷ total (mesma conta do painel do OPA: 6 de 48 = 12,5%).
+- `agents` / `agents_total` — quem está **em ligação, ocupado, em pausa ou ausente** (online e offline são muitos e não ficam na lista), com `state_label` e `seconds_in_state`. Ordem: ligação, ocupado, pausa, ausente; dentro de cada estado, o mais antigo primeiro. A lista traz no máximo 4 (`AGENT_LIST_LIMIT`); `agents_total` é o total real, para a tela mostrar "+N outros".
+- **`seconds_in_state` é uma APROXIMAÇÃO.** O OPA não expõe o instante em que o status mudou; usamos `updatedAt` do usuário (última gravação do registro), que acompanha a troca de presença, mas também se move com qualquer outra alteração do cadastro. Sem data válida vem `null` e a tela omite o tempo (nunca 0 nem um palpite).
+- **`ringing_available: false` — a API não informa ligação tocando.** Nenhum campo de conexão
+  (`conexoes`, `sip`, `siga_me`) traz isso; a TV declara na tela em vez de sugerir que monitora.
+- A lista de usuários do OPA fica em cache por 5 s, para várias TVs/abas não multiplicarem as
+  chamadas.
+
+**Mudança da API do OPA (2026-10-08):** o OPA passou a recusar listagens sem filtro
+(`400 NO_ARGUMENT_ERROR: At least one valid filter is required`) em usuário, departamento, etiqueta
+e cliente — a sincronização de dimensões falhava em silêncio (só um aviso no log). Correção em
+`OpaClient.list_collection_union`: junta consultas por um campo de valores conhecidos e deduplica por
+`_id` — usuários por `tipo` (user, bot), departamentos por `recebeAtendimento` (true, false) e
+clientes por `status` (A, I). **Ainda não corrigido:** etiquetas (só aceitam `nome` exato, sem como
+enumerar) e motivos (a rota agora é `/api/v1/motivo` e o token responde `Invalid permissions
+profile` — falta liberar a permissão no perfil de API do OPA). O nome do motivo do atendimento
+continua vindo do próprio payload do atendimento.
+
+**Meta do TMR geral:** 140 s (02:20). Vem da configuração do sistema
+`support_tv_tmr_target_seconds` (valor inteiro em segundos, entre 10 e 3600); ausente ou inválida,
+vale o padrão 140. Não há tela de edição — ajuste direto em `app_settings`.
+
+**Histórico:** só dado novo. O TMR geral (`tmr_all_responses_seconds`) só existe para atendimentos
+importados depois da coluna; por isso a cobertura aparece ao lado do número.
+
 ### Tickets IXC / Analytics IXC
 
 Camada "clássica" (KPIs por mês-calendário) e camada "analytics" (Fases 1–6 do plano de

@@ -40,7 +40,7 @@ export function OverviewSupportCard({
 }) {
   return (
     <OverviewBlock
-      eyebrow="SGP Suporte"
+      eyebrow="Suporte Interno"
       title="Atendimentos do período"
       subtitle="Somente o período - os filtros de O.S. não se aplicam a atendimentos."
       actions={
@@ -53,7 +53,7 @@ export function OverviewSupportCard({
         </Link>
       }
       state={state}
-      deniedLabel="Seu perfil não tem acesso ao SGP Suporte."
+      deniedLabel="Seu perfil não tem acesso ao Suporte Interno."
     >
       <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4">
         <SummaryMetric

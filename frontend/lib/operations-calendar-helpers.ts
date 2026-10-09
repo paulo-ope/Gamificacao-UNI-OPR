@@ -58,5 +58,6 @@ export const PERFORMANCE_LABEL: Record<OperationPerformanceBand, string> = {
 
 export function performanceLabel(performance: OperationPerformanceBand, quantity: number, model: OperationCalendarTeamModel | null) {
   if (!model && quantity > 0) return "Sem meta configurada";
+  if (performance === "neutral" && quantity > 0) return "Sem meta neste dia";
   return PERFORMANCE_LABEL[performance];
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { WorkspaceAppShell } from "@/components/workspace/app-shell";
@@ -221,9 +221,54 @@ function AdminPageContent({ user }: { user: AuthUser }) {
   useEffect(() => {
     const tab = searchParams.get("tab");
     const person = searchParams.get("person");
-    if (tab && ADMIN_NAV_ITEMS.some((item) => item.value === tab)) setActiveTab(tab as AdminTab);
+    if (tab && (tab === "ai_governance" || ADMIN_NAV_ITEMS.some((item) => item.value === tab))) setActiveTab(tab as AdminTab);
     if (person) setPersonSearch(person);
   }, [searchParams]);
+
+  // `?profile=<id>` (vem da busca global): abre o editor do perfil assim que a lista carrega.
+  // Abre uma única vez por link: sem isso, salvar recarregaria a lista e reabriria o editor.
+  const openedDeepLinks = useRef(new Set<string>());
+  const requestedProfileId = Number(searchParams.get("profile")) || null;
+  useEffect(() => {
+    if (!requestedProfileId) {
+      openedDeepLinks.current.forEach((key) => key.startsWith("profile:") && openedDeepLinks.current.delete(key));
+      return;
+    }
+    if (openedDeepLinks.current.has(`profile:${requestedProfileId}`)) return;
+    const profile = profiles.find((item) => item.id === requestedProfileId);
+    if (!profile) return;
+    openedDeepLinks.current.add(`profile:${requestedProfileId}`);
+    openProfileEditor({
+      id: profile.id,
+      name: profile.name,
+      description: profile.description || "",
+      active: profile.active,
+      permission_keys: profile.permission_keys,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedProfileId, profiles]);
+
+  // `?user=<id>` (vem da busca global): abre o editor da conta assim que a lista carrega.
+  const requestedUserId = Number(searchParams.get("user")) || null;
+  useEffect(() => {
+    if (!requestedUserId) {
+      openedDeepLinks.current.forEach((key) => key.startsWith("user:") && openedDeepLinks.current.delete(key));
+      return;
+    }
+    if (openedDeepLinks.current.has(`user:${requestedUserId}`)) return;
+    const row = users.find((item) => item.id === requestedUserId);
+    if (!row) return;
+    openedDeepLinks.current.add(`user:${requestedUserId}`);
+    setUserDraft({
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      password: "",
+      active: row.active,
+      access_profile_ids: row.access_profile_ids,
+      managed_regionals: row.managed_regionals,
+    });
+  }, [requestedUserId, users]);
 
   if (!canAdmin) {
     return (

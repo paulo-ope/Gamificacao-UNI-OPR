@@ -247,6 +247,7 @@ class OpaClient:
         max_records: int = 5000,
     ) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
         skip = 0
         while len(records) < max_records:
             body = {
@@ -265,8 +266,18 @@ class OpaClient:
             if not page_records:
                 return records
 
+            # O OPA às vezes ignora `skip`/`limit` e devolve SEMPRE a coleção inteira (visto ao vivo
+            # em 2026-10-08 no /usuario filtrado: 277 registros por página, para qualquer skip). Sem
+            # esta guarda a listagem repetia a mesma página até o teto de `max_records`, inflando
+            # contagens (a presença da TV chegou a 2.653 "atendentes"). Página sem nenhum `_id` novo
+            # = a API não avançou: encerra. Registro sem `_id` nunca é descartado.
+            fresh = [item for item in page_records if item.get("_id") is None or str(item["_id"]) not in seen_ids]
+            if not fresh:
+                return records
+            seen_ids.update(str(item["_id"]) for item in fresh if item.get("_id") is not None)
+
             remaining = max_records - len(records)
-            records.extend(page_records[:remaining])
+            records.extend(fresh[:remaining])
             if total is not None and len(records) >= total:
                 return records
             if total is None and len(page_records) < limit:
@@ -276,14 +287,50 @@ class OpaClient:
         logger.warning("colecao_interrompida_por_limite path=%s max_records=%s", path, max_records)
         return records
 
+    def list_collection_union(
+        self,
+        path: str,
+        filter_variants: list[dict[str, Any]],
+        *,
+        max_records: int = 5000,
+    ) -> list[dict[str, Any]]:
+        """Lista uma coleção inteira juntando várias consultas filtradas, sem duplicar por `_id`.
+
+        Achado de 2026-10-08 (probe ao vivo): o OPA Suite passou a recusar com 400
+        (`NO_ARGUMENT_ERROR: At least one valid filter is required`) qualquer listagem de usuário,
+        departamento, etiqueta e cliente sem filtro - e cada coleção aceita só alguns campos. Sem
+        enumerar por um campo de valores conhecidos, a sincronização de dimensões falhava inteira
+        (e só deixava um aviso no log). A união de variantes que cobrem TODOS os valores possíveis do
+        campo devolve a coleção completa tanto se o OPA respeitar o filtro quanto se o ignorar."""
+        merged: dict[str, dict[str, Any]] = {}
+        for index, filters in enumerate(filter_variants):
+            records = self.list_collection(path, filters=filters, max_records=max_records)
+            for position, record in enumerate(records):
+                key = str(record.get("_id") or f"sem-id-{index}-{position}")
+                merged.setdefault(key, record)
+        return list(merged.values())
+
     def list_users(self) -> list[dict[str, Any]]:
-        return self.list_collection("/api/v1/usuario/")
+        # `tipo` é o filtro aceito; os dois valores existentes cobrem todos os usuários.
+        return self.list_collection_union("/api/v1/usuario/", [{"tipo": "user"}, {"tipo": "bot"}])
+
+    def list_user_presence(self) -> list[dict[str, Any]]:
+        """Usuários humanos com o campo `online` (presença). Só `tipo=user`: bot não tem presença
+        relevante para a TV e o filtro é obrigatório no OPA (ver `list_collection_union`)."""
+        return self.list_collection("/api/v1/usuario/", filters={"tipo": "user"})
 
     def list_reasons(self) -> list[dict[str, Any]]:
+        # ATENÇÃO (2026-10-08): o OPA moveu a listagem para `/api/v1/motivo`, que exige permissão
+        # no perfil de API do token ("Invalid permissions profile"). Enquanto a permissão não for
+        # liberada no OPA, esta chamada continua falhando - o nome do motivo do atendimento segue
+        # vindo do próprio payload do atendimento, não desta dimensão.
         return self.list_collection("/api/v1/atendimento/motivo")
 
     def list_departments(self) -> list[dict[str, Any]]:
-        return self.list_collection("/api/v1/departamento/")
+        # `recebeAtendimento` (booleano) é o único filtro enumerável aceito pelo OPA aqui.
+        return self.list_collection_union(
+            "/api/v1/departamento/", [{"recebeAtendimento": True}, {"recebeAtendimento": False}]
+        )
 
     def list_tags(self) -> list[dict[str, Any]]:
         return self.list_collection("/api/v1/etiqueta/")
@@ -295,7 +342,10 @@ class OpaClient:
         # atendimentos sem nome de cliente. Mantém uma margem de segurança bem
         # acima do observado — `list_collection` já loga um aviso se esse teto
         # for atingido (colecao_interrompida_por_limite).
-        return self.list_collection("/api/v1/cliente/", max_records=SUPPORT_OPA_CLIENT_MAX_RECORDS)
+        # O OPA exige um filtro; `status` (A/I) é enumerável e a união cobre toda a base.
+        return self.list_collection_union(
+            "/api/v1/cliente/", [{"status": "A"}, {"status": "I"}], max_records=SUPPORT_OPA_CLIENT_MAX_RECORDS
+        )
 
     def list_messages(self, id_rota: str) -> list[dict[str, Any]]:
         return self.list_collection(

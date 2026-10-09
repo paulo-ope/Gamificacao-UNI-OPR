@@ -249,7 +249,10 @@ function performanceClass(
   quantity: number,
   model: OperationCalendarTeamModel | null,
 ) {
-  if (!model && quantity > 0)
+  // Com produção mas sem meta avaliável (sem modelo, regra do dia desligada ou folga de escala) o
+  // número tem que continuar legível: o estilo "neutral" é o de "Sem produção" (text-slate-300),
+  // quase invisível - achado real de 2026-10-07 com o modelo AUXILIAR, de regras desligadas.
+  if ((!model || performance === "neutral") && quantity > 0)
     return "border-slate-200 bg-slate-50 text-slate-700";
   return PERFORMANCE[performance].className;
 }
@@ -1093,7 +1096,9 @@ export function OperationsMonthlyCalendar({
                               title={collaborator.team_model?.name}
                             >
                               {collaborator.team_model
-                                ? `${collaborator.team_model.name} · META ${ruleFor(collaborator.team_model, "weekday")?.target_quantity ?? collaborator.team_model.daily_target}/DIA`
+                                ? ruleFor(collaborator.team_model, "weekday")?.enabled === false
+                                  ? `${collaborator.team_model.name} · SEM META`
+                                  : `${collaborator.team_model.name} · META ${ruleFor(collaborator.team_model, "weekday")?.target_quantity ?? collaborator.team_model.daily_target}/DIA`
                                 : "SEM MODELO DE EQUIPE"}
                             </p>
                           </th>
