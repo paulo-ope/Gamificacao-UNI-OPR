@@ -20,6 +20,7 @@ import {
   Upload,
   Users,
 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -169,6 +170,27 @@ export function OperationsTeamConfiguration({
             ? "sla-groups"
             : "sync",
   );
+  // Seção e busca pedidas pela URL (`?tab=teams&sub=members&q=<nome>`), vindas da busca global.
+  // Só vale se o usuário enxerga a seção; senão fica na padrão.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const requested = searchParams.get("sub");
+    const allowed: Record<string, boolean> = {
+      models: canManageTeamModels,
+      capacity: canManageTeamModels,
+      members: canAccessTeamsSection,
+      subjects: canManageSubjects,
+      sync: canSyncIxc,
+      "sla-groups": canManageSlaGroups,
+    };
+    if (requested && allowed[requested]) setSection(requested as typeof section);
+    const q = searchParams.get("q");
+    if (q) {
+      setSearch(q);
+      setMemberPage(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const [subjectMappings, setSubjectMappings] = useState<
     OperationSubjectTypeMapping[]
   >([]);

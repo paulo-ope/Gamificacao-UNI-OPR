@@ -331,7 +331,7 @@ function ModuleNavEntry({
   closeOnNavigate: boolean;
 }) {
   const icon = moduleIcon(module.key);
-  const screens = visibleModuleScreens(module.key, icon, permissions);
+  const screens = visibleModuleScreens(module.key, icon, permissions).filter((screen) => !screen.searchOnly);
   const isActiveModule = activePath === module.web_path;
   // Abre já aberto no módulo em que se está: quem entrou na Operação Analítica vê as telas dela
   // sem precisar de um clique extra.
@@ -410,11 +410,15 @@ function ModuleScreenLink({
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const selected = pathname === href.split("?")[0] && (searchParams.get("tab") === screen.value || (!searchParams.get("tab") && isDefault));
+  // Tela com rota própria (sem `?tab=`): selecionada só pelo caminho.
+  const selected = screen.path
+    ? pathname === screen.path
+    : pathname === href.split("?")[0] && (searchParams.get("tab") === screen.value || (!searchParams.get("tab") && isDefault));
   const link = (
     <Link
       href={href}
       title={screen.description}
+      {...(screen.opensInNewTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
       aria-current={selected ? "page" : undefined}
       className={cn("block rounded-lg px-3 py-2 text-xs leading-5 transition-colors hover:bg-white/10 hover:text-white", selected ? "bg-white/10 font-semibold text-white ring-1 ring-inset ring-white/10" : "text-slate-300")}
     >

@@ -166,6 +166,21 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
   const [configTab, setConfigTab] = useState("rules");
   const [auditTab, setAuditTab] = useState("scoring");
   const [rankingTab, setRankingTab] = useState("collaborators");
+  const [pendingTab, setPendingTab] = useState("subjects");
+  // Sub-aba pedida pela URL (`?tab=config&sub=leadership`), vinda da busca global. Valores
+  // espelham os `<TabsTrigger>` de cada aba abaixo.
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    const sub = searchParams.get("sub");
+    // `?q=` pré-preenche a busca do ranking (vem da busca global por pessoa).
+    const q = searchParams.get("q");
+    if (tab === "ranking" && q) setRankingSearch(q);
+    if (!sub) return;
+    if (tab === "ranking" && ["collaborators", "leaders"].includes(sub)) setRankingTab(sub);
+    if (tab === "pending" && ["subjects", "diagnoses"].includes(sub)) setPendingTab(sub);
+    if (tab === "config" && ["rules", "collaborators", "leadership", "users"].includes(sub)) setConfigTab(sub);
+    if (tab === "audit" && ["scoring", "trail"].includes(sub)) setAuditTab(sub);
+  }, [searchParams]);
   const [analysisPeriod, setAnalysisPeriod] = useState<AnalysisPeriod>({});
   const [selectedRegionals, setSelectedRegionals] = useState<string[]>([]);
   const [rankingSearch, setRankingSearch] = useState("");
@@ -1282,7 +1297,7 @@ function GamificacaoPageContent({ user }: { user: AuthUser }) {
                     </div>
                   </section>
 
-                  <Tabs defaultValue="subjects" className="min-w-0 space-y-4">
+                  <Tabs value={pendingTab} onValueChange={setPendingTab} className="min-w-0 space-y-4">
                     <TabsList aria-label="Tipo de pendência" className="h-auto gap-1 p-1"><TabsTrigger value="subjects" className="gap-2 px-4 py-2">Assuntos <Badge>{unmappedSubjects.length}</Badge></TabsTrigger><TabsTrigger value="diagnoses" className="gap-2 px-4 py-2">Diagnósticos <Badge>{unmappedDiagnoses.length}</Badge></TabsTrigger></TabsList>
                     <TabsContent value="subjects" forceMount className="mt-0 data-[state=inactive]:hidden">
                   <UnmappedSubjectsPanel
