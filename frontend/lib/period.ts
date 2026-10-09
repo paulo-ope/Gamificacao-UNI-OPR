@@ -61,3 +61,13 @@ export function percentChange(current: number | null | undefined, previous: numb
   if (previous === 0) return null;
   return Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
 }
+
+/**
+ * Início da janela "no ano" que termina em `dateTo`: 1º de janeiro do ano de `dateTo`, nunca antes
+ * de `allowedFrom` (o início do ano operacional que o backend aceita - mesma razão de
+ * `previousWindow`: melhor cortar a janela do que tomar um 422).
+ */
+export function yearStartFor(dateTo: string, allowedFrom?: string | null): string {
+  const start = `${dateTo.slice(0, 4)}-01-01`;
+  return allowedFrom && allowedFrom > start ? allowedFrom : start;
+}

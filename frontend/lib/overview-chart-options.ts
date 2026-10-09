@@ -460,74 +460,167 @@ export function buildShareDonutOption(slices: readonly ShareSlice[], options: { 
   };
 }
 
-/** Mesma paleta de `slaTone`/`slaSystemTone` (lib/operations-sla.ts), em hex - ECharts não lê
- * classe Tailwind. Mantém os três limiares (≥80 verde, ≥60 âmbar, abaixo vermelho) e o cinza de
- * "sem dado" idênticos ao badge de SLA que o resto da tela já usa - o gauge não pode inventar um
- * quarto critério de cor. */
-const SLA_GAUGE_TONE_COLOR: Record<ReturnType<typeof slaTone>, string> = {
-  success: "#16a34a",
-  warning: "#f59e0b",
-  danger: "#ef4444",
-  neutral: "#94a3b8",
+/**
+ * Anel de SLA de UM cartão (uma tecnologia, ou o "Geral"): arco com gradiente e ponta arredondada
+ * sobre um trilho cinza, percentual no centro. Um gráfico por cartão (e não um só com N séries)
+ * porque cada cartão tem o próprio bloco de variação/meta embaixo e precisa de altura fixa.
+ * A cor segue o tom do SLA (`slaTone`): verde na meta, âmbar entre 60 e 80, vermelho abaixo de 60;
+ * sem dado desenha só o trilho e um traço no centro.
+ */
+const SLA_RING_COLORS: Record<ReturnType<typeof slaTone>, [string, string]> = {
+  success: ["#0d9488", "#34d399"],
+  warning: ["#d97706", "#fbbf24"],
+  danger: ["#dc3545", "#fb7185"],
+  neutral: ["#94a3b8", "#cbd5e1"],
 };
 
-/**
- * Três gauges de SLA lado a lado (uma tecnologia cada: Fibra Urbana, Fibra Rural, Rádio),
- * pedido do usuário em 2026-09-17 pra reproduzir na Visão Geral o "Painel do CEO" que ele
- * recebe de outro sistema. Uma única instância de ECharts com 3 séries `gauge` independentes
- * (uma por `center` horizontal) - não 3 componentes separados, para o card não desalinhar em
- * telas estreitas (o grid do ECharts distribui os 3 centros em % da MESMA largura).
- *
- * `items` já vem de `GET /operations/sla?group_by=technology_group` (`operationsApi.sla`) -
- * este builder só escolhe, para cada rótulo em `groups`, o item cujo `label` bate; um grupo sem
- * O.S. no período (ex.: nenhuma Ativação Rádio no mês) desenha um gauge zerado, não desaparece -
- * sumir sem aviso pareceria bug de filtro, não ausência real de volume.
- */
-export function buildSlaTechnologyGaugeOption(
-  items: readonly OperationSlaItem[],
-  groups: readonly string[],
-  options: { meta?: number } = {},
-): EChartsOption {
-  const meta = options.meta ?? 80;
-  const byLabel = new Map(items.map((item) => [item.label, item]));
-  const slotWidth = 100 / groups.length;
-
+export function buildSlaRingOption(rate: number | null): EChartsOption {
+  const [from, to] = SLA_RING_COLORS[slaTone(rate)];
   return {
-    animationDuration: 350,
-    series: groups.map((group, index) => {
-      const item = byLabel.get(group) ?? null;
-      const rate = item?.sla_rate ?? null;
-      const tone = slaTone(rate);
-      const color = SLA_GAUGE_TONE_COLOR[tone];
-      const centerX = slotWidth * index + slotWidth / 2;
-      return {
+    animation: false,
+    series: [
+      {
         type: "gauge",
-        center: [`${centerX}%`, "58%"],
-        radius: "82%",
-        startAngle: 210,
-        endAngle: -30,
+        center: ["50%", "52%"],
+        radius: "96%",
+        startAngle: 90,
+        endAngle: -270,
         min: 0,
         max: 100,
-        splitNumber: 5,
-        progress: { show: true, width: 10, itemStyle: { color } },
-        axisLine: { lineStyle: { width: 10, color: [[1, CHART_INK.gridline]] } },
         pointer: { show: false },
+        progress: {
+          show: rate !== null,
+          roundCap: true,
+          width: 11,
+          itemStyle: {
+            color: {
+              type: "linear",
+              x: 0,
+              y: 0,
+              x2: 1,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: from },
+                { offset: 1, color: to },
+              ],
+            },
+          },
+        },
+        axisLine: { lineStyle: { width: 11, color: [[1, "#e6edf6"]] } },
         axisTick: { show: false },
         splitLine: { show: false },
         axisLabel: { show: false },
         anchor: { show: false },
         title: { show: false },
         detail: {
-          show: true,
-          valueAnimation: true,
-          offsetCenter: [0, "6%"],
-          formatter: (value: number) => (rate === null ? "-" : `${value}%`),
-          fontSize: 20,
-          fontWeight: 700,
+          offsetCenter: [0, 0],
+          fontSize: 21,
+          fontWeight: 800,
           color: CHART_INK.primary,
+          formatter: (value: number) =>
+            rate === null ? "-" : `${shareFormat.format(value)}{u|%}`,
+          rich: { u: { fontSize: 11, color: "#94a3b8", padding: [6, 0, 0, 1] } },
         },
         data: [{ value: rate ?? 0 }],
-      };
-    }),
+      },
+    ],
+  };
+}
+
+/**
+ * SLA acumulado (linha) sobre o estoque de backlog (barras) no mesmo gráfico, com a meta de SLA
+ * marcada. O backlog só tem fotografia nos dias em que a coleta existiu (`backlog_daily_trend`):
+ * dia sem fotografia fica sem barra, nunca zero. O alinhamento é por DATA (`period_start` do dia
+ * == `snapshot_date`), não por índice - os dois históricos podem ter tamanhos diferentes.
+ */
+export function buildOverviewSlaBacklogOption(
+  trend: OperationTrendSeries,
+  backlogTrend: OperationBacklogTrend | null,
+  target: number,
+  previousTrend: OperationTrendSeries | null = null,
+): EChartsOption {
+  const labels = trend.points.map((point) => trendPointLabel(point.period_start, point.period_end, trend.granularity));
+  const backlogByDate = new Map((backlogTrend?.points ?? []).map((point) => [point.snapshot_date, point.backlog]));
+  const series: NonNullable<EChartsOption["series"]> = [
+    {
+      name: "Backlog",
+      type: "bar",
+      yAxisIndex: 1,
+      barMaxWidth: 30,
+      data: trend.points.map((point) => backlogByDate.get(point.period_start) ?? null),
+      itemStyle: { color: "#fcd9a0", borderRadius: [6, 6, 0, 0] },
+    },
+    {
+      name: "SLA acumulado",
+      type: "line",
+      smooth: 0.2,
+      symbolSize: 6,
+      connectNulls: false,
+      data: trend.points.map((point) => point.sla_cumulative_rate),
+      lineStyle: { color: "#2563eb", width: 2.5 },
+      itemStyle: { color: "#2563eb" },
+      markLine: {
+        silent: true,
+        symbol: "none",
+        label: { formatter: `Meta ${target}%`, position: "insideEndTop", color: "#dc3545", fontSize: 10 },
+        lineStyle: { color: "#dc3545", type: "dashed" },
+        data: [{ yAxis: target }],
+      },
+    },
+  ];
+  if (previousTrend) {
+    series.push({
+      name: "SLA acumulado · período anterior",
+      type: "line",
+      smooth: 0.2,
+      symbol: "none",
+      data: previousTrend.points.map((point) => point.sla_cumulative_rate),
+      lineStyle: { color: "#94a3b8", width: 2, type: "dashed" },
+    });
+  }
+  return {
+    tooltip: { trigger: "axis" },
+    legend: { top: 0, right: 0, itemWidth: 10, itemHeight: 10, icon: "roundRect", textStyle: { color: "#64748b", fontSize: 11 } },
+    grid: { left: 40, right: 44, top: 34, bottom: 26 },
+    xAxis: { type: "category", data: labels, axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: "#94a3b8", fontSize: 10, hideOverlap: true } },
+    yAxis: [
+      {
+        type: "value",
+        max: 100,
+        axisLabel: { color: "#94a3b8", fontSize: 10, formatter: "{value}%" },
+        splitLine: { lineStyle: { color: "#edf1f7" } },
+      },
+      { type: "value", axisLabel: { color: "#94a3b8", fontSize: 10 }, splitLine: { show: false } },
+    ],
+    series,
+  };
+}
+
+/**
+ * Mini-gráfico de área dos cartões de KPI: só o formato da série, sem eixos, grade nem tooltip.
+ * `min`/`max` seguem os próprios valores (com folga) porque a escala do cartão não é comparável
+ * com a dos outros - o sparkline mostra tendência, não magnitude.
+ */
+export function buildSparklineOption(values: readonly number[], color: string): EChartsOption {
+  return {
+    animation: false,
+    grid: { left: 0, right: 0, top: 6, bottom: 0 },
+    xAxis: { type: "category", show: false, boundaryGap: false, data: values.map((_, index) => index) },
+    yAxis: {
+      type: "value",
+      show: false,
+      min: (range: { min: number }) => range.min - Math.abs(range.min) * 0.05,
+      max: (range: { max: number }) => range.max + Math.abs(range.max) * 0.05,
+    },
+    series: [
+      {
+        type: "line",
+        data: [...values],
+        smooth: true,
+        symbol: "none",
+        lineStyle: { width: 2, color },
+        areaStyle: { color, opacity: 0.12 },
+      },
+    ],
   };
 }
