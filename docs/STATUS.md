@@ -13,8 +13,9 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-07** — branch `claude/n1-incluir-grupo-117` (PR #54 mesclado na `master` e em produção; o
-texto abaixo sobre o checkout compartilhado é de 2026-09-18 e está desatualizado)
+**2026-10-09** — branch `claude/menu-lateral-seta-recolher` (PR único com o trabalho de 07-09/10, ver
+primeira entrada abaixo; o texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está
+desatualizado)
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
 compartilhado por várias sessões rodando em paralelo há alguns dias -
@@ -44,6 +45,28 @@ abaixo) - o erro de ambiente do SQLite-em-thread é intermitente, não indica
 regressão.
 
 ## O que foi feito recentemente
+
+- **Trabalho de 07-09/10 reunido num PR só (2026-10-09, pedido do usuário "tudo junto").** Saiu de várias
+  sessões no mesmo checkout; nada disto estava commitado antes.
+  - **Busca global "Buscar telas" (Ctrl K).** Abas **Telas** e **Pessoas**. Telas: abas e sub-abas
+    (Gamificação: ranking/pendências/config/auditoria; Operação › Config: 6 seções), perfis, permissões,
+    módulos, painéis de TV do Intelligence e Governança de IA. Pessoas: uma linha por pessoa (junta Pessoas,
+    contas, convites, solicitações, atendentes OPA/N1 e responsáveis da Operação); clicar abre a lista de
+    lugares onde ela aparece. Dados dinâmicos carregados na 1ª abertura, cada grupo só com a permissão da
+    tela de origem (`use-search-index.ts`). Links novos: `?sub=` (Gamificação, Config da Operação), `?q=`
+    (ranking, Config), `?profile=` e `?user=` (Admin, abrem o editor uma vez), `?attendant_id=` (Suporte).
+    Telas só da busca têm `searchOnly` em `module-screens.ts` e **não aparecem no menu lateral**.
+    "Pessoas" saiu do menu lateral da Administração (a aba segue existindo: a Gestão linka para ela).
+    Verificado: tsc, vitest 101/101 e navegador (login local de teste).
+  - **TV do Suporte Interno** (`/suporte/tv`, `/api/support/tv/{snapshot,presence,config}`), presença dos
+    atendentes pelo campo `online` do OPA e radar operacional do IXC.
+  - **OPA Suite:** `list_collection` para de repetir página quando o OPA ignora `skip`/`limit` (a presença
+    chegou a 2.653 atendentes) e `list_collection_union` contorna o 400 "At least one valid filter is
+    required" nas listagens de usuário/departamento/etiqueta/cliente. Docs em `docs/api-suporte.md` e
+    `docs/opa-suite-api-referencia.md`.
+  - **Renome "SGP Suporte" → "Suporte Interno"** (módulo, rótulos, Visão Geral, permissão `support:read`).
+  - **Calendário da Operação:** produção sem meta avaliável fica legível e mostra "SEM META".
+  - **Pendente:** deploy na VM (backend + frontend); o "Pessoas" da busca depende de `admin:users:read`.
 
 - **Deploy de 2026-10-07 (PR #54, mesclado em `master` `3df4dce`; deploy feito na VM pelo usuário).** Três
   commits: `dface07`, `59df45d`, `b520bef`. Na `master` também já estão os PRs #52 e #53 (aba N1 e grupo 117).
