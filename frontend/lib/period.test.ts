@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { percentChange, previousWindow, windowLengthDays } from "@/lib/period";
+import { percentChange, previousWindow, windowLengthDays, yearStartFor } from "@/lib/period";
 
 describe("windowLengthDays", () => {
   it("conta as duas pontas", () => {
@@ -55,5 +55,15 @@ describe("percentChange", () => {
     expect(percentChange(12, 0)).toBeNull();
     expect(percentChange(12, null)).toBeNull();
     expect(percentChange(null, 12)).toBeNull();
+  });
+});
+
+describe("yearStartFor", () => {
+  it("começa em 1º de janeiro do ano da data final", () => {
+    expect(yearStartFor("2026-10-09")).toBe("2026-01-01");
+  });
+  it("nunca começa antes do início permitido pelo backend", () => {
+    expect(yearStartFor("2026-10-09", "2026-03-01")).toBe("2026-03-01");
+    expect(yearStartFor("2026-10-09", "2025-01-01")).toBe("2026-01-01");
   });
 });

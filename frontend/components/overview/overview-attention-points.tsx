@@ -1,10 +1,9 @@
 "use client";
 
-import { Bell, ChevronDown, CircleAlert, Info, TriangleAlert } from "lucide-react";
+import { ChevronDown, Info, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 
-import { Card } from "@/components/ui/card";
-import type { OverviewBlockState } from "@/components/overview/overview-block";
+import { OverviewBlock, type OverviewBlockState } from "@/components/overview/overview-block";
 import { formatIsoDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { OperationAttentionPoints } from "@/lib/operations-api";
@@ -18,12 +17,11 @@ const RULE_LABELS: Record<string, string> = {
 };
 
 /**
- * Pontos de atenção do recorte da Visão Geral, no fim da tela e recolhido por padrão: a linha de
- * resumo (quantos achados, quantos críticos) já diz se vale abrir, e a lista só ocupa espaço
- * quando alguém pede. Nenhuma regra roda aqui: o backend (`operations/attention.py`) avalia e
- * devolve cada achado com o número que o justifica; a tela só exibe. O rodapé da lista diz quantas
- * regras foram verificadas e quais ficaram de fora, porque "nenhum achado" só tem valor se o
- * painel disser o que olhou.
+ * Pontos de atenção do recorte da Visão Geral, sempre à vista no bloco de monitoramento. Nenhuma
+ * regra roda aqui: o backend (`operations/attention.py`) avalia e devolve cada achado com o número
+ * que o justifica; a tela só exibe. O rodapé diz quantas regras foram verificadas e quais ficaram
+ * de fora, porque "nenhum achado" só tem valor se o painel disser o que olhou. O `id` é o destino
+ * do link "+N alertas" do Status geral.
  */
 export function OverviewAttentionPoints({
   data,
@@ -32,164 +30,81 @@ export function OverviewAttentionPoints({
   data: OperationAttentionPoints | null;
   state?: OverviewBlockState;
 }) {
-  const [open, setOpen] = useState(false);
+  // Aberto por padrão (é o que o Status geral do topo aponta), mas recolhível: o título e o resumo
+  // de achados continuam à vista no cabeçalho.
+  const [open, setOpen] = useState(true);
   const items = data?.items ?? [];
-  const critical = items.filter(
-    (point) => point.severity === "critical",
-  ).length;
-  const skipped = (data?.skipped_rules ?? []).map(
-    (rule) => RULE_LABELS[rule] ?? rule,
-  );
-
-  let summary: string;
-  if (state?.loading) summary = "Carregando...";
-  else if (state?.error) summary = "Indisponível";
-  else if (items.length === 0) summary = "Nenhum achado neste recorte";
-  else
-    summary = `${items.length} ${items.length === 1 ? "achado" : "achados"}${critical > 0 ? ` · ${critical} ${critical === 1 ? "crítico" : "críticos"}` : ""}`;
-
-  const canExpand = !state?.loading && !state?.error;
-  const periodLabel = data
-    ? `${formatIsoDate(data.date_from)} a ${formatIsoDate(data.date_to)}`
-    : null;
+  const critical = items.filter((point) => point.severity === "critical").length;
+  const skipped = (data?.skipped_rules ?? []).map((rule) => RULE_LABELS[rule] ?? rule);
+  const periodLabel = data ? `${formatIsoDate(data.date_from)} a ${formatIsoDate(data.date_to)}` : null;
 
   return (
-    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-      <button
-        type="button"
-        onClick={() => canExpand && setOpen((current) => !current)}
-        aria-expanded={open}
-        aria-controls="overview-attention-points-list"
-        disabled={!canExpand}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left disabled:cursor-default"
-      >
-        <span className="flex min-w-0 items-center gap-2.5">
-          <Bell
-            className={cn(
-              "h-4 w-4 shrink-0",
-              critical > 0
-                ? "text-rose-600"
-                : items.length > 0
-                  ? "text-amber-600"
-                  : "text-slate-400",
-            )}
-          />
-          <span className="text-sm font-semibold text-slate-950">
-            Pontos de atenção
-          </span>
-          <span
-            className={cn(
-              "truncate rounded-full border px-2.5 py-0.5 text-[10px] font-semibold",
-              critical > 0
-                ? "border-rose-200 bg-rose-50 text-rose-700"
-                : items.length > 0
-                  ? "border-amber-200 bg-amber-50 text-amber-700"
-                  : "border-slate-200 bg-slate-50 text-slate-500",
-            )}
+    <div id="overview-attention-points" className="min-w-0 scroll-mt-28">
+      <OverviewBlock
+        eyebrow="Cockpit"
+        title="Pontos de atenção"
+        subtitle={
+          items.length === 0
+            ? "Nenhum achado pelas regras verificadas neste recorte."
+            : `${items.length} ${items.length === 1 ? "achado" : "achados"}${critical > 0 ? ` · ${critical} ${critical === 1 ? "crítico" : "críticos"}` : ""}`
+        }
+        badge={<TriangleAlert className={cn("h-4 w-4", critical > 0 ? "text-rose-600" : items.length ? "text-amber-600" : "text-slate-400")} aria-hidden="true" />}
+        actions={
+          <button
+            type="button"
+            onClick={() => setOpen((current) => !current)}
+            aria-expanded={open}
+            aria-controls="overview-attention-points-body"
+            aria-label={open ? "Recolher pontos de atenção" : "Expandir pontos de atenção"}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100"
           >
-            {summary}
-          </span>
-        </span>
-        <span className="flex shrink-0 items-center gap-3">
-          {periodLabel ? (
-            <span className="hidden text-[11px] text-slate-500 sm:inline">
-              Período{" "}
-              <span className="font-semibold text-slate-700">
-                {periodLabel}
-              </span>
-            </span>
-          ) : null}
-          {canExpand ? (
-            <ChevronDown
-              className={cn(
-                "h-4 w-4 shrink-0 text-slate-400 transition-transform",
-                open && "rotate-180",
-              )}
-            />
-          ) : null}
-        </span>
-      </button>
-
-      {state?.error ? (
-        <p className="border-t border-slate-100 px-4 py-2.5 text-xs text-amber-800">
-          {state.error}
-        </p>
-      ) : null}
-
-      {open && canExpand ? (
-        <div
-          id="overview-attention-points-list"
-          className="border-t border-slate-100 px-4 py-3"
-        >
-          {items.length === 0 ? (
-            <p className="text-sm text-slate-600">
-              Nenhum achado pelas regras verificadas neste recorte.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {items.map((point) => {
-                const isCritical = point.severity === "critical";
-                const Icon = isCritical ? CircleAlert : TriangleAlert;
-                return (
-                  <li
-                    key={`${point.rule}-${point.regional ?? "geral"}`}
+            <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
+          </button>
+        }
+        state={state}
+      >
+        <div id="overview-attention-points-body" hidden={!open}>
+        {items.length > 0 ? (
+          <ul className="space-y-2">
+            {items.map((point) => {
+              const isCritical = point.severity === "critical";
+              return (
+                <li
+                  key={`${point.rule}-${point.regional ?? "geral"}`}
+                  className="grid grid-cols-[3px_minmax(0,1fr)_auto] items-center gap-2.5 overflow-hidden rounded-lg border border-slate-200 bg-slate-50/70 py-2.5 pr-2.5"
+                >
+                  <span className={cn("h-full self-stretch", isCritical ? "bg-rose-500" : "bg-amber-500")} aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold leading-snug text-slate-900">{point.title}</p>
+                    <p className="text-[11px] leading-snug text-slate-500">{point.detail}</p>
+                  </div>
+                  <span
                     className={cn(
-                      "flex items-start gap-2.5 rounded-xl border px-3 py-2",
-                      isCritical
-                        ? "border-rose-200 bg-rose-50"
-                        : "border-amber-200 bg-amber-50",
+                      "rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide",
+                      isCritical ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-800",
                     )}
                   >
-                    <Icon
-                      className={cn(
-                        "mt-0.5 h-4 w-4 shrink-0",
-                        isCritical ? "text-rose-600" : "text-amber-600",
-                      )}
-                    />
-                    <div className="min-w-0">
-                      <p
-                        className={cn(
-                          "text-sm font-semibold",
-                          isCritical ? "text-rose-900" : "text-amber-900",
-                        )}
-                      >
-                        {point.title}
-                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide opacity-70">
-                          {isCritical ? "Crítico" : "Atenção"}
-                        </span>
-                      </p>
-                      <p
-                        className={cn(
-                          "text-xs",
-                          isCritical ? "text-rose-800" : "text-amber-800",
-                        )}
-                      >
-                        {point.detail}
-                      </p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {data?.notes?.map((note) => (
-            <p key={note} className="mt-3 flex items-start gap-1.5 rounded-lg bg-slate-50 px-2.5 py-2 text-[11px] text-slate-600">
-              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-              <span>{note}</span>
-            </p>
-          ))}
-          {data ? (
-            <p className="mt-3 text-[11px] text-slate-500">
-              Período {periodLabel} · {data.rules_checked} de {data.rules_total}{" "}
-              regras verificadas
-              {skipped.length > 0
-                ? ` · não verificadas: ${skipped.join(", ")}`
-                : ""}
-              .
-            </p>
-          ) : null}
+                    {isCritical ? "Crítico" : "Atenção"}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+        {data?.notes?.map((note) => (
+          <p key={note} className="mt-3 flex items-start gap-1.5 rounded-lg bg-slate-50 px-2.5 py-2 text-[11px] text-slate-600">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <span>{note}</span>
+          </p>
+        ))}
+        {data ? (
+          <p className="mt-3 text-[11px] text-slate-500">
+            Período {periodLabel} · {data.rules_checked} de {data.rules_total} regras verificadas
+            {skipped.length > 0 ? ` · não verificadas: ${skipped.join(", ")}` : ""}.
+          </p>
+        ) : null}
         </div>
-      ) : null}
-    </Card>
+      </OverviewBlock>
+    </div>
   );
 }

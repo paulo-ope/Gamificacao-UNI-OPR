@@ -25,7 +25,7 @@ type SummaryMetricProps = {
 
 const percentFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
 
-function deltaPresentation(delta: SummaryMetricDelta) {
+export function deltaPresentation(delta: SummaryMetricDelta) {
   if (delta.value === null) {
     return { Icon: Minus, text: "sem base de comparação", className: "text-slate-400" };
   }

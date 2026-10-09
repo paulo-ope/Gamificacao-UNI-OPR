@@ -3,6 +3,9 @@ import type { Tone } from "@/lib/tones";
 
 export type SlaTone = "neutral" | "danger" | "warning" | "success";
 
+/** Meta de SLA do sistema (a mesma que `operations/attention.py` usa nos pontos de atenção). */
+export const SLA_TARGET_PERCENT = 80;
+
 export function slaTone(rate: number | null): SlaTone {
   if (rate === null) return "neutral";
   if (rate >= 80) return "success";

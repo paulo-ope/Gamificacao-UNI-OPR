@@ -14,8 +14,8 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 ## Última atualização
 
 **2026-10-09** — branch `claude/menu-lateral-seta-recolher` (PR #57 mesclado na `master`, **em produção e validado**,
-ver primeira entrada abaixo; o texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está
-desatualizado)
+ver a segunda entrada abaixo; **PR #60 (Visão Geral estilo cockpit) aberto e ainda não em produção**, ver a primeira
+entrada; o texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está desatualizado)
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
 compartilhado por várias sessões rodando em paralelo há alguns dias -
@@ -45,6 +45,38 @@ abaixo) - o erro de ambiente do SQLite-em-thread é intermitente, não indica
 regressão.
 
 ## O que foi feito recentemente
+
+- **Visão Geral em painel executivo estilo cockpit (2026-10-09, PR #60 aberto contra `master`, commit `9986b22`,
+  ainda NÃO mesclado nem em produção).** Só frontend (20 arquivos), sem backend, API ou migration. Referência visual
+  aprovada pelo usuário: `visao-geral-cockpit-prototipo.html` (HTML estático com dados fictícios, ficou na Desktop do
+  usuário, fora do repositório).
+  - **O que mudou na tela.** Seções (Qualidade e nível de serviço, Volume, Evolução, Regional e equipe, Monitoramento
+    e gestão); KPIs com sparkline; SLA por tecnologia em anel com variação contra o período anterior, meta e SLA do ano
+    (`lib/overview-sla-cards.ts`); cartões de Ordens de serviço e Suporte Interno com barra de progresso; gráfico
+    SLA acumulado × backlog alinhado por data; IA × Humano; saúde dos monitores; Pontos de atenção e Recomendações
+    na mesma coluna, ambos recolhíveis.
+  - **Decisões do usuário que não estão óbvias no código.** (1) Só os cartões **"SLA de Ativação" e "SLA de Suporte"**
+    aparecem na Visão Geral, fixos em `OVERVIEW_SLA_CARD_LABELS` (`overview-screen.tsx`); os outros 4 cartões
+    configurados seguem em Operação Analítica - renomear um desses dois na configuração o faz sumir da Visão Geral.
+    (2) Os grupos de cada cartão são **clicáveis** e o "Geral" soma só os selecionados (ponderado pelo volume); sem
+    seleção soma todos. A seleção não é persistida. (3) O **Status geral** (faixa azul no topo) foi feito e depois
+    **removido** a pedido. (4) O donut "Finalizadas por regional" saiu (a tabela já mostra a participação) e o antigo
+    "Média selecionada" foi substituído pelo "Geral". (5) **Seletor de departamento** no cabeçalho do cartão do Suporte
+    Interno, ligado ao mesmo `support_department` da barra de filtros; sem escolha, continua contando todo o OPA
+    (o escopo de departamentos da TV, `support_tv_department_ids`, foi discutido e **não** foi usado).
+  - **Limitações conhecidas.** O tile "Garantia / retorno" do protótipo **não existe** (o sistema não expõe essa taxa
+    por este caminho); entrou "Entrada × vazão". A meta dos medidores é a constante `SLA_TARGET_PERCENT = 80`
+    (`lib/operations-sla.ts`, a mesma de `operations/attention.py`) para todos os grupos - não há meta por tecnologia.
+    O cartão de monitores lê o payload do cockpit do perfil `uni-geral` e exige `intelligence:read`; se esse perfil
+    não existir em produção, só esse cartão mostra erro.
+  - **Verificação.** `tsc --noEmit` limpo, vitest 121/121 (eram 101); conferido no navegador contra o banco **local**
+    (não o de produção), com usuário de teste descartável já removido. **Falta conferir em produção, logado, depois
+    do deploy** (só `frontend` precisa de build: `docker compose build frontend && docker compose up -d frontend`).
+    O repositório não tem lint configurado nem CI; o `next build` do Docker valida os tipos.
+  - **Em aberto.** O usuário pediu um filtro para o cartão de Ordens de serviço e **não respondeu** a duas perguntas:
+    qual dimensão (tipo de O.S., setor, regional ou colaborador) e se vale só para o cartão ou para a tela toda
+    (recomendado: tela toda, o mesmo filtro da barra, para não divergir dos KPIs). Também não foi feito o
+    restyle do donut de modelo de equipe e da tabela por regional, que ficaram como já eram.
 
 - **Trabalho de 07-09/10 reunido num PR só (2026-10-09, pedido do usuário "tudo junto").** Saiu de várias
   sessões no mesmo checkout; nada disto estava commitado antes.

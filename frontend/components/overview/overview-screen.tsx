@@ -3,7 +3,11 @@
 import { Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { OverviewAiHumanCard } from "@/components/overview/overview-ai-human-card";
 import { OverviewAttentionPoints } from "@/components/overview/overview-attention-points";
+import { OverviewMonitorsCard } from "@/components/overview/overview-monitors-card";
+import { OverviewSectionHeading } from "@/components/overview/overview-layout-parts";
+import { OverviewOrdersCard } from "@/components/overview/overview-orders-card";
 import { OverviewRecommendations } from "@/components/overview/overview-recommendations";
 import { OverviewFilterBar } from "@/components/overview/overview-filter-bar";
 import { Button } from "@/components/ui/button";
@@ -27,11 +31,8 @@ import {
 } from "@/hooks/use-overview-filters";
 import { api } from "@/lib/api";
 import { formatDateTime, formatIsoDate } from "@/lib/format";
-import {
-  buildBacklogTrendOption,
-  buildOverviewOpeningsTrendOption,
-  buildOverviewSlaTrendOption,
-} from "@/lib/overview-chart-options";
+import { intelligenceCockpitApi } from "@/lib/intelligence-cockpit-api";
+import { buildOverviewOpeningsTrendOption, buildOverviewSlaBacklogOption } from "@/lib/overview-chart-options";
 import {
   operationsApi,
   type OperationFilterState,
@@ -42,7 +43,8 @@ import {
   type OperationSlaGroup,
   type OverviewSupportFilterValues,
 } from "@/lib/operations-api";
-import { previousWindow, windowLengthDays } from "@/lib/period";
+import { SLA_TARGET_PERCENT } from "@/lib/operations-sla";
+import { previousWindow, windowLengthDays, yearStartFor } from "@/lib/period";
 import type { AuthUser } from "@/lib/types";
 
 function errorMessage(reason: unknown, fallback: string) {
@@ -53,6 +55,14 @@ function errorMessage(reason: unknown, fallback: string) {
 const FALLBACK_VISIBLE: OperationOverviewFilterKey[] = [...OVERVIEW_LIST_KEYS];
 
 const SHOW_PREVIOUS_PERIOD_STORAGE_KEY = "uni_overview_show_previous_period";
+
+// Cartões de "SLA por tecnologia" exibidos na Visão Geral (pelo `card_label` da configuração de
+// Operação Analítica). Pedido do usuário: só Ativação e Suporte aparecem aqui.
+const OVERVIEW_SLA_CARD_LABELS = ["SLA de Ativação", "SLA de Suporte"] as const;
+
+// Perfil do cockpit do qual a Visão Geral lê a saúde dos monitores. Os monitores são globais (não
+// dependem do escopo do perfil), então o perfil "geral" semeado pelo backend serve.
+const MONITORS_COCKPIT_PROFILE = "uni-geral";
 
 /**
  * Visão Geral executiva: macrovisão da operação em uma tela, sem entrar em módulo.
@@ -109,6 +119,7 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const canSeeSla = user.permissions.includes("operations:view_sla");
   const canSeeSupport = user.permissions.includes("support:read");
   const canSeeGamification = user.permissions.includes("dashboard:read");
+  const canSeeIntelligence = user.permissions.includes("intelligence:read");
 
   // Bootstrap: período disponível + filtro padrão da tela. Os dois juntos definem o estado
   // inicial do filtro, então nada mais é buscado antes deles.
@@ -140,6 +151,10 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     [filters, period?.allowed_from],
   );
   const previousFilters: OperationFilterState | null = opFilters && previous ? { ...opFilters, ...previous } : null;
+  // "No ano" dos medidores de SLA: mesmos filtros, do 1º de janeiro até o fim do período.
+  const yearFilters: OperationFilterState | null = opFilters
+    ? { ...opFilters, date_from: yearStartFor(opFilters.date_to, period?.allowed_from) }
+    : null;
   const supportKey = filters
     ? [
         filters.date_from,
@@ -173,6 +188,14 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     enabled: ready && canSeeSla,
     fallbackError: "Não foi possível carregar o SLA por tecnologia.",
   });
+  // Mesmo endpoint em outras duas janelas: o período anterior (variação em p.p. dos medidores) e o
+  // ano até o fim do período (linha "No ano"). Só o `previous` depende de existir janela anterior.
+  const slaTechnologyPrevious = useBlockQuery(() => operationsApi.sla(previousFilters!, "technology_group"), [filterKey], {
+    enabled: ready && canSeeSla && previousFilters !== null,
+  });
+  const slaTechnologyYear = useBlockQuery(() => operationsApi.sla(yearFilters!, "technology_group"), [filterKey], {
+    enabled: ready && canSeeSla,
+  });
   const slaGroups = useBlockQuery(() => operationsApi.slaGroups(), [], { enabled: canSeeSla });
   const slaCards = useMemo(() => {
     const byCard = new Map<string, OperationSlaGroup[]>();
@@ -183,7 +206,14 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
       byCard.set(group.card_label, list);
     }
     Array.from(byCard.values()).forEach((list) => list.sort((a, b) => a.display_order - b.display_order));
-    return Array.from(byCard.entries()).sort((a, b) => a[0].localeCompare(b[0], "pt-BR"));
+    // Só os cartões pedidos para a Visão Geral, na ordem da constante. Os demais (Alteração de
+    // Endereço, Viabilidades etc.) continuam configurados e visíveis em Operação Analítica - aqui só
+    // não entram. Desativar o grupo na configuração tiraria ele de lá também, por isso o filtro é
+    // desta tela.
+    return OVERVIEW_SLA_CARD_LABELS.flatMap((label) => {
+      const groups = byCard.get(label);
+      return groups ? [[label, groups] as [string, OperationSlaGroup[]]] : [];
+    });
   }, [slaGroups.data]);
   // Mesma janela que já alimenta o card de comparação do topo (`previousOverview`) - aqui vira
   // uma linha no gráfico, não só um número agregado.
@@ -201,9 +231,6 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const backlogTrend = useBlockQuery(() => operationsApi.overviewBacklogTrend(opFilters!), [filterKey], {
     enabled: ready,
     fallbackError: "Não foi possível carregar o histórico de backlog.",
-  });
-  const previousBacklogTrend = useBlockQuery(() => operationsApi.overviewBacklogTrend(previousFilters!), [filterKey], {
-    enabled: ready && previousFilters !== null,
   });
   const capacity = useBlockQuery(() => operationsApi.capacitySummary(opFilters!), [filterKey], { enabled: ready });
   const workSchedule = useBlockQuery(() => operationsApi.overviewWorkSchedule(opFilters!), [filterKey], {
@@ -250,7 +277,9 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const supportOptions = useBlockQuery(
     () => api.supportOpaFilters({ date_from: filters!.date_from, date_to: filters!.date_to }),
     [filters?.date_from, filters?.date_to],
-    { enabled: ready && showsSupportFilters },
+    // O cartão do Suporte Interno tem o próprio seletor de departamento, então as opções
+    // carregam sempre que o perfil vê o Suporte - não só quando a barra exibe o filtro.
+    { enabled: ready && (showsSupportFilters || canSeeSupport) },
   );
   // A prévia da gamificação e o frescor do dado não dependem do filtro: um pedido por abertura.
   const gamification = useBlockQuery(() => api.gamificationPreview(), [], {
@@ -258,6 +287,11 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     fallbackError: "Não foi possível carregar a prévia da gamificação.",
   });
   const freshness = useBlockQuery(() => operationsApi.dataFreshness(), []);
+  // Saúde dos monitores não depende de filtro: um pedido por abertura, só com `intelligence:read`.
+  const monitors = useBlockQuery(() => intelligenceCockpitApi.getCockpit(MONITORS_COCKPIT_PROFILE), [], {
+    enabled: canSeeIntelligence,
+    fallbackError: "Não foi possível carregar a saúde dos monitores.",
+  });
 
   const resetToDefault = useCallback(() => {
     if (!period) return;
@@ -303,18 +337,16 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   }, [filters]);
 
   const previousTrendForCharts = showPreviousPeriod ? previousTrends.data : null;
-  const previousBacklogForChart = showPreviousPeriod ? previousBacklogTrend.data : null;
   const openingsOption = useMemo(
     () => (trends.data ? buildOverviewOpeningsTrendOption(trends.data, previousTrendForCharts) : null),
     [trends.data, previousTrendForCharts],
   );
-  const slaOption = useMemo(
-    () => (canSeeSla && trends.data ? buildOverviewSlaTrendOption(trends.data, previousTrendForCharts) : null),
-    [canSeeSla, trends.data, previousTrendForCharts],
-  );
-  const backlogOption = useMemo(
-    () => (backlogTrend.data?.points.length ? buildBacklogTrendOption(backlogTrend.data, previousBacklogForChart) : null),
-    [backlogTrend.data, previousBacklogForChart],
+  const slaBacklogOption = useMemo(
+    () =>
+      canSeeSla && trends.data
+        ? buildOverviewSlaBacklogOption(trends.data, backlogTrend.data, SLA_TARGET_PERCENT, previousTrendForCharts)
+        : null,
+    [canSeeSla, trends.data, backlogTrend.data, previousTrendForCharts],
   );
   // Aviso só quando o recorte pedido começa antes da coleta existir - não é erro, é a fotografia
   // diária não tendo retroatividade (ver `backlog_daily_trend`).
@@ -363,18 +395,16 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         },
       }
     : undefined;
-  const backlogDrillEvents = backlogTrend.data
-    ? {
-        click: (params: unknown) => {
-          const index = (params as { dataIndex?: number }).dataIndex;
-          const day = index !== undefined ? backlogTrend.data!.points[index]?.snapshot_date : undefined;
-          if (day) drillIntoDay(day);
-        },
-      }
-    : undefined;
-  const completedByRegional = useMemo(
-    () => (matrix.data?.items ?? []).map((item) => ({ label: item.regional, value: item.completed })),
-    [matrix.data],
+  // Séries dos mini-gráficos dos cartões de KPI: as mesmas respostas que já alimentam os gráficos
+  // grandes, sem chamada nova. SLA sem dado no dia (null) fica de fora em vez de virar zero.
+  const kpiSeries = useMemo(
+    () => ({
+      opened: (trends.data?.points ?? []).map((point) => point.opened_operation),
+      completed: (trends.data?.points ?? []).map((point) => point.completed),
+      backlog: (backlogTrend.data?.points ?? []).map((point) => point.backlog),
+      sla: (trends.data?.points ?? []).flatMap((point) => (point.sla_cumulative_rate === null ? [] : [point.sla_cumulative_rate])),
+    }),
+    [trends.data, backlogTrend.data],
   );
   const completedByTeamModel = useMemo(
     () => (workSchedule.data?.by_model ?? []).map((item) => ({ label: item.model_name, value: item.completed })),
@@ -438,18 +468,6 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         </div>
       </div>
 
-      <OverviewKpiStrip
-        overview={overview.error ? null : overview.data}
-        previous={previousOverview.error ? null : previousOverview.data}
-        previousLabel={previousLabel}
-        backlog={matrix.data?.total ?? null}
-        canSeeSla={canSeeSla}
-      />
-      {overview.error ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{overview.error}</p>
-      ) : null}
-
-
       <OverviewFilterBar
         filters={filters}
         visible={visible}
@@ -464,18 +482,13 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
 
       {/*
         Fixa (sticky) logo abaixo do cabeçalho do ecossistema (`app-shell.tsx`, `sticky top-0
-        z-20`, 79px de altura medida ao vivo) - achado real, 2026-09-05: o aviso vivia só no topo
-        da página,
-        então quem clicava pra detalhar num gráfico ou na tabela lá embaixo (Backlog, SLA,
-        "Quadro geral das filiais") precisava rolar de volta pro topo só pra achar o "Voltar".
-        Aqui ele acompanha a rolagem, sempre visível enquanto o drill estiver ativo - "o local
-        óbvio e evidente" pedido pelo usuário é literalmente "sempre à vista", não um lugar fixo
-        na tela. Âmbar (não azul, já usado pelo resto da barra de filtros) pra se destacar como
-        um estado temporário, não mais um filtro comum.
+        z-20`) - achado real, 2026-09-05: o aviso vivia só no topo da página, então quem clicava pra
+        detalhar num gráfico ou na tabela lá embaixo precisava rolar de volta pro topo só pra achar o
+        "Voltar". Aqui ele acompanha a rolagem, sempre visível enquanto o drill estiver ativo.
+        Âmbar (não azul, já usado pela barra de filtros) pra se destacar como estado temporário.
+        `top-[var(--workspace-header-height)]`: mesma fonte única do offset do header usada em
+        `operations-filter-panel.tsx` e `opa-module-components.tsx` (ver `app/globals.css`).
       */}
-      {/* `top-[var(--workspace-header-height)]`: mesma fonte única do offset do header usada em
-          `operations-filter-panel.tsx` e `opa-module-components.tsx` - ver
-          `--workspace-header-height` em app/globals.css (medida ao vivo por `WorkspaceAppShell`). */}
       {isDrilled && preDrillFilters ? (
         <div className="sticky top-[var(--workspace-header-height)] z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 shadow-md">
           <span className="font-medium">
@@ -493,94 +506,115 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
         </div>
       ) : null}
 
+      <OverviewKpiStrip
+        overview={overview.error ? null : overview.data}
+        previous={previousOverview.error ? null : previousOverview.data}
+        previousLabel={previousLabel}
+        backlog={matrix.data?.total ?? null}
+        canSeeSla={canSeeSla}
+        series={kpiSeries}
+        support={
+          canSeeSupport
+            ? { total: support.data?.total_attendances.current ?? null, closureRate: support.data?.closure_rate.current ?? null }
+            : null
+        }
+      />
+      {overview.error ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{overview.error}</p>
+      ) : null}
 
-      {trends.error ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{trends.error}</p>
-      ) : openingsOption ? (
-        <OperationsTrendChart
-          eyebrow="Fluxo diário"
-          title="Aberturas e finalizações por dia"
-          description={
-            "Barras são O.S. abertas (demanda, sem recorte de equipe); a linha verde são as finalizações, que respeitam todos os filtros" +
-            (previousTrendForCharts ? "; a linha cinza tracejada é a mesma finalização, no período anterior" : "") +
-            ". Saldo do dia no tooltip. Clique num dia pra detalhar só ele."
-          }
-          badge={periodLabel}
-          option={openingsOption}
-          onEvents={trendDrillEvents}
-        />
-      ) : (
-        <div className="h-[300px] animate-pulse rounded-2xl bg-slate-100" aria-label="Carregando gráfico" />
-      )}
+      {canSeeSla && slaCards.length > 0 ? (
+        <>
+          <OverviewSectionHeading>Qualidade e nível de serviço</OverviewSectionHeading>
+          <div className="grid gap-4 xl:grid-cols-2">
+            {slaCards.map(([cardLabel, cardGroups]) => (
+              <OverviewSlaTechnologyGauges
+                key={cardLabel}
+                eyebrow="SLA por tecnologia"
+                title={cardLabel}
+                groups={cardGroups.map((group) => group.name)}
+                current={slaTechnology.error ? null : slaTechnology.data}
+                previous={slaTechnologyPrevious.error ? null : slaTechnologyPrevious.data}
+                year={slaTechnologyYear.error ? null : slaTechnologyYear.data}
+                previousLabel="vs. ant."
+                state={{ loading: slaTechnology.loading || slaGroups.loading, error: slaTechnology.error ?? slaGroups.error }}
+              />
+            ))}
+          </div>
+        </>
+      ) : null}
 
+      <OverviewSectionHeading>Volume e eficiência operacional</OverviewSectionHeading>
       <div className="grid gap-4 xl:grid-cols-2">
+        <OverviewOrdersCard
+          overview={overview.error ? null : overview.data}
+          previous={previousOverview.error ? null : previousOverview.data}
+          previousLabel="ant."
+          backlog={matrix.data?.total ?? null}
+          state={{ loading: overview.loading || matrix.loading, error: overview.error }}
+        />
+        {canSeeSupport ? (
+          <OverviewSupportCard
+            data={support.data}
+            state={{ loading: support.loading, error: support.error }}
+            dateFrom={filters.date_from}
+            dateTo={filters.date_to}
+            departmentOptions={supportOptions.data?.departments ?? []}
+            departmentValues={filters.support_department ?? []}
+            onDepartmentChange={(values) => update({ support_department: values })}
+          />
+        ) : null}
+      </div>
+
+      <OverviewSectionHeading>Evolução no período</OverviewSectionHeading>
+      <div className="grid gap-4 xl:grid-cols-2">
+        {trends.error ? (
+          <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{trends.error}</p>
+        ) : openingsOption ? (
+          <OperationsTrendChart
+            eyebrow="Fluxo diário"
+            title="Aberturas e finalizações por dia"
+            description={
+              "Barras são O.S. abertas (demanda, sem recorte de equipe); a linha verde são as finalizações, que respeitam todos os filtros" +
+              (previousTrendForCharts ? "; a linha cinza tracejada é a mesma finalização, no período anterior" : "") +
+              ". Saldo do dia no tooltip. Clique num dia pra detalhar só ele."
+            }
+            badge={periodLabel}
+            option={openingsOption}
+            onEvents={trendDrillEvents}
+          />
+        ) : (
+          <div className="h-[300px] animate-pulse rounded-2xl bg-slate-100" aria-label="Carregando gráfico" />
+        )}
         {canSeeSla ? (
-          slaOption ? (
+          slaBacklogOption ? (
             <OperationsTrendChart
-              eyebrow="SLA operacional"
-              title="SLA ponderado por dia"
+              eyebrow="SLA e backlog"
+              title="SLA acumulado × backlog"
               description={
-                "Linha contínua: SLA acumulado ponderado do período. Linha tracejada: SLA do dia" +
-                (previousTrendForCharts ? "; linha cinza tracejada: SLA acumulado do período anterior" : "") +
-                ". Total de finalizadas do dia no tooltip - as barras só empilham no prazo e fora do prazo." +
+                "Linha: SLA acumulado ponderado do período" +
+                (previousTrendForCharts ? "; linha cinza tracejada: o mesmo SLA no período anterior" : "") +
+                ". Barras: estoque de O.S. em aberto por dia (retrato, não fluxo)." +
+                (backlogCoverageNote ? ` ${backlogCoverageNote}` : "") +
                 " Clique num dia pra detalhar só ele."
               }
-              badge="Meta 80%"
-              option={slaOption}
+              badge={`Meta ${SLA_TARGET_PERCENT}%`}
+              option={slaBacklogOption}
               onEvents={trendDrillEvents}
             />
           ) : (
             <div className="h-[300px] animate-pulse rounded-2xl bg-slate-100" aria-label="Carregando gráfico" />
           )
         ) : null}
-        {backlogOption ? (
-          <OperationsTrendChart
-            eyebrow="Backlog"
-            title="Histórico de backlog"
-            description={
-              "Estoque de O.S. em aberto por dia (não soma com abertas/finalizadas - é retrato, não fluxo)" +
-              (previousBacklogForChart ? "; linha cinza tracejada: backlog do período anterior" : "") +
-              ". Clique num dia pra detalhar só ele." +
-              (backlogCoverageNote ? ` ${backlogCoverageNote}` : "")
-            }
-            option={backlogOption}
-            onEvents={backlogDrillEvents}
-          />
-        ) : null}
       </div>
 
-      {canSeeSla && slaCards.length > 0 ? (
-        <div className="grid gap-4 xl:grid-cols-2">
-          {slaCards.map(([cardLabel, cardGroups]) => (
-            <OverviewSlaTechnologyGauges
-              key={cardLabel}
-              eyebrow="SLA por tecnologia"
-              title={cardLabel}
-              groups={cardGroups.map((group) => group.name)}
-              items={slaTechnology.error ? null : slaTechnology.data}
-              state={{ loading: slaTechnology.loading || slaGroups.loading, error: slaTechnology.error ?? slaGroups.error }}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      <div className="grid gap-4 xl:grid-cols-3">
-        <OverviewShareDonut
-          eyebrow="Finalizadas por regional"
-          title="Onde a produção se concentra"
-          subtitle="Todas as regionais, cada uma com número e cor - sem agrupar em Outros."
-          items={completedByRegional}
-          totalLabel="finalizadas"
+      <OverviewSectionHeading>Desempenho por regional e equipe</OverviewSectionHeading>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+        <OverviewRegionalTable
+          data={matrix.data}
+          capacity={capacity.data?.items ?? null}
           state={{ loading: matrix.loading, error: matrix.error }}
-          onSelect={(regional) => drillFilters({ regional_groups: [regional] })}
-          // Pedido explícito do usuário (2026-09-04): "que os donuts apareça todas filial" - nunca
-          // dobrar em "Outros" aqui, mesmo além do teto de cor da paleta (`CATEGORICAL_SLOTS`, 8
-          // slots). Além do 8º nome, a fatia cai no cinza neutro (`assignSeriesColors`) e passa a
-          // repetir cor com outra(s) regional(is) no ANEL - mas a lista ao lado (nome, número, %)
-          // continua distinguindo cada uma individualmente, então nenhum dado fica escondido, só a
-          // cor deixa de ser exclusiva a partir da 9ª. Desde 2026-09-14 a tela agrupa por Regional
-          // (não mais Filial granular), então o teto passou a valer bem menos vezes.
-          maxSlices={completedByRegional.length}
+          onDrillRegional={(regional) => drillFilters({ regional_groups: [regional] })}
         />
         {drilledTeamModel ? (
           <OverviewShareDonut
@@ -591,9 +625,8 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
             totalLabel="finalizadas"
             state={{ loading: collaborators.loading, error: collaborators.error }}
             onSelect={(responsible) => drillFilters({ responsibles: [responsible] })}
-            // Todos os técnicos nomeados, sem dobrar em "Outros" - mesma escolha do donut de filial
-            // (pedido do usuário em 2026-09-04). A cor repete a partir do 9º nome, mas a lista ao
-            // lado continua distinguindo cada pessoa por nome e número.
+            // Todos os técnicos nomeados, sem dobrar em "Outros" (pedido do usuário em 2026-09-04). A
+            // cor repete a partir do 9º nome, mas a lista ao lado continua distinguindo cada pessoa.
             maxSlices={completedByCollaborator.length}
           />
         ) : (
@@ -607,47 +640,50 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
             onSelect={(model) => drillFilters({ team_models: [model] })}
           />
         )}
-        {canSeeSupport ? (
-          <OverviewShareDonut
-            eyebrow="Suporte Interno"
-            title="Atendimentos por canal"
-            subtitle="Somente o período - os filtros de O.S. não se aplicam a atendimentos."
-            items={attendancesByChannel}
-            totalLabel="atendimentos"
-            state={{ loading: support.loading, error: support.error }}
-          />
-        ) : null}
       </div>
 
-      <OverviewRegionalTable
-        data={matrix.data}
-        capacity={capacity.data?.items ?? null}
-        state={{ loading: matrix.loading, error: matrix.error }}
-        onDrillRegional={(regional) => drillFilters({ regional_groups: [regional] })}
-      />
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        {canSeeSupport ? (
-          <OverviewSupportCard
-            data={support.data}
-            state={{ loading: support.loading, error: support.error }}
-            dateFrom={filters.date_from}
-            dateTo={filters.date_to}
+      <OverviewSectionHeading>Monitoramento e gestão</OverviewSectionHeading>
+      <div className="grid gap-4 xl:grid-cols-3">
+        <div className="min-w-0 space-y-4">
+          {canSeeSupport ? (
+            <>
+              <OverviewAiHumanCard
+                data={support.data?.bot_human ?? null}
+                state={{ loading: support.loading, error: support.error }}
+              />
+              <OverviewShareDonut
+                eyebrow="Suporte Interno"
+                title="Atendimentos por canal"
+                subtitle="Somente o período - os filtros de O.S. não se aplicam a atendimentos."
+                items={attendancesByChannel}
+                totalLabel="atendimentos"
+                state={{ loading: support.loading, error: support.error }}
+              />
+            </>
+          ) : null}
+        </div>
+        <div className="min-w-0 space-y-4">
+          <OverviewAttentionPoints
+            data={attention.error ? null : attention.data}
+            state={{ loading: attention.loading, error: attention.error }}
           />
-        ) : null}
-        {canSeeGamification ? (
-          <OverviewGamificationCard data={gamification.data} state={{ loading: gamification.loading, error: gamification.error }} />
-        ) : null}
+          <OverviewRecommendations
+            data={attention.error ? null : attention.data}
+            state={{ loading: attention.loading, error: attention.error }}
+          />
+        </div>
+        <div className="min-w-0 space-y-4">
+          {canSeeGamification ? (
+            <OverviewGamificationCard data={gamification.data} state={{ loading: gamification.loading, error: gamification.error }} />
+          ) : null}
+          {canSeeIntelligence ? (
+            <OverviewMonitorsCard
+              monitors={monitors.data?.monitor_health ?? null}
+              state={{ loading: monitors.loading, error: monitors.error }}
+            />
+          ) : null}
+        </div>
       </div>
-
-      <OverviewAttentionPoints
-        data={attention.error ? null : attention.data}
-        state={{ loading: attention.loading, error: attention.error }}
-      />
-      <OverviewRecommendations
-        data={attention.error ? null : attention.data}
-        state={{ loading: attention.loading, error: attention.error }}
-      />
 
       <StatusToast
         error={feedback.error}
