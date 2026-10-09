@@ -13,7 +13,7 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-09** — branch `claude/menu-lateral-seta-recolher` (PR #57 mesclado na `master` e **em produção**,
+**2026-10-09** — branch `claude/menu-lateral-seta-recolher` (PR #57 mesclado na `master`, **em produção e validado**,
 ver primeira entrada abaixo; o texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está
 desatualizado)
 
@@ -68,10 +68,9 @@ regressão.
   - **Calendário da Operação:** produção sem meta avaliável fica legível e mostra "SEM META".
   - **Deploy feito em 2026-10-09** (PR #57, merge `019f893`), na VM pelo dono do sistema. Checagem de
     fumaça: `/api/health` 200 `{"status":"ok"}`, frontend 200 e `/suporte/tv` 200.
-  - **Pendente:** validação funcional logada em produção (ainda não confirmada): `alembic current` no
-    head, menu lateral ("Suporte Interno", sem "Pessoas" na Administração), Ctrl K › Pessoas, presença da
-    TV com número plausível (a TV depende do OPA responder em produção) e "SEM META" no calendário. O
-    "Pessoas" da busca depende de `admin:users:read`.
+  - **Validado em produção pelo usuário em 2026-10-09**: migração no head, menu lateral, Ctrl K ›
+    Pessoas, presença da TV e "SEM META" no calendário, tudo conforme o esperado. O "Pessoas" da busca
+    depende de `admin:users:read`.
   - **Falhas de teste do backend que já existiam** (não são deste PR): 121 failed + 332 errors, idênticos
     na `master` e na branch (453 ids iguais) - `no such table` no arranque da aplicação sobre SQLite em
     memória. Merece PR próprio.
