@@ -42,7 +42,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_timeline_service
+from . import ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_presence_service, opa_timeline_service, opa_tv_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -106,6 +106,7 @@ from .schemas import (
     SupportOpaTimeseries,
     SupportPeriodRequest,
 )
+from .tv_schemas import SupportTvConfig, SupportTvConfigUpdate, SupportTvPresence, SupportTvSnapshot
 
 logger = logging.getLogger("support")
 router = APIRouter(
@@ -1111,6 +1112,80 @@ def opa_overview(
         "previous_period": {"date_from": previous_filters.date_from, "date_to": previous_filters.date_to},
         **opa_overview_service.expanded_overview(db, filters),
     }
+
+
+@router.get("/tv/snapshot", response_model=SupportTvSnapshot)
+def support_tv_snapshot(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Tudo que a TV do SGP Suporte mostra, em uma chamada só (dia corrente em America/Porto_Velho).
+    Só agregados - nenhum atendimento individual nem nome de cliente. Cada bloco falha isolado e
+    aparece em `unavailable`."""
+    return opa_tv_service.build_snapshot(db)
+
+
+@router.get("/tv/presence", response_model=SupportTvPresence)
+def support_tv_presence(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Status (presença) dos atendentes da TV, do campo `online` do OPA. Consultado pela TV a cada
+    ~10 s, separado do snapshot (30 s). Respeita os departamentos escolhidos na configuração."""
+    try:
+        return opa_presence_service.build_presence(
+            db,
+            get_opa_client(),
+            datetime.now(timezone.utc),
+            opa_tv_service.tv_department_ids(db),
+        )
+    except OpaApiError as exc:
+        logger.warning("tv_presence_indisponivel erro=%s", exc)
+        raise HTTPException(status_code=502, detail="Não foi possível consultar a presença dos atendentes no OPA agora.") from exc
+
+
+def _tv_config_response(db: Session) -> dict:
+    return {
+        "department_ids": opa_tv_service.tv_department_ids(db),
+        "available_departments": opa_tv_service.department_options(db),
+        "tmr_target_seconds": opa_tv_service.tmr_target_seconds(db),
+    }
+
+
+@router.get("/tv/config", response_model=SupportTvConfig)
+def support_tv_config(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("support:sync_opa")),
+):
+    """Configuração da TV: departamentos considerados (vazio = todos) e a lista de departamentos
+    disponíveis para escolher."""
+    return _tv_config_response(db)
+
+
+@router.put("/tv/config", response_model=SupportTvConfig)
+def update_support_tv_config(
+    payload: SupportTvConfigUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("support:sync_opa")),
+):
+    before = _tv_config_response(db)
+    try:
+        opa_tv_service.save_tv_department_ids(db, payload.department_ids)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    after = _tv_config_response(db)
+    record_audit_log(
+        db,
+        user,
+        "update",
+        "support_tv_config",
+        "tv",
+        {"department_ids": before["department_ids"]},
+        {"department_ids": after["department_ids"]},
+    )
+    db.commit()
+    return after
 
 
 @router.get("/opa/timeseries", response_model=SupportOpaTimeseries)

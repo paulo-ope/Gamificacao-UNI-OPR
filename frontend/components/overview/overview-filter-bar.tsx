@@ -230,7 +230,7 @@ export function OverviewFilterBar({
             {supportKeys.length ? (
               <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-3">
                 <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-500">
-                  Filtros do SGP Suporte{" "}
+                  Filtros do Suporte Interno{" "}
                   <span className="font-normal normal-case tracking-normal text-slate-500">
                     · recortam só os blocos de atendimento
                   </span>

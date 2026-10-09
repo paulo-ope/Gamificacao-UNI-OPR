@@ -55,7 +55,7 @@ MODULES: tuple[ModuleDefinition, ...] = (
     ),
     ModuleDefinition(
         key="support",
-        name="SGP Suporte",
+        name="Suporte Interno",
         description="Indicadores, atendimentos e métricas de suporte vindos do OPA Suite.",
         web_path="/suporte",
         api_prefix="/api/support",

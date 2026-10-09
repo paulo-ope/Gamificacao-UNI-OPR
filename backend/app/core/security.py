@@ -227,7 +227,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "operations:read": "Operação: acessar módulo",
     "operations:manage": "Operação: administrar módulo",
     "operations:sync_ixc": "Operação: sincronizar IXC",
-    "support:read": "Suporte: acessar módulo SGP",
+    "support:read": "Suporte Interno: acessar o módulo",
     "support:sync_opa": "Suporte: sincronizar OPA Suite",
     "operations:manage_filters": "Operação: gerenciar visões/filtros",
     "operations:views:read_global": "Operação: ver visões globais",
