@@ -14,8 +14,9 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 ## Última atualização
 
 **2026-10-10** — PRs **#63** (verificação de e-mail na criação de conta + novos e-mails) e **#64** (login novo,
-paleta interna, aba Personalização) **mesclados na `master`**; **o deploy na VM não foi confirmado nesta sessão** (ver
-a primeira entrada abaixo, que traz os comandos). "Esqueci minha senha" (PR #61) já está em produção e o e-mail real foi
+paleta interna, aba Personalização) **mesclados na `master` e com deploy feito na VM** (informado pelo dono do
+sistema; o que foi conferido de fora está na primeira entrada abaixo, e **o teste logado ainda não foi feito**).
+"Esqueci minha senha" (PR #61) já está em produção e o e-mail real foi
 confirmado pelo usuário. O PR #60 (Visão Geral estilo cockpit) também já está mesclado, mas **a tela logada ainda não
 foi conferida**. O texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está desatualizado.
 
@@ -49,9 +50,14 @@ regressão.
 ## O que foi feito recentemente
 
 - **Verificação de e-mail, e-mails novos, login novo, paleta interna e aba Personalização (2026-10-10, PR #63 mesclado
-  em `master` `b803e29` e PR #64 em `6fddfeb`; deploy NÃO confirmado).** Deploy necessário: **backend e frontend**
-  (`docker compose build backend frontend && docker compose up -d`; a migration `20261010_0111` roda sozinha no
-  entrypoint; conferir com `docker compose exec backend python -m alembic current`).
+  em `master` `b803e29` e PR #64 em `6fddfeb`; deploy feito pelo dono do sistema).** O deploy leva **backend e
+  frontend** (`docker compose build backend frontend && docker compose up -d`; a migration `20261010_0111` roda sozinha
+  no entrypoint; conferir com `docker compose exec backend python -m alembic current`).
+  - **Deploy: o que foi conferido.** O usuário informou que o deploy foi feito. De fora, só com leituras: `/api/health`
+    200; `/`, `/portal`, `/solicitar-acesso` e `/admin` 200; `/esqueci-senha` **404** (a página foi removida, então o
+    frontend novo está no ar); um `POST /api/access-requests/verify-email` com código malformado devolve **422**
+    (`string_pattern_mismatch` no campo `code`), enquanto uma rota inexistente de controle devolve 404 - ou seja, o
+    backend do #63 está no ar. **Não conferido:** `alembic current` (esperado `20261010_0111`) e qualquer teste logado.
   - **Verificação de e-mail na solicitação de acesso (#63).** Depois de enviar o pedido, a pessoa recebe um código de
     6 dígitos no e-mail informado e o confirma na própria tela (`POST /api/access-requests/verify-email`, reenvio em
     `/resend-code`). O admin **continua aprovando** cada pedido (decisão do usuário: o vínculo com o colaborador é
@@ -109,7 +115,7 @@ regressão.
     local: criar usuário admin e um colaborador de teste no banco local. O frontend local precisa de `--webpack`.
   - **Pendências.** (1) **Segurança (herdada do #61):** trocar a senha da caixa `operacional@souuni.com` (foi digitada no
     chat) e atualizar `SMTP_PASSWORD` no `.env` da VM; apagar `.env.bak-antes-email` e `.env.save` da pasta da VM.
-    (2) **Teste em produção depois do deploy:** `/solicitar-acesso` com um CPF de teste (código chega → "E-mail
+    (2) **Teste em produção, ainda por fazer:** `/solicitar-acesso` com um CPF de teste (código chega → "E-mail
     verificado" no painel do admin) e um "Esqueci minha senha" para ver o e-mail novo no cliente real. (3) A Visão Geral
     (PR #60) e as telas listadas acima ainda precisam de uma passada visual logado. (4) O "Lembrar meu e-mail" do login
     grava só o e-mail no navegador; a página de privacidade pode precisar citar isso (texto não alterado). (5) O JWT
