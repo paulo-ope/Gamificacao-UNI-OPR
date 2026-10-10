@@ -13,10 +13,11 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-10** — "Esqueci minha senha" por código de 6 dígitos (PR #61) **mesclado na `master` e em produção**; o
-e-mail de verdade foi confirmado pelo usuário (o código chegou na caixa). Ver a primeira entrada abaixo. O PR #60
-(Visão Geral estilo cockpit) também já está mesclado e subiu junto neste deploy, mas **a tela logada ainda não foi
-conferida**. O texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está desatualizado.
+**2026-10-10** — PRs **#63** (verificação de e-mail na criação de conta + novos e-mails) e **#64** (login novo,
+paleta interna, aba Personalização) **mesclados na `master`**; **o deploy na VM não foi confirmado nesta sessão** (ver
+a primeira entrada abaixo, que traz os comandos). "Esqueci minha senha" (PR #61) já está em produção e o e-mail real foi
+confirmado pelo usuário. O PR #60 (Visão Geral estilo cockpit) também já está mesclado, mas **a tela logada ainda não
+foi conferida**. O texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está desatualizado.
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
 compartilhado por várias sessões rodando em paralelo há alguns dias -
@@ -47,6 +48,73 @@ regressão.
 
 ## O que foi feito recentemente
 
+- **Verificação de e-mail, e-mails novos, login novo, paleta interna e aba Personalização (2026-10-10, PR #63 mesclado
+  em `master` `b803e29` e PR #64 em `6fddfeb`; deploy NÃO confirmado).** Deploy necessário: **backend e frontend**
+  (`docker compose build backend frontend && docker compose up -d`; a migration `20261010_0111` roda sozinha no
+  entrypoint; conferir com `docker compose exec backend python -m alembic current`).
+  - **Verificação de e-mail na solicitação de acesso (#63).** Depois de enviar o pedido, a pessoa recebe um código de
+    6 dígitos no e-mail informado e o confirma na própria tela (`POST /api/access-requests/verify-email`, reenvio em
+    `/resend-code`). O admin **continua aprovando** cada pedido (decisão do usuário: o vínculo com o colaborador é
+    financeiro; a verificação só prova a posse da caixa), mas só aprova pedido com `email_verified_at` (409 caso
+    contrário; botão bloqueado e selo "E-mail verificado/não verificado" no painel). **Pedidos antigos ficam
+    bloqueados** até a pessoa reenviar o pedido e confirmar o código - sem exceção do admin (decisão do usuário).
+    **Reenviar o pedido enquanto pendente zera a verificação e invalida o código anterior**: isso fecha o achado de que
+    quem só sabia o CPF de um colega conseguia trocar e-mail/senha de uma solicitação pendente. Toda falha de verificação
+    devolve a mesma mensagem (sem revelar se o CPF tem pedido). A lógica do código (emissão, limites, tentativas) mora
+    **uma vez só** em `backend/app/services/verification_codes.py`, compartilhada com o "esqueci minha senha".
+    **Migration `20261010_0111`** (colunas nullable `portal_access_requests.email_verified_at` e
+    `account_action_tokens.access_request_id`). **Risco residual:** quem tem uma caixa `@souuni.com` própria ainda
+    consegue verificar o pedido com ela - o admin confere nome × e-mail na fila antes de aprovar.
+  - **Bug achado e corrigido no caminho.** O código aceito terminava com status `revoked` em vez de `accepted` (a sessão
+    do app **não faz autoflush**, então revogar os pendentes depois de aceitar sobrescrevia o status). Inofensivo, mas
+    errado, e valia também para o reset de senha que já estava em produção. Teste de regressão nos dois fluxos (usa
+    `db_session.autoflush = False`; falha com a ordem antiga).
+  - **E-mails de código redesenhados (#63).** Os dois (recuperação e verificação) usam uma estrutura única em
+    `backend/app/services/email_templates.py`: tabelas e estilos inline (clientes de e-mail ignoram CSS externo), paleta
+    do Workspace, código em destaque com validade, aviso de segurança, preheader com o código. O **logo só aparece quando
+    `FRONTEND_URL` é `https` público** (em desenvolvimento sai só a marca em texto). O texto simples mantém a linha
+    "Seu código de verificação é: ..." (contrato usado pelos testes). **Não testado em cliente real** (Gmail/Outlook/
+    celular); no Outlook desktop a faixa do topo deve sair em azul sólido, sem o degradê.
+  - **Login novo do Workspace (#64).** Portado da pasta "Gamificação Codex" (que tinha o React que gerou o modelo
+    `modelo-uni-workspace.html`; o HTML em si **não** foi embutido: 186 KB, quase tudo imagem em base64). `WorkspaceLogin`
+    foi **substituído**, com as mesmas props (a prop `eyebrow`, sem uso, deixou de existir) - vale para `/`, `/portal` e
+    o login de todos os módulos. A recuperação de senha agora é um **diálogo** (e-mail → código → senha → concluído) que
+    usa os endpoints que já existem; o servidor só confere o código ao salvar a senha, e código errado devolve a tela
+    para a etapa do código. **A página `/esqueci-senha` e `password-reset.tsx` foram removidos** (qualquer atalho salvo
+    para `/esqueci-senha` agora dá 404). CSS todo namespaced (`.uni-access-*`) em `workspace-login.css`.
+  - **Paleta do login na parte interna (#64).** A paleta de marca já estava nos tokens (`uni-royal #2d5fff`,
+    `uni-turquoise #27d9bf`); o que mudou foram os **neutros**: a escala `slate` do Tailwind foi **remapeada** em
+    `tailwind.config.ts` para a tinta do login (900 `#152747`, 200 `#dfe7f2`, 50 `#f7f9fc`; o 500 ficou em `#5f7391`, um
+    pouco mais escuro que o `#6a7c97` do login, para manter contraste AA no texto secundário). Isso troca ~4.000 usos de
+    uma vez, sem editar tela por tela. Também mudaram os tokens de `globals.css` (fundo, texto, borda, primário
+    `#2d5fff`, foco), `.workspace-surface` (mesma névoa azul/turquesa do login) e `.uni-gradient`. O texto do item ativo
+    da barra lateral usa `#0028f3` (não `#2d5fff`) porque `#2d5fff` sobre `#edf2ff` dá 4,4:1, abaixo do AA.
+  - **Aba Personalização na Administração (#64).** Escolhe o tema da barra lateral: **Clara** (padrão, visual do login) ou
+    **Escura** (`#101e38`, idêntica à de antes - com hex explícito, porque os cinzas do Tailwind foram remapeados). A
+    escolha fica **no navegador** (`localStorage`, chave `uni_workspace_sidebar_theme`), **sem backend** - decisão do
+    usuário: cada navegador lembra a sua; quem abrir em outro navegador vê a clara, e só quem abre a Administração muda.
+    Se o usuário quiser que o admin defina o tema para todos, é trabalho novo (backend + `app_settings`). As classes de
+    cada tema ficam em `components/workspace/sidebar-theme.ts` (uma marcação só em `app-shell.tsx`).
+  - **Verificação.** Backend: testes de verificação (16), do reset (18), do template (15) e de solicitação de acesso
+    (31, ajustados: a aprovação exige verificação) passando. Frontend: `tsc --noEmit` limpo, vitest 137/137. No navegador
+    (backend local isolado): formulário → código errado → código certo → "Solicitação recebida e e-mail confirmado";
+    recuperação de senha de ponta a ponta no diálogo; login real; `/portal` e `/suporte` com o visual novo; celular em
+    375 px; tema escuro idêntico ao antigo e persistindo ao recarregar. **Não verificado:** o selo/botão bloqueado no
+    painel do admin (só typecheck); as telas **Operação, Gestão, Suporte, Gamificação, Portal logado e os 9 arquivos que
+    usam `.uni-gradient`** depois da troca dos cinzas (o banco local não tem dados para gráficos/tabelas); o tema escuro
+    com o conteúdo na paleta nova (mais azulada que antes).
+  - **Ambiente local (não commitado).** `backend/scripts/run_local.py` sobe um backend isolado (SQLite descartável em
+    `backend/.local-reset-test.db`, syncs desligados, IXC apontando para `127.0.0.1:9` de propósito para a rota pública
+    não quebrar sem URL; o corpo do e-mail aparece no console só fora de produção). O que está **só num `git stash`**
+    local: criar usuário admin e um colaborador de teste no banco local. O frontend local precisa de `--webpack`.
+  - **Pendências.** (1) **Segurança (herdada do #61):** trocar a senha da caixa `operacional@souuni.com` (foi digitada no
+    chat) e atualizar `SMTP_PASSWORD` no `.env` da VM; apagar `.env.bak-antes-email` e `.env.save` da pasta da VM.
+    (2) **Teste em produção depois do deploy:** `/solicitar-acesso` com um CPF de teste (código chega → "E-mail
+    verificado" no painel do admin) e um "Esqueci minha senha" para ver o e-mail novo no cliente real. (3) A Visão Geral
+    (PR #60) e as telas listadas acima ainda precisam de uma passada visual logado. (4) O "Lembrar meu e-mail" do login
+    grava só o e-mail no navegador; a página de privacidade pode precisar citar isso (texto não alterado). (5) O JWT
+    emitido antes de uma troca de senha continua **não sendo invalidado** (expira em até 12 h).
+
 - **"Esqueci minha senha" por código de 6 dígitos enviado por e-mail (2026-10-10, PR #61 mesclado em `master`
   `4b695bb`, deploy feito na VM pelo dono do sistema).** Pedido do usuário: clicar em "esqueci a senha" envia um
   código de 6 dígitos para o e-mail da conta e a pessoa digita o código e a senha nova na própria tela.
@@ -67,18 +135,16 @@ regressão.
     (`Falha ao enviar e-mail para ... (TipoDoErro)`), sem código nem senha. **Desligar o envio:** `EMAIL_ENABLED=false`.
   - **Verificação.** 17 testes novos (`backend/tests/test_password_reset.py`) passando; `tsc --noEmit` limpo; fluxo
     completo conferido no navegador contra o backend local; em **produção** o código chegou na caixa do usuário
-    (SMTP real confirmado). `/esqueci-senha` responde 200 em produção. O backend local isolado para testar fluxos de
+    (SMTP real confirmado). `/esqueci-senha` respondia 200 em produção (a página foi removida depois, pelo PR #64). O backend local isolado para testar fluxos de
     conta está em `backend/scripts/run_local.py` (SQLite descartável, syncs IXC/OPA/CPK desligados; o corpo do e-mail
     aparece no console só fora de produção); configs `backend-local`/`frontend-local` em `.claude/launch.json`. O
     frontend local precisa de `--webpack` (Next 16 + `webpack` config do projeto).
   - **Pendências.** (1) **Segurança:** a senha da caixa `operacional@souuni.com` foi digitada no chat durante o deploy
     - trocar e atualizar `SMTP_PASSWORD` no `.env` da VM (`docker compose up -d backend`); o ideal é uma caixa só do
     sistema (ex.: `nao-responda@souuni.com`). Também apagar `.env.bak-antes-email` e `.env.save` da pasta da VM (cópias
-    do `.env` com segredos) e limpar o histórico do bash. (2) **Verificação de e-mail na criação de conta (Fase 2D)
-    NÃO foi feita** - o e-mail do formulário de solicitação de acesso continua sem prova de posse. (3) **Achado de
-    segurança aberto:** reenviar a solicitação com o mesmo CPF enquanto ela está pendente sobrescreve e-mail,
-    telefone e senha (`portal_access_requests.py`, dedup silenciosa) - quem souber o CPF de um colega consegue trocar a
-    senha de uma solicitação alheia antes da aprovação; a verificação de e-mail (2) fecha isso. (4) O JWT emitido
+    do `.env` com segredos) e limpar o histórico do bash. (2) ~~Verificação de e-mail na criação de conta (Fase 2D) não foi feita~~ - **feita no PR #63** (ver a entrada
+    acima). (3) ~~Achado de segurança: reenviar a solicitação com o mesmo CPF sobrescrevia e-mail e senha~~ -
+    **corrigido no PR #63** (reenviar zera a verificação). (4) O JWT emitido
     antes da troca de senha **não é invalidado** (vale para este fluxo e para a troca voluntária); só expira em até
     12 h. (5) A Visão Geral estilo cockpit (PR #60) subiu no mesmo deploy e falta conferi-la logado. (6) A VM mostra "System restart required" (atualização do Ubuntu, sem relação).
 
