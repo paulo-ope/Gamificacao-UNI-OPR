@@ -1,4 +1,4 @@
-import { Boxes, History, Inbox, KeyRound, LayoutDashboard, Mail, PlugZap, ShieldCheck, UserCog, UserRound, Users } from "lucide-react";
+import { Boxes, History, Inbox, KeyRound, LayoutDashboard, Mail, Palette, PlugZap, ShieldCheck, UserCog, UserRound, Users } from "lucide-react";
 
 import type { ModuleNavigationItem } from "@/components/workspace/module-navigation-sidebar";
 import type { AccessProfile, AdminWorkspaceModule, AuthUser, EcosystemPermission, PermissionKey } from "@/lib/types";
@@ -17,6 +17,7 @@ export type AdminTab =
   | "profiles"
   | "permissions"
   | "modules"
+  | "appearance"
   | "integrations"
   | "ai_governance"
   | "audit";
@@ -33,6 +34,7 @@ export const ADMIN_NAV_ITEMS: Array<ModuleNavigationItem<AdminTab>> = [
   { value: "profiles", label: "Perfis", description: "Permissões por função", icon: ShieldCheck },
   { value: "permissions", label: "Permissões", description: "Catálogo, uso e permissões próprias", icon: KeyRound },
   { value: "modules", label: "Módulos", description: "Nome, status, ordem e visibilidade", icon: Boxes },
+  { value: "appearance", label: "Personalização", description: "Tema da barra lateral", icon: Palette },
   { value: "integrations", label: "Integrações", description: "IXC, APIs e IA", icon: PlugZap },
   { value: "audit", label: "Auditoria", description: "Ações sensíveis", icon: History },
 ];

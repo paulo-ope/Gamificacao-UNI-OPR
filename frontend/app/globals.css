@@ -165,3 +165,14 @@
 .sidebar-scroll::-webkit-scrollbar-thumb:hover {
   background-color: rgb(21 39 71 / 0.34);
 }
+
+/* Variante escura da barra lateral (aba Personalização da Administração): rolagem em branco translúcido. */
+.sidebar-scroll-dark {
+  scrollbar-color: rgb(255 255 255 / 0.18) transparent;
+}
+.sidebar-scroll-dark::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.16);
+}
+.sidebar-scroll-dark::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(255 255 255 / 0.32);
+}

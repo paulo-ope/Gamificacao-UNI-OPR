@@ -8,6 +8,7 @@ import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { NavigationSearch } from "@/components/workspace/navigation-search";
 import { WorkspaceLoading } from "@/components/ui/workspace-loading";
+import { SIDEBAR_STYLES, SidebarStylesContext, useSidebarStyles } from "@/components/workspace/sidebar-theme";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +21,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { useVisibleModules } from "@/hooks/use-visible-modules";
+import { useSidebarTheme } from "@/hooks/use-sidebar-theme";
 import { useWorkspaceAuth } from "@/hooks/use-workspace-auth";
 import type { AuthUser, WorkspaceVisibleModule } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -62,6 +64,8 @@ export function WorkspaceAppShell({
   children: ReactNode | ((user: AuthUser) => ReactNode);
 }) {
   const { user, checking, error, login, logout } = useWorkspaceAuth();
+  // Tema da barra lateral escolhido neste navegador (aba Personalização da Administração).
+  const styles = SIDEBAR_STYLES[useSidebarTheme()];
   const modules = useVisibleModules(user);
   const headerRef = useRef<HTMLElement>(null);
 
@@ -120,6 +124,7 @@ export function WorkspaceAppShell({
   const screens = visibleWorkspaceScreens(user.permissions);
 
   return (
+    <SidebarStylesContext.Provider value={styles}>
     <div className="workspace-surface min-h-screen lg:flex">
       <a href="#workspace-content" className="skip-link">Pular para o conteúdo</a>
       <aside
@@ -132,13 +137,15 @@ export function WorkspaceAppShell({
           // altura, crescendo sem limite conforme a página cresce - achado real, 2026-09-03).
           // `h-screen` fixa a altura na viewport (não mais na altura da coluna irmã) e `sticky`
           // mantém a barra visível enquanto a página rola.
-          "hidden shrink-0 border-r border-slate-200 bg-white text-slate-700 transition-[width] duration-200 lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col",
+          "hidden shrink-0 border-r transition-[width] duration-200 lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col",
+          styles.aside,
           expanded ? "w-[264px]" : "w-[76px]",
         )}
       >
         <div
           className={cn(
-            "flex min-h-20 items-center gap-3 border-b border-slate-200 py-4",
+            "flex min-h-20 items-center gap-3 border-b py-4",
+            styles.brand,
             expanded ? "px-4" : "justify-center px-2",
           )}
         >
@@ -146,7 +153,7 @@ export function WorkspaceAppShell({
           <img src="/brand/uni-symbol.png" alt="" aria-hidden="true" className="h-11 w-11 shrink-0 object-contain" />
           {expanded ? (
             <div className="min-w-0">
-              <p className="text-base font-semibold text-slate-900">UNI <span className="font-normal text-slate-500">Workspace</span></p>
+              <p className={cn("text-base font-semibold", styles.brandName)}>UNI <span className={cn("font-normal", styles.brandSub)}>Workspace</span></p>
             </div>
           ) : null}
         </div>
@@ -160,10 +167,10 @@ export function WorkspaceAppShell({
           onToggleSidebar={toggleSidebar}
         />
         {expanded ? (
-          <div className="flex items-center gap-3 border-t border-slate-200 px-4 py-4">
-            <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-uni-royal/10 text-sm font-semibold text-uni-royal">{user.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
-            <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-900">{user.name}</p>
-            <p className="mt-0.5 truncate text-[11px] text-slate-500">{user.email}</p></div>
+          <div className={cn("flex items-center gap-3 border-t px-4 py-4", styles.footer)}>
+            <span aria-hidden="true" className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold", styles.avatar)}>{user.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
+            <div className="min-w-0"><p className={cn("truncate text-xs font-semibold", styles.userName)}>{user.name}</p>
+            <p className={cn("mt-0.5 truncate text-[11px]", styles.userEmail)}>{user.email}</p></div>
           </div>
         ) : null}
       </aside>
@@ -179,10 +186,10 @@ export function WorkspaceAppShell({
                       <Menu className="h-5 w-5" />
                     </Button>
                   </SheetTrigger>
-                  <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r border-slate-200 bg-white p-0 text-slate-700 sm:max-w-sm [&>button]:text-slate-500 [&>button:hover]:bg-slate-100">
-                    <SheetHeader className="shrink-0 border-slate-200">
-                      <SheetTitle className="text-slate-900">UNI Workspace</SheetTitle>
-                      <SheetDescription className="text-slate-500">Telas e módulos do ecossistema</SheetDescription>
+                  <SheetContent className={cn("left-0 right-auto w-[88vw] border-l-0 border-r p-0 sm:max-w-sm", styles.sheet)}>
+                    <SheetHeader className={cn("shrink-0", styles.sheetHeader)}>
+                      <SheetTitle className={styles.sheetTitle}>UNI Workspace</SheetTitle>
+                      <SheetDescription className={styles.sheetDescription}>Telas e módulos do ecossistema</SheetDescription>
                     </SheetHeader>
                     <ShellNavigation
                       activePath={activePath}
@@ -217,6 +224,7 @@ export function WorkspaceAppShell({
         </main>
       </div>
     </div>
+    </SidebarStylesContext.Provider>
   );
 }
 
@@ -241,6 +249,7 @@ function ShellNavigation({
   onToggleSidebar?: () => void;
   closeOnNavigate?: boolean;
 }) {
+  const styles = useSidebarStyles();
   const toggleButton = onToggleSidebar ? (
     <button
       type="button"
@@ -248,14 +257,14 @@ function ShellNavigation({
       aria-expanded={expanded}
       aria-label={expanded ? "Recolher menu lateral" : "Expandir menu lateral"}
       title={expanded ? "Recolher menu" : "Expandir menu"}
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+      className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors", styles.iconButton)}
     >
       {expanded ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
     </button>
   ) : null;
   return (
     <nav
-      className={cn("sidebar-scroll min-h-0 flex-1 overflow-y-auto", expanded ? "p-3" : "px-2 py-3")}
+      className={cn("min-h-0 flex-1 overflow-y-auto", styles.scroll, expanded ? "p-3" : "px-2 py-3")}
       aria-label="Navegação do ecossistema"
     >
       <NavGroup label="Telas" expanded={expanded}>
@@ -330,6 +339,7 @@ function ModuleNavEntry({
   onExpandRequest?: () => void;
   closeOnNavigate: boolean;
 }) {
+  const styles = useSidebarStyles();
   const icon = moduleIcon(module.key);
   const screens = visibleModuleScreens(module.key, icon, permissions).filter((screen) => !screen.searchOnly);
   const isActiveModule = activePath === module.web_path;
@@ -361,14 +371,14 @@ function ModuleNavEntry({
             onClick={() => setOpen((current) => !current)}
             aria-expanded={open}
             aria-label={`${open ? "Recolher" : "Expandir"} telas de ${module.name}`}
-            className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            className={cn("flex h-9 w-8 shrink-0 items-center justify-center rounded-lg transition-colors", styles.iconButton)}
           >
             <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
           </button>
         ) : null}
       </div>
       {expanded && canExpand && open ? (
-        <ul className="mb-2 ml-6 mt-1 space-y-0.5 border-l border-slate-200 pl-2">
+        <ul className={cn("mb-2 ml-6 mt-1 space-y-0.5 border-l pl-2", styles.submenu)}>
           {screens.map((screen) => (
             <Suspense key={screen.value} fallback={null}><ModuleScreenLink
               href={moduleScreenHref(module.web_path, screen)}
@@ -388,7 +398,7 @@ function ModuleNavEntry({
           }}
           aria-label={`Expandir telas de ${module.name}`}
           title={`Telas de ${module.name}`}
-          className="mx-auto mt-0.5 flex h-6 w-9 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+          className={cn("mx-auto mt-0.5 flex h-6 w-9 items-center justify-center rounded transition-colors", styles.iconButton)}
         >
           <ChevronDown className="h-3 w-3" />
         </button>
@@ -408,6 +418,7 @@ function ModuleScreenLink({
   isDefault: boolean;
   closeOnNavigate: boolean;
 }) {
+  const styles = useSidebarStyles();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   // Tela com rota própria (sem `?tab=`): selecionada só pelo caminho.
@@ -420,7 +431,7 @@ function ModuleScreenLink({
       title={screen.description}
       {...(screen.opensInNewTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
       aria-current={selected ? "page" : undefined}
-      className={cn("block rounded-lg px-3 py-2 text-xs leading-5 transition-colors", selected ? "bg-uni-mist font-semibold text-uni-impact ring-1 ring-inset ring-uni-royal/15" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900")}
+      className={cn("block rounded-lg px-3 py-2 text-xs leading-5 transition-colors", selected ? styles.screenLinkSelected : styles.screenLinkIdle)}
     >
       {screen.label}
     </Link>
@@ -429,14 +440,15 @@ function ModuleScreenLink({
 }
 
 function NavGroup({ label, expanded, children }: { label: string; expanded: boolean; children: ReactNode }) {
+  const styles = useSidebarStyles();
   return (
     <div className="mb-4 last:mb-0">
       {expanded ? (
-        <p className="px-3 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
+        <p className={cn("px-3 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em]", styles.groupLabel)}>{label}</p>
       ) : (
         // Recolhido não cabe o rótulo do grupo: um divisor mantém a separação visível entre
         // "Telas" e "Módulos" sem texto cortado.
-        <div className="mx-2 mb-2 border-t border-slate-200 first:border-t-0" aria-hidden="true" />
+        <div className={cn("mx-2 mb-2 border-t first:border-t-0", styles.divider)} aria-hidden="true" />
       )}
       <div className="space-y-1">{children}</div>
     </div>
@@ -460,6 +472,7 @@ function NavItem({
   expanded: boolean;
   closeOnNavigate: boolean;
 }) {
+  const styles = useSidebarStyles();
   const link = (
     <Link
       href={href}
@@ -471,16 +484,13 @@ function NavItem({
       className={cn(
         "relative flex w-full items-center rounded-xl text-left transition-colors",
         expanded ? "gap-3 px-3 py-2.5" : "justify-center px-1 py-1.5",
-        // Item ativo como na tela de acesso: fundo azul-névoa, texto azul e filete turquesa na borda.
-        selected
-          ? "bg-uni-mist text-uni-impact ring-1 ring-inset ring-uni-royal/15 before:absolute before:bottom-2 before:left-0 before:top-2 before:w-[3px] before:rounded-full before:bg-uni-turquoise before:content-['']"
-          : "text-slate-700 hover:bg-slate-100 hover:text-slate-900",
+        selected ? styles.itemSelected : styles.itemIdle,
       )}
     >
       <span
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-          selected ? "bg-uni-royal text-white shadow-sm" : "bg-slate-100 text-slate-500",
+          selected ? styles.iconBoxSelected : styles.iconBoxIdle,
         )}
       >
         <Icon className="h-4 w-4" />
@@ -488,7 +498,7 @@ function NavItem({
       {expanded ? (
         <span className="min-w-0 flex-1">
           <span className="block text-[13px] font-medium leading-5">{label}</span>
-          <span className={cn("block truncate text-[11px]", selected ? "text-slate-600" : "text-slate-500")}>
+          <span className={cn("block truncate text-[11px]", selected ? styles.descriptionSelected : styles.descriptionIdle)}>
             {description}
           </span>
         </span>
