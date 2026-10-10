@@ -15,6 +15,7 @@ import { IntegrationsPanel } from "@/components/admin/integrations-panel";
 import { InternalAccountsPanel } from "@/components/admin/internal-accounts-panel";
 import { InvitesPanel } from "@/components/admin/invites-panel";
 import { ModuleSettingsDrawer } from "@/components/admin/module-settings-drawer";
+import { AppearancePanel } from "@/components/admin/appearance-panel";
 import { ModulesPanel } from "@/components/admin/modules-panel";
 import { PermissionsPanel } from "@/components/admin/permissions-panel";
 import { OverviewSettingsPanel } from "@/components/admin/overview-settings-panel";
@@ -925,6 +926,10 @@ function AdminPageContent({ user }: { user: AuthUser }) {
               onPersonStatusFilterChange={setPersonStatusFilter}
               onEditPerson={openPersonDraft}
             />
+          </TabsContent>
+
+          <TabsContent value="appearance" className="mt-4">
+            <AppearancePanel />
           </TabsContent>
 
           <TabsContent value="modules" className="mt-4">
