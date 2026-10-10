@@ -215,6 +215,17 @@ formal — depende de pedido informal chegando até algum admin por fora do sist
 
 ## 7. Fase 2E — Esqueci minha senha
 
+> **Implementado em 2026-10-10 com código de 6 dígitos, não link** (decisão do usuário): o
+> `POST /auth/forgot-password` envia um código por e-mail (remetente `operacional@souuni.com`,
+> SMTP configurado por `EMAIL_ENABLED`/`SMTP_*` no `.env`) e o `POST /auth/reset-password`
+> recebe e-mail + código + senha nova. O código vale 10 minutos, é de uso único, é guardado só
+> como HMAC salgado em `account_action_tokens` (`purpose="password_reset"`) e aceita no máximo 5
+> tentativas erradas (coluna `attempts`) antes de ser revogado. Reenvio com intervalo de 60 s e
+> teto de 5 pedidos por hora por e-mail (persistidos no banco); mais um limite por IP em memória.
+> Resposta sempre genérica (sem enumeração) e envio em segundo plano. Telas: `/esqueci-senha`,
+> com link no login. A verificação de e-mail na criação de conta (Fase 2D) ficou pendente. O
+> texto abaixo é o planejamento original (por link) e vale como histórico.
+
 **Contexto**: hoje não existe nenhum jeito de recuperar acesso perdido sem um admin
 intervir manualmente — o que, por sua vez, só passa a ser possível depois de existir a
 Fase 2B.

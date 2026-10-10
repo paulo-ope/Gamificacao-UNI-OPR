@@ -12,6 +12,18 @@
       "runtimeExecutable": "docker",
       "runtimeArgs": ["compose", "up", "frontend"],
       "port": 3000
+    },
+    {
+      "name": "backend-local",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["backend/scripts/run_local.py"],
+      "port": 8000
+    },
+    {
+      "name": "frontend-local",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "--webpack", "-p", "3001"],
+      "port": 3001
     }
   ]
 }

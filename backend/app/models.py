@@ -382,6 +382,10 @@ class AccountActionToken(Base):
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Tentativas erradas de confirmar o token. Só `purpose="password_reset"` usa: o código é de 6
+    # dígitos (1 milhão de combinações), então o limite de tentativas por código é o que impede
+    # força bruta - ao atingir o máximo o código é revogado.
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     user: Mapped[User | None] = relationship(foreign_keys=[user_id])

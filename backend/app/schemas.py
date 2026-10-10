@@ -36,6 +36,32 @@ class ChangePasswordRequest(BaseModel):
     confirm_password: str = Field(..., min_length=8, max_length=128)
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Esqueci minha senha - passo 1: a pessoa informa o e-mail e recebe um código de 6 dígitos."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(..., min_length=3, max_length=180)
+
+
+class ForgotPasswordOut(BaseModel):
+    """Resposta SEMPRE igual, exista ou não a conta (sem enumeração de e-mails)."""
+
+    received: bool = True
+    message: str
+
+
+class ResetPasswordRequest(BaseModel):
+    """Esqueci minha senha - passo 2: código de 6 dígitos recebido por e-mail + senha nova."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(..., min_length=3, max_length=180)
+    code: str = Field(..., pattern=r"^\d{6}$")
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str = Field(..., min_length=8, max_length=128)
+
+
 class UserBase(BaseModel):
     name: str
     email: str

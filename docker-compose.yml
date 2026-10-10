@@ -33,6 +33,14 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opr:opr@db:5432/opr_gamification}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY}
+      # Envio de e-mail (código de recuperação de senha). Desligado por padrão.
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-operacional@souuni.com}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-UNI Workspace}
       IXC_API_BASE_URL: ${IXC_API_BASE_URL:-}
       IXC_API_TOKEN: ${IXC_API_TOKEN:-}
       IXC_API_VERIFY_SSL: ${IXC_API_VERIFY_SSL:-true}
