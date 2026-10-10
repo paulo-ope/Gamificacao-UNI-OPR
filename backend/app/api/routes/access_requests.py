@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import SlidingWindowLimiter
 from app.core.security import require_any_permission
 from app.db.session import get_db
 from app.models import PortalAccessRequest, User
@@ -13,11 +14,22 @@ from app.schemas import (
     PortalAccessRequestCreate,
     PortalAccessRequestOut,
     PortalAccessRequestReject,
+    PortalAccessRequestResendCode,
     PortalAccessRequestSubmitOut,
+    PortalAccessRequestVerifyEmail,
+    PortalAccessRequestVerifyOut,
 )
 from app.services.ixc_client import get_ixc_client
 from app.services.ixc_collaborator_lookup import lookup_own_identity_by_cpf
-from app.services.portal_access_requests import approve_access_request, list_access_requests, reject_access_request, submit_access_request
+from app.services.portal_access_requests import (
+    approve_access_request,
+    list_access_requests,
+    reject_access_request,
+    resend_email_verification,
+    send_email_verification_code,
+    submit_access_request,
+    verify_access_request_email,
+)
 
 router = APIRouter(prefix="/access-requests", tags=["access-requests"])
 
@@ -61,6 +73,16 @@ def _guard_lookup_attempts(request: Request) -> None:
     _lookup_attempts[client_host] = attempts
 
 
+# Verificação de e-mail (2026-10-10): limites por IP próprios, além do limite por código (5 tentativas) e
+# por solicitação (intervalo e teto por hora, no banco - ver services/verification_codes.py).
+_verify_limiter = SlidingWindowLimiter(
+    window_minutes=15, max_attempts=15, message="Muitas tentativas. Aguarde alguns minutos e tente novamente."
+)
+_resend_limiter = SlidingWindowLimiter(
+    window_minutes=15, max_attempts=10, message="Muitas tentativas. Aguarde alguns minutos e tente novamente."
+)
+
+
 @router.post("/lookup-cpf", response_model=PortalAccessRequestCpfLookupOut)
 def lookup_access_request_cpf_route(payload: PortalAccessRequestCpfLookupRequest, request: Request, db: Session = Depends(get_db)):
     """Pública, sem autenticação - o próprio colaborador confirma nome e telefone antes de
@@ -71,12 +93,15 @@ def lookup_access_request_cpf_route(payload: PortalAccessRequestCpfLookupRequest
 
 
 @router.post("", response_model=PortalAccessRequestSubmitOut, status_code=201)
-def submit_access_request_route(payload: PortalAccessRequestCreate, request: Request, db: Session = Depends(get_db)):
+def submit_access_request_route(
+    payload: PortalAccessRequestCreate, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
     """Pública, sem autenticação - canal formal pra quem não tem conta nem convite pedir acesso
     (Fase 2D). A resposta é sempre a mesma, de propósito (ver PortalAccessRequestSubmitOut) - não
-    revela se o CPF/e-mail já existe no sistema."""
+    revela se o CPF/e-mail já existe no sistema. Envia um código de 6 dígitos para o e-mail informado
+    (em segundo plano) - o admin só aprova depois que a pessoa confirmá-lo em `/verify-email`."""
     _guard_submit_attempts(request)
-    submit_access_request(
+    issued = submit_access_request(
         db,
         get_ixc_client(),
         cpf=payload.cpf,
@@ -86,6 +111,30 @@ def submit_access_request_route(payload: PortalAccessRequestCreate, request: Req
         name=payload.name,
         phone=payload.phone,
     )
+    if issued:
+        background_tasks.add_task(send_email_verification_code, *issued)
+    return {"received": True}
+
+
+@router.post("/verify-email", response_model=PortalAccessRequestVerifyOut)
+def verify_access_request_email_route(payload: PortalAccessRequestVerifyEmail, request: Request, db: Session = Depends(get_db)):
+    """Pública. Confirma o código de 6 dígitos enviado ao e-mail da solicitação. Toda falha devolve a mesma
+    mensagem (400) - não revela se um CPF tem solicitação."""
+    _verify_limiter.check(request)
+    verify_access_request_email(db, cpf=payload.cpf, email=payload.email, code=payload.code)
+    return {"verified": True}
+
+
+@router.post("/resend-code", response_model=PortalAccessRequestSubmitOut, status_code=202)
+def resend_access_request_code_route(
+    payload: PortalAccessRequestResendCode, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
+    """Pública. Reenvia o código de verificação. Resposta SEMPRE igual (exista ou não solicitação para o
+    CPF/e-mail, ou ainda esteja no intervalo mínimo entre envios)."""
+    _resend_limiter.check(request)
+    issued = resend_email_verification(db, cpf=payload.cpf, email=payload.email)
+    if issued:
+        background_tasks.add_task(send_email_verification_code, *issued)
     return {"received": True}
 
 

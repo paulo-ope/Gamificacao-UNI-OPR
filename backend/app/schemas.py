@@ -281,6 +281,37 @@ class PortalAccessRequestSubmitOut(BaseModel):
     received: bool = True
 
 
+class PortalAccessRequestVerifyEmail(BaseModel):
+    """Verificação de e-mail da solicitação: o código de 6 dígitos que chegou na caixa informada."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cpf: str = Field(..., min_length=1, max_length=32)
+    email: str = Field(..., min_length=3, max_length=180)
+    code: str = Field(..., pattern=r"^\d{6}$")
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class PortalAccessRequestResendCode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cpf: str = Field(..., min_length=1, max_length=32)
+    email: str = Field(..., min_length=3, max_length=180)
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class PortalAccessRequestVerifyOut(BaseModel):
+    verified: bool = True
+
+
 class PortalAccessRequestOut(BaseModel):
     """Item de listagem para o admin - `cpf_masked` nunca o CPF completo (seção 9)."""
 
@@ -289,6 +320,8 @@ class PortalAccessRequestOut(BaseModel):
     cpf_masked: str | None = None
     phone: str
     email: str
+    # O admin só consegue aprovar quando o e-mail foi verificado por código (ver `approve_access_request`).
+    email_verified: bool = False
     suggested_collaborator_id: int | None = None
     suggested_collaborator_name: str | None = None
     status: str

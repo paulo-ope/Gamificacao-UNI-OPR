@@ -181,6 +181,8 @@ export type PortalAccessRequest = {
   cpf_masked: string | null;
   phone: string;
   email: string;
+  /** A pessoa confirmou o código de 6 dígitos enviado ao e-mail. Sem isso o admin não aprova. */
+  email_verified: boolean;
   suggested_collaborator_id: number | null;
   suggested_collaborator_name: string | null;
   status: "pending" | "approved" | "rejected";

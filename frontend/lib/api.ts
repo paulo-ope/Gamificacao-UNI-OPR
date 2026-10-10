@@ -390,6 +390,10 @@ export const api = {
     request<PortalAccessRequestCpfLookup>("/access-requests/lookup-cpf", { method: "POST", body: JSON.stringify({ cpf }) }),
   submitAccessRequest: (payload: { cpf: string; email: string; new_password: string; confirm_password: string; name?: string; phone?: string }) =>
     request<{ received: boolean }>("/access-requests", { method: "POST", body: JSON.stringify(payload) }),
+  verifyAccessRequestEmail: (payload: { cpf: string; email: string; code: string }) =>
+    request<{ verified: boolean }>("/access-requests/verify-email", { method: "POST", body: JSON.stringify(payload) }),
+  resendAccessRequestCode: (payload: { cpf: string; email: string }) =>
+    request<{ received: boolean }>("/access-requests/resend-code", { method: "POST", body: JSON.stringify(payload) }),
   listAccessRequests: () => request<PortalAccessRequest[]>("/access-requests"),
   approveAccessRequest: (id: number, payload: { collaborator_id: number; decision_reason?: string | null }) =>
     request<PortalAccessRequest>(`/access-requests/${id}/approve`, { method: "POST", body: JSON.stringify(payload) }),

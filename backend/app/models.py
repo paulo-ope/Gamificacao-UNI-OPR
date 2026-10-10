@@ -376,6 +376,8 @@ class AccountActionToken(Base):
     # Só usado em purpose="invite" - é aqui que o ADMIN fixa o vinculo financeiro/operacional,
     # nunca a pessoa convidada (principio de seguranca da Fase 2, secao 2 do documento).
     collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id", ondelete="CASCADE"), nullable=True, index=True)
+    # Só usado em purpose="email_verification": a solicitação de acesso cujo e-mail este código prova.
+    access_request_id: Mapped[int | None] = mapped_column(ForeignKey("portal_access_requests.id", ondelete="CASCADE"), nullable=True, index=True)
     role: Mapped[str | None] = mapped_column(String(30), nullable=True)
     token_hash: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
@@ -417,6 +419,12 @@ class PortalAccessRequest(Base):
     # aprovação recusa essas com um erro claro em vez de criar conta sem senha (ver
     # `approve_access_request`), nunca apaga ou força um valor nelas.
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Quando a pessoa provou ser dona da caixa de e-mail informada (código de 6 dígitos enviado para
+    # ela - `purpose="email_verification"` em `AccountActionToken`). `None` = não verificado: o admin
+    # não consegue aprovar. Qualquer reenvio da solicitação zera este campo (ver
+    # `submit_access_request`), então um pedido sobrescrito por terceiro nunca fica aprovável sem o
+    # dono da caixa confirmar de novo. Solicitações anteriores a esta coluna nascem sem verificação.
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     suggested_collaborator_id: Mapped[int | None] = mapped_column(ForeignKey("collaborators.id", ondelete="SET NULL"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
     reviewed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
