@@ -132,13 +132,13 @@ export function WorkspaceAppShell({
           // altura, crescendo sem limite conforme a página cresce - achado real, 2026-09-03).
           // `h-screen` fixa a altura na viewport (não mais na altura da coluna irmã) e `sticky`
           // mantém a barra visível enquanto a página rola.
-          "hidden shrink-0 border-r border-slate-800 bg-[#101e38] text-slate-100 transition-[width] duration-200 lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col",
+          "hidden shrink-0 border-r border-slate-200 bg-white text-slate-700 transition-[width] duration-200 lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col",
           expanded ? "w-[264px]" : "w-[76px]",
         )}
       >
         <div
           className={cn(
-            "flex min-h-20 items-center gap-3 border-b border-white/10 py-4",
+            "flex min-h-20 items-center gap-3 border-b border-slate-200 py-4",
             expanded ? "px-4" : "justify-center px-2",
           )}
         >
@@ -146,7 +146,7 @@ export function WorkspaceAppShell({
           <img src="/brand/uni-symbol.png" alt="" aria-hidden="true" className="h-11 w-11 shrink-0 object-contain" />
           {expanded ? (
             <div className="min-w-0">
-              <p className="text-base font-semibold text-white">UNI <span className="font-normal text-slate-300">Workspace</span></p>
+              <p className="text-base font-semibold text-slate-900">UNI <span className="font-normal text-slate-500">Workspace</span></p>
             </div>
           ) : null}
         </div>
@@ -160,10 +160,10 @@ export function WorkspaceAppShell({
           onToggleSidebar={toggleSidebar}
         />
         {expanded ? (
-          <div className="flex items-center gap-3 border-t border-white/10 px-4 py-4">
-            <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">{user.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
-            <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-100">{user.name}</p>
-            <p className="mt-0.5 truncate text-[11px] text-slate-400">{user.email}</p></div>
+          <div className="flex items-center gap-3 border-t border-slate-200 px-4 py-4">
+            <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-uni-royal/10 text-sm font-semibold text-uni-royal">{user.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span>
+            <div className="min-w-0"><p className="truncate text-xs font-semibold text-slate-900">{user.name}</p>
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">{user.email}</p></div>
           </div>
         ) : null}
       </aside>
@@ -179,10 +179,10 @@ export function WorkspaceAppShell({
                       <Menu className="h-5 w-5" />
                     </Button>
                   </SheetTrigger>
-                  <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r border-slate-800 bg-[#101e38] p-0 text-slate-100 sm:max-w-sm [&>button]:text-slate-300 [&>button:hover]:bg-white/10">
-                    <SheetHeader className="shrink-0 border-white/10">
-                      <SheetTitle className="text-white">UNI Workspace</SheetTitle>
-                      <SheetDescription className="text-slate-400">Telas e módulos do ecossistema</SheetDescription>
+                  <SheetContent className="left-0 right-auto w-[88vw] border-l-0 border-r border-slate-200 bg-white p-0 text-slate-700 sm:max-w-sm [&>button]:text-slate-500 [&>button:hover]:bg-slate-100">
+                    <SheetHeader className="shrink-0 border-slate-200">
+                      <SheetTitle className="text-slate-900">UNI Workspace</SheetTitle>
+                      <SheetDescription className="text-slate-500">Telas e módulos do ecossistema</SheetDescription>
                     </SheetHeader>
                     <ShellNavigation
                       activePath={activePath}
@@ -248,7 +248,7 @@ function ShellNavigation({
       aria-expanded={expanded}
       aria-label={expanded ? "Recolher menu lateral" : "Expandir menu lateral"}
       title={expanded ? "Recolher menu" : "Expandir menu"}
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
     >
       {expanded ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
     </button>
@@ -361,14 +361,14 @@ function ModuleNavEntry({
             onClick={() => setOpen((current) => !current)}
             aria-expanded={open}
             aria-label={`${open ? "Recolher" : "Expandir"} telas de ${module.name}`}
-            className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+            className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
           >
             <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
           </button>
         ) : null}
       </div>
       {expanded && canExpand && open ? (
-        <ul className="mb-2 ml-6 mt-1 space-y-0.5 border-l border-white/15 pl-2">
+        <ul className="mb-2 ml-6 mt-1 space-y-0.5 border-l border-slate-200 pl-2">
           {screens.map((screen) => (
             <Suspense key={screen.value} fallback={null}><ModuleScreenLink
               href={moduleScreenHref(module.web_path, screen)}
@@ -388,7 +388,7 @@ function ModuleNavEntry({
           }}
           aria-label={`Expandir telas de ${module.name}`}
           title={`Telas de ${module.name}`}
-          className="mx-auto mt-0.5 flex h-6 w-9 items-center justify-center rounded text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+          className="mx-auto mt-0.5 flex h-6 w-9 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
         >
           <ChevronDown className="h-3 w-3" />
         </button>
@@ -420,7 +420,7 @@ function ModuleScreenLink({
       title={screen.description}
       {...(screen.opensInNewTab ? { target: "_blank", rel: "noopener noreferrer" } : {})}
       aria-current={selected ? "page" : undefined}
-      className={cn("block rounded-lg px-3 py-2 text-xs leading-5 transition-colors hover:bg-white/10 hover:text-white", selected ? "bg-white/10 font-semibold text-white ring-1 ring-inset ring-white/10" : "text-slate-300")}
+      className={cn("block rounded-lg px-3 py-2 text-xs leading-5 transition-colors", selected ? "bg-uni-mist font-semibold text-uni-impact ring-1 ring-inset ring-uni-royal/15" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900")}
     >
       {screen.label}
     </Link>
@@ -432,11 +432,11 @@ function NavGroup({ label, expanded, children }: { label: string; expanded: bool
   return (
     <div className="mb-4 last:mb-0">
       {expanded ? (
-        <p className="px-3 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">{label}</p>
+        <p className="px-3 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</p>
       ) : (
         // Recolhido não cabe o rótulo do grupo: um divisor mantém a separação visível entre
         // "Telas" e "Módulos" sem texto cortado.
-        <div className="mx-2 mb-2 border-t border-white/10 first:border-t-0" aria-hidden="true" />
+        <div className="mx-2 mb-2 border-t border-slate-200 first:border-t-0" aria-hidden="true" />
       )}
       <div className="space-y-1">{children}</div>
     </div>
@@ -469,15 +469,18 @@ function NavItem({
       title={expanded ? undefined : `${label} - ${description}`}
       aria-label={expanded ? undefined : label}
       className={cn(
-        "flex w-full items-center rounded-xl text-left transition-colors",
+        "relative flex w-full items-center rounded-xl text-left transition-colors",
         expanded ? "gap-3 px-3 py-2.5" : "justify-center px-1 py-1.5",
-        selected ? "bg-white/10 text-white ring-1 ring-inset ring-white/10" : "text-slate-300 hover:bg-white/5 hover:text-white",
+        // Item ativo como na tela de acesso: fundo azul-névoa, texto azul e filete turquesa na borda.
+        selected
+          ? "bg-uni-mist text-uni-impact ring-1 ring-inset ring-uni-royal/15 before:absolute before:bottom-2 before:left-0 before:top-2 before:w-[3px] before:rounded-full before:bg-uni-turquoise before:content-['']"
+          : "text-slate-700 hover:bg-slate-100 hover:text-slate-900",
       )}
     >
       <span
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-          selected ? "bg-uni-royal text-white shadow-sm" : "bg-white/5 text-slate-400",
+          selected ? "bg-uni-royal text-white shadow-sm" : "bg-slate-100 text-slate-500",
         )}
       >
         <Icon className="h-4 w-4" />
@@ -485,7 +488,7 @@ function NavItem({
       {expanded ? (
         <span className="min-w-0 flex-1">
           <span className="block text-[13px] font-medium leading-5">{label}</span>
-          <span className={cn("block truncate text-[11px]", selected ? "text-blue-200" : "text-slate-400")}>
+          <span className={cn("block truncate text-[11px]", selected ? "text-slate-600" : "text-slate-500")}>
             {description}
           </span>
         </span>
