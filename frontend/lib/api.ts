@@ -321,6 +321,10 @@ export const api = {
       body: JSON.stringify({ email, password })
     }),
   me: () => request<AuthUser>("/auth/me"),
+  forgotPassword: (email: string) =>
+    request<{ received: boolean; message: string }>("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) }),
+  resetPassword: (payload: { email: string; code: string; new_password: string; confirm_password: string }) =>
+    request<void>("/auth/reset-password", { method: "POST", body: JSON.stringify(payload) }),
   changePassword: (payload: { current_password: string; new_password: string; confirm_password: string }) =>
     request<AuthUser>("/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
   portalSummary: (period?: { reference_month: number; reference_year: number }) => {

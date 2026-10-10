@@ -1,17 +1,36 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import SlidingWindowLimiter
 from app.core.security import create_access_token, get_current_user, permissions_for_user, portal_first_access_pending, verify_password
 from app.db.session import get_db
 from app.models import User
-from app.schemas import ChangePasswordRequest, LoginRequest, TokenOut, UserOut
+from app.schemas import (
+    ChangePasswordRequest,
+    ForgotPasswordOut,
+    ForgotPasswordRequest,
+    LoginRequest,
+    ResetPasswordRequest,
+    TokenOut,
+    UserOut,
+)
 from app.services.account_security import change_own_password
+from app.services.password_reset import CODE_TTL_MINUTES, confirm_password_reset, request_password_reset, send_password_reset_code
 from app.services.regional import effective_managed_regionals
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Rotas públicas de recuperação de senha: limite por IP (em memória) além do limite por e-mail e das
+# tentativas por código, que ficam no banco (ver services/password_reset.py).
+_forgot_limiter = SlidingWindowLimiter(
+    window_minutes=15, max_attempts=10, message="Muitas tentativas. Aguarde alguns minutos e tente novamente."
+)
+_reset_limiter = SlidingWindowLimiter(
+    window_minutes=15, max_attempts=15, message="Muitas tentativas. Aguarde alguns minutos e tente novamente."
+)
 
 LOGIN_WINDOW_MINUTES = 15
 LOGIN_MAX_ATTEMPTS = 5
@@ -80,6 +99,36 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=401, detail="Email ou senha inválidos.")
     _clear_login_attempts(attempt_key)
     return {"access_token": create_access_token(user), "token_type": "bearer", "user": serialize_user(user)}
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordOut, status_code=202)
+def forgot_password(payload: ForgotPasswordRequest, request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Pública. Passo 1 do esqueci minha senha: envia um código de 6 dígitos para o e-mail da conta.
+    A resposta é idêntica exista ou não a conta, e o envio roda em segundo plano para o tempo de
+    resposta também não denunciar."""
+    _forgot_limiter.check(request)
+    issued = request_password_reset(db, payload.email)
+    if issued:
+        user, code = issued
+        background_tasks.add_task(send_password_reset_code, user.name, user.email, code)
+    return {
+        "received": True,
+        "message": f"Se o e-mail estiver cadastrado, enviamos um código de 6 dígitos para ele. O código vale por {CODE_TTL_MINUTES} minutos.",
+    }
+
+
+@router.post("/reset-password", status_code=204)
+def reset_password(payload: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    """Pública. Passo 2: valida o código recebido por e-mail e define a senha nova. Não faz login -
+    a pessoa entra depois, pela tela de login normal."""
+    _reset_limiter.check(request)
+    confirm_password_reset(
+        db,
+        email=payload.email,
+        code=payload.code,
+        new_password=payload.new_password,
+        confirm_password=payload.confirm_password,
+    )
 
 
 @router.get("/me", response_model=UserOut)

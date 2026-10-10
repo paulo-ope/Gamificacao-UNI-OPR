@@ -168,6 +168,9 @@ export function WorkspaceLogin({ isLoading, error, onLogin, eyebrow, title, subt
               <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} aria-pressed={showPassword} className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-lg text-slate-500 hover:text-primary">
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button></div>
+              <Link href="/esqueci-senha" className="justify-self-end text-xs font-medium text-uni-impact hover:underline">
+                Esqueci minha senha
+              </Link>
             </div>
             {error ? (
               <p id={errorId} role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">

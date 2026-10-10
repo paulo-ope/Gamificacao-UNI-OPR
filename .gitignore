@@ -26,3 +26,5 @@ backups/
 outputs/
 tmp_spreadsheet/
 BACKUP_MANIFEST.json
+.local-reset-test.db*
+backend/.local-reset-test.db*

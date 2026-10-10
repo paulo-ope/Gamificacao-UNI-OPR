@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # grandeza do convite de portal (`INVITE_EXPIRES_HOURS`, 72h) - prazo curto o bastante para não
     # acumular links esquecidos, longo o bastante para o cliente abrir fora do horário comercial.
     localiza_link_ttl_hours: int = 72
+    # Envio de e-mail transacional (recuperação de senha). Desligado por padrão: sem
+    # EMAIL_ENABLED=true nada é enviado e o restante do app segue igual. Credenciais SMTP só no
+    # `.env` da VM, nunca no Git. Porta 465 usa SSL direto; qualquer outra usa STARTTLS.
+    email_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "operacional@souuni.com"
+    smtp_from_name: str = "UNI Workspace"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
