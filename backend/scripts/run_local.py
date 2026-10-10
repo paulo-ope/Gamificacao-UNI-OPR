@@ -28,8 +28,11 @@ os.environ.update(
         "FRONTEND_URL": "http://localhost:3001",
         "EMAIL_ENABLED": "false",
         "IXC_SYNC_ENABLED": "false",
-        "IXC_API_BASE_URL": "",
-        "IXC_API_TOKEN": "",
+        # URL local que recusa conexão, de propósito: rotas públicas (ex.: solicitar acesso) criam o
+        # cliente IXC antes de qualquer coisa e quebram com 500 se a URL estiver vazia. Assim a consulta
+        # falha rápido (IxcApiError) e o fluxo segue pelo caminho manual, sem nunca tocar no IXC real.
+        "IXC_API_BASE_URL": "http://127.0.0.1:9",
+        "IXC_API_TOKEN": "local-test-dummy",
         "OPA_SYNC_ENABLED": "false",
         "OPA_API_BASE_URL": "",
         "OPA_API_TOKEN": "",

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, CheckCircle2, IdCard, KeyRound, Loader2, Mail, Phone, ShieldCheck, User as UserIcon } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,12 @@ import { formatCpf, formatPhone, isValidCpf, onlyDigits } from "@/lib/masks";
 // usuário em 2026-08-29). Só então informa o e-mail (sempre digitado, nunca herdado do IXC,
 // restrito ao domínio corporativo). Se o CPF não for encontrado no IXC (cadastro ainda não
 // sincronizado), cai no formulário manual original, pra não perder essa capacidade.
-type Step = "cpf" | "confirm_identity" | "confirm_phone" | "correct_phone" | "email" | "manual" | "done";
+// Verificação de e-mail (2026-10-10): depois de enviar o pedido, a pessoa confirma o código de 6 dígitos que
+// chegou no e-mail informado (`verify_email`) - o admin só aprova pedidos com e-mail verificado.
+type Step = "cpf" | "confirm_identity" | "confirm_phone" | "correct_phone" | "email" | "manual" | "verify_email" | "done";
+
+// Mesmo intervalo mínimo que o backend aplica entre dois envios de código (RESEND_COOLDOWN_SECONDS).
+const RESEND_COOLDOWN_SECONDS = 60;
 
 const CORPORATE_EMAIL_SUFFIX = "@souuni.com";
 
@@ -42,6 +47,13 @@ export function AccessRequestForm() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submittedVia, setSubmittedVia] = useState<"email" | "manual">("email");
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [verifyNotice, setVerifyNotice] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
 
   const cpfId = useId();
   const correctedPhoneId = useId();
@@ -50,6 +62,13 @@ export function AccessRequestForm() {
   const confirmPasswordId = useId();
   const manualNameId = useId();
   const manualPhoneId = useId();
+  const verifyCodeId = useId();
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const timer = setTimeout(() => setCooldown((value) => value - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [cooldown]);
 
   function restart() {
     setStep("cpf");
@@ -68,6 +87,10 @@ export function AccessRequestForm() {
     setPasswordError(null);
     setManualErrors({});
     setSubmitError(null);
+    setVerifyCode("");
+    setVerifyError(null);
+    setVerifyNotice(null);
+    setCooldown(0);
   }
 
   function validatePassword(): string | null {
@@ -111,6 +134,49 @@ export function AccessRequestForm() {
     }
   }
 
+  function goToVerification(via: "email" | "manual") {
+    setSubmittedVia(via);
+    setVerifyCode("");
+    setVerifyError(null);
+    setVerifyNotice(`Enviamos um código de 6 dígitos para ${email.trim().toLowerCase()}. Ele vale por 10 minutos.`);
+    setCooldown(RESEND_COOLDOWN_SECONDS);
+    setStep("verify_email");
+  }
+
+  async function handleVerifyEmail(event?: React.FormEvent) {
+    event?.preventDefault();
+    setVerifyError(null);
+    if (!/^\d{6}$/.test(verifyCode)) {
+      setVerifyError("O código tem 6 dígitos.");
+      return;
+    }
+    setVerifying(true);
+    try {
+      await api.verifyAccessRequestEmail({ cpf: onlyDigits(cpf), email: email.trim().toLowerCase(), code: verifyCode });
+      setStep("done");
+    } catch (err) {
+      setVerifyError(err instanceof Error ? err.message : "Não foi possível confirmar o código. Tente novamente.");
+    } finally {
+      setVerifying(false);
+    }
+  }
+
+  async function handleResendCode() {
+    setVerifyError(null);
+    setResending(true);
+    try {
+      await api.resendAccessRequestCode({ cpf: onlyDigits(cpf), email: email.trim().toLowerCase() });
+      // A resposta é sempre a mesma (o servidor não revela se há solicitação), então a mensagem
+      // também não promete que um e-mail saiu.
+      setVerifyNotice("Se o pedido ainda estiver aguardando confirmação, enviamos um código novo.");
+      setCooldown(RESEND_COOLDOWN_SECONDS);
+    } catch (err) {
+      setVerifyError(err instanceof Error ? err.message : "Não foi possível reenviar o código.");
+    } finally {
+      setResending(false);
+    }
+  }
+
   async function handleSubmitFound() {
     setEmailError(null);
     setPasswordError(null);
@@ -137,7 +203,7 @@ export function AccessRequestForm() {
         confirm_password: confirmPassword,
         phone: correctedPhone ? formatPhone(correctedPhone) : undefined,
       });
-      setStep("done");
+      goToVerification("email");
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Não foi possível enviar sua solicitação.");
     } finally {
@@ -168,7 +234,7 @@ export function AccessRequestForm() {
         name: manualName.trim(),
         phone: formatPhone(manualPhone),
       });
-      setStep("done");
+      goToVerification("manual");
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Não foi possível enviar sua solicitação.");
     } finally {
@@ -463,10 +529,52 @@ export function AccessRequestForm() {
             </form>
           ) : null}
 
+          {step === "verify_email" ? (
+            <form onSubmit={handleVerifyEmail} className="grid gap-5" noValidate>
+              <div className="rounded-xl border border-uni-royal/20 bg-uni-royal/5 p-5 text-center">
+                <Mail className="mx-auto h-6 w-6 text-uni-impact" aria-hidden="true" />
+                <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Confirme seu e-mail</p>
+                <p className="mt-1 text-sm text-slate-600">{verifyNotice}</p>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor={verifyCodeId}>Código de 6 dígitos</Label>
+                <Input
+                  id={verifyCodeId}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  autoFocus
+                  className="text-center text-2xl font-semibold tracking-[0.5em] focus-visible:ring-uni-royal"
+                  value={verifyCode}
+                  onChange={(event) => setVerifyCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                />
+                {verifyError ? <p role="alert" className="text-xs text-rose-600">{verifyError}</p> : <p className="text-xs text-slate-400">Confira também a caixa de spam.</p>}
+              </div>
+              <Button type="submit" disabled={verifying || verifyCode.length !== 6} className="w-full rounded-xl">
+                {verifying ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="h-4 w-4" aria-hidden="true" />}
+                {verifying ? "Confirmando..." : "Confirmar e-mail"}
+              </Button>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                <button
+                  type="button"
+                  disabled={resending || cooldown > 0}
+                  className="font-medium text-uni-impact hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+                  onClick={() => void handleResendCode()}
+                >
+                  {cooldown > 0 ? `Reenviar código em ${cooldown}s` : "Reenviar código"}
+                </button>
+                <button type="button" className="hover:underline" onClick={() => setStep(submittedVia)}>
+                  Corrigir o e-mail
+                </button>
+              </div>
+            </form>
+          ) : null}
+
           {step === "done" ? (
             <div className="flex flex-col items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-8 text-center">
               <CheckCircle2 className="h-8 w-8 text-emerald-600" aria-hidden="true" />
-              <p className="text-sm font-medium text-emerald-900">Solicitação recebida.</p>
+              <p className="text-sm font-medium text-emerald-900">Solicitação recebida e e-mail confirmado.</p>
               <p className="max-w-xs text-sm text-emerald-800">
                 Um administrador vai analisar seu pedido. Assim que for aprovado, você já pode entrar no Portal com o e-mail e a senha que você cadastrou aqui.
               </p>

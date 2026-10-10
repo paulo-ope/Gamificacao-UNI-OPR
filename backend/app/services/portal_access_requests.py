@@ -11,8 +11,14 @@ from app.core.security import hash_password
 from app.models import Collaborator, PortalAccessRequest, User
 from app.services.audit_log import record_audit_log
 from app.services.documents import is_valid_cpf, mask_document, normalize_document
+from app.services.email_sender import send_email
+from app.services.email_templates import build_email_verification_code_email
 from app.services.ixc_client import IxcApiError, IxcClient
 from app.services.ixc_collaborator_lookup import find_funcionario_identity_by_cpf, find_local_collaborator
+from app.services.verification_codes import CODE_TTL_MINUTES, issue_code, revoke_pending, verify_code
+
+PURPOSE = "email_verification"
+INVALID_CODE_MESSAGE = "Código inválido ou expirado. Confira os 6 dígitos ou peça um código novo."
 
 
 def _serialize_request(item: PortalAccessRequest) -> dict[str, Any]:
@@ -22,6 +28,7 @@ def _serialize_request(item: PortalAccessRequest) -> dict[str, Any]:
         "cpf_masked": mask_document(item.cpf),
         "phone": item.phone,
         "email": item.email,
+        "email_verified": item.email_verified_at is not None,
         "suggested_collaborator_id": item.suggested_collaborator_id,
         "suggested_collaborator_name": item.suggested_collaborator.name if item.suggested_collaborator else None,
         "status": item.status,
@@ -48,7 +55,7 @@ def submit_access_request(
     confirm_password: str,
     name: str | None = None,
     phone: str | None = None,
-) -> None:
+) -> tuple[str, str, str] | None:
     """Fase 2D - registra a solicitação (nunca cria `User`/vínculo). Resposta pública é sempre
     genérica (ver router) - a lógica aqui pode ramificar internamente (CPF já tem solicitação
     pendente, já tem correspondência de colaborador etc.) sem que isso vaze pra fora.
@@ -64,7 +71,14 @@ def submit_access_request(
     `new_password`/`confirm_password` (2026-08-29): a pessoa já escolhe a própria senha aqui - só
     o hash é armazenado (`PortalAccessRequest.password_hash`), nunca a senha em claro em nenhum
     lugar (nem auditoria). Se aprovada, a conta é criada direto com essa senha
-    (`approve_access_request`), sem convite/link manual."""
+    (`approve_access_request`), sem convite/link manual.
+
+    Verificação de e-mail (2026-10-10): toda solicitação nasce com `email_verified_at=None` e um código
+    de 6 dígitos é emitido para o e-mail informado - o admin só aprova depois que a pessoa confirmar o
+    código (`verify_access_request_email`). Reenviar enquanto pendente ZERA a verificação e invalida o
+    código anterior: é isso que impede alguém que só sabe o CPF de um colega de trocar e-mail/senha de
+    uma solicitação já verificada. Devolve `(nome, e-mail, código)` para a rota enviar o e-mail em
+    segundo plano, ou `None` quando não há código a enviar (intervalo mínimo/limite por hora)."""
     if new_password != confirm_password:
         raise HTTPException(status_code=422, detail="A nova senha e a confirmação não são iguais.")
 
@@ -122,6 +136,8 @@ def submit_access_request(
         existing_pending.email = email
         existing_pending.password_hash = password_hash
         existing_pending.suggested_collaborator_id = suggested_collaborator.id if suggested_collaborator else None
+        existing_pending.email_verified_at = None
+        revoke_pending(db, purpose=PURPOSE, access_request_id=existing_pending.id)
         record_audit_log(
             db,
             None,
@@ -131,8 +147,9 @@ def submit_access_request(
             None,
             {"cpf_masked": mask_document(normalized_cpf), "phone_source": phone_source},
         )
+        issued = issue_code(db, purpose=PURPOSE, email=email, access_request_id=existing_pending.id)
         db.commit()
-        return
+        return (resolved_name, email, issued[0]) if issued else None
 
     item = PortalAccessRequest(
         name=resolved_name,
@@ -158,7 +175,62 @@ def submit_access_request(
         None,
         {"cpf_masked": mask_document(normalized_cpf), "suggested_collaborator_id": item.suggested_collaborator_id, "phone_source": phone_source},
     )
+    issued = issue_code(db, purpose=PURPOSE, email=email, access_request_id=item.id)
     db.commit()
+    return (resolved_name, email, issued[0]) if issued else None
+
+
+def send_email_verification_code(name: str, email: str, code: str) -> None:
+    """Tarefa de segundo plano (roda depois da resposta HTTP, então o tempo de resposta não diz se
+    houve ou não envio). Falha de envio só vira log (ver `send_email`)."""
+    send_email(build_email_verification_code_email(to=email, name=name, code=code, ttl_minutes=CODE_TTL_MINUTES))
+
+
+def _find_pending_unverified(db: Session, cpf: str, email: str) -> PortalAccessRequest | None:
+    normalized_cpf = normalize_document(cpf)
+    if not normalized_cpf:
+        return None
+    return db.scalar(
+        select(PortalAccessRequest).where(
+            PortalAccessRequest.cpf == normalized_cpf,
+            PortalAccessRequest.status == "pending",
+            PortalAccessRequest.email == email.strip().lower(),
+            PortalAccessRequest.email_verified_at.is_(None),
+        )
+    )
+
+
+def verify_access_request_email(db: Session, *, cpf: str, email: str, code: str) -> None:
+    """Confirma o código de 6 dígitos que chegou no e-mail da solicitação. QUALQUER falha (CPF sem
+    solicitação, e-mail diferente do que está salvo, código errado/expirado/esgotado, já verificada)
+    devolve a MESMA mensagem - a rota pública não revela se um CPF tem solicitação."""
+    item = _find_pending_unverified(db, cpf, email)
+    if not item or not verify_code(db, purpose=PURPOSE, email=item.email, code=code, access_request_id=item.id):
+        raise HTTPException(status_code=400, detail=INVALID_CODE_MESSAGE)
+
+    item.email_verified_at = datetime.now(timezone.utc)
+    # Auditoria sem o código e sem o CPF completo.
+    record_audit_log(
+        db, None, "portal_access_request.email_verified", "portal_access_request", item.id, None, {"cpf_masked": mask_document(item.cpf)}
+    )
+    db.commit()
+
+
+def resend_email_verification(db: Session, *, cpf: str, email: str) -> tuple[str, str, str] | None:
+    """Emite um código novo para uma solicitação pendente e ainda não verificada. Devolve
+    `(nome, e-mail, código)` para a rota enviar, ou `None` quando não há nada a enviar - a rota
+    responde igual nos dois casos (sem revelar se o CPF tem solicitação)."""
+    item = _find_pending_unverified(db, cpf, email)
+    if not item:
+        return None
+    issued = issue_code(db, purpose=PURPOSE, email=item.email, access_request_id=item.id)
+    if not issued:
+        return None
+    record_audit_log(
+        db, None, "portal_access_request.verification_code_resent", "portal_access_request", item.id, None, {"cpf_masked": mask_document(item.cpf)}
+    )
+    db.commit()
+    return item.name, item.email, issued[0]
 
 
 def approve_access_request(
@@ -176,6 +248,13 @@ def approve_access_request(
     nunca vira vínculo automático (princípio de segurança da Fase 2, seção 2)."""
     if request.status != "pending":
         raise HTTPException(status_code=409, detail="Esta solicitação já foi decidida.")
+    if not request.email_verified_at:
+        # Verificação de e-mail (2026-10-10): sem a prova de posse da caixa, o admin não aprova - nem
+        # os pedidos anteriores a esta regra (a pessoa reenvia o pedido e confirma o código).
+        raise HTTPException(
+            status_code=409,
+            detail="O e-mail desta solicitação ainda não foi verificado. Peça para a pessoa confirmar o código enviado para o e-mail (ou reenviar a solicitação em /solicitar-acesso).",
+        )
     if not request.password_hash:
         # Solicitação criada antes de `password_hash` existir (2026-08-29) - nunca cria conta sem
         # senha; pede reenvio em vez de inventar ou reaproveitar senha de outro lugar.

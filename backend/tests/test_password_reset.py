@@ -324,3 +324,13 @@ def test_send_email_swallows_smtp_failure(monkeypatch):
         assert email_sender.send_email(OutgoingEmail(to="a@souuni.com", subject="s", text_body="b")) is False
     finally:
         get_settings.cache_clear()
+
+
+def test_accepted_reset_code_is_marked_accepted_even_without_autoflush(db_session, sent_emails):
+    """Regressão: com a sessão do app (sem autoflush), o código aceito terminava como "revoked"."""
+    _make_user(db_session)
+    db_session.autoflush = False
+    with _client(db_session) as client:
+        code = _request_code(client, sent_emails)
+        assert _reset(client, code).status_code == 204
+    assert db_session.query(AccountActionToken).one().status == "accepted"

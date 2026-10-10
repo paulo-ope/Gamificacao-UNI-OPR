@@ -13,6 +13,8 @@ escolhe a própria senha (`new_password`/`confirm_password`) - só o hash é arm
 test_portal_first_access.py).
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -62,6 +64,13 @@ def _reset_rate_limits():
     access_requests_module._submit_attempts.clear()
     access_requests_module._lookup_attempts.clear()
     yield
+
+
+def _mark_email_verified(db_session, request_row) -> None:
+    """A aprovação exige e-mail verificado (2026-10-10). Estes testes cobrem a regra de aprovação, não o
+    código - a verificação em si é testada em test_access_request_email_verification.py."""
+    request_row.email_verified_at = datetime.now(timezone.utc)
+    db_session.commit()
 
 
 def _admin_client(db_session, admin_user) -> TestClient:
@@ -469,6 +478,7 @@ def test_approve_creates_user_directly_with_submitted_password(db_session, make_
     app.dependency_overrides.clear()
 
     request_row = db_session.query(PortalAccessRequest).filter(PortalAccessRequest.email == "aprovado@souuni.com").one()
+    _mark_email_verified(db_session, request_row)
 
     with _admin_client(db_session, admin_user) as client:
         response = client.post(f"/api/access-requests/{request_row.id}/approve", json={"collaborator_id": collaborator.id})
@@ -484,7 +494,13 @@ def test_approve_creates_user_directly_with_submitted_password(db_session, make_
     assert request_row.reviewed_by_user_id == admin_user.id
     assert request_row.password_hash is None  # limpo após uso, não fica retido à toa
 
-    assert db_session.query(AccountActionToken).filter(AccountActionToken.email == "aprovado@souuni.com").first() is None
+    # Aprovar não gera CONVITE (o token de verificação de e-mail, `purpose="email_verification"`, é outra coisa).
+    assert (
+        db_session.query(AccountActionToken)
+        .filter(AccountActionToken.email == "aprovado@souuni.com", AccountActionToken.purpose == "invite")
+        .first()
+        is None
+    )
 
     user = db_session.query(User).filter(User.email == "aprovado@souuni.com").one()
     assert user.collaborator_id == collaborator.id
@@ -516,6 +532,7 @@ def test_approved_user_can_login_to_portal_with_submitted_password(db_session, m
     app.dependency_overrides.clear()
 
     request_row = db_session.query(PortalAccessRequest).filter(PortalAccessRequest.email == "login.aprovado@souuni.com").one()
+    _mark_email_verified(db_session, request_row)
 
     with _admin_client(db_session, admin_user) as client:
         approve = client.post(f"/api/access-requests/{request_row.id}/approve", json={"collaborator_id": collaborator.id})
@@ -572,6 +589,7 @@ def test_approve_rejects_legacy_request_without_password(db_session, make_collab
     app.dependency_overrides.clear()
 
     request_row = db_session.query(PortalAccessRequest).filter(PortalAccessRequest.email == "legado@souuni.com").one()
+    _mark_email_verified(db_session, request_row)
     request_row.password_hash = None  # simula uma solicitação anterior à coluna existir
     db_session.commit()
 
@@ -599,6 +617,7 @@ def test_approve_rejects_collaborator_already_linked(db_session, make_collaborat
     app.dependency_overrides.clear()
 
     request_row = db_session.query(PortalAccessRequest).filter(PortalAccessRequest.email == "duplicado@souuni.com").one()
+    _mark_email_verified(db_session, request_row)
 
     with _admin_client(db_session, admin_user) as client:
         response = client.post(f"/api/access-requests/{request_row.id}/approve", json={"collaborator_id": collaborator.id})
@@ -618,6 +637,7 @@ def test_approve_already_decided_request_is_rejected(db_session, make_collaborat
     app.dependency_overrides.clear()
 
     request_row = db_session.query(PortalAccessRequest).filter(PortalAccessRequest.email == "ja.decidido@souuni.com").one()
+    _mark_email_verified(db_session, request_row)
 
     with _admin_client(db_session, admin_user) as client:
         first = client.post(f"/api/access-requests/{request_row.id}/approve", json={"collaborator_id": collaborator.id})
@@ -684,6 +704,7 @@ def test_audit_log_never_stores_full_cpf_or_password(db_session, make_collaborat
     app.dependency_overrides.clear()
 
     request_row = db_session.query(PortalAccessRequest).filter(PortalAccessRequest.email == "auditoria.acesso@souuni.com").one()
+    _mark_email_verified(db_session, request_row)
 
     with _admin_client(db_session, admin_user) as client:
         client.post(f"/api/access-requests/{request_row.id}/approve", json={"collaborator_id": collaborator.id})

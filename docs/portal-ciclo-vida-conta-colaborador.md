@@ -190,6 +190,18 @@ algo de fato muda.
 
 ## 6. Fase 2D — Solicitação de acesso
 
+> **Verificação de e-mail (2026-10-10).** Depois de enviar o pedido, a pessoa recebe um código de 6 dígitos
+> no e-mail informado e o confirma na própria tela (`POST /access-requests/verify-email`; reenvio em
+> `POST /access-requests/resend-code`). O admin **só aprova** pedidos com `email_verified_at` preenchido
+> (409 caso contrário), inclusive os pedidos antigos, que precisam ser reenviados. Reenviar o pedido
+> enquanto pendente **zera a verificação** e invalida o código anterior: isso fecha o achado de que quem
+> só sabia o CPF de um colega conseguia trocar e-mail/senha de uma solicitação alheia. O código segue as
+> mesmas regras do "esqueci minha senha" (10 min, uso único, 5 tentativas, reenvio a cada 60 s, 5 pedidos
+> por hora, limite por IP), implementadas uma vez só em `services/verification_codes.py`. A aprovação
+> manual do admin continua, porque o vínculo com o colaborador é financeiro. Risco residual: quem tem uma
+> caixa `@souuni.com` própria ainda consegue verificar o pedido com ela - o admin confere nome × e-mail
+> na fila antes de aprovar.
+
 **Contexto**: hoje, se alguém não tem conta e não recebeu convite, não existe canal
 formal — depende de pedido informal chegando até algum admin por fora do sistema.
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { Select } from "@/components/ui/select";
-import { Ban, IdCard, Loader2, Mail } from "lucide-react";
+import { Ban, IdCard, Loader2, Mail, MailCheck, MailWarning } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,7 @@ export function AccessRequestsPanel({
       <div className="border-b border-slate-200 p-5">
         <h3 className="text-lg font-semibold text-slate-950">Solicitações de acesso</h3>
         <p className="text-sm text-slate-500">
-          Pedidos de quem ainda não tem conta nem convite. Aprovar cria a conta direto, com a senha que a pessoa já definiu (o vínculo com o colaborador precisa ser confirmado aqui, mesmo quando já existe uma sugestão automática por CPF/IXC).
+          Pedidos de quem ainda não tem conta nem convite. Aprovar cria a conta direto, com a senha que a pessoa já definiu (o vínculo com o colaborador precisa ser confirmado aqui, mesmo quando já existe uma sugestão automática por CPF/IXC). Só dá para aprovar depois que a pessoa confirmar o código de 6 dígitos enviado ao e-mail dela; pedidos antigos precisam ser reenviados em /solicitar-acesso.
         </p>
       </div>
 
@@ -59,6 +59,19 @@ export function AccessRequestsPanel({
                 <TableCell className="text-sm text-slate-600">
                   <div>{item.phone}</div>
                   <div className="text-slate-400">{item.email}</div>
+                  {item.status === "pending" ? (
+                    item.email_verified ? (
+                      <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+                        <MailCheck className="h-3 w-3" aria-hidden="true" />
+                        E-mail verificado
+                      </span>
+                    ) : (
+                      <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-amber-700">
+                        <MailWarning className="h-3 w-3" aria-hidden="true" />
+                        E-mail não verificado
+                      </span>
+                    )
+                  ) : null}
                 </TableCell>
                 <TableCell>
                   <Badge className={ACCESS_REQUEST_STATUS_BADGE[item.status] || "bg-slate-100 text-slate-600"}>
@@ -100,12 +113,16 @@ export function AccessRequestsPanel({
                           aria-label={`Aprovar solicitação de ${item.name}`}
                           type="button"
                           size="sm"
-                          disabled={decidingAccessRequestId === item.id}
+                          disabled={decidingAccessRequestId === item.id || !item.email_verified}
+                          title={item.email_verified ? undefined : "Aguardando a pessoa confirmar o código enviado ao e-mail."}
                           onClick={() => onApprove(item)}
                         >
                           {decidingAccessRequestId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
                           Aprovar
                         </Button>
+                        {!item.email_verified ? (
+                          <p className="sr-only">Aprovação bloqueada: e-mail ainda não verificado.</p>
+                        ) : null}
                         <Button
                           aria-label={`Rejeitar solicitação de ${item.name}`}
                           type="button"
