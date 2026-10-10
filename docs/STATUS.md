@@ -13,9 +13,10 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-09** — branch `claude/menu-lateral-seta-recolher` (PR #57 mesclado na `master`, **em produção e validado**,
-ver a segunda entrada abaixo; **PR #60 (Visão Geral estilo cockpit) aberto e ainda não em produção**, ver a primeira
-entrada; o texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está desatualizado)
+**2026-10-10** — "Esqueci minha senha" por código de 6 dígitos (PR #61) **mesclado na `master` e em produção**; o
+e-mail de verdade foi confirmado pelo usuário (o código chegou na caixa). Ver a primeira entrada abaixo. O PR #60
+(Visão Geral estilo cockpit) também já está mesclado e subiu junto neste deploy, mas **a tela logada ainda não foi
+conferida**. O texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está desatualizado.
 
 **Estado do checkout, importante pra quem entrar agora**: este working tree é
 compartilhado por várias sessões rodando em paralelo há alguns dias -
@@ -45,6 +46,41 @@ abaixo) - o erro de ambiente do SQLite-em-thread é intermitente, não indica
 regressão.
 
 ## O que foi feito recentemente
+
+- **"Esqueci minha senha" por código de 6 dígitos enviado por e-mail (2026-10-10, PR #61 mesclado em `master`
+  `4b695bb`, deploy feito na VM pelo dono do sistema).** Pedido do usuário: clicar em "esqueci a senha" envia um
+  código de 6 dígitos para o e-mail da conta e a pessoa digita o código e a senha nova na própria tela.
+  - **Fluxo.** Link "Esqueci minha senha" no login → `/esqueci-senha` → `POST /api/auth/forgot-password` (202,
+    resposta sempre igual, exista ou não a conta) → código por e-mail → `POST /api/auth/reset-password` (204, não
+    faz login) → login normal. Código de 10 min, uso único, 5 tentativas erradas e é revogado (6 dígitos são só 1
+    milhão de combinações); reenvio só após 60 s e no máximo 5 pedidos/hora por e-mail (persistido no banco); mais
+    limite por IP em memória. Só contas **ativas** recebem código. Não mexe em `first_access_completed_at` nem em
+    `must_change_password`. Guardado só como HMAC salgado em `account_action_tokens` (`purpose="password_reset"`);
+    auditoria sem código nem senha. **Migration `20261010_0110`** (coluna `attempts`).
+  - **Envio de e-mail (decisão que não está óbvia no código).** O `souuni.com` **não** é Google nem Microsoft: o MX
+    é um servidor próprio, `mail.souuni.com` (porta 587 STARTTLS ou 465 SSL, AUTH PLAIN/LOGIN, certificado válido).
+    Em produção o remetente e o login são a caixa `operacional@souuni.com`. O SPF do domínio é `-all` e só autoriza
+    3 IPs (o do `mail.souuni.com` é um deles): **o envio precisa sair pelo `mail.souuni.com`, nunca direto da VM**,
+    senão o SPF reprova. Configuração no `.env` da VM (nunca no Git): `EMAIL_ENABLED`, `SMTP_HOST`, `SMTP_PORT`,
+    `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_FROM_NAME` (padrão desligado; sem `EMAIL_ENABLED=true` nada é
+    enviado). `docker-compose.yml` repassa essas variáveis ao backend. Falha de envio vira só log
+    (`Falha ao enviar e-mail para ... (TipoDoErro)`), sem código nem senha. **Desligar o envio:** `EMAIL_ENABLED=false`.
+  - **Verificação.** 17 testes novos (`backend/tests/test_password_reset.py`) passando; `tsc --noEmit` limpo; fluxo
+    completo conferido no navegador contra o backend local; em **produção** o código chegou na caixa do usuário
+    (SMTP real confirmado). `/esqueci-senha` responde 200 em produção. O backend local isolado para testar fluxos de
+    conta está em `backend/scripts/run_local.py` (SQLite descartável, syncs IXC/OPA/CPK desligados; o corpo do e-mail
+    aparece no console só fora de produção); configs `backend-local`/`frontend-local` em `.claude/launch.json`. O
+    frontend local precisa de `--webpack` (Next 16 + `webpack` config do projeto).
+  - **Pendências.** (1) **Segurança:** a senha da caixa `operacional@souuni.com` foi digitada no chat durante o deploy
+    - trocar e atualizar `SMTP_PASSWORD` no `.env` da VM (`docker compose up -d backend`); o ideal é uma caixa só do
+    sistema (ex.: `nao-responda@souuni.com`). Também apagar `.env.bak-antes-email` e `.env.save` da pasta da VM (cópias
+    do `.env` com segredos) e limpar o histórico do bash. (2) **Verificação de e-mail na criação de conta (Fase 2D)
+    NÃO foi feita** - o e-mail do formulário de solicitação de acesso continua sem prova de posse. (3) **Achado de
+    segurança aberto:** reenviar a solicitação com o mesmo CPF enquanto ela está pendente sobrescreve e-mail,
+    telefone e senha (`portal_access_requests.py`, dedup silenciosa) - quem souber o CPF de um colega consegue trocar a
+    senha de uma solicitação alheia antes da aprovação; a verificação de e-mail (2) fecha isso. (4) O JWT emitido
+    antes da troca de senha **não é invalidado** (vale para este fluxo e para a troca voluntária); só expira em até
+    12 h. (5) A Visão Geral estilo cockpit (PR #60) subiu no mesmo deploy e falta conferi-la logado. (6) A VM mostra "System restart required" (atualização do Ubuntu, sem relação).
 
 - **Visão Geral em painel executivo estilo cockpit (2026-10-09, PR #60 aberto contra `master`, commit `9986b22`,
   ainda NÃO mesclado nem em produção).** Só frontend (20 arquivos), sem backend, API ou migration. Referência visual
