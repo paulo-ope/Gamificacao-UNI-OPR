@@ -103,8 +103,15 @@ def test_agents_list_only_has_states_that_need_attention_and_orders_by_priority_
 
     result = presence.build_presence(db_session, FakeOpa(users), NOW)
 
-    # Só os 4 primeiros cabem na TV; o total real (5) vai junto para a tela mostrar "+1".
-    assert [agent["name"] for agent in result["agents"]] == ["Em ligação", "Ocupado", "Pausa longa", "Pausa curta"]
+    # Todos os que pedem atenção aparecem (o limite da TV é 12), na ordem de prioridade; o mais antigo
+    # de cada estado vem primeiro.
+    assert [agent["name"] for agent in result["agents"]] == [
+        "Em ligação",
+        "Ocupado",
+        "Pausa longa",
+        "Pausa curta",
+        "Ausente curto",
+    ]
     assert result["agents_total"] == 5
 
 

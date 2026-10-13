@@ -13,7 +13,6 @@ import {
   LockKeyhole,
   Mail,
   ShieldCheck,
-  Sparkles,
   Trophy,
   UsersRound,
   X,
@@ -133,7 +132,6 @@ export function WorkspaceLogin({
   onLogin,
   title,
   subtitle,
-  description,
   helperText,
   variant = "workspace",
   showPortalLink = false,
@@ -212,23 +210,9 @@ export function WorkspaceLogin({
           aria-labelledby="uni-access-intro-title"
         >
           <h2 id="uni-access-intro-title">
-            Seu trabalho.
-            <br />
-            <span>Mais conectado.</span>
+            Seu trabalho <span>conectado.</span>
           </h2>
-          <p className="uni-access-intro-description">
-            {description ??
-              "Pessoas, operações e conquistas em um só lugar. Um espaço para simplificar sua rotina e ir mais longe, juntos."}
-          </p>
           <WorkspaceConnections />
-          <div className="uni-access-intro-footnote">
-            <span className="uni-access-sparkle">
-              <Sparkles size={16} aria-hidden="true" />
-            </span>
-            <p>
-              Uma conexão. <strong>Novas possibilidades.</strong>
-            </p>
-          </div>
         </section>
         <section
           className="uni-access-card"

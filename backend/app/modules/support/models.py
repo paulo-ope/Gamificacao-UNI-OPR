@@ -412,6 +412,28 @@ class SupportOpaAttendance(Base):
     # com painéis que não distinguem bot de humano no TMR. tmr_seconds
     # continua sendo o TMR só-humano, não foi alterado.
     tmr_all_responses_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # TMA EFETIVO (o do painel do OPA): da 1ª mensagem do atendente humano até a mensagem de
+    # conclusão (ou a última mensagem humana, sem ela). `tma_seconds` continua sendo a duração
+    # TOTAL (abertura -> encerramento), que inclui bot, fila e o tempo até o fechamento. NULL =
+    # sem mensagem humana (atendimento só do bot) ou mensagens ainda não buscadas - nunca 0.
+    # Ver opa_ingestion._effective_tma_seconds.
+    tma_effective_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # TMR EFETIVO (APROXIMAÇÃO do TMR do painel do OPA, ±35% em 5 atendentes testados): média dos
+    # intervalos entre a última mensagem do cliente e a resposta (humana ou do bot) depois da entrada
+    # do atendente humano, descartando intervalos acima de 1 h. `tmr_seconds`/`tmr_all_responses_seconds`
+    # não mudam. NULL = sem humano, sem resposta medível ou mensagens ainda não buscadas - nunca 0.
+    # Ver opa_ingestion._effective_tmr_seconds.
+    tmr_effective_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # TMR HUMANO "ao vivo": só respostas de atendente HUMANO e só a partir da entrada dele (mede a
+    # rapidez do atendente, sem a espera pelo humano). `tmr_seconds` (legado) continua incluindo essa
+    # espera e não muda. NULL = sem humano, sem resposta medível ou mensagens ainda não buscadas.
+    # Ver opa_ingestion._human_tmr_after_entry_seconds.
+    tmr_human_live_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ESPERA PELO HUMANO ("1ª resposta humana"): da última mensagem do bot (a transferência) até a 1ª
+    # mensagem do atendente humano; sem mensagem do bot, da última mensagem do cliente. Não inclui a
+    # conversa do cliente com o bot (que o `first_response_at - opened_at` legado inclui). NULL = sem
+    # humano ou mensagens ainda não buscadas. Ver opa_ingestion._human_wait_seconds.
+    human_wait_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Nullable de propósito: NULL = atendimento ainda não classificado (histórico
     # anterior à Fase 2, ou mensagens indisponíveis) — nunca tratar como False.
     # Ver opa_ingestion._classify_bot_human.

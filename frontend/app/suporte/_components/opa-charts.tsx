@@ -123,6 +123,8 @@ export function TimeTrendChart({ points, loading }: { points: SupportOpaTimeseri
     (point) =>
       point.average_duration_seconds !== null ||
       point.average_tmr_seconds !== null ||
+      point.average_tmr_human_live_seconds !== null ||
+      point.average_tmr_effective_seconds !== null ||
       point.average_tmr_all_responses_seconds !== null,
   );
   return (

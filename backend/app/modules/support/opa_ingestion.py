@@ -4,6 +4,7 @@ import calendar
 import contextlib
 import logging
 import time
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -392,8 +393,155 @@ def _human_response_metrics(
     return round(sum(gaps) / len(gaps)), first_response_at
 
 
+# Mensagem que o atendente envia ao encerrar ("Seu atendimento foi concluído com sucesso! ..."). No
+# painel do OPA ela marca o FIM do tempo médio de atendimento (confirmado com o protocolo
+# UNI20261003905 e com os 203 atendimentos da Jennyfer exportados do OPA em 2026-10-12).
+_CONCLUSION_MARKER = "atendimento foi concluido com sucesso"
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    """Texto da mensagem em minúsculas e sem acento; vazio quando não é texto simples (ex.: o log
+    interno do Theo traz `mensagem` como objeto)."""
+    value = message.get("mensagem")
+    if not isinstance(value, str):
+        return ""
+    decomposed = unicodedata.normalize("NFKD", value)
+    return "".join(char for char in decomposed if not unicodedata.combining(char)).casefold()
+
+
+def _effective_tma_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
+    """TMA efetivo = da PRIMEIRA mensagem do atendente humano até a mensagem de conclusão. Sem a
+    mensagem de conclusão, usa a ÚLTIMA mensagem humana (na amostra da Jennyfer deu 8m39s contra
+    8m55s com a conclusão e 9m04s no OPA). Atendimento sem mensagem humana (só bot) devolve `None`:
+    ele não tem tempo de atendimento humano e nunca vira 0, que puxaria a média para baixo."""
+    human: list[tuple[datetime, bool]] = []
+    for message in messages:
+        if not _message_is_from_human_attendant(message, human_attendant_ids):
+            continue
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        human.append((timestamp, _CONCLUSION_MARKER in _message_text(message)))
+    if not human:
+        return None
+    human.sort(key=lambda item: item[0])
+    start = human[0][0]
+    conclusion_times = [timestamp for timestamp, is_conclusion in human if is_conclusion]
+    end = conclusion_times[-1] if conclusion_times else human[-1][0]
+    return max(0, round((end - start).total_seconds()))
+
+
 def _message_is_from_any_attendant(message: dict[str, Any]) -> bool:
     return bool(message.get("id_atend")) or _message_is_from_theo_bot(message)
+
+
+# TMR EFETIVO (aproximação do TMR do painel do OPA). A API do OPA não traz o TMR e a fórmula deles
+# não é pública; esta regra foi ajustada em 2026-10-13 contra 5 atendentes exportados do OPA
+# (Jennyfer, Julio, Anna Heloisa, Adelaidy e Kaline, 04-10/10) e fica a +-35% do painel em todos
+# (erro máximo 1,37x), contra 15x a 250x do TMR geral/humano. NÃO é exata: ver docs/STATUS.md.
+# - intervalo = última mensagem do cliente -> resposta de um atendente (humano OU bot);
+# - só conta depois da PRIMEIRA mensagem humana (ignora a fase em que o cliente só falou com o bot);
+# - descarta intervalos acima de 1 h (cliente sumiu, expediente acabou...);
+# - por atendimento é a média dos intervalos; a média da tela é a média entre atendimentos.
+_TMR_EFFECTIVE_MAX_GAP_SECONDS = 3600
+
+
+def _effective_tmr_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
+    """TMR efetivo (aproximado) de UM atendimento, em segundos. `None` quando não houve atendente
+    humano ou nenhuma resposta a uma mensagem do cliente depois da entrada dele: nunca vira 0."""
+    events: list[tuple[datetime, str]] = []
+    for message in messages:
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        if _message_is_from_client(message):
+            events.append((timestamp, "client"))
+        elif _message_is_from_human_attendant(message, human_attendant_ids):
+            events.append((timestamp, "human"))
+        elif _message_is_from_any_attendant(message):
+            events.append((timestamp, "other"))  # agente virtual ou atendente sem tipo conhecido
+    events.sort(key=lambda event: event[0])
+    first_human_at = next((timestamp for timestamp, role in events if role == "human"), None)
+    if first_human_at is None:
+        return None
+
+    gaps: list[float] = []
+    last_client_at: datetime | None = None
+    for timestamp, role in events:
+        if role == "client":
+            if timestamp >= first_human_at:
+                last_client_at = timestamp
+        elif last_client_at is not None:
+            gap = (timestamp - last_client_at).total_seconds()
+            if 0 <= gap <= _TMR_EFFECTIVE_MAX_GAP_SECONDS:
+                gaps.append(gap)
+            last_client_at = None
+    return round(sum(gaps) / len(gaps)) if gaps else None
+
+
+def _human_tmr_after_entry_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
+    """TMR HUMANO ao vivo = média dos intervalos entre uma mensagem do cliente e a resposta do
+    atendente HUMANO, contando só a partir da PRIMEIRA mensagem humana. Mede a rapidez do atendente:
+    diferente do `tmr_seconds` legado, não inclui a espera pelo humano (o cliente falando só com o
+    bot) nem o tempo do agente virtual. Mensagens de bot são ignoradas (não respondem nem fecham o
+    intervalo). `None` sem humano ou sem resposta medível - nunca 0."""
+    events: list[tuple[datetime, str]] = []
+    for message in messages:
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        if _message_is_from_client(message):
+            events.append((timestamp, "client"))
+        elif _message_is_from_human_attendant(message, human_attendant_ids):
+            events.append((timestamp, "human"))
+    events.sort(key=lambda event: event[0])
+    first_human_at = next((timestamp for timestamp, role in events if role == "human"), None)
+    if first_human_at is None:
+        return None
+
+    gaps: list[float] = []
+    pending_client_at: datetime | None = None
+    for timestamp, role in events:
+        if role == "client":
+            if pending_client_at is None and timestamp >= first_human_at:
+                pending_client_at = timestamp
+        elif pending_client_at is not None:
+            gap = (timestamp - pending_client_at).total_seconds()
+            if gap >= 0:
+                gaps.append(gap)
+            pending_client_at = None
+    return round(sum(gaps) / len(gaps)) if gaps else None
+
+
+def _human_wait_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
+    """ESPERA PELO HUMANO ("1ª resposta humana"): da ÚLTIMA mensagem do bot antes da 1ª mensagem humana
+    (a transferência: "aguarde um atendente", "atendimento direcionado para...") até essa 1ª mensagem
+    humana. Sem mensagem do bot antes dela, usa a última mensagem do CLIENTE. Não conta a conversa do
+    cliente com o bot, que inflava o número (abertura -> 1ª humana). `None` sem humano, ou quando não
+    há mensagem anterior de bot nem de cliente: nunca vira 0."""
+    events: list[tuple[datetime, str]] = []
+    for message in messages:
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        if _message_is_from_human_attendant(message, human_attendant_ids):
+            events.append((timestamp, "human"))
+        elif _message_is_from_client(message):
+            events.append((timestamp, "client"))
+        elif _message_is_from_any_attendant(message):
+            events.append((timestamp, "bot"))  # agente virtual ou atendente sem tipo humano
+    events.sort(key=lambda event: event[0])
+    first_human_index = next((index for index, (_, role) in enumerate(events) if role == "human"), None)
+    if first_human_index is None:
+        return None
+    first_human_at = events[first_human_index][0]
+    before = events[:first_human_index]
+    reference = next((timestamp for timestamp, role in reversed(before) if role == "bot"), None)
+    if reference is None:
+        reference = next((timestamp for timestamp, role in reversed(before) if role == "client"), None)
+    if reference is None:
+        return None
+    return max(0, round((first_human_at - reference).total_seconds()))
 
 
 def _all_response_metrics(messages: list[dict[str, Any]]) -> int | None:
@@ -1049,6 +1197,19 @@ def _process_attendance_pages(
                         if avg_all_seconds is not None:
                             payload["tmr_all_responses_seconds"] = avg_all_seconds
 
+                        tma_effective = _effective_tma_seconds(messages, human_attendant_ids)
+                        if tma_effective is not None:
+                            payload["tma_effective_seconds"] = tma_effective
+                        tmr_effective = _effective_tmr_seconds(messages, human_attendant_ids)
+                        if tmr_effective is not None:
+                            payload["tmr_effective_seconds"] = tmr_effective
+                        tmr_human_live = _human_tmr_after_entry_seconds(messages, human_attendant_ids)
+                        if tmr_human_live is not None:
+                            payload["tmr_human_live_seconds"] = tmr_human_live
+                        human_wait = _human_wait_seconds(messages, human_attendant_ids)
+                        if human_wait is not None:
+                            payload["human_wait_seconds"] = human_wait
+
                         handled_by_bot, reached_human, handoff = _classify_bot_human(messages, attendant_types)
                         payload["handled_by_bot"] = handled_by_bot
                         payload["reached_human"] = reached_human
@@ -1384,19 +1545,34 @@ def run_tmr_history_backfill(db: Session, client: OpaClient, *, limit: int) -> d
     attendant_types = _load_attendant_types(db)
     human_attendant_ids = _human_attendant_ids(attendant_types)
 
-    candidates = db.scalars(
+    # Até METADE do lote vai para o TMA efetivo pendente (só quem já se sabe que teve humano; mais
+    # RECENTES primeiro, que é o período que o time consulta); o resto segue com o TMR histórico
+    # (mais antigos primeiro, como sempre). Sem a divisão, os ~45 mil sem TMR ocupariam a cota por
+    # dias. Sem TMA pendente, o TMR usa o lote inteiro - o comportamento anterior.
+    tma_candidates = db.scalars(
         select(SupportOpaAttendance)
         .where(
             SupportOpaAttendance.closed_at.isnot(None),
-            SupportOpaAttendance.tmr_all_responses_seconds.is_(None),
+            SupportOpaAttendance.reached_human.is_(True),
+            SupportOpaAttendance.tma_effective_seconds.is_(None),
         )
-        .order_by(
+        .order_by(SupportOpaAttendance.closed_at.desc())
+        .limit(limit // 2)
+    ).all()
+    tmr_query = select(SupportOpaAttendance).where(
+        SupportOpaAttendance.closed_at.isnot(None),
+        SupportOpaAttendance.tmr_all_responses_seconds.is_(None),
+    )
+    if tma_candidates:
+        tmr_query = tmr_query.where(SupportOpaAttendance.id.not_in([item.id for item in tma_candidates]))
+    tmr_candidates = db.scalars(
+        tmr_query.order_by(
             SupportOpaAttendance.tmr_backfill_attempted_at.is_(None).desc(),
             SupportOpaAttendance.tmr_backfill_attempted_at.asc(),
             SupportOpaAttendance.opened_at.asc(),
-        )
-        .limit(limit)
+        ).limit(limit - len(tma_candidates))
     ).all()
+    candidates = [*tmr_candidates, *tma_candidates]
 
     processed = 0
     updated = 0
@@ -1411,10 +1587,27 @@ def run_tmr_history_backfill(db: Session, client: OpaClient, *, limit: int) -> d
             logger.warning("falha_backfill_tmr source_id=%s erro=%s", attendance.source_id, exc)
             continue
 
+        # O TMA efetivo é independente do TMR: preenche mesmo quando o atendimento nunca teve
+        # resposta a cliente (que é o motivo de o TMR geral ficar vazio).
+        tma_effective = _effective_tma_seconds(messages, human_attendant_ids)
+        if tma_effective is not None:
+            attendance.tma_effective_seconds = tma_effective
+        tmr_effective = _effective_tmr_seconds(messages, human_attendant_ids)
+        if tmr_effective is not None:
+            attendance.tmr_effective_seconds = tmr_effective
+        tmr_human_live = _human_tmr_after_entry_seconds(messages, human_attendant_ids)
+        if tmr_human_live is not None:
+            attendance.tmr_human_live_seconds = tmr_human_live
+        human_wait = _human_wait_seconds(messages, human_attendant_ids)
+        if human_wait is not None:
+            attendance.human_wait_seconds = human_wait
+
         avg_all_seconds = _all_response_metrics(messages)
         if avg_all_seconds is None:
             # Mensagens indisponíveis (ou nenhuma resposta a um cliente ainda) - a
             # tentativa já foi marcada acima, mas nada é sobrescrito com vazio.
+            if tma_effective is not None:
+                updated += 1
             continue
 
         avg_human_seconds, first_human_response_at = _human_response_metrics(messages, human_attendant_ids)

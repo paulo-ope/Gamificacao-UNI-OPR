@@ -703,24 +703,66 @@ export function tmrCoverageNote(coverage: SupportOpaMetricCoverage | null | unde
   if (coverage.count >= coverage.total) return null;
   const pct = coverage.percentage ?? 0;
   if (coverage.count === 0) {
-    return "TMR geral: nenhum atendimento deste recorte tem o cálculo ainda — histórico anterior à ativação do campo não foi reprocessado.";
+    return "TMR Geral: nenhum atendimento deste recorte tem o cálculo ainda — histórico anterior à ativação do campo não foi reprocessado.";
   }
-  return `TMR geral: média sobre ${number(coverage.count)} de ${number(coverage.total)} atendimentos (cobertura de ${number(pct, 1)}%) — histórico mais antigo ainda não foi reprocessado.`;
+  return `TMR Geral: média sobre ${number(coverage.count)} de ${number(coverage.total)} atendimentos (cobertura de ${number(pct, 1)}%) — histórico mais antigo ainda não foi reprocessado.`;
+}
+
+// Explicações curtas do "i" de cada cartão da faixa "Tempo" (aparecem ao passar o mouse ou tocar).
+export const TIME_METRIC_INFO = {
+  tma: "Da 1ª mensagem do atendente humano até a mensagem de conclusão. Só conta atendimentos com humano.",
+  tmrGeneral:
+    "Inclui as respostas do bot depois que o humano entra. Aproxima o TMR do painel do OPA (diferença de até ~35%); não é o número oficial.",
+  tmrHuman: "Só as respostas de humano, contadas a partir da entrada dele na conversa.",
+  tmrGeneralBot: "A conversa toda, inclusive a fase em que o cliente só falou com o bot (referência do agente virtual).",
+  firstResponse:
+    "Da última mensagem do bot (a transferência) até a 1ª mensagem do humano. Não conta a conversa do cliente com o bot.",
+  firstResponseLegacy: "Da abertura até a 1ª mensagem do humano; inclui a conversa do cliente com o bot.",
+} as const;
+
+/** Linha curta de cobertura para somar ao "i": vazia quando todo o recorte já tem o cálculo (o histórico
+ *  antigo é preenchido aos poucos, então a média pode cobrir só parte do período). */
+export function coverageInfo(coverage: SupportOpaMetricCoverage | null | undefined, unit = "encerrados"): string {
+  if (!coverage || coverage.total === 0 || coverage.count >= coverage.total) return "";
+  if (coverage.count === 0) return " Ainda não calculado neste recorte; o histórico é reprocessado de madrugada.";
+  return ` Base: ${number(coverage.count)} de ${number(coverage.total)} ${unit} (${number(coverage.percentage ?? 0, 1)}%); o histórico antigo ainda está sendo calculado.`;
+}
+
+/** "i" com explicação curta: abre ao passar o mouse e ao focar/tocar, sem poluir a faixa. */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="group relative inline-flex shrink-0">
+      <button
+        type="button"
+        aria-label={text}
+        className="rounded-full text-slate-400 transition-colors hover:text-slate-700 focus-visible:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Info className="h-3 w-3" aria-hidden="true" />
+      </button>
+      <span
+        role="tooltip"
+        className="pointer-events-none invisible absolute left-1/2 top-full z-30 mt-1.5 w-60 -translate-x-1/2 rounded-lg bg-slate-900 px-2.5 py-2 text-[11px] font-normal leading-snug text-white opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+      >
+        {text}
+      </span>
+    </span>
+  );
 }
 
 export function TimeMetricsStrip({
   items,
-  note,
 }: {
-  items: Array<{ label: string; value: string; helper?: string; emphasis?: boolean; muted?: boolean }>;
-  note?: string | null;
+  items: Array<{ label: string; value: string; helper?: string; info?: string; emphasis?: boolean; muted?: boolean }>;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-amber-200/70 bg-amber-50/50 shadow-sm">
-      <div className="grid divide-amber-200/70 sm:grid-cols-2 sm:divide-x sm:divide-y-0 xl:grid-cols-4">
+    <div className="rounded-2xl border border-amber-200/70 bg-amber-50/50 shadow-sm">
+      <div className={`grid divide-amber-200/70 sm:grid-cols-2 sm:divide-x sm:divide-y-0 ${items.length >= 6 ? "xl:grid-cols-6" : items.length === 5 ? "xl:grid-cols-5" : "xl:grid-cols-4"}`}>
         {items.map((item, index) => (
           <div key={item.label} className={`min-w-0 p-4 ${index > 0 ? "border-t border-amber-200/70 sm:border-t-0" : ""}`}>
-            <p className={`truncate text-[11px] font-medium ${item.emphasis ? "text-amber-800" : "text-slate-500"}`}>{item.label}</p>
+            <div className="flex items-center gap-1">
+              <p title={item.label} className={`truncate text-[11px] font-medium ${item.emphasis ? "text-amber-800" : "text-slate-500"}`}>{item.label}</p>
+              {item.info ? <InfoTip text={item.info} /> : null}
+            </div>
             <p className={`mt-1 truncate text-2xl font-bold tabular-nums ${item.muted ? "text-slate-400" : item.emphasis ? "text-amber-900" : "text-slate-950"}`}>
               {item.value}
             </p>
@@ -728,12 +770,6 @@ export function TimeMetricsStrip({
           </div>
         ))}
       </div>
-      {note ? (
-        <div className="flex items-start gap-1.5 border-t border-amber-200/70 bg-amber-50 px-4 py-2 text-[11px] leading-relaxed text-amber-800">
-          <Info className="mt-0.5 h-3 w-3 shrink-0" />
-          <span>{note}</span>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -769,12 +805,11 @@ export function OpaOverview({ overview }: { overview: SupportOpaOverview | null 
       <OverviewSection title="Tempo">
         <TimeMetricsStrip
           items={[
-            { label: "TMA", value: secondsLabel(overview?.average_duration_seconds.current), helper: "duração média" },
-            { label: "TMR humano", value: secondsLabel(overview?.average_tmr_seconds.current), helper: "exclui bot" },
-            { label: "TMR geral", value: secondsLabel(overview?.average_tmr_all_responses_seconds.current), helper: "inclui bot", emphasis: true },
-            { label: "1ª resposta humana", value: secondsLabel(overview?.average_first_response_seconds) },
+            { label: "Tempo Médio de Atendimento - Humano", value: secondsLabel(overview?.average_tma_effective_seconds.current), helper: "1ª msg do atendente → conclusão", info: TIME_METRIC_INFO.tma + coverageInfo(overview?.tma_effective_coverage), emphasis: true },
+            { label: "TMR Geral", value: secondsLabel(overview?.average_tmr_effective_seconds.current), helper: "inclui as respostas do bot", info: TIME_METRIC_INFO.tmrGeneral + coverageInfo(overview?.tmr_effective_coverage), emphasis: true },
+            { label: "TMR Humano", value: secondsLabel(overview?.average_tmr_human_live_seconds.current), helper: "só respostas de humano", info: TIME_METRIC_INFO.tmrHuman + coverageInfo(overview?.tmr_human_live_coverage) },
+            { label: "1ª resposta humana", value: secondsLabel(overview?.average_human_wait_seconds.current), info: TIME_METRIC_INFO.firstResponse + coverageInfo(overview?.human_wait_coverage) },
           ]}
-          note={tmrCoverageNote(overview?.tmr_all_responses_coverage)}
         />
       </OverviewSection>
 
@@ -870,7 +905,10 @@ export function OpaAttendantsPanel({
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                 <MiniStat label="Encerramento" value={`${number(item.closure_rate, 1)}%`} />
-                <MiniStat label="Duração" value={secondsLabel(item.avg_duration_seconds)} />
+                <MiniStat label="Duração total" value={secondsLabel(item.avg_duration_seconds)} />
+                <MiniStat label="Tempo Médio de Atendimento - Humano" value={secondsLabel(item.avg_tma_effective_seconds)} />
+                <MiniStat label="TMR Geral" value={secondsLabel(item.avg_tmr_effective_seconds)} />
+                <MiniStat label="TMR Humano" value={secondsLabel(item.avg_tmr_human_live_seconds)} />
                 <MiniStat label="Avaliação" value={number(item.avg_rating, 2)} />
                 <MiniStat label="Avaliações" value={number(item.rating_count)} />
               </div>
@@ -880,25 +918,28 @@ export function OpaAttendantsPanel({
         </div>
 
         <div className="hidden overflow-x-auto p-4 lg:block">
-          <Table className="min-w-[980px]">
+          <Table className="min-w-[1280px]">
             <TableHeader>
               <TableRow>
                 <BreakdownHead label="Atendente" column="label" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
                 <BreakdownHead label="Volume" column="total" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
                 <BreakdownHead label="Encerramento" column="closure_rate" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
-                <BreakdownHead label="Duração" column="avg_duration_seconds" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                <BreakdownHead label="Duração total" column="avg_duration_seconds" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                <BreakdownHead label="Tempo Médio de Atendimento - Humano" column="avg_tma_effective_seconds" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                <BreakdownHead label="TMR Geral" column="avg_tmr_effective_seconds" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
+                <BreakdownHead label="TMR Humano" column="avg_tmr_human_live_seconds" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
                 <BreakdownHead label="Avaliação" column="avg_rating" sortBy={sortBy} sortDir={sortDir} onSort={onSort} />
                 <TableHead>Tendências</TableHead>
                 <TableHead className="text-right">Ação</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">Carregando atendentes...</TableCell></TableRow> : null}
+              {loading ? <TableRow><TableCell colSpan={10} className="py-10 text-center text-sm text-slate-500">Carregando atendentes...</TableCell></TableRow> : null}
               {!loading && items.map((item) => (
                 <AttendantBreakdownRow key={item.id ?? item.label} item={item} onOpenAttendant={onOpenAttendant} />
               ))}
               {!loading && !items.length ? (
-                <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-slate-500">Nenhum atendente encontrado para os filtros aplicados.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} className="py-10 text-center text-sm text-slate-500">Nenhum atendente encontrado para os filtros aplicados.</TableCell></TableRow>
               ) : null}
             </TableBody>
           </Table>
@@ -976,7 +1017,19 @@ function AttendantBreakdownRow({ item, onOpenAttendant }: { item: SupportOpaBrea
       </TableCell>
       <TableCell>
         <p className="font-semibold tabular-nums text-slate-950">{secondsLabel(item.avg_duration_seconds)}</p>
-        <p className="mt-0.5 text-[11px] text-slate-500">média dos encerrados</p>
+        <p className="mt-0.5 text-[11px] text-slate-500">abertura até o encerramento</p>
+      </TableCell>
+      <TableCell>
+        <p className="font-semibold tabular-nums text-slate-950">{secondsLabel(item.avg_tma_effective_seconds)}</p>
+        <p className="mt-0.5 text-[11px] text-slate-500">tempo com o atendente</p>
+      </TableCell>
+      <TableCell>
+        <p className="font-semibold tabular-nums text-slate-950">{secondsLabel(item.avg_tmr_effective_seconds)}</p>
+        <p className="mt-0.5 text-[11px] text-slate-500">inclui as respostas do bot</p>
+      </TableCell>
+      <TableCell>
+        <p className="font-semibold tabular-nums text-slate-950">{secondsLabel(item.avg_tmr_human_live_seconds)}</p>
+        <p className="mt-0.5 text-[11px] text-slate-500">só respostas de humano</p>
       </TableCell>
       <TableCell>
         <p className={`font-semibold tabular-nums ${ratingTone}`}>{number(item.avg_rating, 2)}</p>
@@ -1130,9 +1183,9 @@ export function TopReasonsSummary({ items }: { items: SupportOpaReasonMetric[] }
             <TableRow className="border-slate-200">
               <TableHead>Motivo</TableHead>
               <TableHead className="text-right">Atendimentos</TableHead>
-              <TableHead className="text-right">TMA médio</TableHead>
-              <TableHead className="text-right">TMR humano</TableHead>
-              <TableHead className="text-right text-blue-700">TMR geral</TableHead>
+              <TableHead className="text-right">Duração total média</TableHead>
+              <TableHead className="text-right">TMR Humano (c/ espera)</TableHead>
+              <TableHead className="text-right text-blue-700">TMR Geral (c/ fase do bot)</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1642,7 +1695,7 @@ export function OpaAttendantOverridesPanel({
         </div>
         <p className="mt-1 text-xs text-slate-500">
           Cadastre um <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10.5px] text-slate-700">attendant_id</code> do
-          OPA Suite pra ser sempre tratado como agente virtual — o painel individual passa a priorizar TMR geral pra
+          OPA Suite pra ser sempre tratado como agente virtual — o painel individual passa a priorizar TMR Geral pra
           ele, mesmo que o OPA nunca mande <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10.5px] text-slate-700">tipo=&quot;bot&quot;</code>.
         </p>
       </div>

@@ -14,6 +14,7 @@ export const SUPPORT_CHART_COLORS = {
   tmrHuman: "#059669",
   tmrAll: "#d97706",
   tma: "#7c3aed",
+  tmaEffective: "#0891b2",
   bot: "#8b5cf6",
   human: "#10b981",
   neutral: "#94a3b8",
@@ -111,7 +112,7 @@ export function buildTimeTrendOption(points: SupportOpaTimeseriesPoint[]): EChar
   const asMinutes = (value: number | null) => (value === null ? null : Number((value / 60).toFixed(2)));
   return {
     animationDuration: 300,
-    color: [SUPPORT_CHART_COLORS.tma, SUPPORT_CHART_COLORS.tmrHuman, SUPPORT_CHART_COLORS.tmrAll],
+    color: [SUPPORT_CHART_COLORS.tma, SUPPORT_CHART_COLORS.tmaEffective, SUPPORT_CHART_COLORS.tmrHuman, SUPPORT_CHART_COLORS.tmrAll],
     grid: { left: 46, right: 16, top: 34, bottom: 26 },
     legend: { top: 0, right: 0, itemWidth: 10, itemHeight: 8, textStyle: { color: "#475569", fontSize: 10 } },
     tooltip: {
@@ -125,11 +126,12 @@ export function buildTimeTrendOption(points: SupportOpaTimeseriesPoint[]): EChar
         const cov = point.tmr_all_responses_coverage;
         return [
           `<strong>${labels[index]}</strong>`,
-          `TMA: ${secondsLabel(point.average_duration_seconds)}`,
-          `TMR humano: ${secondsLabel(point.average_tmr_seconds)}`,
-          `TMR geral: ${secondsLabel(point.average_tmr_all_responses_seconds)}`,
+          `Duração total: ${secondsLabel(point.average_duration_seconds)}`,
+          `Tempo Médio de Atendimento - Humano: ${secondsLabel(point.average_tma_effective_seconds)}`,
+          `TMR Humano: ${secondsLabel(point.average_tmr_human_live_seconds)}`,
+          `TMR Geral: ${secondsLabel(point.average_tmr_effective_seconds)}`,
           cov && cov.total > 0
-            ? `<span style="opacity:.75">TMR geral sobre ${number(cov.count)} de ${number(cov.total)} atend.</span>`
+            ? `<span style="opacity:.75">TMR Geral sobre ${number(cov.count)} de ${number(cov.total)} atend.</span>`
             : "",
         ]
           .filter(Boolean)
@@ -151,9 +153,10 @@ export function buildTimeTrendOption(points: SupportOpaTimeseriesPoint[]): EChar
       axisLabel: AXIS_LABEL,
     },
     series: [
-      { name: "TMA", type: "line", smooth: true, showSymbol: false, connectNulls: false, data: points.map((p) => asMinutes(p.average_duration_seconds)) },
-      { name: "TMR humano", type: "line", smooth: true, showSymbol: false, connectNulls: false, data: points.map((p) => asMinutes(p.average_tmr_seconds)) },
-      { name: "TMR geral", type: "line", smooth: true, showSymbol: false, connectNulls: false, data: points.map((p) => asMinutes(p.average_tmr_all_responses_seconds)) },
+      { name: "Duração total", type: "line", smooth: true, showSymbol: false, connectNulls: false, data: points.map((p) => asMinutes(p.average_duration_seconds)) },
+      { name: "Tempo Médio de Atendimento - Humano", type: "line", smooth: true, showSymbol: false, connectNulls: false, data: points.map((p) => asMinutes(p.average_tma_effective_seconds)) },
+      { name: "TMR Humano", type: "line", smooth: true, showSymbol: false, connectNulls: false, data: points.map((p) => asMinutes(p.average_tmr_human_live_seconds)) },
+      { name: "TMR Geral", type: "line", smooth: true, showSymbol: false, connectNulls: false, data: points.map((p) => asMinutes(p.average_tmr_effective_seconds)) },
     ],
   };
 }

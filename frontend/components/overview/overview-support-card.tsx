@@ -22,6 +22,16 @@ function changeHint(metric: SupportOpaMetricComparison | undefined, unit: "count
   return `${direction}${formatPercent(metric.percentage_change)} vs. ${previous}`;
 }
 
+/** Texto de apoio do TMA efetivo: avisa quando só parte dos encerrados já foi calculada (o histórico
+ *  é preenchido aos poucos), senão mostra a variação contra o período anterior. */
+function tmaEffectiveHint(data: SupportOpaOverview | null) {
+  const coverage = data?.tma_effective_coverage;
+  if (coverage && coverage.total > 0 && coverage.count < coverage.total) {
+    return `${formatInteger(coverage.count)} de ${formatInteger(coverage.total)} encerrados (atend. com humano)`;
+  }
+  return changeHint(data?.average_tma_effective_seconds, "seconds");
+}
+
 /**
  * Bloco macro do Suporte Interno. Usa o mesmo `/support/opa/overview` da tela do módulo (nenhuma
  * métrica nova, nenhuma conta refeita aqui) e só o período da Visão Geral - os filtros de O.S.
@@ -83,7 +93,7 @@ export function OverviewSupportCard({
       state={state}
       deniedLabel="Seu perfil não tem acesso ao Suporte Interno."
     >
-      <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-5">
         <OverviewTile
           label="Atendimentos"
           value={formatInteger(total)}
@@ -98,14 +108,20 @@ export function OverviewSupportCard({
         />
         <OverviewTile label="Em aberto" value={formatInteger(open)} accent="amber" sub="agora" />
         <OverviewTile
-          label="TMA · TMR (humano)"
+          label="Tempo Médio de Atendimento - Humano"
+          value={<span className="text-[1.15rem]">{secondsLabel(data?.average_tma_effective_seconds.current ?? null)}</span>}
+          accent="violet"
+          sub={tmaEffectiveHint(data)}
+        />
+        <OverviewTile
+          label="TMR Geral · TMR Humano"
           value={
             <span className="text-[1.15rem]">
-              {secondsLabel(data?.average_duration_seconds.current ?? null)} · {secondsLabel(data?.average_tmr_seconds.current ?? null)}
+              {secondsLabel(data?.average_tmr_effective_seconds.current ?? null)} · {secondsLabel(data?.average_tmr_human_live_seconds.current ?? null)}
             </span>
           }
           accent="violet"
-          sub={changeHint(data?.average_duration_seconds, "seconds")}
+          sub={`${changeHint(data?.average_tmr_effective_seconds, "seconds")} (geral inclui o bot)`}
         />
       </div>
       <OverviewProgress

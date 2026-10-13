@@ -29,9 +29,9 @@ describe("buildSlaGaugeCards", () => {
       previous: null,
       year: null,
     });
-    expect(cards.map((card) => card.label)).toEqual(["Geral", "Fibra Urbana", "Rádio"]);
+    expect(cards.map((card) => card.label)).toEqual(["Fibra Urbana", "Rádio", "Geral"]);
     // (810 + 50) / 1000 = 86%; a média simples de 90% e 50% daria 70%.
-    expect(cards[0].rate).toBe(86);
+    expect(cards[cards.length - 1].rate).toBe(86);
   });
 
   it("calcula variação contra o período anterior, SLA do ano e distância da meta de 80%", () => {
@@ -62,7 +62,7 @@ describe("buildSlaGaugeCards", () => {
       year: [item("Fibra Urbana", 1000, 880), item("Rádio", 1000, 600)],
       selected: ["Rádio"],
     });
-    expect(cards[0]).toMatchObject({ rate: 50, deltaPp: 10, yearRate: 60, scopeLabel: "1 de 2 selecionados" });
+    expect(cards[cards.length - 1]).toMatchObject({ rate: 50, deltaPp: 10, yearRate: 60, scopeLabel: "1 de 2 selecionados" });
     expect(cards.find((card) => card.key === "Rádio")?.selected).toBe(true);
     expect(cards.find((card) => card.key === "Fibra Urbana")?.selected).toBe(false);
   });
@@ -75,7 +75,7 @@ describe("buildSlaGaugeCards", () => {
       year: null,
       selected: [],
     });
-    expect(cards[0]).toMatchObject({ rate: 86, scopeLabel: "todos os grupos" });
+    expect(cards[cards.length - 1]).toMatchObject({ rate: 86, scopeLabel: "todos os grupos" });
   });
 
   it("ignora seleção de grupo que não existe mais no cartão", () => {
@@ -86,6 +86,6 @@ describe("buildSlaGaugeCards", () => {
       year: null,
       selected: ["Grupo removido"],
     });
-    expect(cards[0].scopeLabel).toBe("todos os grupos");
+    expect(cards[cards.length - 1].scopeLabel).toBe("todos os grupos");
   });
 });

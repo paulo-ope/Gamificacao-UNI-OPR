@@ -13,6 +13,37 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-13** — PR de ajustes de tela e **indicadores de tempo do Suporte Interno (OPA)** (branch
+`feat/suporte-tma-tmr-efetivo-e-ajustes`; **ainda sem deploy**). O que entrou e o que ficou pendente:
+
+- **Login (Workspace):** título "Seu trabalho conectado."; saíram o parágrafo e a linha "Uma conexão. Novas possibilidades.".
+- **Visão Geral:** "N fora do prazo" do quadro por regional abre um painel lateral com as O.S. (rota
+  `/operations/in-progress/orders?overdue_only=true&regional_label=...`, mesmo recorte do quadro; o rótulo da
+  linha é comparado no servidor porque "NAO IDENTIFICADO"/"20" não são regionais agrupadas); barra de filtros
+  recolhida no celular corrigida (chips numa linha própria); cartões "Geral" de SLA por tecnologia passam a vir
+  por último.
+- **Suporte Interno:** escolher departamento marca no filtro de Atendente quem **atendeu** neles no período (o
+  cadastro do OPA não traz os departamentos do usuário; é "teve atendimento", editável à mão); TV: lista de
+  presença de até 12 (`AGENT_LIST_LIMIT`), 2 colunas acima de 6, linha de baixo da TV mais alta.
+- **Tempos do OPA (migrations `20261012_0112` a `20261013_0115`, só colunas nullable):** a API do OPA **não traz
+  TMA nem TMR**; a antiga "TMA" era `fim - abertura` (agora "Duração total", `tma_seconds`, inalterada).
+  Novas colunas, calculadas do texto das conversas no sync e no backfill noturno (metade do lote vai para elas,
+  mais recentes primeiro): `tma_effective_seconds` (1ª msg humana -> mensagem de conclusão ou última humana;
+  validado em 5 atendentes, erro de -6% a +4% contra o painel do OPA), `tmr_effective_seconds` (**aproximação**
+  do TMR do OPA, exibida como "TMR Geral": última msg do cliente -> resposta de humano ou bot, só depois da
+  entrada do humano, descarta intervalos acima de 1 h; erro de -27% a +34% nos 5 atendentes, **não é o número
+  oficial**), `tmr_human_live_seconds` ("TMR Humano": só respostas humanas após a entrada dele) e
+  `human_wait_seconds` ("1ª resposta humana": última msg do bot -> 1ª msg humana). `tmr_seconds` e
+  `tmr_all_responses_seconds` seguem na API (legado) e na TV/aba por motivo, com rótulo "c/ espera"/"c/ fase do bot".
+  Os rótulos da tela e as descrições do MCP/IA foram alinhados a isso.
+- **Pendências:** (1) deploy + migrations; o histórico só é preenchido pelo backfill noturno (hoje desligado por
+  padrão) - até lá as colunas novas aparecem parciais, com a cobertura no "i" de cada cartão; (2) validar o TMR
+  aproximado em produção com outros atendentes (a validação cruzada deu erro de 1,5x a 2,5x fora da amostra);
+  só a definição oficial de TMR do OPA fecha isso; (3) o banco local usado nos testes não tinha nenhum
+  atendimento aberto em **10/10/2026** - conferir em produção se há buraco de importação nesse dia;
+  (4) o teste `test_backfill_due_respects_run_hour_and_daily_gate` depende da hora do dia e a suíte com o fixture
+  `client` não sobe no Python 3.14 local (roda no 3.12 do Docker).
+
 **2026-10-12** — PRs **#63** (verificação de e-mail na criação de conta + novos e-mails) e **#64** (login novo,
 paleta interna, aba Personalização) **mesclados na `master` e com deploy feito na VM** (informado pelo dono do
 sistema; o que foi conferido de fora está na primeira entrada abaixo). **Teste em produção de `/solicitar-acesso`

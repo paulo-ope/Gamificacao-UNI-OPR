@@ -259,7 +259,7 @@ export default function SupportTvPage() {
             <TvKpiStrip kpis={snapshot.kpis} theme={theme} />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:min-h-0 xl:flex-1 xl:grid-cols-4 xl:grid-rows-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:min-h-0 xl:flex-1 xl:grid-cols-4 xl:grid-rows-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
             {/* Sem o bloco Bot e humano, o ritmo por hora ocupa as 3 colunas que sobraram ao lado do radar. */}
             <Slot className="max-xl:order-3 md:col-span-2 xl:col-span-3">
               <TvHourlyChart hourly={snapshot.hourly} theme={theme} />
