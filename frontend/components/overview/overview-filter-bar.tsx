@@ -167,7 +167,9 @@ export function OverviewFilterBar({
 
         {/* Resumo em chips: só quando fechada - aberta, os próprios campos já mostram a seleção. */}
         {!expanded && chips.length ? (
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          // No celular os chips ocupam a própria linha (abaixo do título e do botão); sem isso o
+          // contêiner `flex-1` era espremido ao lado do título e cada chip virava uma pílula vazia.
+          <div className="order-last flex w-full min-w-0 flex-wrap items-center gap-1.5 sm:order-none sm:w-auto sm:flex-1">
             {chips.map((chip) => (
               <FilterChip key={chip.key} label={chip.label} onRemove={chip.onRemove} variant="pill" />
             ))}
@@ -177,7 +179,7 @@ export function OverviewFilterBar({
         )}
 
         {!expanded ? (
-          <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={toggleExpanded}>
+          <Button type="button" variant="outline" size="sm" className="ml-auto shrink-0 sm:ml-0" onClick={toggleExpanded}>
             Editar filtros
           </Button>
         ) : null}

@@ -9,7 +9,7 @@ import { formatPercent } from "@/lib/format";
 import type { OperationSlaItem } from "@/lib/operations-api";
 import { SLA_TARGET_PERCENT, slaTone } from "@/lib/operations-sla";
 import { buildSlaRingOption } from "@/lib/overview-chart-options";
-import { buildSlaGaugeCards, type SlaGaugeCard } from "@/lib/overview-sla-cards";
+import { GENERAL_KEY, buildSlaGaugeCards, type SlaGaugeCard } from "@/lib/overview-sla-cards";
 import { cn } from "@/lib/utils";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), {
@@ -142,16 +142,19 @@ export function OverviewSlaTechnologyGauges({
       state={{ ...state, empty: !state?.loading && !state?.error && current !== null && current.length === 0 }}
     >
       <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4">
-        {cards.map((card, index) => (
-          <GaugeTile
-            key={card.key}
-            card={card}
-            previousLabel={previousLabel}
-            isGeneral={index === 0}
-            hasSelection={selected.length > 0}
-            onToggle={() => (index === 0 ? setSelected([]) : toggle(card.label))}
-          />
-        ))}
+        {cards.map((card) => {
+          const isGeneral = card.key === GENERAL_KEY;
+          return (
+            <GaugeTile
+              key={card.key}
+              card={card}
+              previousLabel={previousLabel}
+              isGeneral={isGeneral}
+              hasSelection={selected.length > 0}
+              onToggle={() => (isGeneral ? setSelected([]) : toggle(card.label))}
+            />
+          );
+        })}
       </div>
     </OverviewBlock>
   );

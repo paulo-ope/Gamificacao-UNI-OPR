@@ -8,6 +8,7 @@ import { OverviewAttentionPoints } from "@/components/overview/overview-attentio
 import { OverviewMonitorsCard } from "@/components/overview/overview-monitors-card";
 import { OverviewSectionHeading } from "@/components/overview/overview-layout-parts";
 import { OverviewOrdersCard } from "@/components/overview/overview-orders-card";
+import { OverviewOverdueOrdersDrawer } from "@/components/overview/overview-overdue-orders-drawer";
 import { OverviewRecommendations } from "@/components/overview/overview-recommendations";
 import { OverviewFilterBar } from "@/components/overview/overview-filter-bar";
 import { Button } from "@/components/ui/button";
@@ -120,6 +121,13 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
   const canSeeSupport = user.permissions.includes("support:read");
   const canSeeGamification = user.permissions.includes("dashboard:read");
   const canSeeIntelligence = user.permissions.includes("intelligence:read");
+  // A lista de O.S. fora do prazo exige as mesmas duas permissões da rota no backend.
+  const canListOverdueOrders =
+    user.permissions.includes("operations:view_backlog") && user.permissions.includes("operations:view_order_details");
+  const [overdueDrawer, setOverdueDrawer] = useState<{ open: boolean; regional: string | null }>({
+    open: false,
+    regional: null,
+  });
 
   // Bootstrap: período disponível + filtro padrão da tela. Os dois juntos definem o estado
   // inicial do filtro, então nada mais é buscado antes deles.
@@ -615,6 +623,7 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           capacity={capacity.data?.items ?? null}
           state={{ loading: matrix.loading, error: matrix.error }}
           onDrillRegional={(regional) => drillFilters({ regional_groups: [regional] })}
+          onShowOverdue={canListOverdueOrders ? (regional) => setOverdueDrawer({ open: true, regional }) : undefined}
         />
         {drilledTeamModel ? (
           <OverviewShareDonut
@@ -684,6 +693,15 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           ) : null}
         </div>
       </div>
+
+      {canListOverdueOrders ? (
+        <OverviewOverdueOrdersDrawer
+          open={overdueDrawer.open}
+          onOpenChange={(open) => setOverdueDrawer((current) => ({ ...current, open }))}
+          regional={overdueDrawer.regional}
+          filters={opFilters}
+        />
+      ) : null}
 
       <StatusToast
         error={feedback.error}

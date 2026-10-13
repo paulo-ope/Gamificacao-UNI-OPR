@@ -21,7 +21,7 @@ export type SlaGaugeCard = {
 
 type SlaLookup = ReadonlyMap<string, OperationSlaItem>;
 
-const GENERAL_KEY = "__geral__";
+export const GENERAL_KEY = "__geral__";
 
 function lookup(items: readonly OperationSlaItem[] | null): SlaLookup {
   return new Map((items ?? []).map((item) => [item.label, item]));
@@ -35,7 +35,8 @@ function diff(current: number | null, reference: number | null): number | null {
 
 /**
  * Cartões de medidor de um grupo de SLA por tecnologia: "Geral" (todos os grupos do cartão,
- * ponderado pelo volume - não média simples de percentuais) seguido de cada grupo. Tudo é aritmética
+ * ponderado pelo volume - não média simples de percentuais) por ÚLTIMO, depois de cada grupo -
+ * pedido do usuário (2026-10-12): o total fecha a leitura das tecnologias. Tudo é aritmética
  * sobre o que o backend já devolveu de `/operations/sla?group_by=technology_group` no período, no
  * período anterior e no ano; nenhuma taxa de SLA é recalculada a partir de O.S. aqui.
  */
@@ -64,19 +65,18 @@ export function buildSlaGaugeCards({
   const generalPrevious = aggregateSlaItems(pick(previousBy));
   const generalYear = aggregateSlaItems(pick(yearBy));
 
-  const cards: SlaGaugeCard[] = [
-    {
-      key: GENERAL_KEY,
-      label: "Geral",
-      rate: general.sla_rate,
-      completed: general.completed,
-      deltaPp: diff(general.sla_rate, generalPrevious.sla_rate),
-      yearRate: generalYear.sla_rate,
-      gapPp: general.sla_rate === null ? null : round1(general.sla_rate - SLA_TARGET_PERCENT),
-      selected: false,
-      scopeLabel: chosen.length > 0 ? `${chosen.length} de ${groups.length} selecionados` : "todos os grupos",
-    },
-  ];
+  const generalCard: SlaGaugeCard = {
+    key: GENERAL_KEY,
+    label: "Geral",
+    rate: general.sla_rate,
+    completed: general.completed,
+    deltaPp: diff(general.sla_rate, generalPrevious.sla_rate),
+    yearRate: generalYear.sla_rate,
+    gapPp: general.sla_rate === null ? null : round1(general.sla_rate - SLA_TARGET_PERCENT),
+    selected: false,
+    scopeLabel: chosen.length > 0 ? `${chosen.length} de ${groups.length} selecionados` : "todos os grupos",
+  };
+  const cards: SlaGaugeCard[] = [];
   for (const group of groups) {
     const rate = currentBy.get(group)?.sla_rate ?? null;
     cards.push({
@@ -91,5 +91,6 @@ export function buildSlaGaugeCards({
       scopeLabel: null,
     });
   }
+  cards.push(generalCard);
   return cards;
 }

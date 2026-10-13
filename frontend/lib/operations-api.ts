@@ -1293,9 +1293,11 @@ export const operationsApi = {
     pageSize = 50,
     sort?: { key: string; direction: "asc" | "desc" },
     slaRisk?: string,
+    overdueOnly?: boolean,
+    regionalLabel?: string,
   ) =>
     request<OperationOrderPage>(
-      `/operations/in-progress/orders?${query(filters, { page, page_size: pageSize, sort_by: sort?.key, sort_dir: sort?.direction, sla_risk: slaRisk }, true)}`,
+      `/operations/in-progress/orders?${query(filters, { page, page_size: pageSize, sort_by: sort?.key, sort_dir: sort?.direction, sla_risk: slaRisk, overdue_only: overdueOnly ? "true" : undefined, regional_label: regionalLabel }, true)}`,
     ),
   orders: (
     filters: OperationFilterState,

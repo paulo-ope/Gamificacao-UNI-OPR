@@ -3052,9 +3052,30 @@ def in_progress_order_page(
     sort_by: str | None = None,
     sort_dir: str = "asc",
     sla_risk: str | None = None,
+    overdue_only: bool = False,
+    regional_label: str | None = None,
     **filters,
 ) -> dict:
+    """`overdue_only` abre exatamente as O.S. contadas em "fora do prazo" do quadro por regional
+    (`regional_matrix`): mesmo recorte de filtros (`_backlog_filters`) e mesmo critério
+    (`sla_status == "out_of_time"`), para a lista sempre somar o número que foi clicado.
+
+    `regional_label` é o rótulo da LINHA do quadro, comparado com a mesma expressão que o quadro
+    usa para agrupar. Não dá para usar o filtro `regional_groups` aqui: ele só conhece regionais
+    agrupadas e zera o resultado para rótulos como "NAO IDENTIFICADO", que o quadro também lista."""
+    if overdue_only:
+        filters = _backlog_filters(filters)
     conditions = [*_dimension_conditions(db, user, filters), OperationOrder.is_closed.is_(False)]
+    if overdue_only:
+        conditions.append(OperationOrder.sla_status == "out_of_time")
+        if regional_label:
+            conditions.append(
+                case(
+                    *_REGIONAL_MATRIX_GROUP_WHENS,
+                    else_=func.coalesce(OperationOrder.regional, "Não identificada"),
+                )
+                == regional_label
+            )
     if sla_risk and sla_risk in SLA_RISK_LABELS:
         conditions.append(_sla_risk_bucket_case() == sla_risk)
     total = int(db.scalar(select(func.count(OperationOrder.id)).where(*conditions)) or 0)

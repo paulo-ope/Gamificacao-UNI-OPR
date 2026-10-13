@@ -1539,11 +1539,13 @@ def in_progress_orders(
     sort_by: str | None = Query(default=None, max_length=40),
     sort_dir: Literal["asc", "desc"] = Query(default="asc"),
     sla_risk: Literal["breached", "critical", "attention", "on_track", "no_target"] | None = Query(default=None),
+    overdue_only: bool = Query(default=False),
+    regional_label: str | None = Query(default=None, max_length=120),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Página paginada/ordenável do backlog atual, com filtro opcional por faixa de risco de SLA
-    (`sla_risk`)."""
+    (`sla_risk`) ou só as O.S. fora do prazo do quadro por regional (`overdue_only`)."""
     return queries.in_progress_order_page(
         db,
         user,
@@ -1552,6 +1554,8 @@ def in_progress_orders(
         sort_by=sort_by,
         sort_dir=sort_dir,
         sla_risk=sla_risk,
+        overdue_only=overdue_only,
+        regional_label=regional_label,
         **selected_filters,
     )
 

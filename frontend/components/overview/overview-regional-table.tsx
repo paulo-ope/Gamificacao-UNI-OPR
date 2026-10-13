@@ -52,6 +52,7 @@ export function OverviewRegionalTable({
   capacity,
   state,
   onDrillRegional,
+  onShowOverdue,
 }: {
   data: OperationRegionalMatrix | null;
   /**
@@ -62,6 +63,11 @@ export function OverviewRegionalTable({
   capacity?: OperationBranchCapacitySummaryItem[] | null;
   state?: OverviewBlockState;
   onDrillRegional?: (regional: string) => void;
+  /**
+   * Abre as O.S. do "N fora do prazo" (`regional` nulo = total). Ausente quando o usuário não pode
+   * ver detalhe de O.S.: nesse caso o número segue como texto.
+   */
+  onShowOverdue?: (regional: string | null) => void;
 }) {
   const capacityByRegional = useMemo(
     () => new Map((capacity ?? []).map((item) => [item.regional, item] as const)),
@@ -148,9 +154,7 @@ export function OverviewRegionalTable({
                 <TableCell className="text-right tabular-nums">
                   <span className="block">{formatInteger(item.backlog)}</span>
                   {item.overdue_backlog ? (
-                    <span className="mt-0.5 block text-[10px] font-semibold leading-3 text-red-600">
-                      {formatInteger(item.overdue_backlog)} fora do prazo
-                    </span>
+                    <OverdueLink count={item.overdue_backlog} regional={item.regional} onShowOverdue={onShowOverdue} />
                   ) : null}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{formatInteger(item.completed)}</TableCell>
@@ -188,7 +192,12 @@ export function OverviewRegionalTable({
               <TableRow className="border-t-2 border-slate-200 bg-slate-50 font-semibold">
                 <TableCell className="text-slate-900">Total</TableCell>
                 <TableCell className="text-right tabular-nums">{formatInteger(data.total.opened)}</TableCell>
-                <TableCell className="text-right tabular-nums">{formatInteger(data.total.backlog)}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  <span className="block">{formatInteger(data.total.backlog)}</span>
+                  {data.total.overdue_backlog ? (
+                    <OverdueLink count={data.total.overdue_backlog} regional={null} onShowOverdue={onShowOverdue} />
+                  ) : null}
+                </TableCell>
                 <TableCell className="text-right tabular-nums">{formatInteger(data.total.completed)}</TableCell>
                 <TableCell className="text-right tabular-nums">{formatPercent(data.total.sla_rate)}</TableCell>
                 <TableCell className="text-right tabular-nums">{formatHours(data.total.average_closing_hours)}</TableCell>
@@ -207,6 +216,34 @@ export function OverviewRegionalTable({
         equipe e colaborador.
       </p>
     </OverviewBlock>
+  );
+}
+
+/** "N fora do prazo": botão que abre a lista quando há permissão, texto simples quando não há. */
+function OverdueLink({
+  count,
+  regional,
+  onShowOverdue,
+}: {
+  count: number;
+  regional: string | null;
+  onShowOverdue?: (regional: string | null) => void;
+}) {
+  const label = `${formatInteger(count)} fora do prazo`;
+  const className = "mt-0.5 block text-[10px] font-semibold leading-3 text-red-600";
+  if (!onShowOverdue) return <span className={className}>{label}</span>;
+  return (
+    <button
+      type="button"
+      onClick={() => onShowOverdue(regional)}
+      aria-label={`Ver as ${label}${regional ? ` em ${regional}` : ""}`}
+      className={cn(
+        className,
+        "ml-auto rounded underline decoration-dotted underline-offset-2 hover:text-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
