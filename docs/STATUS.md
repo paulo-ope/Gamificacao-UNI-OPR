@@ -13,8 +13,11 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-13** — PR de ajustes de tela e **indicadores de tempo do Suporte Interno (OPA)** (branch
-`feat/suporte-tma-tmr-efetivo-e-ajustes`; **ainda sem deploy**). O que entrou e o que ficou pendente:
+**2026-10-13** — PR **#69** (ajustes de tela e **indicadores de tempo do Suporte Interno (OPA)**) **mesclado na
+`master` e com deploy feito na VM em 2026-10-13** (informado pelo dono do sistema). Conferido por ele na VM:
+`alembic current` = `20261013_0115 (head)`, `/api/health` e a página principal respondem 200. **A conferência
+visual das telas em produção (fora do prazo clicável, faixa "Tempo", TV, login) ainda não foi feita.** O que
+entrou e o que ficou pendente:
 
 - **Login (Workspace):** título "Seu trabalho conectado."; saíram o parágrafo e a linha "Uma conexão. Novas possibilidades.".
 - **Visão Geral:** "N fora do prazo" do quadro por regional abre um painel lateral com as O.S. (rota
@@ -36,8 +39,11 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
   `human_wait_seconds` ("1ª resposta humana": última msg do bot -> 1ª msg humana). `tmr_seconds` e
   `tmr_all_responses_seconds` seguem na API (legado) e na TV/aba por motivo, com rótulo "c/ espera"/"c/ fase do bot".
   Os rótulos da tela e as descrições do MCP/IA foram alinhados a isso.
-- **Pendências:** (1) deploy + migrations; o histórico só é preenchido pelo backfill noturno (hoje desligado por
-  padrão) - até lá as colunas novas aparecem parciais, com a cobertura no "i" de cada cartão; (2) validar o TMR
+- **Pendências:** (1) o histórico só é preenchido pelo backfill noturno, que **já está ligado em produção** (janela
+  1h-6h, teto 5.000/noite; metade do lote, cerca de 2.500, vai para os indicadores novos, mais recentes primeiro) -
+  até lá as colunas novas aparecem parciais, com a cobertura no "i" de cada cartão; o contador "sem TMR histórico"
+  da tela de sincronização conta só o TMR **antigo** (não mostra o progresso dos novos); subir o teto só depois de
+  conferir a primeira noite (o limite da API do OPA não é conhecido); (2) validar o TMR
   aproximado em produção com outros atendentes (a validação cruzada deu erro de 1,5x a 2,5x fora da amostra);
   só a definição oficial de TMR do OPA fecha isso; (3) o banco local usado nos testes não tinha nenhum
   atendimento aberto em **10/10/2026** - conferir em produção se há buraco de importação nesse dia;
