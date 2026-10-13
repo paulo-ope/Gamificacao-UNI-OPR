@@ -41,7 +41,9 @@ ACTIVITY_WINDOW_DAYS = 30
 # Quem aparece na lista "quem está em quê": só os estados que pedem atenção (online e offline são
 # muitos e não são notícia). Ordem de prioridade na lista; dentro de cada estado, o mais antigo primeiro.
 LISTED_STATES: tuple[str, ...] = ("call", "oc", "pause", "au")
-AGENT_LIST_LIMIT = 4
+# Pedido do usuário (2026-10-13): com mais de 3-4 em pausa a lista cortava gente. 12 cobre o pior caso
+# real da operação; passando disso a TV mostra "+N outros" (agents_total).
+AGENT_LIST_LIMIT = 12
 
 # Várias TVs/abas abertas não podem multiplicar as chamadas ao OPA: a lista de usuários fica em
 # cache por alguns segundos (a TV consulta a cada ~10 s).

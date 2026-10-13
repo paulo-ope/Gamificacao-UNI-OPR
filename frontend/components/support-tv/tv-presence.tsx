@@ -47,7 +47,8 @@ export function TvPresencePanel({ presence, theme }: { presence: SupportTvPresen
             {presence.agents.length === 0 ? (
               <p className={cn("py-2 text-lg", t.muted)}>Ninguém em ligação, ocupado, em pausa ou ausente agora.</p>
             ) : (
-              <ul className="min-h-0 flex-1 overflow-hidden">
+              // Acima de 6 atendentes a lista passa para duas colunas: cabem mais nomes sem aumentar o cartão.
+              <ul className={cn("min-h-0 flex-1 overflow-hidden", presence.agents.length > 6 && "grid grid-cols-2 content-start gap-x-4")}>
                 {presence.agents.map((agent) => (
                   <li key={`${agent.state_code}-${agent.name}`} className="flex items-center gap-2.5 py-0.5">
                     <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", agent.state_code === "call" && "tv-live")} style={{ backgroundColor: presenceColor(agent.state_code, theme) }} aria-hidden="true" />
