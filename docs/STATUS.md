@@ -13,9 +13,11 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-10** — PRs **#63** (verificação de e-mail na criação de conta + novos e-mails) e **#64** (login novo,
+**2026-10-12** — PRs **#63** (verificação de e-mail na criação de conta + novos e-mails) e **#64** (login novo,
 paleta interna, aba Personalização) **mesclados na `master` e com deploy feito na VM** (informado pelo dono do
-sistema; o que foi conferido de fora está na primeira entrada abaixo, e **o teste logado ainda não foi feito**).
+sistema; o que foi conferido de fora está na primeira entrada abaixo). **Teste em produção de `/solicitar-acesso`
+feito em 2026-10-12** (código chegou, "E-mail verificado" apareceu no painel do admin); **o teste logado das demais
+telas ainda não foi feito**.
 "Esqueci minha senha" (PR #61) já está em produção e o e-mail real foi
 confirmado pelo usuário. O PR #60 (Visão Geral estilo cockpit) também já está mesclado, mas **a tela logada ainda não
 foi conferida**. O texto sobre o checkout compartilhado a seguir é de 2026-09-18 e está desatualizado.
@@ -115,8 +117,10 @@ regressão.
     local: criar usuário admin e um colaborador de teste no banco local. O frontend local precisa de `--webpack`.
   - **Pendências.** (1) **Segurança (herdada do #61):** trocar a senha da caixa `operacional@souuni.com` (foi digitada no
     chat) e atualizar `SMTP_PASSWORD` no `.env` da VM; apagar `.env.bak-antes-email` e `.env.save` da pasta da VM.
-    (2) **Teste em produção, ainda por fazer:** `/solicitar-acesso` com um CPF de teste (código chega → "E-mail
-    verificado" no painel do admin) e um "Esqueci minha senha" para ver o e-mail novo no cliente real. (3) A Visão Geral
+    (2) **Teste em produção:** `/solicitar-acesso` **feito em 2026-10-12** (informado pelo dono do sistema: o código
+    chegou e "E-mail verificado" apareceu no painel do admin; isso também confirma o selo do admin, que antes só tinha
+    typecheck). **Ainda por fazer:** um "Esqueci minha senha" para ver o e-mail novo no cliente real (Gmail/Outlook/
+    celular). (3) A Visão Geral
     (PR #60) e as telas listadas acima ainda precisam de uma passada visual logado. (4) O "Lembrar meu e-mail" do login
     grava só o e-mail no navegador; a página de privacidade pode precisar citar isso (texto não alterado). (5) O JWT
     emitido antes de uma troca de senha continua **não sendo invalidado** (expira em até 12 h).
