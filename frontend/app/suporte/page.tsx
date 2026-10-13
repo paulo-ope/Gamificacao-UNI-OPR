@@ -43,13 +43,15 @@ import {
   StatCell,
   StatusSummary,
   TimeMetricsStrip,
-  tmrCoverageNote,
+  TIME_METRIC_INFO,
+  coverageInfo,
   TopReasonsSummary,
   TrendValue,
   type OpaModuleTab,
 } from "@/app/suporte/_components/opa-module-components";
 import { BotHumanChart, RankingChart, TimeTrendChart, VolumeTrendChart } from "@/app/suporte/_components/opa-charts";
 import { OpaDrilldownSheet, type OpaDrilldown } from "@/app/suporte/_components/opa-drilldown";
+import { useDepartmentAttendantsSync } from "@/app/suporte/_components/use-department-attendants-sync";
 import { IxcN1Panel } from "@/app/suporte/_components/ixc-n1-panel";
 import { IxcTicketAnalyticsPanel } from "@/app/suporte/_components/ixc-ticket-analytics-panel";
 import { IxcTicketDrilldownPanel } from "@/app/suporte/_components/ixc-ticket-drilldown";
@@ -335,6 +337,12 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   }, [initialTab]);
   const [attendancePage, setAttendancePage] = useState<SupportOpaAttendancePage | null>(null);
   const [attendanceFilters, setAttendanceFilters] = useState<SupportOpaAttendanceFilters>(initialFilters);
+  const syncAttendantsWithDepartments = useDepartmentAttendantsSync({
+    period,
+    dateBasis: attendanceFilters.date_basis,
+    attendantId: attendanceFilters.attendant_id,
+    setFilters: setAttendanceFilters,
+  });
   const [attendantBreakdown, setAttendantBreakdown] = useState<SupportOpaBreakdowns | null>(null);
   const [attendantBreakdownLoading, setAttendantBreakdownLoading] = useState(false);
   const [attendantSortBy, setAttendantSortBy] = useState("total");
@@ -812,7 +820,11 @@ function SupportPageContent({ user }: { user: AuthUser }) {
         canImport={Boolean(syncStatus?.configured)}
         importedDataWindow={overview?.imported_data_window ?? null}
         onPeriodChange={setPeriod}
-        onFilterChange={(patch) => setAttendanceFilters((current) => ({ ...current, ...patch }))}
+        onFilterChange={(patch) => {
+          setAttendanceFilters((current) => ({ ...current, ...patch }));
+          // Escolher/limpar departamento marca (ou desmarca) no filtro de Atendente quem atendeu neles.
+          if ("department_id" in patch) void syncAttendantsWithDepartments(patch.department_id);
+        }}
         onApply={() => void load(period, { ...attendanceFilters, page: 1 }, activeView)}
         onClear={clearFilters}
         onImport={() => void importPeriod()}
@@ -1114,18 +1126,19 @@ function AttendanceDataTable({
               <TableHead>Motivo</TableHead>
               <SortableHead label="Canal" active={filters.sort_by === "channel"} onClick={() => sort("channel")} />
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">TMA</TableHead>
+              <TableHead className="text-right">Duração total</TableHead>
+              <TableHead className="text-right">Tempo Médio de Atendimento - Humano</TableHead>
               <TableHead className="text-right">Avaliação</TableHead>
               <TableHead className="text-right">Ação</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={11} className="py-10 text-center text-sm text-slate-500">Carregando atendimentos...</TableCell></TableRow>
+              <TableRow><TableCell colSpan={12} className="py-10 text-center text-sm text-slate-500">Carregando atendimentos...</TableCell></TableRow>
             ) : null}
             {!loading && items.map((item, index) => <AttendanceRow key={item.id} item={item} zebra={index % 2 === 1} onOpenDetail={onOpenDetail} />)}
             {!loading && !items.length ? (
-              <TableRow><TableCell colSpan={11} className="py-10 text-center text-sm text-slate-500">Não há atendimentos para os filtros aplicados.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={12} className="py-10 text-center text-sm text-slate-500">Não há atendimentos para os filtros aplicados.</TableCell></TableRow>
             ) : null}
           </TableBody>
         </Table>
@@ -1182,6 +1195,7 @@ function AttendanceRow({ item, zebra, onOpenDetail }: { item: SupportOpaAttendan
       <TableCell>{item.channel ?? "-"}</TableCell>
       <TableCell><AttendanceStatusBadge status={item.status} closedAt={item.closed_at} /></TableCell>
       <TableCell className="text-right tabular-nums">{secondsLabel(item.tma_seconds)}</TableCell>
+      <TableCell className="text-right tabular-nums">{secondsLabel(item.tma_effective_seconds)}</TableCell>
       <TableCell className="text-right tabular-nums">{number(item.rating, 2)}</TableCell>
       <TableCell className="text-right">
         <Button
@@ -1312,7 +1326,7 @@ function AttendantDetailSheet({
               <div className="border-b border-slate-100 px-4 py-3">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Painel individual</h3>
                 <p className="mt-1 text-xs text-slate-400">
-                  TMR humano, TMR geral, 1ª resposta, clientes e classificação bot/humano no mesmo recorte de filtros aplicado na tela.
+                  TMR Humano, TMR Geral, 1ª resposta, clientes e classificação bot/humano no mesmo recorte de filtros aplicado na tela.
                 </p>
               </div>
 
@@ -1326,7 +1340,7 @@ function AttendantDetailSheet({
                 <div className="grid gap-5 p-4">
                   {summary.attendant_type === "bot" ? (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                      Agente virtual — TMR geral é a métrica de referência aqui; TMR humano não se aplica (não há atendente humano nesta conversa).
+                      Agente virtual — TMR Geral é a métrica de referência aqui; TMR Humano não se aplica (não há atendente humano nesta conversa).
                     </div>
                   ) : null}
                   <div>
@@ -1335,19 +1349,19 @@ function AttendantDetailSheet({
                       items={
                         summary.attendant_type === "bot"
                           ? [
-                              { label: "TMA médio", value: secondsLabel(summary.average_tma_seconds), helper: "atendimentos encerrados" },
-                              { label: "TMR geral", value: secondsLabel(summary.average_tmr_all_responses_seconds), helper: "métrica principal do agente virtual", emphasis: true },
-                              { label: "TMR humano", value: secondsLabel(summary.average_tmr_seconds), helper: "não aplicável a agente virtual", muted: true },
-                              { label: "1ª resposta humana", value: secondsLabel(summary.average_first_response_seconds) },
+                              { label: "Duração total média", value: secondsLabel(summary.average_tma_seconds), helper: "abertura até o encerramento", info: "Da abertura até o encerramento, incluindo bot, fila e espera." },
+                              { label: "Tempo Médio de Atendimento - Humano", value: secondsLabel(summary.average_tma_effective_seconds), helper: "1ª msg do atendente → conclusão", info: TIME_METRIC_INFO.tma + coverageInfo(summary.tma_effective_coverage), emphasis: true },
+                              { label: "TMR Geral", value: secondsLabel(summary.average_tmr_all_responses_seconds), helper: "métrica principal do agente virtual", info: TIME_METRIC_INFO.tmrGeneralBot + coverageInfo(summary.tmr_all_responses_coverage, "atendimentos"), emphasis: true },
+                              { label: "TMR Humano", value: secondsLabel(summary.average_tmr_seconds), helper: "não aplicável a agente virtual", muted: true },
+                              { label: "1ª resposta humana", value: secondsLabel(summary.average_first_response_seconds), info: TIME_METRIC_INFO.firstResponseLegacy },
                             ]
                           : [
-                              { label: "TMA médio", value: secondsLabel(summary.average_tma_seconds), helper: "atendimentos encerrados" },
-                              { label: "TMR humano", value: secondsLabel(summary.average_tmr_seconds), helper: "exclui respostas automáticas", emphasis: true },
-                              { label: "TMR geral", value: secondsLabel(summary.average_tmr_all_responses_seconds), helper: "inclui respostas automáticas" },
-                              { label: "1ª resposta humana", value: secondsLabel(summary.average_first_response_seconds) },
+                              { label: "Tempo Médio de Atendimento - Humano", value: secondsLabel(summary.average_tma_effective_seconds), helper: "1ª msg do atendente → conclusão", info: TIME_METRIC_INFO.tma + coverageInfo(summary.tma_effective_coverage), emphasis: true },
+                              { label: "TMR Geral", value: secondsLabel(summary.average_tmr_effective_seconds), helper: "inclui as respostas do bot", info: TIME_METRIC_INFO.tmrGeneral + coverageInfo(summary.tmr_effective_coverage), emphasis: true },
+                              { label: "TMR Humano", value: secondsLabel(summary.average_tmr_human_live_seconds), helper: "só respostas de humano", info: TIME_METRIC_INFO.tmrHuman + coverageInfo(summary.tmr_human_live_coverage), emphasis: true },
+                              { label: "1ª resposta humana", value: secondsLabel(summary.average_human_wait_seconds), info: TIME_METRIC_INFO.firstResponse + coverageInfo(summary.human_wait_coverage) },
                             ]
                       }
-                      note={tmrCoverageNote(summary.tmr_all_responses_coverage)}
                     />
                   </div>
 
@@ -1555,8 +1569,8 @@ function AttendanceSummaryHeader({
 
       <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 border-t border-slate-100 sm:grid-cols-4 sm:divide-y-0">
         <StatCell label="Duração" value={typeof duration === "number" ? secondsLabel(duration) : "-"} />
-        <StatCell label="TMR humano" value={typeof tmrHuman === "number" ? secondsLabel(tmrHuman) : "Não disponível"} />
-        <StatCell label="TMR geral" value={typeof tmrAll === "number" ? secondsLabel(tmrAll) : "Não disponível"} helper="inclui bot" />
+        <StatCell label="TMR Humano (c/ espera)" value={typeof tmrHuman === "number" ? secondsLabel(tmrHuman) : "Não disponível"} />
+        <StatCell label="TMR Geral (c/ fase do bot)" value={typeof tmrAll === "number" ? secondsLabel(tmrAll) : "Não disponível"} helper="inclui bot" />
         <StatCell label="Abertura → Encerramento" value={typeof openedAt === "string" ? dateTimeShort(openedAt) : "-"} helper={typeof closedAt === "string" ? `até ${dateTimeShort(closedAt)}` : "em aberto"} />
       </div>
     </section>

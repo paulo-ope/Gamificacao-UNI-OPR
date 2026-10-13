@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import { secondsLabel } from "@/lib/format-duration";
 import type { SupportOpaAttendanceFilters, SupportOpaAttendancePage, SupportOpaOverview } from "@/lib/types";
 
-import { customerCodeLabel, customerNameLabel, number, opaStatusLabel, StatCell, tmrCoverageNote } from "./opa-module-components";
+import { coverageInfo, customerCodeLabel, customerNameLabel, number, opaStatusLabel, StatCell } from "./opa-module-components";
 
 /** O que o usuário clicou no gráfico. `filters` é o recorte ADICIONAL daquele
  *  clique — sempre aplicado por cima dos filtros globais da tela, nunca no
@@ -112,7 +112,7 @@ export function OpaDrilldownSheet({
   }, [key, currentPage]);
 
   const items = page?.items ?? [];
-  const coverageNote = tmrCoverageNote(overview?.tmr_all_responses_coverage);
+  const coverageNote = coverageInfo(overview?.tmr_effective_coverage).trim() || null;
 
   return (
     <Sheet open={drilldown !== null} onOpenChange={onOpenChange}>
@@ -138,8 +138,8 @@ export function OpaDrilldownSheet({
               <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 sm:grid-cols-4 sm:divide-y-0">
                 <StatCell label="Atendimentos" value={number(overview.total_attendances.current)} />
                 <StatCell label="Encerrados" value={number(overview.closed_attendances.current)} />
-                <StatCell label="TMA" value={secondsLabel(overview.average_duration_seconds.current)} />
-                <StatCell label="TMR geral" value={secondsLabel(overview.average_tmr_all_responses_seconds.current)} helper="inclui bot" />
+                <StatCell label="Tempo Médio de Atendimento - Humano" value={secondsLabel(overview.average_tma_effective_seconds.current)} helper="1ª msg do atendente → conclusão" />
+                <StatCell label="TMR Geral" value={secondsLabel(overview.average_tmr_effective_seconds.current)} helper="inclui as respostas do bot" />
               </div>
               {coverageNote ? (
                 <p className="border-t border-amber-200/70 bg-amber-50 px-4 py-2 text-[11px] leading-relaxed text-amber-800">

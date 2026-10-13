@@ -403,6 +403,7 @@ def _attendance_list_item(row: SupportOpaAttendance) -> dict:
         "closed_at": row.closed_at,
         "rating": row.rating,
         "tma_seconds": row.tma_seconds,
+        "tma_effective_seconds": row.tma_effective_seconds,
         "tmr_seconds": row.tmr_seconds,
         "tmr_all_responses_seconds": row.tmr_all_responses_seconds,
     }
@@ -428,6 +429,7 @@ def _attendance_local_detail(row: SupportOpaAttendance) -> dict:
         "first_response_at": row.first_response_at,
         "duration_seconds": row.tma_seconds or _duration_seconds(row.opened_at, row.closed_at),
         "tma_seconds": row.tma_seconds,
+        "tma_effective_seconds": row.tma_effective_seconds,
         "tmr_seconds": row.tmr_seconds,
         "tmr_all_responses_seconds": row.tmr_all_responses_seconds,
         "rating": row.rating,
@@ -603,6 +605,15 @@ def _opa_breakdown_rows(
         average_duration = func.avg(
             case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_seconds))
         ).label("avg_duration_seconds")
+        average_tma_effective = func.avg(
+            case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))
+        ).label("avg_tma_effective_seconds")
+        average_tmr_effective = func.avg(
+            case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_effective_seconds))
+        ).label("avg_tmr_effective_seconds")
+        average_tmr_human_live = func.avg(
+            case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_human_live_seconds))
+        ).label("avg_tmr_human_live_seconds")
         average_rating = func.avg(SupportOpaAttendance.rating).label("avg_rating")
         rating_count = func.count(SupportOpaAttendance.rating).label("rating_count")
 
@@ -614,6 +625,9 @@ def _opa_breakdown_rows(
             open_total,
             closure_rate,
             average_duration,
+            average_tma_effective,
+            average_tmr_effective,
+            average_tmr_human_live,
             average_rating,
             rating_count,
         ).group_by(id_column)
@@ -625,6 +639,9 @@ def _opa_breakdown_rows(
                 "open": open_total,
                 "closure_rate": closure_rate,
                 "avg_duration_seconds": average_duration,
+                "avg_tma_effective_seconds": average_tma_effective,
+                "avg_tmr_effective_seconds": average_tmr_effective,
+                "avg_tmr_human_live_seconds": average_tmr_human_live,
                 "avg_rating": average_rating,
                 "rating_count": rating_count,
                 "share_percentage": total,
@@ -656,6 +673,9 @@ def _opa_breakdown_item(row, previous_row, universe_total: int, percentage_chang
     total = int(row.total or 0)
     closure_rate = float(row.closure_rate or 0)
     average_duration = float(row.avg_duration_seconds) if row.avg_duration_seconds is not None else None
+    average_tma_effective = float(row.avg_tma_effective_seconds) if row.avg_tma_effective_seconds is not None else None
+    average_tmr_effective = float(row.avg_tmr_effective_seconds) if row.avg_tmr_effective_seconds is not None else None
+    average_tmr_human_live = float(row.avg_tmr_human_live_seconds) if row.avg_tmr_human_live_seconds is not None else None
     average_rating = float(row.avg_rating) if row.avg_rating is not None else None
     previous_total = int(previous_row.total or 0) if previous_row is not None else 0
     previous_closure_rate = float(previous_row.closure_rate or 0) if previous_row is not None else 0.0
@@ -675,6 +695,9 @@ def _opa_breakdown_item(row, previous_row, universe_total: int, percentage_chang
         "open": int(row.open or 0),
         "closure_rate": closure_rate,
         "avg_duration_seconds": average_duration,
+        "avg_tma_effective_seconds": average_tma_effective,
+        "avg_tmr_effective_seconds": average_tmr_effective,
+        "avg_tmr_human_live_seconds": average_tmr_human_live,
         "avg_rating": average_rating,
         "rating_count": int(row.rating_count or 0),
         "share_percentage": (total / universe_total) * 100,

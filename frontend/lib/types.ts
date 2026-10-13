@@ -539,6 +539,18 @@ export type SupportOpaOverview = {
   open_attendances: SupportOpaMetricComparison;
   closure_rate: SupportOpaMetricComparison;
   average_duration_seconds: SupportOpaMetricComparison;
+  /** TMA efetivo (1ª mensagem do atendente humano até a conclusão), como o painel do OPA. */
+  average_tma_effective_seconds: SupportOpaMetricComparison;
+  tma_effective_coverage: SupportOpaMetricCoverage;
+  /** Aproximação do TMR do painel do OPA (±35% nos atendentes testados). */
+  average_tmr_effective_seconds: SupportOpaMetricComparison;
+  tmr_effective_coverage: SupportOpaMetricCoverage;
+  /** TMR humano: só respostas humanas, a partir da entrada do humano (sem a espera por ele). */
+  average_tmr_human_live_seconds: SupportOpaMetricComparison;
+  tmr_human_live_coverage: SupportOpaMetricCoverage;
+  /** Espera pelo humano: da última mensagem do bot até a 1ª mensagem humana. */
+  average_human_wait_seconds: SupportOpaMetricComparison;
+  human_wait_coverage: SupportOpaMetricCoverage;
   average_rating: SupportOpaMetricComparison;
   average_tmr_seconds: SupportOpaMetricComparison;
   average_tmr_all_responses_seconds: SupportOpaMetricComparison;
@@ -590,6 +602,14 @@ export type SupportOpaAttendantSummary = {
   open_attendances: number;
   closure_rate: number;
   average_tma_seconds: number | null;
+  average_tma_effective_seconds: number | null;
+  tma_effective_coverage: SupportOpaMetricCoverage | null;
+  average_tmr_effective_seconds: number | null;
+  tmr_effective_coverage: SupportOpaMetricCoverage | null;
+  average_tmr_human_live_seconds: number | null;
+  tmr_human_live_coverage: SupportOpaMetricCoverage | null;
+  average_human_wait_seconds: number | null;
+  human_wait_coverage: SupportOpaMetricCoverage | null;
   average_tmr_seconds: number | null;
   average_tmr_all_responses_seconds: number | null;
   tmr_all_responses_coverage: SupportOpaMetricCoverage | null;
@@ -613,6 +633,9 @@ export type SupportOpaBreakdownItem = {
   open: number;
   closure_rate: number;
   avg_duration_seconds: number | null;
+  avg_tma_effective_seconds: number | null;
+  avg_tmr_effective_seconds: number | null;
+  avg_tmr_human_live_seconds: number | null;
   avg_rating: number | null;
   rating_count: number;
   share_percentage: number;
@@ -653,6 +676,7 @@ export type SupportOpaAttendanceListItem = {
   closed_at: string | null;
   rating: number | null;
   tma_seconds: number | null;
+  tma_effective_seconds: number | null;
   tmr_seconds: number | null;
   tmr_all_responses_seconds: number | null;
 };
@@ -682,6 +706,7 @@ export type SupportOpaAttendanceDetailData = {
   closed_at: string | null;
   duration_seconds: number | null;
   tma_seconds: number | null;
+  tma_effective_seconds: number | null;
   tmr_seconds: number | null;
   tmr_all_responses_seconds: number | null;
   rating: number | null;
@@ -753,6 +778,9 @@ export type SupportOpaTimeseriesPoint = {
   closed: number;
   open: number;
   average_duration_seconds: number | null;
+  average_tma_effective_seconds: number | null;
+  average_tmr_human_live_seconds: number | null;
+  average_tmr_effective_seconds: number | null;
   average_tmr_seconds: number | null;
   average_tmr_all_responses_seconds: number | null;
   average_rating: number | null;

@@ -230,6 +230,14 @@ class SupportOpaAttendantSummary(BaseModel):
     open_attendances: int
     closure_rate: float
     average_tma_seconds: float | None = None
+    average_tma_effective_seconds: float | None = None
+    tma_effective_coverage: SupportOpaMetricCoverage | None = None
+    average_tmr_effective_seconds: float | None = None
+    tmr_effective_coverage: SupportOpaMetricCoverage | None = None
+    average_tmr_human_live_seconds: float | None = None
+    tmr_human_live_coverage: SupportOpaMetricCoverage | None = None
+    average_human_wait_seconds: float | None = None
+    human_wait_coverage: SupportOpaMetricCoverage | None = None
     average_tmr_seconds: float | None = None
     average_tmr_all_responses_seconds: float | None = None
     tmr_all_responses_coverage: SupportOpaMetricCoverage | None = None
@@ -295,6 +303,19 @@ class SupportOpaOverview(BaseModel):
     average_tmr_seconds: SupportOpaMetricComparison
     average_tmr_all_responses_seconds: SupportOpaMetricComparison
     tmr_all_responses_coverage: SupportOpaMetricCoverage
+    # TMA efetivo (1ª mensagem humana -> mensagem de conclusão, como o painel do OPA). Ao lado da
+    # duração total (`average_duration_seconds`), nunca no lugar dela.
+    average_tma_effective_seconds: SupportOpaMetricComparison
+    tma_effective_coverage: SupportOpaMetricCoverage
+    # TMR efetivo: APROXIMAÇÃO do TMR do painel do OPA (±35% nos atendentes testados).
+    average_tmr_effective_seconds: SupportOpaMetricComparison
+    tmr_effective_coverage: SupportOpaMetricCoverage
+    # TMR humano ao vivo: só respostas humanas, a partir da entrada do humano (sem a espera por ele).
+    average_tmr_human_live_seconds: SupportOpaMetricComparison
+    tmr_human_live_coverage: SupportOpaMetricCoverage
+    # Espera pelo humano ("1ª resposta humana"): da última mensagem do bot até a 1ª mensagem humana.
+    average_human_wait_seconds: SupportOpaMetricComparison
+    human_wait_coverage: SupportOpaMetricCoverage
     distinct_attendants: SupportOpaMetricComparison
     distinct_departments: SupportOpaMetricComparison
     by_channel: list[SupportOpaChannelCount] = Field(default_factory=list)
@@ -326,6 +347,7 @@ class SupportOpaAttendanceListItem(BaseModel):
     closed_at: datetime | None = None
     rating: float | None = None
     tma_seconds: int | None = None
+    tma_effective_seconds: int | None = None
     tmr_seconds: int | None = None
     tmr_all_responses_seconds: int | None = None
 
@@ -346,6 +368,9 @@ class SupportOpaBreakdownItem(BaseModel):
     open: int
     closure_rate: float
     avg_duration_seconds: float | None = None
+    avg_tma_effective_seconds: float | None = None
+    avg_tmr_effective_seconds: float | None = None
+    avg_tmr_human_live_seconds: float | None = None
     avg_rating: float | None = None
     rating_count: int
     share_percentage: float
@@ -710,6 +735,7 @@ class SupportOpaAttendanceDetailData(BaseModel):
     first_response_at: datetime | None = None
     duration_seconds: int | None = None
     tma_seconds: int | None = None
+    tma_effective_seconds: int | None = None
     tmr_seconds: int | None = None
     tmr_all_responses_seconds: int | None = None
     rating: float | None = None
@@ -751,6 +777,9 @@ class SupportOpaTimeseriesPoint(BaseModel):
     closed: int
     open: int
     average_duration_seconds: float | None = None
+    average_tma_effective_seconds: float | None = None
+    average_tmr_human_live_seconds: float | None = None
+    average_tmr_effective_seconds: float | None = None
     average_tmr_seconds: float | None = None
     average_tmr_all_responses_seconds: float | None = None
     average_rating: float | None = None

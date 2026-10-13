@@ -244,8 +244,8 @@ _SUPPORT_DATE_BASIS = frozenset(DATE_BASIS_COLUMNS)
 
 
 SUPPORT_OVERVIEW_DESCRIPTION = """Obtém indicadores consolidados do SGP Suporte/OPA Suite para o período solicitado,
-incluindo TMA (duração do atendimento), TMR (tempo de resposta) e a comparação automática
-com o período imediatamente anterior de mesma duração.
+incluindo TMA EFETIVO (o "TMA" do painel do OPA), DURAÇÃO TOTAL do atendimento, TMR (tempo de
+resposta) e a comparação automática com o período imediatamente anterior de mesma duração.
 
 Mesmo cálculo dos cards da tela /suporte (`expanded_overview`) - não é um número paralelo.
 
@@ -266,18 +266,33 @@ Returns:
     JSON com o período atual e o anterior, e os indicadores. Os campos de comparação vêm
     como {"current", "previous", "absolute_change", "percentage_change"}: total_attendances,
     closed_attendances, open_attendances, closure_rate (percentual),
-    average_duration_seconds (TMA), average_rating, average_tmr_seconds (TMR da primeira
+    average_tma_effective_seconds (TMA EFETIVO: da 1ª mensagem do atendente humano até a mensagem
+    de conclusão - é o que o painel/cockpit do OPA chama de TMA; atendimento só do bot não entra),
+    average_duration_seconds (DURAÇÃO TOTAL: abertura até o encerramento, inclui bot, fila e espera -
+    NÃO é o TMA do OPA), average_tmr_effective_seconds (TMR EFETIVO, mostrado na tela como "TMR Geral": INCLUI as respostas do bot depois da entrada do
+    humano; APROXIMAÇÃO do TMR do painel do OPA, ±35% nos atendentes testados - não é exato; use no
+    lugar de average_tmr_seconds quando a pergunta for "qual o TMR do OPA"), tmr_effective_coverage, average_tmr_human_live_seconds (TMR
+    HUMANO: só respostas de atendente humano, a partir da entrada dele - a rapidez do atendente),
+    average_tmr_all_responses_seconds (conversa toda, inclusive a fase só com o bot; NÃO é o "TMR Geral" da tela),
+    average_tmr_seconds (LEGADO: respostas humanas contadas desde o início, então inclui a espera
+    pelo humano - evite), average_human_wait_seconds (ESPERA PELO HUMANO, a "1ª resposta humana" da tela:
+    da última mensagem do bot - a transferência - até a 1ª mensagem do humano; não conta a conversa com
+    o bot), human_wait_coverage, average_rating, average_tmr_seconds (TMR da primeira
     resposta), average_tmr_all_responses_seconds (TMR de todas as respostas),
     distinct_attendants, distinct_departments. Sem comparação (só período atual):
+    tma_effective_coverage ({count, total, percentage}: quantos encerrados já têm TMA efetivo - o
+    histórico antigo é preenchido aos poucos, então a média pode cobrir só parte do período),
     tmr_all_responses_coverage (denominador real da média de TMR geral), by_channel,
-    by_status, customers, top_reasons, average_first_response_seconds, bot_human.
+    by_status, customers, top_reasons, average_first_response_seconds (LEGADO: abertura até a 1ª mensagem
+    humana, inclui a conversa com o bot - prefira average_human_wait_seconds), bot_human.
     Tempos SEMPRE em segundos. Média `null` significa "sem base para calcular" no período
     (nenhum atendimento com aquele dado), não zero.
 """
 
 
 SUPPORT_BREAKDOWNS_DESCRIPTION = """Agrupa indicadores do SGP Suporte pelas dimensões suportadas - responde "quem/qual mais
-atendeu, com que TMA e que nota" sem precisar baixar os atendimentos um por um.
+atendeu, com que tempo e que nota" sem precisar baixar os atendimentos um por um. Para o TMA que o
+OPA mostra, use `avg_tma_effective_seconds`; `avg_duration_seconds` é a duração total.
 
 Dimensões: attendant (atendente), department (departamento), reason (motivo), channel
 (canal), status, customer (cliente). Qualquer outro nome é rejeitado.
@@ -293,7 +308,7 @@ Args:
         importado e não há comparativo.
     date_basis: opened_at (default) ou closed_at.
     sort_by: label, total (default), closed, open, closure_rate, avg_duration_seconds,
-        avg_rating, rating_count ou share_percentage.
+        avg_tma_effective_seconds, avg_rating, rating_count ou share_percentage.
     sort_dir: desc (default) ou asc.
     limit: top N linhas, 1 a 200 (default 20). `total` na resposta é o universo inteiro
         do recorte, não a soma das linhas devolvidas.
@@ -301,7 +316,8 @@ Args:
 
 Returns:
     JSON {"dimension", "total", "limit", "sort_by", "sort_dir", "items": [...]}. Cada item:
-    {id, label, total, closed, open, closure_rate, avg_duration_seconds, avg_rating,
+    {id, label, total, closed, open, closure_rate, avg_duration_seconds (duração total),
+    avg_tma_effective_seconds (TMA efetivo, o do OPA), avg_rating,
     rating_count, share_percentage} mais os campos de comparação. `label` "Não
     identificado" = a origem não informou nome para aquele id. Um recorte sem nenhum
     atendimento devolve total=0 e items=[] - consulta válida, sem registros.
@@ -326,7 +342,8 @@ Args:
 
 Returns:
     JSON {"date_basis", "date_from", "date_to", "points": [{day, total, closed, open,
-    average_duration_seconds, average_tmr_seconds, average_tmr_all_responses_seconds,
+    average_duration_seconds (duração total), average_tma_effective_seconds (TMA efetivo, o do OPA),
+    average_tmr_seconds, average_tmr_all_responses_seconds,
     average_rating, tmr_all_responses_coverage}]}, um ponto por dia do período, em ordem.
     Tempos em segundos.
 """
@@ -2296,7 +2313,7 @@ def build_mcp_server() -> FastMCP:
         date_basis: str = "opened_at",
         support_filters: dict[str, Any] | None = None,
     ) -> str:
-        """Indicadores consolidados do SGP Suporte (TMA/TMR + comparativo). Ver SUPPORT_OVERVIEW_DESCRIPTION.
+        """Indicadores consolidados do SGP Suporte (TMA efetivo/duração total/TMR + comparativo). Ver SUPPORT_OVERVIEW_DESCRIPTION.
 
         A descricao completa que a IA le vai em `description=` no decorador - docstring
         montada com concatenacao de variavel NAO vira __doc__ (fica None).

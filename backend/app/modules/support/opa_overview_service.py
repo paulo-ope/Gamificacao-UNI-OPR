@@ -117,6 +117,15 @@ def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, An
             # COUNT ignora NULL igual AVG — dá o denominador real da média de
             # TMR geral sem precisar de uma segunda consulta. Ver `coverage()`.
             func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
+            # TMA efetivo (o do painel do OPA): só atendimentos com humano e já processados.
+            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))).label("avg_tma_effective"),
+            func.count(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))).label("tma_effective_count"),
+            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_effective_seconds))).label("avg_tmr_effective"),
+            func.count(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_effective_seconds))).label("tmr_effective_count"),
+            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_human_live_seconds))).label("avg_tmr_human_live"),
+            func.count(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_human_live_seconds))).label("tmr_human_live_count"),
+            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.human_wait_seconds))).label("avg_human_wait"),
+            func.count(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.human_wait_seconds))).label("human_wait_count"),
             select(func.count()).select_from(distinct_attendants_subquery).scalar_subquery().label("distinct_attendants"),
             select(func.count()).select_from(distinct_departments_subquery).scalar_subquery().label("distinct_departments"),
         ),
@@ -136,6 +145,15 @@ def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, An
         "average_tmr_seconds": float(row.avg_tmr) if row.avg_tmr is not None else None,
         "average_tmr_all_responses_seconds": float(row.avg_tmr_all) if row.avg_tmr_all is not None else None,
         "tmr_all_responses_coverage": coverage(int(row.tmr_all_count or 0), total),
+        "average_tma_effective_seconds": float(row.avg_tma_effective) if row.avg_tma_effective is not None else None,
+        # Denominador = encerrados do recorte: mostra quanto do histórico já foi calculado.
+        "tma_effective_coverage": coverage(int(row.tma_effective_count or 0), closed),
+        "average_tmr_effective_seconds": float(row.avg_tmr_effective) if row.avg_tmr_effective is not None else None,
+        "tmr_effective_coverage": coverage(int(row.tmr_effective_count or 0), closed),
+        "average_tmr_human_live_seconds": float(row.avg_tmr_human_live) if row.avg_tmr_human_live is not None else None,
+        "tmr_human_live_coverage": coverage(int(row.tmr_human_live_count or 0), closed),
+        "average_human_wait_seconds": float(row.avg_human_wait) if row.avg_human_wait is not None else None,
+        "human_wait_coverage": coverage(int(row.human_wait_count or 0), closed),
         "distinct_attendants": int(row.distinct_attendants or 0),
         "distinct_departments": int(row.distinct_departments or 0),
     }
@@ -384,6 +402,9 @@ def daily_timeseries(db: Session, filters: OpaAttendanceFilters) -> list[dict[st
             func.avg(SupportOpaAttendance.tmr_seconds).label("avg_tmr"),
             func.avg(SupportOpaAttendance.tmr_all_responses_seconds).label("avg_tmr_all"),
             func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
+            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))).label("avg_tma_effective"),
+            func.avg(SupportOpaAttendance.tmr_human_live_seconds).label("avg_tmr_human_live"),
+            func.avg(SupportOpaAttendance.tmr_effective_seconds).label("avg_tmr_effective"),
             func.avg(SupportOpaAttendance.rating).label("avg_rating"),
         ),
         filters,
@@ -402,6 +423,9 @@ def daily_timeseries(db: Session, filters: OpaAttendanceFilters) -> list[dict[st
             "closed": closed,
             "open": max(0, total - closed),
             "average_duration_seconds": float(row.avg_tma) if row.avg_tma is not None else None,
+            "average_tma_effective_seconds": float(row.avg_tma_effective) if row.avg_tma_effective is not None else None,
+            "average_tmr_human_live_seconds": float(row.avg_tmr_human_live) if row.avg_tmr_human_live is not None else None,
+            "average_tmr_effective_seconds": float(row.avg_tmr_effective) if row.avg_tmr_effective is not None else None,
             "average_tmr_seconds": float(row.avg_tmr) if row.avg_tmr is not None else None,
             "average_tmr_all_responses_seconds": float(row.avg_tmr_all) if row.avg_tmr_all is not None else None,
             "average_rating": float(row.avg_rating) if row.avg_rating is not None else None,
@@ -423,6 +447,9 @@ def daily_timeseries(db: Session, filters: OpaAttendanceFilters) -> list[dict[st
                     "closed": 0,
                     "open": 0,
                     "average_duration_seconds": None,
+                    "average_tma_effective_seconds": None,
+                    "average_tmr_human_live_seconds": None,
+                    "average_tmr_effective_seconds": None,
                     "average_tmr_seconds": None,
                     "average_tmr_all_responses_seconds": None,
                     "average_rating": None,
@@ -460,6 +487,22 @@ def expanded_overview(db: Session, filters: OpaAttendanceFilters) -> dict[str, A
             current["average_tmr_all_responses_seconds"], previous["average_tmr_all_responses_seconds"]
         ),
         "tmr_all_responses_coverage": current["tmr_all_responses_coverage"],
+        "average_tma_effective_seconds": metric_comparison(
+            current["average_tma_effective_seconds"], previous["average_tma_effective_seconds"]
+        ),
+        "tma_effective_coverage": current["tma_effective_coverage"],
+        "average_tmr_effective_seconds": metric_comparison(
+            current["average_tmr_effective_seconds"], previous["average_tmr_effective_seconds"]
+        ),
+        "tmr_effective_coverage": current["tmr_effective_coverage"],
+        "average_tmr_human_live_seconds": metric_comparison(
+            current["average_tmr_human_live_seconds"], previous["average_tmr_human_live_seconds"]
+        ),
+        "tmr_human_live_coverage": current["tmr_human_live_coverage"],
+        "average_human_wait_seconds": metric_comparison(
+            current["average_human_wait_seconds"], previous["average_human_wait_seconds"]
+        ),
+        "human_wait_coverage": current["human_wait_coverage"],
         "distinct_attendants": metric_comparison(current["distinct_attendants"], previous["distinct_attendants"]),
         "distinct_departments": metric_comparison(current["distinct_departments"], previous["distinct_departments"]),
         "by_channel": channel_counts(db, filters),
