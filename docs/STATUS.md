@@ -38,6 +38,11 @@ só para CSAT/TMR/TMA; protocolos, O.S. e N2 do IXC não têm essa dimensão). *
 2 h 41 min, bem acima dos 56 min do painel de referência do usuário - não sei qual é o critério do OPA para o TMA
 oficial; só foi validado por atendente (5 atendentes, erro de -6% a +4%). Backfill de produção conferido em 14/10:
 ligado, teto 12.000/noite, 5.263 atendimentos de 01/10-06/10 ainda sem TMA (previsão: 2 madrugadas).
+**Filtro "Colaborador" dos Indicadores do Suporte = equipe FIXA do Suporte Técnico** (branch
+`feat/indicadores-suporte-equipe-fixa`, não mesclada): 23 pessoas, lista informada pelo usuário em 2026-10-15, em
+`dashboard_macros.SUPPORT_TEAM`, resolvida para o id do usuário no OPA pelo cadastro `user` (`GET
+/support/dashboard/collaborators`). O OPA não traz o departamento de cada usuário, então **quem entrar ou sair da equipe
+precisa ser editado nessa lista**. "Wendher Moura" e "Wendher Lopes de Moura" são o mesmo usuário do OPA (mesmo id).
 Segue o registro do que entrou:
 
 - **Indicadores do Suporte** (`/suporte?tab=dashboard`, antes "Dashboard Suporte"; `GET /support/dashboard/macros`,
