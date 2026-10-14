@@ -294,22 +294,27 @@ export function DashboardMacros() {
 
   const invalidPeriod = !period.date_from || !period.date_to || period.date_to < period.date_from;
 
-  // Opções dos filtros (mesma fonte da tela Dados): se falhar, os seletores ficam vazios e o resto funciona.
+  // Departamentos: os do OPA (mesma fonte da tela Dados). Colaboradores: a equipe FIXA do Suporte Técnico
+  // (lista no backend, `dashboard_macros.SUPPORT_TEAM`). Se uma das consultas falhar, o seletor fica vazio e o
+  // resto do dashboard funciona.
   useEffect(() => {
-    if (invalidPeriod) return;
     let cancelled = false;
     api
-      .supportOpaFilters(period)
+      .supportOpaFilters()
       .then((options) => {
-        if (cancelled) return;
-        setDepartments(options.departments);
-        setAttendants(options.attendants);
+        if (!cancelled) setDepartments(options.departments);
+      })
+      .catch(() => undefined);
+    api
+      .supportDashboardCollaborators()
+      .then((options) => {
+        if (!cancelled) setAttendants(options);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [period, invalidPeriod]);
+  }, []);
 
   const departmentKey = departmentIds.join(",");
   const attendantKey = attendantIds.join(",");

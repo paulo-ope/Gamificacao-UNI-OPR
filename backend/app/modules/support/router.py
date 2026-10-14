@@ -73,6 +73,7 @@ from .schemas import (
     SupportIxcAnalyticsDriverItem,
     SupportIxcN1Summary,
     SupportMacroDashboard,
+    SupportOpaFilterOption,
     SupportIxcTicketBurstWindow,
     SupportIxcTicketMomentum,
     SupportIxcTicketOsConversion,
@@ -1782,6 +1783,15 @@ def support_macro_dashboard(
     return dashboard_macros.macro_dashboard(
         db, date_from=date_from, date_to=date_to, department_id=department_id, attendant_id=attendant_id
     )
+
+
+@router.get("/dashboard/collaborators", response_model=list[SupportOpaFilterOption])
+def support_dashboard_collaborators(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Equipe fixa do Suporte Técnico (OPA) para o filtro "Colaborador" dos Indicadores do Suporte."""
+    return dashboard_macros.support_team_options(db)
 
 
 @router.get("/ixc/tickets/filter-options")

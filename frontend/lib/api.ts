@@ -105,6 +105,7 @@ import type {
   SupportIxcTicketDailyPoint,
   SupportIxcN1Summary,
   SupportMacroDashboard,
+  SupportOpaFilterOption,
   SupportIxcTicketFilterOptions,
   SupportIxcTicketMomentum,
   SupportIxcTicketOsConversion,
@@ -1160,6 +1161,8 @@ export const api = {
   supportIxcN1Summary: (params: { date_from: string; date_to: string; level?: "n1" | "n2" }) =>
     request<SupportIxcN1Summary>(`/support/ixc/n1/summary?${new URLSearchParams(params).toString()}`),
 
+  // Equipe fixa do Suporte Técnico para o filtro "Colaborador" dos Indicadores do Suporte.
+  supportDashboardCollaborators: () => request<SupportOpaFilterOption[]>("/support/dashboard/collaborators"),
   supportMacroDashboard: (params: { date_from: string; date_to: string; department_id?: string; attendant_id?: string }) => {
     const query = new URLSearchParams({ date_from: params.date_from, date_to: params.date_to });
     // Vários ids separados por vírgula; só os indicadores do OPA usam esses filtros.
