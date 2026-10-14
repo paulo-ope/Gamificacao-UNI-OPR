@@ -59,10 +59,12 @@ export function OverviewGamificationCard({
       emptyLabel={data?.unavailable_reason ?? "Prévia indisponível para o mês corrente."}
       deniedLabel="Seu perfil não tem acesso aos valores da gamificação."
     >
-      <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4">
+      {/* Este bloco divide a linha com outros dois (`xl:grid-cols-3` em overview-screen): quatro colunas deixavam cada
+          cartão com ~80px e o valor em reais quebrava no meio ("R$ 6.038" / ",76"). Duas colunas até telas muito largas. */}
+      <div className="grid grid-cols-2 gap-2.5 2xl:grid-cols-4">
         <SummaryMetric
           label="Valor estimado"
-          value={formatMoney(data?.estimated_payment ?? null)}
+          value={<span className="text-[1.15rem]">{formatMoney(data?.estimated_payment ?? null)}</span>}
           tone="violet"
           hint={data?.is_preview ? "Ainda pode mudar até o fechamento" : "Fechamento já encerrado"}
         />

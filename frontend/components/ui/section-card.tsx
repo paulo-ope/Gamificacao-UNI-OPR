@@ -15,6 +15,8 @@ type SectionCardProps = {
   style?: React.CSSProperties;
 };
 
+// O selo (`badge`) usa `whitespace-nowrap`: sem isso, com um subtítulo longo ao lado, ele era espremido e
+// quebrava em três linhas (ex.: "01/10/2026 / a / 14/10/2026").
 // Card padrão "premium" do sistema (mesmo padrão do módulo de operações analíticas:
 // operations-trend-chart.tsx) - eyebrow azul, título forte, subtítulo discreto.
 export function SectionCard({ eyebrow, title, subtitle, badge, actions, children, className, contentClassName, style }: SectionCardProps) {
@@ -33,7 +35,7 @@ export function SectionCard({ eyebrow, title, subtitle, badge, actions, children
         </div>
         <div className="flex max-w-full flex-wrap items-center gap-2">
           {badge ? (
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
+            <span className="whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
               {badge}
             </span>
           ) : null}
