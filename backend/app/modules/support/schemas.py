@@ -492,6 +492,104 @@ class SupportIxcN1Summary(BaseModel):
     attendants: list[SupportIxcN1Attendant] = Field(default_factory=list)
 
 
+class SupportMacroCard(BaseModel):
+    key: str
+    label: str
+    # score (nota 0-5), seconds, count ou percent - quem formata é a tela.
+    unit: str
+    value: float | None = None
+    previous: float | None = None
+    change: float | None = None
+    target: float | None = None
+    # "min": quanto maior melhor; "max": quanto menor melhor.
+    direction: str
+    # ok | attention | critical | no_data | no_target
+    status: str
+    source: str
+    note: str | None = None
+
+
+class SupportMacroN2Block(BaseModel):
+    """Suporte N2: protocolos interno (motivo 80) e externo (81), O.S. abertas pelos colaboradores N2 e
+    O.S. de Ativação de Novo Login/Transferência de Comodato (assunto 74) finalizadas no período."""
+
+    internal: int
+    external: int
+    total: int
+    orders: int
+    # Vêm do IXC ao vivo; `None` + `new_login_error` quando o IXC não respondeu (nunca zero inventado).
+    new_login_finalized: int | None = None
+    # Finalizadas por um colaborador N2 (o responsável da O.S.).
+    new_login_finalized_by_n2: int | None = None
+    new_login_error: str | None = None
+
+
+class SupportMacroN2Collaborator(BaseModel):
+    user_id: str
+    name: str
+    active: bool
+    internal: int
+    external: int
+    total: int
+    orders: int
+
+
+class SupportMacroN2Collaborators(BaseModel):
+    """Por colaborador N2: atendimentos Interno/Externo abertos e O.S. abertas. `others_*`: protocolos N2
+    abertos por quem não está na lista de colaboradores N2 (ou sem operador)."""
+
+    rows: list[SupportMacroN2Collaborator] = Field(default_factory=list)
+    others_internal: int = 0
+    others_external: int = 0
+
+
+class SupportMacroDailyPoint(BaseModel):
+    day: date
+    performed: int
+    solved: int
+    field: int
+    # Atendimentos N2 (motivos 80 + 81) do dia.
+    n2_total: int = 0
+    # Médias do OPA no dia; `None` em dia sem atendimento (só no período atual).
+    rating: float | None = None
+    tmr_seconds: float | None = None
+    tmr_human_seconds: float | None = None
+    tma_seconds: float | None = None
+
+
+class SupportMacroWeekBucket(BaseModel):
+    key: str
+    label: str
+    date_from: date
+    date_to: date
+    performed: int
+    field: int
+    solved: int
+    resolutivity: float | None = None
+
+
+class SupportMacroWeekly(BaseModel):
+    month: str
+    resolutivity_target: float
+    buckets: list[SupportMacroWeekBucket]
+
+
+class SupportMacroDashboard(BaseModel):
+    """`dashboard_macros.macro_dashboard`: macros do Dashboard Suporte (N1 do IXC + OPA)."""
+
+    date_from: date
+    date_to: date
+    previous_date_from: date | None = None
+    previous_date_to: date | None = None
+    cards: list[SupportMacroCard]
+    n2: SupportMacroN2Block
+    previous_n2: SupportMacroN2Block | None = None
+    n2_collaborators: SupportMacroN2Collaborators
+    daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
+    previous_daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
+    weekly: SupportMacroWeekly
+
+
 class SupportIxcTicketOverviewKpis(BaseModel):
     month: str
     cutoff_day: int
