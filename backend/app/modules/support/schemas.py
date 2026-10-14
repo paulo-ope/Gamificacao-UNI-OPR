@@ -492,6 +492,14 @@ class SupportIxcN1Summary(BaseModel):
     attendants: list[SupportIxcN1Attendant] = Field(default_factory=list)
 
 
+class SupportMacroCoverage(BaseModel):
+    """Quantos atendimentos do universo entraram na média (o histórico de TMR/TMA é preenchido aos poucos)."""
+
+    count: int
+    total: int
+    percentage: float | None = None
+
+
 class SupportMacroCard(BaseModel):
     key: str
     label: str
@@ -503,8 +511,9 @@ class SupportMacroCard(BaseModel):
     target: float | None = None
     # "min": quanto maior melhor; "max": quanto menor melhor.
     direction: str
-    # ok | attention | critical | no_data | no_target
+    # ok | attention | critical | partial (cobertura baixa) | no_data | no_target
     status: str
+    coverage: SupportMacroCoverage | None = None
     source: str
     note: str | None = None
 

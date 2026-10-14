@@ -44,12 +44,13 @@ def _ticket(db, source_id, subject_id, opened_by, day):
     )
 
 
-def _order(db, code, creator, day):
+def _order(db, code, creator, day, sector="Suporte Externo"):
     db.add(
         OperationOrder(
             source_order_id=code,
             order_code=code,
             creator=creator,
+            sector=sector,
             opened_at=datetime(2026, 10, day, 10, tzinfo=timezone.utc),
         )
     )
@@ -271,3 +272,54 @@ def test_macro_dashboard_empty_period_has_no_data(db_session):
     assert cards["resolutivity"]["value"] is None
     assert cards["resolutivity"]["status"] == "no_data"
     assert cards["csat"]["status"] == "no_data"
+
+
+def test_field_orders_only_count_field_sectors(db_session):
+    db_session.add(SupportIxcUser(ixc_user_id="10", name="Ana N1", group_id="105", active=True))
+    _order(db_session, "OS1", "Ana N1", 5, sector="Suporte Externo Fibra")  # campo: conta
+    _order(db_session, "OS2", "Ana N1", 5, sector="Comercial")              # o N1 também abre, mas não vai a campo
+    _order(db_session, "OS3", "Ana N1", 5, sector="Retenção")
+    db_session.commit()
+
+    result = dashboard_macros.macro_dashboard(db_session, date_from=date(2026, 10, 1), date_to=date(2026, 10, 10))
+    cards = {card["key"]: card for card in result["cards"]}
+
+    assert cards["field"]["value"] == 1
+    assert sum(point["field"] for point in result["daily"]) == 1
+
+
+def _closed_attendance(db, source_id, tma_effective):
+    db.add(
+        SupportOpaAttendance(
+            source_id=source_id,
+            opened_at=datetime(2026, 10, 5, 15, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 10, 5, 16, tzinfo=timezone.utc),
+            status="encerrado",
+            tma_effective_seconds=tma_effective,
+        )
+    )
+
+
+def test_low_coverage_opa_average_is_partial_not_judged_against_target(db_session):
+    # 1 de 3 encerrados tem TMA efetivo (33%): a média de uma amostra pequena não é comparada com a meta.
+    _closed_attendance(db_session, "A1", 400000)
+    _closed_attendance(db_session, "A2", None)
+    _closed_attendance(db_session, "A3", None)
+    db_session.commit()
+
+    cards = {c["key"]: c for c in dashboard_macros.macro_dashboard(db_session, date_from=date(2026, 10, 1), date_to=date(2026, 10, 10))["cards"]}
+
+    assert cards["tma"]["value"] == 400000
+    assert cards["tma"]["status"] == "partial"
+    assert cards["tma"]["coverage"]["count"] == 1 and cards["tma"]["coverage"]["total"] == 3
+
+
+def test_full_coverage_opa_average_is_judged_against_target(db_session):
+    _closed_attendance(db_session, "A1", 400000)
+    _closed_attendance(db_session, "A2", 500000)
+    db_session.commit()
+
+    cards = {c["key"]: c for c in dashboard_macros.macro_dashboard(db_session, date_from=date(2026, 10, 1), date_to=date(2026, 10, 10))["cards"]}
+
+    assert cards["tma"]["status"] == "critical"
+    assert cards["tma"]["coverage"]["percentage"] == 100.0
