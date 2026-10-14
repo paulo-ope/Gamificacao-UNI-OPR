@@ -2474,6 +2474,104 @@ export type SupportIxcN1Summary = {
   attendants: SupportIxcN1Attendant[];
 };
 
+// Dashboard Suporte - macros (2026-10-14): ver `dashboard_macros.macro_dashboard` no backend, que traz
+// valor, meta e status já calculados - a tela só formata.
+export type SupportMacroCardStatus = "ok" | "attention" | "critical" | "no_data" | "no_target";
+
+export type SupportMacroCard = {
+  key: string;
+  label: string;
+  unit: "score" | "seconds" | "count" | "percent";
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  target: number | null;
+  // "min": quanto maior melhor; "max": quanto menor melhor.
+  direction: "min" | "max";
+  status: SupportMacroCardStatus;
+  source: "opa" | "ixc";
+  note: string | null;
+};
+
+// Suporte N2 no Dashboard Suporte: protocolos interno (motivo 80) e externo (81), O.S. abertas pelos
+// colaboradores N2 e O.S. de Ativação de Novo Login (assunto 74) finalizadas no período.
+export type SupportMacroN2Block = {
+  internal: number;
+  external: number;
+  total: number;
+  orders: number;
+  // Vêm do IXC ao vivo: `null` + `new_login_error` quando o IXC não respondeu (nunca zero inventado).
+  new_login_finalized: number | null;
+  // Finalizadas por um colaborador N2 (o responsável da O.S.).
+  new_login_finalized_by_n2: number | null;
+  new_login_error: string | null;
+};
+
+export type SupportMacroN2Collaborator = {
+  user_id: string;
+  name: string;
+  active: boolean;
+  internal: number;
+  external: number;
+  total: number;
+  orders: number;
+};
+
+// Por colaborador N2: atendimentos Interno/Externo abertos e O.S. abertas. `others_*`: protocolos N2 abertos
+// por quem não está na lista de colaboradores N2 (ou sem operador), para a tabela fechar com o total.
+export type SupportMacroN2Collaborators = {
+  rows: SupportMacroN2Collaborator[];
+  others_internal: number;
+  others_external: number;
+};
+
+export type SupportMacroDailyPoint = {
+  day: string;
+  performed: number;
+  solved: number;
+  field: number;
+  // Atendimentos N2 (motivos 80 + 81) do dia.
+  n2_total?: number;
+  // Médias do OPA no dia; `null` em dia sem atendimento (só no período atual).
+  rating?: number | null;
+  tmr_seconds?: number | null;
+  tmr_human_seconds?: number | null;
+  tma_seconds?: number | null;
+};
+
+export type SupportMacroWeekBucket = {
+  key: string;
+  label: string;
+  date_from: string;
+  date_to: string;
+  performed: number;
+  field: number;
+  solved: number;
+  resolutivity: number | null;
+};
+
+export type SupportMacroWeekly = {
+  month: string;
+  resolutivity_target: number;
+  // Última semana do mês anterior, semanas (dom-sáb) do mês e, por último, o mês inteiro ("month").
+  buckets: SupportMacroWeekBucket[];
+};
+
+export type SupportMacroDashboard = {
+  date_from: string;
+  date_to: string;
+  previous_date_from: string | null;
+  previous_date_to: string | null;
+  cards: SupportMacroCard[];
+  n2: SupportMacroN2Block;
+  previous_n2: SupportMacroN2Block | null;
+  n2_collaborators: SupportMacroN2Collaborators;
+  daily: SupportMacroDailyPoint[];
+  // Período anterior de mesmo tamanho, alinhado por posição do dia com `daily`.
+  previous_daily: SupportMacroDailyPoint[];
+  weekly: SupportMacroWeekly;
+};
+
 export type SupportIxcTicketFilterOptions = {
   subjects: SupportIxcTicketFilterOption[];
   sectors: SupportIxcTicketFilterOption[];

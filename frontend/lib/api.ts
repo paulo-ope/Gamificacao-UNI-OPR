@@ -104,6 +104,7 @@ import type {
   SupportIxcTicketBurstWindow,
   SupportIxcTicketDailyPoint,
   SupportIxcN1Summary,
+  SupportMacroDashboard,
   SupportIxcTicketFilterOptions,
   SupportIxcTicketMomentum,
   SupportIxcTicketOsConversion,
@@ -1147,8 +1148,11 @@ export const api = {
     return request<SupportIxcTicketPage>(`/support/ixc/tickets?${query.toString()}`);
   },
 
-  supportIxcN1Summary: (params: { date_from: string; date_to: string }) =>
+  supportIxcN1Summary: (params: { date_from: string; date_to: string; level?: "n1" | "n2" }) =>
     request<SupportIxcN1Summary>(`/support/ixc/n1/summary?${new URLSearchParams(params).toString()}`),
+
+  supportMacroDashboard: (params: { date_from: string; date_to: string }) =>
+    request<SupportMacroDashboard>(`/support/dashboard/macros?${new URLSearchParams(params).toString()}`),
 
   supportIxcTicketFilterOptions: () =>
     request<SupportIxcTicketFilterOptions>(`/support/ixc/tickets/filter-options`),

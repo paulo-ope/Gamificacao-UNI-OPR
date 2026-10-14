@@ -64,11 +64,14 @@ import type {
 
 export type OpaModuleTab =
   | "overview"
+  | "dashboard"
   | "attendants"
+  | "settings"
   | "data"
   | "sync"
   | "ixc_tickets"
   | "ixc_n1"
+  | "ixc_n2"
   | "operation"
   | "queues"
   | "agents"
@@ -87,11 +90,12 @@ export type OpaNavigationItem = {
 
 export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "overview", label: "Visão Geral", description: "Indicadores confiáveis", icon: LayoutDashboard },
+  { value: "dashboard", label: "Indicadores do Suporte", description: "Macros e micros", icon: BarChart3 },
   { value: "attendants", label: "Atendentes", description: "Volume por atendente", icon: Users },
-  { value: "data", label: "Dados", description: "Tabela analítica", icon: Database },
-  { value: "sync", label: "Sincronização", description: "Status do OPA", icon: RefreshCw },
   { value: "ixc_tickets", label: "Atendimento IXC", description: "Indicador antecipado", icon: TriangleAlert },
   { value: "ixc_n1", label: "Atendimento Suporte Interno N1", description: "Operacional e financeiro", icon: Headphones },
+  { value: "ixc_n2", label: "Atendimento Operacional N2", description: "Interno e externo", icon: Headphones },
+  { value: "settings", label: "Configuração", description: "Dados e sincronização", icon: Settings2 },
   { value: "operation", label: "Operação", description: "Planejado", icon: BarChart3 },
   { value: "queues", label: "Filas", description: "Planejado", icon: GitBranch },
   { value: "reasons", label: "Motivos", description: "Planejado", icon: ListFilter },
@@ -99,7 +103,15 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "history", label: "Histórico", description: "Planejado", icon: History },
 ];
 
-export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "attendants", "data", "sync", "ixc_tickets", "ixc_n1"];
+// `data` e `sync` não têm item próprio no menu: vivem como sub-abas de "Configuração" (`settings`), mas
+// continuam válidas na URL (`?tab=data`, `?tab=sync`) para links já existentes.
+export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "dashboard", "attendants", "settings", "data", "sync", "ixc_tickets", "ixc_n1", "ixc_n2"];
+
+/** Sub-abas de "Configuração". */
+export const OPA_SETTINGS_VIEWS: { value: "data" | "sync"; label: string; icon: LucideIcon }[] = [
+  { value: "data", label: "Dados", icon: Database },
+  { value: "sync", label: "Sincronização", icon: RefreshCw },
+];
 
 const OPA_STATUS_LABELS: Record<string, string> = {
   AG: "Aguardando atendimento",

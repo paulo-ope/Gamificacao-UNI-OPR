@@ -25,7 +25,7 @@ export type OverviewKpiSupport = {
 
 const EMPTY_SERIES: OverviewKpiSeries = { opened: [], completed: [], backlog: [], sla: [] };
 
-const SPARK_COLOR: Record<"blue" | "emerald" | "amber" | "red" | "violet", string> = {
+export const SPARK_COLOR: Record<"blue" | "emerald" | "amber" | "red" | "violet", string> = {
   blue: "#2563eb",
   emerald: "#0d9488",
   amber: "#d97706",
@@ -51,7 +51,7 @@ function alertCardClass(tone: Tone): string | undefined {
   return undefined;
 }
 
-function KpiCard({
+export function KpiCard({
   label,
   value,
   tone,
@@ -59,6 +59,7 @@ function KpiCard({
   delta,
   spark,
   sparkColor,
+  large = false,
 }: {
   label: string;
   value: string;
@@ -67,19 +68,22 @@ function KpiCard({
   delta?: SummaryMetricDelta;
   spark: readonly number[];
   sparkColor: string;
+  /** Cartão de destaque (macro): número maior e mini-gráfico mais alto. */
+  large?: boolean;
 }) {
   const deltaView = delta ? deltaPresentation(delta) : null;
   const accent = alertCardClass(tone);
   return (
     <div
       className={cn(
-        "relative flex min-h-[10.5rem] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white pt-4 shadow-panel",
+        "relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white pt-4 shadow-panel",
+        large ? "min-h-[17rem]" : "min-h-[10.5rem]",
         accent && `${accent} before:absolute before:inset-x-0 before:top-0 before:h-[3px] before:content-['']`,
       )}
     >
       <div className="px-4">
         <p className="text-xs font-medium text-slate-600">{label}</p>
-        <p className={cn("mb-2 mt-2 break-words text-[2rem] font-bold leading-tight tracking-tight tabular-nums", toneTextClass(tone))}>{value}</p>
+        <p className={cn("mb-2 mt-2 break-words font-bold leading-tight tracking-tight tabular-nums", large ? "text-[2.75rem]" : "text-[2rem]", toneTextClass(tone))}>{value}</p>
         {deltaView ? (
           <p className={cn("flex flex-wrap items-center gap-x-1.5 text-[11px] font-semibold leading-snug", deltaView.className)}>
             <deltaView.Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -89,7 +93,7 @@ function KpiCard({
         {hint ? <p className="mt-1 text-[11px] leading-snug text-slate-500">{hint}</p> : null}
       </div>
       <div className="mt-auto pt-2">
-        <OverviewSparkline values={spark} color={sparkColor} />
+        <OverviewSparkline values={spark} color={sparkColor} height={large ? 120 : undefined} />
       </div>
     </div>
   );
