@@ -50,7 +50,7 @@ export function OverviewOrdersCard({
       badge={<Wrench className="h-4 w-4 text-slate-400" aria-hidden="true" />}
       state={state}
     >
-      <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))] gap-2.5">
         <OverviewTile
           label="Abertas"
           value={formatInteger(opened)}

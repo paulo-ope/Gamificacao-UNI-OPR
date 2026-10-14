@@ -59,30 +59,31 @@ export function OverviewGamificationCard({
       emptyLabel={data?.unavailable_reason ?? "Prévia indisponível para o mês corrente."}
       deniedLabel="Seu perfil não tem acesso aos valores da gamificação."
     >
-      {/* Este bloco divide a linha com outros dois (`xl:grid-cols-3` em overview-screen): quatro colunas deixavam cada
-          cartão com ~80px e o valor em reais quebrava no meio ("R$ 6.038" / ",76"). Duas colunas até telas muito largas. */}
-      <div className="grid grid-cols-2 gap-2.5 2xl:grid-cols-4">
+      {/* Colunas pela LARGURA DO CARTÃO, não da tela (`auto-fit`): o bloco divide a linha com outros dois e a
+          largura dele muda com o zoom e o tamanho da janela. Com colunas fixas, o valor quebrava no meio
+          ("R$ 6.07" / "8,52"). Números em `whitespace-nowrap`: nunca partem; só o texto do escopo quebra por palavra. */}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2.5">
         <SummaryMetric
           label="Valor estimado"
-          value={<span className="text-[1.15rem]">{formatMoney(data?.estimated_payment ?? null)}</span>}
+          value={<span className="whitespace-nowrap text-[1.15rem]">{formatMoney(data?.estimated_payment ?? null)}</span>}
           tone="violet"
           hint={data?.is_preview ? "Ainda pode mudar até o fechamento" : "Fechamento já encerrado"}
         />
         <SummaryMetric
           label="Pontos finais"
-          value={formatNumber(data?.final_points ?? null, 1)}
+          value={<span className="whitespace-nowrap">{formatNumber(data?.final_points ?? null, 1)}</span>}
           tone="slate"
           hint={`Valor do ponto ${formatMoney(data?.point_value ?? null)}`}
         />
         <SummaryMetric
           label="Colaboradores"
-          value={formatInteger(data?.collaborators ?? null)}
+          value={<span className="whitespace-nowrap">{formatInteger(data?.collaborators ?? null)}</span>}
           tone="slate"
           hint="Com pontuação no período"
         />
         <SummaryMetric
           label="Escopo"
-          value={data?.scope_regionals.length ? data.scope_regionals.join(", ") : "Todas as filiais"}
+          value={<span className="text-[1.15rem]">{data?.scope_regionals.length ? data.scope_regionals.join(", ") : "Todas as filiais"}</span>}
           tone="slate"
           hint={data?.scope_regionals.length ? "Recortado pelas suas filiais" : "Total da empresa"}
         />

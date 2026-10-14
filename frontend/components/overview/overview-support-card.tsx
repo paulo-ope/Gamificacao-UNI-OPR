@@ -93,7 +93,7 @@ export function OverviewSupportCard({
       state={state}
       deniedLabel="Seu perfil não tem acesso ao Suporte Interno."
     >
-      <div className="grid grid-cols-2 gap-2.5 2xl:grid-cols-5">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(9.5rem,1fr))] gap-2.5">
         <OverviewTile
           label="Atendimentos"
           value={formatInteger(total)}
