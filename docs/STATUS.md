@@ -23,7 +23,13 @@ setor de `operations_orders`, e o N1 também abre O.S. de Comercial/Retenção e
 produção** (não tenho acesso ao banco de lá; no local o efeito já aparece, 1.881 -> 1.603 em 01/10-14/10) - conferir
 com `SELECT sector, count(*) FROM operations_orders WHERE opened_at::date BETWEEN '2026-10-01' AND '2026-10-03' GROUP BY 1`;
 (2) TMR/TMA levam a cobertura e, abaixo de 50% dos atendimentos, viram "parcial" (cinza, sem status contra a meta) em vez
-de serem julgados - uma média de poucos atendimentos (TMA de 94 h) enganava. Segue o registro do que entrou:
+de serem julgados - uma média de poucos atendimentos (TMA de 94 h) enganava. **Segundo achado em produção: 504 (nginx) ao abrir os Indicadores do Suporte** - o endpoint
+`/support/dashboard/macros` fazia ~20 consultas com `date(coluna)` (sem índice) e a evolução semanal repetia as consultas
+por semana: 6,1 s no banco local, bem pior em produção. Corrigido na branch `fix/indicadores-suporte-timeout-e-erro-amigavel`
+(**não mesclada**): filtros de período em intervalo UTC (usam o índice; mesmos totais, conferido no banco), evolução
+semanal a partir de uma única série diária, consulta do Novo Login ao IXC em threads com limite de 10 s por chamada e 15 s
+no total (estourou, o indicador sai "indisponível" e o resto aparece), e a tela mostra uma mensagem legível em vez do HTML do
+504. Local: 6,1 s -> 0,8 s. **Conferir em produção** que o 504 sumiu. Segue o registro do que entrou:
 
 - **Indicadores do Suporte** (`/suporte?tab=dashboard`, antes "Dashboard Suporte"; `GET /support/dashboard/macros`,
   regra em `backend/app/modules/support/dashboard_macros.py`): 3 macros grandes (CSAT, TMR Geral, TMA) e micros
