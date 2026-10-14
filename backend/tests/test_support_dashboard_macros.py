@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from app.modules.operations.models import OperationOrder
-from app.modules.support import dashboard_macros, ixc_new_login
+from app.modules.support import dashboard_macros, ixc_n1, ixc_new_login
 from app.modules.support.models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance
 
 
@@ -323,3 +323,18 @@ def test_full_coverage_opa_average_is_judged_against_target(db_session):
 
     assert cards["tma"]["status"] == "critical"
     assert cards["tma"]["coverage"]["percentage"] == 100.0
+
+
+def test_apply_period_utc_is_inclusive_of_both_days_and_excludes_the_next(db_session):
+    from sqlalchemy import func, select
+
+    for source_id, day, hour in (("P1", 1, 0), ("P2", 3, 23), ("P3", 4, 0), ("P0", 30, 23)):
+        month = 9 if day == 30 else 10
+        db_session.add(
+            SupportIxcTicket(source_id=source_id, subject_id="90", created_at=datetime(2026, month, day, hour, 30, tzinfo=timezone.utc))
+        )
+    db_session.commit()
+
+    query = ixc_n1.apply_period_utc(select(func.count(SupportIxcTicket.id)), SupportIxcTicket.created_at, date(2026, 10, 1), date(2026, 10, 3))
+
+    assert db_session.scalar(query) == 2  # P1 (01/10 00:30) e P2 (03/10 23:30); fora: P3 (04/10) e P0 (30/09)

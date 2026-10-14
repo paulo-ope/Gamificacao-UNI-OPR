@@ -17,7 +17,7 @@ entram: não são de nenhum colaborador.
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.services.ixc_client import IxcClient, fetch_usuarios_by_ids
 
-from .ixc_ticket_queries import _apply_period, _previous_period_bounds
+from .ixc_ticket_queries import _previous_period_bounds
 from .models import SupportIxcTicket, SupportIxcUser, utc_now
 
 logger = logging.getLogger(__name__)
@@ -121,6 +121,18 @@ def sync_ixc_users(db: Session, client: IxcClient, *, seen_user_ids: set[str] | 
     return written
 
 
+def apply_period_utc(query, column, date_from: date | None, date_to: date | None):
+    """Mesmo recorte de `ixc_ticket_queries._apply_period` (dia em UTC, datas inclusivas), mas como INTERVALO na
+    coluna em vez de `date(coluna)`: a função na coluna impede o uso do índice e cada consulta virava uma leitura da
+    tabela inteira. O dashboard faz ~10 consultas por abertura; em produção (centenas de milhares de protocolos)
+    isso estourava o tempo do nginx (504)."""
+    if date_from:
+        query = query.where(column >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        query = query.where(column < datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc))
+    return query
+
+
 def _n1_base(query, level: str = "n1"):
     first, second, group_ids = _LEVELS[level]
     if group_ids is None:
@@ -160,7 +172,7 @@ def _totals(db: Session, date_from: date | None, date_to: date | None, level: st
     query = _n1_base(select(SupportIxcTicket.subject_id, func.count(SupportIxcTicket.id)), level).group_by(
         SupportIxcTicket.subject_id
     )
-    query = _apply_period(query, SupportIxcTicket.created_at, date_from, date_to)
+    query = apply_period_utc(query, SupportIxcTicket.created_at, date_from, date_to)
     totals = {"operational": 0, "financial": 0}
     for subject_id, count in db.execute(query).all():
         totals[_kind(subject_id)] += int(count)
@@ -175,7 +187,7 @@ def _daily_series(db: Session, date_from: date, date_to: date, level: str = "n1"
     query = _n1_base(select(day_column, SupportIxcTicket.subject_id, func.count(SupportIxcTicket.id)), level).group_by(
         day_column, SupportIxcTicket.subject_id
     )
-    query = _apply_period(query, SupportIxcTicket.created_at, date_from, date_to)
+    query = apply_period_utc(query, SupportIxcTicket.created_at, date_from, date_to)
     counts: dict[str, dict[str, int]] = {}
     for day_value, subject_id, count in db.execute(query).all():
         # SQLite (testes) devolve string, Postgres devolve `date` - normaliza pra ISO.
@@ -208,7 +220,7 @@ def n1_summary(db: Session, *, date_from: date, date_to: date, level: str = "n1"
     ).where(SupportIxcTicket.opened_by_user_id.is_not(None)).group_by(
         SupportIxcTicket.opened_by_user_id, SupportIxcUser.name, SupportIxcUser.active, SupportIxcTicket.subject_id
     )
-    attendant_query = _apply_period(attendant_query, SupportIxcTicket.created_at, date_from, date_to)
+    attendant_query = apply_period_utc(attendant_query, SupportIxcTicket.created_at, date_from, date_to)
     attendants: dict[str, dict[str, Any]] = {}
     for user_id, name, active, subject_id, count in db.execute(attendant_query).all():
         row = attendants.setdefault(
