@@ -49,3 +49,13 @@ def test_finalized_in_period_uses_short_cache():
     assert first == second
     assert sum(1 for table, _ in client.calls if table == "su_oss_chamado") == 1  # a segunda saiu do cache
     ixc_new_login.clear_cache()
+
+
+def test_fetch_period_gives_up_after_deadline(monkeypatch):
+    monkeypatch.setattr(ixc_new_login, "DEADLINE_SECONDS", -1.0)
+
+    try:
+        ixc_new_login._fetch_period(FakeClient(), date(2026, 10, 1), date(2026, 10, 14))
+    except TimeoutError:
+        return
+    raise AssertionError("deveria ter estourado o tempo limite do IXC")

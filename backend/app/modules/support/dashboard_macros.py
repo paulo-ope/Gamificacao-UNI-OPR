@@ -22,6 +22,7 @@ usuário; cards sem meta saem sem status.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date, timedelta
 from typing import Any
 
@@ -32,7 +33,7 @@ from app.modules.operations.models import OperationOrder
 from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 
 from . import ixc_n1, ixc_new_login, opa_overview_service
-from .ixc_ticket_queries import _apply_period, _previous_period_bounds
+from .ixc_ticket_queries import _previous_period_bounds
 from .models import SupportIxcTicket, SupportIxcUser
 from .opa_filters import OpaAttendanceFilters
 
@@ -74,7 +75,7 @@ def _n1_field_orders(db: Session, date_from: date, date_to: date) -> int:
         func.lower(func.trim(OperationOrder.creator)).in_(n1_names),
         OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES),
     )
-    query = _apply_period(query, OperationOrder.opened_at, date_from, date_to)
+    query = ixc_n1.apply_period_utc(query, OperationOrder.opened_at, date_from, date_to)
     return int(db.scalar(query) or 0)
 
 
@@ -86,7 +87,7 @@ def _n1_field_orders_by_day(db: Session, date_from: date, date_to: date) -> dict
         .where(func.lower(func.trim(OperationOrder.creator)).in_(n1_names), OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES))
         .group_by(day)
     )
-    query = _apply_period(query, OperationOrder.opened_at, date_from, date_to)
+    query = ixc_n1.apply_period_utc(query, OperationOrder.opened_at, date_from, date_to)
     # SQLite (testes) devolve texto, Postgres devolve `date` - normaliza pra ISO.
     return {str(row_day)[:10]: int(count) for row_day, count in db.execute(query).all()}
 
@@ -125,14 +126,17 @@ def _n2_orders(db: Session, date_from: date, date_to: date) -> int:
         func.lower(func.trim(OperationOrder.creator)).in_(ixc_n1.n2_user_name_keys()),
         OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES),
     )
-    return int(db.scalar(_apply_period(query, OperationOrder.opened_at, date_from, date_to)) or 0)
+    return int(db.scalar(ixc_n1.apply_period_utc(query, OperationOrder.opened_at, date_from, date_to)) or 0)
 
 
-def _new_login_live(db: Session, date_from: date, date_to: date) -> dict[str, Any]:
+def _new_login_live(db: Session, live_future: Future | None) -> dict[str, Any]:
     """Ativação de Novo Login (assunto 74) finalizadas no período, perguntando ao IXC (ver `ixc_new_login`).
-    Se o IXC estiver fora do ar o indicador sai como indisponível (`None` + mensagem), nunca como zero."""
+    A consulta já foi disparada em outra thread (`live_future`) e roda junto com as consultas ao banco.
+    Se o IXC estiver fora do ar ou lento o indicador sai como indisponível (`None` + mensagem), nunca como zero."""
     try:
-        live = ixc_new_login.finalized_in_period(date_from, date_to)
+        if live_future is None:
+            raise RuntimeError("sem consulta ao IXC")
+        live = live_future.result()
     except Exception:  # noqa: BLE001 - qualquer falha do IXC derruba só este indicador, não o dashboard
         logger.warning("Falha ao consultar Ativação de Novo Login no IXC", exc_info=True)
         return {
@@ -163,7 +167,7 @@ def n2_by_collaborator(db: Session, date_from: date, date_to: date) -> dict[str,
     )
     protocols: dict[tuple[str, str], int] = {
         (user_id, subject_id): int(count)
-        for user_id, subject_id, count in db.execute(_apply_period(protocols_query, SupportIxcTicket.created_at, date_from, date_to)).all()
+        for user_id, subject_id, count in db.execute(ixc_n1.apply_period_utc(protocols_query, SupportIxcTicket.created_at, date_from, date_to)).all()
     }
     creator_key = func.lower(func.trim(OperationOrder.creator))
     orders_query = (
@@ -171,7 +175,7 @@ def n2_by_collaborator(db: Session, date_from: date, date_to: date) -> dict[str,
         .where(creator_key.in_(ixc_n1.n2_user_name_keys()), OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES))
         .group_by(creator_key)
     )
-    orders = {key: int(count) for key, count in db.execute(_apply_period(orders_query, OperationOrder.opened_at, date_from, date_to)).all()}
+    orders = {key: int(count) for key, count in db.execute(ixc_n1.apply_period_utc(orders_query, OperationOrder.opened_at, date_from, date_to)).all()}
 
     rows = []
     for user_id, name, active in users:
@@ -197,7 +201,7 @@ def n2_by_collaborator(db: Session, date_from: date, date_to: date) -> dict[str,
     }
 
 
-def _n2_block(db: Session, date_from: date, date_to: date) -> dict[str, Any]:
+def _n2_block(db: Session, date_from: date, date_to: date, live_future: Future | None) -> dict[str, Any]:
     # No N2 a API devolve "operational" = motivo 80 (interno) e "financial" = motivo 81 (externo).
     protocols = ixc_n1._totals(db, date_from, date_to, "n2")
     return {
@@ -205,7 +209,7 @@ def _n2_block(db: Session, date_from: date, date_to: date) -> dict[str, Any]:
         "external": protocols["financial"],
         "total": protocols["operational"] + protocols["financial"],
         "orders": _n2_orders(db, date_from, date_to),
-        **_new_login_live(db, date_from, date_to),
+        **_new_login_live(db, live_future),
     }
 
 
@@ -280,16 +284,26 @@ def month_week_buckets(reference: date) -> list[dict[str, Any]]:
 
 
 def weekly_evolution(db: Session, reference: date) -> dict[str, Any]:
+    """Uma única série diária cobrindo todas as semanas (4 consultas no total) agregada em Python. Antes cada
+    uma das ~7 semanas fazia as suas próprias consultas (~16), o que pesava na abertura do dashboard."""
+    buckets = month_week_buckets(reference)
+    daily = {point["day"]: point for point in _ixc_daily(db, min(b["from"] for b in buckets), max(b["to"] for b in buckets))}
     items = []
-    for bucket in month_week_buckets(reference):
-        values = _ixc_block(db, bucket["from"], bucket["to"])
+    for bucket in buckets:
+        points = [daily[day] for day in daily if bucket["from"] <= day <= bucket["to"]]
+        solved = sum(point["solved"] for point in points)
+        field = sum(point["field"] for point in points)
+        performed = solved + field
         items.append(
             {
                 "key": bucket["key"],
                 "label": bucket["label"],
                 "date_from": bucket["from"],
                 "date_to": bucket["to"],
-                **values,
+                "performed": performed,
+                "field": field,
+                "solved": solved,
+                "resolutivity": (solved / performed) * 100 if performed else None,
             }
         )
     return {
@@ -300,6 +314,16 @@ def weekly_evolution(db: Session, reference: date) -> dict[str, Any]:
 
 
 def macro_dashboard(db: Session, *, date_from: date, date_to: date) -> dict[str, Any]:
+    """Dispara as consultas ao IXC (Novo Login, período atual e anterior) em threads, para rodarem JUNTO com as
+    consultas ao banco em vez de somar ao tempo total; a sessão do banco só é usada nesta thread."""
+    bounds = _previous_period_bounds(date_from, date_to)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        live_current = pool.submit(ixc_new_login.finalized_in_period, date_from, date_to)
+        live_previous = pool.submit(ixc_new_login.finalized_in_period, *bounds) if bounds else None
+        return _macro_dashboard(db, date_from, date_to, live_current, live_previous)
+
+
+def _macro_dashboard(db: Session, date_from: date, date_to: date, live_current: Future, live_previous: Future | None) -> dict[str, Any]:
     bounds = _previous_period_bounds(date_from, date_to)
     previous_from, previous_to = bounds if bounds else (None, None)
 
@@ -383,9 +407,9 @@ def macro_dashboard(db: Session, *, date_from: date, date_to: date) -> dict[str,
         ],
         "previous_daily": _ixc_daily(db, previous_from, previous_to) if previous_from and previous_to else [],
         # Suporte N2: protocolos (motivos 80 e 81), O.S. abertas por eles e Ativação de Novo Login finalizada.
-        "n2": _n2_block(db, date_from, date_to),
+        "n2": _n2_block(db, date_from, date_to, live_current),
         "n2_collaborators": n2_by_collaborator(db, date_from, date_to),
-        "previous_n2": _n2_block(db, previous_from, previous_to) if previous_from and previous_to else None,
+        "previous_n2": _n2_block(db, previous_from, previous_to, live_previous) if previous_from and previous_to else None,
         # Evolução semanal do mês de `date_to` (independe do recorte escolhido: sempre o mês inteiro).
         "weekly": weekly_evolution(db, date_to),
     }

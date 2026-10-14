@@ -17,10 +17,16 @@ from collections import Counter
 from datetime import date
 from typing import Any
 
-from app.services.ixc_client import IxcClient, fetch_funcionarios_by_ids, get_ixc_client
+from app.core.config import get_settings
+from app.services.ixc_client import IxcClient, fetch_funcionarios_by_ids
 
 NEW_LOGIN_SUBJECT_ID = "74"
 CACHE_TTL_SECONDS = 120
+# Esta consulta roda DENTRO da abertura do dashboard: se o IXC estiver lento, o nginx (60 s) devolvia 504 para a tela
+# inteira. Limites bem abaixo disso: cada chamada HTTP espera até 10 s e a consulta toda, até 15 s; passou disso, o
+# indicador sai como indisponível e o resto do dashboard aparece normalmente.
+HTTP_TIMEOUT_SECONDS = 10.0
+DEADLINE_SECONDS = 15.0
 # Teto de segurança: no ritmo atual (~9 O.S./dia) um ano inteiro cabe com folga.
 MAX_RECORDS = 5000
 
@@ -33,7 +39,25 @@ def clear_cache() -> None:
         _cache.clear()
 
 
+def _default_client() -> IxcClient:
+    settings = get_settings()
+    return IxcClient(
+        base_url=settings.ixc_api_base_url,
+        token=settings.ixc_api_token,
+        verify_ssl=settings.ixc_api_verify_ssl,
+        timeout=HTTP_TIMEOUT_SECONDS,
+    )
+
+
 def _fetch_period(client: IxcClient, date_from: date, date_to: date) -> dict[str, Any]:
+    started = time.monotonic()
+
+    def within_deadline(items):
+        for item in items:
+            if time.monotonic() - started > DEADLINE_SECONDS:
+                raise TimeoutError("Consulta do IXC excedeu o tempo limite.")
+            yield item
+
     grid_param = [
         {"TB": "su_oss_chamado.id_assunto", "OP": "=", "P": NEW_LOGIN_SUBJECT_ID},
         {"TB": "su_oss_chamado.status", "OP": "=", "P": "F"},
@@ -41,7 +65,9 @@ def _fetch_period(client: IxcClient, date_from: date, date_to: date) -> dict[str
         {"TB": "su_oss_chamado.data_fechamento", "OP": "<=", "P": f"{date_to.isoformat()} 23:59:59"},
     ]
     records = list(
-        client.list_all("su_oss_chamado", grid_param=grid_param, rp=200, sortname="su_oss_chamado.id", max_records=MAX_RECORDS)
+        within_deadline(
+            client.list_all("su_oss_chamado", grid_param=grid_param, rp=200, sortname="su_oss_chamado.id", max_records=MAX_RECORDS)
+        )
     )
     technician_ids = sorted({int(record["id_tecnico"]) for record in records if str(record.get("id_tecnico") or "").isdigit() and int(record["id_tecnico"]) > 0})
     names = {
@@ -65,7 +91,7 @@ def finalized_in_period(date_from: date, date_to: date, *, client: IxcClient | N
         cached = _cache.get(key)
         if cached and now - cached[0] < CACHE_TTL_SECONDS:
             return cached[1]
-    result = _fetch_period(client or get_ixc_client(), date_from, date_to)
+    result = _fetch_period(client or _default_client(), date_from, date_to)
     with _cache_lock:
         _cache[key] = (time.monotonic(), result)
     return result

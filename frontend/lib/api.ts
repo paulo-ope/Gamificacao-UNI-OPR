@@ -263,6 +263,15 @@ async function requestRaw<T>(path: string, init?: RequestInit): Promise<T> {
 // (achado real: apareceu um `{"detail":"..."}` cru numa caixa de confirmacao em vez do texto).
 function extractApiErrorMessage(body: string, fallback: string): string {
   if (!body) return fallback;
+  // Página de erro do proxy (nginx 502/503/504...) em vez de JSON do backend: mostrar o HTML cru na tela era
+  // ilegível ("<html><head><title>504 Gateway Time-out</title>..."). O código HTTP vem do `fallback`.
+  if (/^\s*<(!doctype|html)/i.test(body)) {
+    const status = fallback.match(/(\d{3})/)?.[1];
+    const code = status ? ` (HTTP ${status})` : "";
+    return ["502", "503", "504"].includes(status ?? "")
+      ? `O servidor demorou para responder${code}. Tente novamente em instantes.`
+      : `O servidor devolveu uma página de erro${code}. Tente novamente em instantes.`;
+  }
   try {
     const parsed = JSON.parse(body) as { detail?: string | Array<{ msg?: string }>; message?: string };
     if (typeof parsed.detail === "string" && parsed.detail) return parsed.detail;
