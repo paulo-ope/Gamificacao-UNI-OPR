@@ -61,7 +61,7 @@ export function goalProgress(card: Pick<SupportMacroCard, "value" | "target" | "
 export function coverageNote(card: Pick<SupportMacroCard, "status" | "coverage">) {
   const coverage = card.coverage;
   if (!coverage || coverage.percentage === null) return null;
-  const counts = `${new Intl.NumberFormat("pt-BR").format(coverage.count)} de ${new Intl.NumberFormat("pt-BR").format(coverage.total)} atendimentos`;
+  const counts = `${new Intl.NumberFormat("pt-BR").format(coverage.count)} de ${new Intl.NumberFormat("pt-BR").format(coverage.total)} atendimentos com humano`;
   if (card.status === "partial") return `Dado parcial: média de ${counts} (${Math.round(coverage.percentage)}%)`;
   return coverage.percentage < 100 ? `Média de ${counts} (${Math.round(coverage.percentage)}%)` : null;
 }

@@ -1,17 +1,18 @@
 "use client";
 
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ListFilter } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { OperationsTrendChart } from "@/components/operations/operations-trend-chart";
 import { OverviewBlock } from "@/components/overview/overview-block";
 import { KpiCard, SPARK_COLOR } from "@/components/overview/overview-kpi-strip";
 import { OverviewProgress, OverviewSectionHeading, OverviewTile } from "@/components/overview/overview-layout-parts";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { api } from "@/lib/api";
 import { formatInteger, formatPercent } from "@/lib/format";
 import { percentChange } from "@/lib/period";
 import { buildSupportDailyFlowOption, buildSupportWeeklyOption } from "@/lib/support-dashboard-chart-options";
-import type { SupportMacroCard, SupportMacroCardStatus, SupportMacroDailyPoint, SupportMacroDashboard } from "@/lib/types";
+import type { SupportMacroCard, SupportMacroCardStatus, SupportMacroDailyPoint, SupportMacroDashboard, SupportOpaFilterOption } from "@/lib/types";
 import type { Tone } from "@/lib/tones";
 
 import { DashboardGoalRings } from "./dashboard-goal-rings";
@@ -282,11 +283,36 @@ function DashboardBody({ data }: { data: SupportMacroDashboard }) {
 
 export function DashboardMacros() {
   const [period, setPeriod] = useState(initialIxcPeriod);
+  // Filtros do OPA (departamento e colaborador/atendente): valem só para os indicadores do OPA (CSAT, TMR, TMA).
+  const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+  const [attendantIds, setAttendantIds] = useState<string[]>([]);
+  const [departments, setDepartments] = useState<SupportOpaFilterOption[]>([]);
+  const [attendants, setAttendants] = useState<SupportOpaFilterOption[]>([]);
   const [data, setData] = useState<SupportMacroDashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const invalidPeriod = !period.date_from || !period.date_to || period.date_to < period.date_from;
+
+  // Opções dos filtros (mesma fonte da tela Dados): se falhar, os seletores ficam vazios e o resto funciona.
+  useEffect(() => {
+    if (invalidPeriod) return;
+    let cancelled = false;
+    api
+      .supportOpaFilters(period)
+      .then((options) => {
+        if (cancelled) return;
+        setDepartments(options.departments);
+        setAttendants(options.attendants);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [period, invalidPeriod]);
+
+  const departmentKey = departmentIds.join(",");
+  const attendantKey = attendantIds.join(",");
 
   useEffect(() => {
     if (invalidPeriod) return;
@@ -294,7 +320,7 @@ export function DashboardMacros() {
     setLoading(true);
     setError(null);
     api
-      .supportMacroDashboard(period)
+      .supportMacroDashboard({ ...period, department_id: departmentKey || undefined, attendant_id: attendantKey || undefined })
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -307,11 +333,37 @@ export function DashboardMacros() {
     return () => {
       cancelled = true;
     };
-  }, [period, invalidPeriod]);
+  }, [period, invalidPeriod, departmentKey, attendantKey]);
 
   return (
     <div className="grid gap-3">
       <IxcPeriodBar period={period} onChange={setPeriod} />
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <ListFilter className="h-4 w-4 text-slate-400" aria-hidden />
+        <MultiSelect<SupportOpaFilterOption>
+          className="h-8 w-56 text-[11px]"
+          values={departmentIds}
+          options={departments}
+          getValue={(option) => option.value}
+          formatOption={(option) => option.label}
+          placeholder="Todos os departamentos"
+          ariaLabel="Departamento do OPA"
+          onChange={setDepartmentIds}
+        />
+        <MultiSelect<SupportOpaFilterOption>
+          className="h-8 w-56 text-[11px]"
+          values={attendantIds}
+          options={attendants}
+          getValue={(option) => option.value}
+          formatOption={(option) => option.label}
+          placeholder="Todos os colaboradores"
+          ariaLabel="Colaborador do OPA"
+          onChange={setAttendantIds}
+        />
+        <p className="text-[11px] text-slate-500">
+          Os filtros de departamento e colaborador valem para os indicadores do OPA (CSAT, TMR e TMA). Protocolos, O.S. e N2 do IXC não mudam.
+        </p>
+      </div>
 
       {invalidPeriod ? (
         <div className="flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 shadow-sm">

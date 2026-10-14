@@ -1767,16 +1767,21 @@ def ixc_n1_summary(
 def support_macro_dashboard(
     date_from: date,
     date_to: date,
+    department_id: str | None = None,
+    attendant_id: str | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Macros do Dashboard Suporte: atendimentos N1 do IXC (realizados, campo, solucionados,
-    resolutividade) e CSAT/TMR/TMA do OPA, com meta e comparação com o período anterior."""
+    resolutividade) e CSAT/TMR/TMA do OPA, com meta e comparação com o período anterior. `department_id` e
+    `attendant_id` (vários separados por vírgula) filtram só os indicadores do OPA."""
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
     if (date_to - date_from).days > 366:
         raise HTTPException(status_code=400, detail="O período máximo é de 366 dias.")
-    return dashboard_macros.macro_dashboard(db, date_from=date_from, date_to=date_to)
+    return dashboard_macros.macro_dashboard(
+        db, date_from=date_from, date_to=date_to, department_id=department_id, attendant_id=attendant_id
+    )
 
 
 @router.get("/ixc/tickets/filter-options")

@@ -1160,8 +1160,13 @@ export const api = {
   supportIxcN1Summary: (params: { date_from: string; date_to: string; level?: "n1" | "n2" }) =>
     request<SupportIxcN1Summary>(`/support/ixc/n1/summary?${new URLSearchParams(params).toString()}`),
 
-  supportMacroDashboard: (params: { date_from: string; date_to: string }) =>
-    request<SupportMacroDashboard>(`/support/dashboard/macros?${new URLSearchParams(params).toString()}`),
+  supportMacroDashboard: (params: { date_from: string; date_to: string; department_id?: string; attendant_id?: string }) => {
+    const query = new URLSearchParams({ date_from: params.date_from, date_to: params.date_to });
+    // Vários ids separados por vírgula; só os indicadores do OPA usam esses filtros.
+    if (params.department_id) query.set("department_id", params.department_id);
+    if (params.attendant_id) query.set("attendant_id", params.attendant_id);
+    return request<SupportMacroDashboard>(`/support/dashboard/macros?${query.toString()}`);
+  },
 
   supportIxcTicketFilterOptions: () =>
     request<SupportIxcTicketFilterOptions>(`/support/ixc/tickets/filter-options`),
