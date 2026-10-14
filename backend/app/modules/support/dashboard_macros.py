@@ -13,7 +13,12 @@ Junta, num só lugar, os indicadores do Suporte Interno N1 no IXC com os tempos 
 - CSAT, TMR Geral e TMA Humano vêm de `opa_overview_service.overview_metrics` (mesmos números da Visão Geral).
   TMR/TMA só existem para parte dos atendimentos (o histórico é preenchido pelo backfill noturno, dos mais
   recentes para os mais antigos): cada cartão leva a cobertura e, abaixo de `MIN_COVERAGE_PERCENT`, vira "parcial"
-  em vez de julgar a meta - uma média de poucos atendimentos (ex.: 94 h de TMA) enganava o painel.
+  em vez de julgar a meta - uma média de poucos atendimentos (ex.: 94 h de TMA) enganava o painel. A cobertura é
+  medida sobre os atendimentos ENCERRADOS QUE CHEGARAM A UM HUMANO (conversa só do bot nunca tem TMA, então
+  contar todos os encerrados acusava "parcial" em período 100% calculado), e o período anterior só entra na
+  comparação se a cobertura dele também for boa (senão a variação comparava com uma amostra viesada).
+  Os filtros de departamento e colaborador (atendente) do OPA valem para os cartões do OPA; os do IXC não têm
+  essa dimensão.
 
 A comparação é com o período imediatamente anterior, de mesmo tamanho. As metas abaixo foram passadas pelo
 usuário; cards sem meta saem sem status.
@@ -34,8 +39,8 @@ from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 
 from . import ixc_n1, ixc_new_login, opa_overview_service
 from .ixc_ticket_queries import _previous_period_bounds
-from .models import SupportIxcTicket, SupportIxcUser
-from .opa_filters import OpaAttendanceFilters
+from .models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance
+from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +110,24 @@ def _ixc_daily(db: Session, date_from: date, date_to: date) -> list[dict[str, An
     for point, n2_point in zip(points, n2_points, strict=True):
         point["n2_total"] = n2_point["operational"] + n2_point["financial"]
     return points
+
+
+def time_coverage(db: Session, filters: OpaAttendanceFilters) -> dict[str, Any]:
+    """Quantos dos atendimentos encerrados que chegaram a um humano já têm TMA calculado. Como TMA, TMR Geral e
+    TMR Humano são preenchidos na mesma passada (sincronização e backfill noturno), isso mede o andamento do
+    histórico para os três; as lacunas naturais do TMR (sem mensagem do cliente) não contam como atraso."""
+    eligible_where = (SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.reached_human.is_(True))
+    eligible = int(db.scalar(apply_opa_attendance_filters(select(func.count(SupportOpaAttendance.id)).where(*eligible_where), filters)) or 0)
+    processed = int(
+        db.scalar(
+            apply_opa_attendance_filters(
+                select(func.count(SupportOpaAttendance.id)).where(*eligible_where, SupportOpaAttendance.tma_effective_seconds.isnot(None)),
+                filters,
+            )
+        )
+        or 0
+    )
+    return opa_overview_service.coverage(processed, eligible)
 
 
 def _opa_daily(db: Session, filters: OpaAttendanceFilters) -> list[dict[str, Any]]:
@@ -313,17 +336,22 @@ def weekly_evolution(db: Session, reference: date) -> dict[str, Any]:
     }
 
 
-def macro_dashboard(db: Session, *, date_from: date, date_to: date) -> dict[str, Any]:
+def macro_dashboard(
+    db: Session, *, date_from: date, date_to: date, department_id: str | None = None, attendant_id: str | None = None
+) -> dict[str, Any]:
     """Dispara as consultas ao IXC (Novo Login, período atual e anterior) em threads, para rodarem JUNTO com as
     consultas ao banco em vez de somar ao tempo total; a sessão do banco só é usada nesta thread."""
     bounds = _previous_period_bounds(date_from, date_to)
     with ThreadPoolExecutor(max_workers=2) as pool:
         live_current = pool.submit(ixc_new_login.finalized_in_period, date_from, date_to)
         live_previous = pool.submit(ixc_new_login.finalized_in_period, *bounds) if bounds else None
-        return _macro_dashboard(db, date_from, date_to, live_current, live_previous)
+        return _macro_dashboard(db, date_from, date_to, live_current, live_previous, department_id, attendant_id)
 
 
-def _macro_dashboard(db: Session, date_from: date, date_to: date, live_current: Future, live_previous: Future | None) -> dict[str, Any]:
+def _macro_dashboard(
+    db: Session, date_from: date, date_to: date, live_current: Future, live_previous: Future | None,
+    department_id: str | None, attendant_id: str | None,
+) -> dict[str, Any]:
     bounds = _previous_period_bounds(date_from, date_to)
     previous_from, previous_to = bounds if bounds else (None, None)
 
@@ -337,10 +365,16 @@ def _macro_dashboard(db: Session, date_from: date, date_to: date, live_current: 
     current_n2_total = sum(ixc_n1._totals(db, date_from, date_to, "n2").values())
     previous_n2_total = sum(ixc_n1._totals(db, previous_from, previous_to, "n2").values()) if previous_from and previous_to else None
 
-    filters = OpaAttendanceFilters(date_from=date_from, date_to=date_to)
+    filters = OpaAttendanceFilters(date_from=date_from, date_to=date_to, department_id=department_id or None, attendant_id=attendant_id or None)
     current_opa = opa_overview_service.overview_metrics(db, filters)
     previous_filters = filters.previous_period()
     previous_opa = opa_overview_service.overview_metrics(db, previous_filters)
+    current_coverage = time_coverage(db, filters)
+    previous_coverage = time_coverage(db, previous_filters)
+
+    def previous_time(value):
+        """Período anterior só serve de base se também tiver cobertura boa; senão a variação é enganosa."""
+        return value if (previous_coverage["percentage"] or 0) >= MIN_COVERAGE_PERCENT else None
 
     cards = [
         _card(
@@ -350,21 +384,21 @@ def _macro_dashboard(db: Session, date_from: date, date_to: date, live_current: 
         ),
         _card(
             "tmr", "Tempo médio de resposta ao cliente - OPA", "seconds",
-            current_opa["average_tmr_effective_seconds"], previous_opa["average_tmr_effective_seconds"],
+            current_opa["average_tmr_effective_seconds"], previous_time(previous_opa["average_tmr_effective_seconds"]),
             target=TMR_TARGET_SECONDS, direction="max", source="opa", note="TMR Geral (inclui as respostas do bot)",
-            coverage=current_opa["tmr_effective_coverage"],
+            coverage=current_coverage,
         ),
         _card(
             "tmr_human", "TMR Humano - OPA", "seconds",
-            current_opa["average_tmr_human_live_seconds"], previous_opa["average_tmr_human_live_seconds"],
+            current_opa["average_tmr_human_live_seconds"], previous_time(previous_opa["average_tmr_human_live_seconds"]),
             direction="max", source="opa", note="Só respostas de humano (sem o bot); sem meta definida",
-            coverage=current_opa["tmr_human_live_coverage"],
+            coverage=current_coverage,
         ),
         _card(
             "tma", "Tempo médio de atendimento - OPA", "seconds",
-            current_opa["average_tma_effective_seconds"], previous_opa["average_tma_effective_seconds"],
+            current_opa["average_tma_effective_seconds"], previous_time(previous_opa["average_tma_effective_seconds"]),
             target=TMA_TARGET_SECONDS, direction="max", source="opa", note="TMA Humano (1ª msg do atendente até a conclusão)",
-            coverage=current_opa["tma_effective_coverage"],
+            coverage=current_coverage,
         ),
         _card(
             "performed", "Quantidade de atendimentos realizados - IXC", "count",

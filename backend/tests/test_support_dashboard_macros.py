@@ -77,6 +77,7 @@ def test_macro_dashboard_combines_n1_protocols_field_orders_and_opa(db_session):
             opened_at=datetime(2026, 10, 5, 15, tzinfo=timezone.utc),
             closed_at=datetime(2026, 10, 5, 16, tzinfo=timezone.utc),
             status="encerrado",
+            reached_human=True,
             rating=4.0,
             tma_effective_seconds=1800,
             tmr_effective_seconds=60,
@@ -288,53 +289,83 @@ def test_field_orders_only_count_field_sectors(db_session):
     assert sum(point["field"] for point in result["daily"]) == 1
 
 
-def _closed_attendance(db, source_id, tma_effective):
+def _closed_attendance(db, source_id, tma_effective, *, human=True, day=5, department_id=None, attendant_id=None, month=10):
     db.add(
         SupportOpaAttendance(
             source_id=source_id,
-            opened_at=datetime(2026, 10, 5, 15, tzinfo=timezone.utc),
-            closed_at=datetime(2026, 10, 5, 16, tzinfo=timezone.utc),
+            opened_at=datetime(2026, month, day, 15, tzinfo=timezone.utc),
+            closed_at=datetime(2026, month, day, 16, tzinfo=timezone.utc),
             status="encerrado",
+            reached_human=human,
             tma_effective_seconds=tma_effective,
+            department_id=department_id,
+            attendant_id=attendant_id,
         )
     )
 
 
+def _cards(db, **kwargs):
+    result = dashboard_macros.macro_dashboard(db, date_from=date(2026, 10, 1), date_to=date(2026, 10, 10), **kwargs)
+    return {card["key"]: card for card in result["cards"]}
+
+
 def test_low_coverage_opa_average_is_partial_not_judged_against_target(db_session):
-    # 1 de 3 encerrados tem TMA efetivo (33%): a média de uma amostra pequena não é comparada com a meta.
+    # 1 de 3 encerrados COM HUMANO tem TMA efetivo (33%): a média de uma amostra pequena não é julgada pela meta.
     _closed_attendance(db_session, "A1", 400000)
     _closed_attendance(db_session, "A2", None)
     _closed_attendance(db_session, "A3", None)
     db_session.commit()
 
-    cards = {c["key"]: c for c in dashboard_macros.macro_dashboard(db_session, date_from=date(2026, 10, 1), date_to=date(2026, 10, 10))["cards"]}
+    cards = _cards(db_session)
 
     assert cards["tma"]["value"] == 400000
     assert cards["tma"]["status"] == "partial"
     assert cards["tma"]["coverage"]["count"] == 1 and cards["tma"]["coverage"]["total"] == 3
 
 
-def test_full_coverage_opa_average_is_judged_against_target(db_session):
+def test_bot_only_attendances_do_not_count_against_coverage(db_session):
+    # Conversa só do bot nunca tem TMA: não pode derrubar a cobertura de um período 100% calculado.
     _closed_attendance(db_session, "A1", 400000)
     _closed_attendance(db_session, "A2", 500000)
+    for index in range(5):
+        _closed_attendance(db_session, f"B{index}", None, human=False)
     db_session.commit()
 
-    cards = {c["key"]: c for c in dashboard_macros.macro_dashboard(db_session, date_from=date(2026, 10, 1), date_to=date(2026, 10, 10))["cards"]}
+    cards = _cards(db_session)
 
-    assert cards["tma"]["status"] == "critical"
     assert cards["tma"]["coverage"]["percentage"] == 100.0
+    assert cards["tma"]["coverage"]["total"] == 2
+    assert cards["tma"]["status"] == "critical"  # coberto e acima da meta: julgado normalmente
 
 
-def test_apply_period_utc_is_inclusive_of_both_days_and_excludes_the_next(db_session):
-    from sqlalchemy import func, select
-
-    for source_id, day, hour in (("P1", 1, 0), ("P2", 3, 23), ("P3", 4, 0), ("P0", 30, 23)):
-        month = 9 if day == 30 else 10
-        db_session.add(
-            SupportIxcTicket(source_id=source_id, subject_id="90", created_at=datetime(2026, month, day, hour, 30, tzinfo=timezone.utc))
-        )
+def test_partial_previous_period_is_not_used_as_comparison_base(db_session):
+    _closed_attendance(db_session, "A1", 1800)  # período atual, 100% calculado
+    _closed_attendance(db_session, "P1", 90000, day=25, month=9)  # período anterior: 1 de 3 calculado
+    _closed_attendance(db_session, "P2", None, day=25, month=9)
+    _closed_attendance(db_session, "P3", None, day=25, month=9)
     db_session.commit()
 
-    query = ixc_n1.apply_period_utc(select(func.count(SupportIxcTicket.id)), SupportIxcTicket.created_at, date(2026, 10, 1), date(2026, 10, 3))
+    tma = _cards(db_session)["tma"]
 
-    assert db_session.scalar(query) == 2  # P1 (01/10 00:30) e P2 (03/10 23:30); fora: P3 (04/10) e P0 (30/09)
+    assert tma["value"] == 1800
+    assert tma["previous"] is None and tma["change"] is None
+
+
+def test_department_and_attendant_filters_apply_to_opa_cards_only(db_session):
+    db_session.add(SupportIxcUser(ixc_user_id="10", name="Ana N1", group_id="105", active=True))
+    _ticket(db_session, "T1", "90", "10", 5)
+    _closed_attendance(db_session, "A1", 600, department_id="D1", attendant_id="U1")
+    _closed_attendance(db_session, "A2", 3000, department_id="D2", attendant_id="U2")
+    db_session.commit()
+
+    everyone = _cards(db_session)
+    only_d1 = _cards(db_session, department_id="D1")
+    only_u2 = _cards(db_session, attendant_id="U2")
+    both = _cards(db_session, department_id="D1,D2")
+
+    assert everyone["tma"]["value"] == pytest.approx(1800)
+    assert only_d1["tma"]["value"] == 600
+    assert only_u2["tma"]["value"] == 3000
+    assert both["tma"]["value"] == pytest.approx(1800)  # vários departamentos, separados por vírgula
+    # Os cartões do IXC não têm essa dimensão: não mudam com o filtro do OPA.
+    assert only_d1["solved"]["value"] == everyone["solved"]["value"] == 1
