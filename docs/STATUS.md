@@ -29,7 +29,16 @@ por semana: 6,1 s no banco local, bem pior em produção. Corrigido na branch `f
 (**não mesclada**): filtros de período em intervalo UTC (usam o índice; mesmos totais, conferido no banco), evolução
 semanal a partir de uma única série diária, consulta do Novo Login ao IXC em threads com limite de 10 s por chamada e 15 s
 no total (estourou, o indicador sai "indisponível" e o resto aparece), e a tela mostra uma mensagem legível em vez do HTML do
-504. Local: 6,1 s -> 0,8 s. **Conferir em produção** que o 504 sumiu. Segue o registro do que entrou:
+504. Local: 6,1 s -> 0,8 s. **Conferir em produção** que o 504 sumiu. **Terceiro ajuste (branch `fix/indicadores-suporte-cobertura-e-filtros`, não mesclada):** o aviso "Dado parcial" dos
+cartões de TMR/TMA media a cobertura sobre TODOS os encerrados; como conversa só do bot nunca tem TMA, um período 100%
+calculado (07/10-14/10 em produção) aparecia como 46% e "parcial". Agora é sobre os encerrados que chegaram a um
+humano, e o período anterior só entra na comparação se a cobertura dele também for boa (antes, "-57,2%" vinha de
+comparar com uma amostra pequena). Novos filtros de **departamento** e **colaborador** do OPA nos Indicadores (valem
+só para CSAT/TMR/TMA; protocolos, O.S. e N2 do IXC não têm essa dimensão). **Em aberto:** o TMA médio de 07/10-14/10 é
+2 h 41 min, bem acima dos 56 min do painel de referência do usuário - não sei qual é o critério do OPA para o TMA
+oficial; só foi validado por atendente (5 atendentes, erro de -6% a +4%). Backfill de produção conferido em 14/10:
+ligado, teto 12.000/noite, 5.263 atendimentos de 01/10-06/10 ainda sem TMA (previsão: 2 madrugadas).
+Segue o registro do que entrou:
 
 - **Indicadores do Suporte** (`/suporte?tab=dashboard`, antes "Dashboard Suporte"; `GET /support/dashboard/macros`,
   regra em `backend/app/modules/support/dashboard_macros.py`): 3 macros grandes (CSAT, TMR Geral, TMA) e micros
