@@ -13,10 +13,17 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-14** — Branch `feat/suporte-indicadores-n2-configuracao` (5 commits + este) com **Indicadores do Suporte**,
-**Atendimento Operacional N2**, aba **Configuração** e tema claro/escuro; **PR aberto contra a `master`, ainda não
-mesclado e sem deploy**. Validado só no banco local (Docker) e no navegador do app; **a conferência visual em tela
-cheia e em produção não foi feita**. O que entrou:
+**2026-10-14** — **Indicadores do Suporte**, **Atendimento Operacional N2**, aba **Configuração** e tema claro/escuro
+(PR **#71**) e o ajuste dos cartões da Visão Geral (PR **#72**) **mesclados na `master` e já em produção** (informado
+pelo dono do sistema, que mandou um print do painel de produção). **Primeiro achado em produção:** filtrando 01/10 a
+03/10 o painel mostrou "foi a campo" = 667 (61% das O.S.), resolutividade 50,9% e TMA de 94 h; o banco local, com o mesmo
+filtro, dava 260 e 72% e não reproduzia. Corrigido no PR seguinte (branch `fix/indicadores-suporte-escopo-os-e-cobertura`,
+**ainda não mesclado nem em produção**): (1) "foi a campo" só conta O.S. dos setores 7, 8 e 9 - antes contava qualquer
+setor de `operations_orders`, e o N1 também abre O.S. de Comercial/Retenção etc.; **hipótese não confirmada em
+produção** (não tenho acesso ao banco de lá; no local o efeito já aparece, 1.881 -> 1.603 em 01/10-14/10) - conferir
+com `SELECT sector, count(*) FROM operations_orders WHERE opened_at::date BETWEEN '2026-10-01' AND '2026-10-03' GROUP BY 1`;
+(2) TMR/TMA levam a cobertura e, abaixo de 50% dos atendimentos, viram "parcial" (cinza, sem status contra a meta) em vez
+de serem julgados - uma média de poucos atendimentos (TMA de 94 h) enganava. Segue o registro do que entrou:
 
 - **Indicadores do Suporte** (`/suporte?tab=dashboard`, antes "Dashboard Suporte"; `GET /support/dashboard/macros`,
   regra em `backend/app/modules/support/dashboard_macros.py`): 3 macros grandes (CSAT, TMR Geral, TMA) e micros

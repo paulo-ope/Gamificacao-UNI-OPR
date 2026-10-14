@@ -9,14 +9,14 @@ import { buildMetricRingOption } from "@/lib/overview-chart-options";
 import type { SupportMacroCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { formatCardChange, formatCardTarget, formatCardValue, goalProgress, isGoodWhenUp } from "./dashboard-format";
+import { coverageNote, formatCardChange, formatCardTarget, formatCardValue, goalProgress, isGoodWhenUp } from "./dashboard-format";
 
 const ReactECharts = dynamic(() => import("echarts-for-react"), {
   ssr: false,
   loading: () => <div className="h-[116px] animate-pulse rounded-full bg-slate-100" aria-hidden="true" />,
 });
 
-const RING_TONE = { ok: "success", attention: "warning", critical: "danger", no_data: "neutral", no_target: "neutral" } as const;
+const RING_TONE = { ok: "success", attention: "warning", critical: "danger", partial: "neutral", no_data: "neutral", no_target: "neutral" } as const;
 
 function RingTile({ card, previousLabel }: { card: SupportMacroCard; previousLabel: string }) {
   const option = useMemo(
@@ -53,6 +53,7 @@ function RingTile({ card, previousLabel }: { card: SupportMacroCard; previousLab
       <div className="mx-1 mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 border-t border-slate-200 pt-2.5 text-[10px] text-slate-500">
         <b className="text-slate-900">{formatCardTarget(card)}</b>
       </div>
+      {coverageNote(card) ? <p className="mt-1 text-[10px] font-medium text-amber-700">{coverageNote(card)}</p> : null}
     </div>
   );
 }

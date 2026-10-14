@@ -15,7 +15,7 @@ import type { SupportMacroCard, SupportMacroCardStatus, SupportMacroDailyPoint, 
 import type { Tone } from "@/lib/tones";
 
 import { DashboardGoalRings } from "./dashboard-goal-rings";
-import { STATUS_TONE, formatCardChange, formatCardTarget, formatCardValue, isGoodWhenUp } from "./dashboard-format";
+import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, isGoodWhenUp } from "./dashboard-format";
 import { IxcPeriodBar, initialIxcPeriod } from "./ixc-n1-panel";
 
 // Dashboard Suporte (pedido do usuário, 2026-10-14), montado com os mesmos componentes e gráficos da Visão
@@ -35,6 +35,7 @@ const STATUS_SPARK: Record<SupportMacroCardStatus, string> = {
   ok: SPARK_COLOR.emerald,
   attention: SPARK_COLOR.amber,
   critical: SPARK_COLOR.red,
+  partial: SPARK_COLOR.blue,
   no_data: SPARK_COLOR.blue,
   no_target: SPARK_COLOR.blue,
 };
@@ -74,11 +75,11 @@ const MACRO_KEYS = ["csat", "tmr", "tma"];
 
 function MacroKpiCard({ card, daily, previousLabel, large = false }: { card: SupportMacroCard; daily: readonly SupportMacroDailyPoint[]; previousLabel: string; large?: boolean }) {
   const noTarget = NO_TARGET_VIEW[card.key];
-  const tone: Tone = card.status === "no_target" || card.status === "no_data" ? (noTarget?.tone ?? "blue") : STATUS_TONE[card.status];
+  const tone: Tone = card.status === "no_target" || card.status === "no_data" || card.status === "partial" ? (noTarget?.tone ?? "blue") : STATUS_TONE[card.status];
   const target = formatCardTarget(card);
   // Percentual relativo não faz sentido sobre um indicador que já é percentual: aí a variação é em p.p.
   const showPercentDelta = card.unit !== "percent";
-  const hint = [card.unit === "percent" ? `${formatCardChange(card) ?? "sem base"} vs. ${previousLabel}` : null, target].filter(Boolean).join(" · ");
+  const hint = [card.unit === "percent" ? `${formatCardChange(card) ?? "sem base"} vs. ${previousLabel}` : null, target, coverageNote(card)].filter(Boolean).join(" · ");
   return (
     <KpiCard
       label={card.label}
@@ -88,7 +89,7 @@ function MacroKpiCard({ card, daily, previousLabel, large = false }: { card: Sup
       hint={hint || undefined}
       large={large}
       spark={sparkSeries(card.key, daily)}
-      sparkColor={card.status === "no_target" || card.status === "no_data" ? (noTarget?.spark ?? SPARK_COLOR.blue) : STATUS_SPARK[card.status]}
+      sparkColor={card.status === "no_target" || card.status === "no_data" || card.status === "partial" ? (noTarget?.spark ?? SPARK_COLOR.blue) : STATUS_SPARK[card.status]}
     />
   );
 }

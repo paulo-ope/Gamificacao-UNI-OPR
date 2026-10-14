@@ -57,6 +57,15 @@ export function goalProgress(card: Pick<SupportMacroCard, "value" | "target" | "
   return card.value <= 0 ? 100 : Math.min(100, (card.target / card.value) * 100);
 }
 
+/** Aviso de cobertura das médias do OPA (TMR/TMA), que só existem para parte dos atendimentos. */
+export function coverageNote(card: Pick<SupportMacroCard, "status" | "coverage">) {
+  const coverage = card.coverage;
+  if (!coverage || coverage.percentage === null) return null;
+  const counts = `${new Intl.NumberFormat("pt-BR").format(coverage.count)} de ${new Intl.NumberFormat("pt-BR").format(coverage.total)} atendimentos`;
+  if (card.status === "partial") return `Dado parcial: média de ${counts} (${Math.round(coverage.percentage)}%)`;
+  return coverage.percentage < 100 ? `Média de ${counts} (${Math.round(coverage.percentage)}%)` : null;
+}
+
 export function isGoodWhenUp(card: Pick<SupportMacroCard, "target" | "direction">) {
   return card.target === null ? null : card.direction === "min";
 }
@@ -65,6 +74,7 @@ export const STATUS_TONE: Record<SupportMacroCardStatus, "emerald" | "amber" | "
   ok: "emerald",
   attention: "amber",
   critical: "red",
+  partial: "slate",
   no_data: "slate",
   no_target: "slate",
 };

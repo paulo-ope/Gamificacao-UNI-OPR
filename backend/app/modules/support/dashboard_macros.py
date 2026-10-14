@@ -3,12 +3,17 @@
 Junta, num só lugar, os indicadores do Suporte Interno N1 no IXC com os tempos e a avaliação do OPA:
 
 - P (protocolos N1) = operacional (motivo 90) + financeiro (motivo 29), de `ixc_n1.n1_summary`;
-- F (O.S. para campo) = O.S. abertas pelos colaboradores dos grupos N1 (105 e 117) no período. O vínculo é
-  pelo criador da O.S. (`OperationOrder.creator`, que o IXC resolve a partir do mesmo `id_usuarios` do
-  ticket) casado por nome com `SupportIxcUser`; NÃO dá pra usar o ticket da O.S. porque ele tem o motivo
+- F (O.S. para campo) = O.S. abertas pelos colaboradores dos grupos N1 (105 e 117) no período, SÓ dos setores
+  de campo 7, 8 e 9 (`PRIMARY_SECTOR_NAMES`): a tabela pode ter O.S. de outros setores (Comercial, Retenção...),
+  que o N1 também abre e que não vão a campo - contá-las inflava "foi a campo" e derrubava a resolutividade.
+  O vínculo é pelo criador da O.S. (`OperationOrder.creator`, que o IXC resolve a partir do mesmo `id_usuarios`
+  do ticket) casado por nome com `SupportIxcUser`; NÃO dá pra usar o ticket da O.S. porque ele tem o motivo
   comum do cliente (ex.: "Sem Conexão"), não o 90/29 do N1;
 - Atendimentos realizados = P + F; Solucionados = P; Foi a campo = F; Resolutividade = P / (P + F);
 - CSAT, TMR Geral e TMA Humano vêm de `opa_overview_service.overview_metrics` (mesmos números da Visão Geral).
+  TMR/TMA só existem para parte dos atendimentos (o histórico é preenchido pelo backfill noturno, dos mais
+  recentes para os mais antigos): cada cartão leva a cobertura e, abaixo de `MIN_COVERAGE_PERCENT`, vira "parcial"
+  em vez de julgar a meta - uma média de poucos atendimentos (ex.: 94 h de TMA) enganava o painel.
 
 A comparação é com o período imediatamente anterior, de mesmo tamanho. As metas abaixo foram passadas pelo
 usuário; cards sem meta saem sem status.
@@ -24,6 +29,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.operations.models import OperationOrder
+from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 
 from . import ixc_n1, ixc_new_login, opa_overview_service
 from .ixc_ticket_queries import _apply_period, _previous_period_bounds
@@ -40,6 +46,9 @@ RESOLUTIVITY_TARGET_PERCENT = 80.0
 
 # Margem abaixo (ou acima) da meta em que o card ainda é "Atenção" em vez de "Crítico".
 ATTENTION_MARGIN = 0.10
+
+# Abaixo disso de cobertura, a média do OPA é de uma amostra pequena e não é comparada com a meta.
+MIN_COVERAGE_PERCENT = 50.0
 
 
 def metric_status(value: float | None, target: float | None, direction: str) -> str:
@@ -61,7 +70,10 @@ def metric_status(value: float | None, target: float | None, direction: str) -> 
 def _n1_field_orders(db: Session, date_from: date, date_to: date) -> int:
     """O.S. abertas no período por colaboradores dos grupos N1 (casamento por nome, sem caixa/espaços)."""
     n1_names = ixc_n1.n1_user_name_keys()
-    query = select(func.count(OperationOrder.id)).where(func.lower(func.trim(OperationOrder.creator)).in_(n1_names))
+    query = select(func.count(OperationOrder.id)).where(
+        func.lower(func.trim(OperationOrder.creator)).in_(n1_names),
+        OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES),
+    )
     query = _apply_period(query, OperationOrder.opened_at, date_from, date_to)
     return int(db.scalar(query) or 0)
 
@@ -71,7 +83,7 @@ def _n1_field_orders_by_day(db: Session, date_from: date, date_to: date) -> dict
     day = func.date(OperationOrder.opened_at)
     query = (
         select(day, func.count(OperationOrder.id))
-        .where(func.lower(func.trim(OperationOrder.creator)).in_(n1_names))
+        .where(func.lower(func.trim(OperationOrder.creator)).in_(n1_names), OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES))
         .group_by(day)
     )
     query = _apply_period(query, OperationOrder.opened_at, date_from, date_to)
@@ -110,7 +122,8 @@ def _opa_daily(db: Session, filters: OpaAttendanceFilters) -> list[dict[str, Any
 def _n2_orders(db: Session, date_from: date, date_to: date) -> int:
     """O.S. abertas pelos colaboradores N2 no período."""
     query = select(func.count(OperationOrder.id)).where(
-        func.lower(func.trim(OperationOrder.creator)).in_(ixc_n1.n2_user_name_keys())
+        func.lower(func.trim(OperationOrder.creator)).in_(ixc_n1.n2_user_name_keys()),
+        OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES),
     )
     return int(db.scalar(_apply_period(query, OperationOrder.opened_at, date_from, date_to)) or 0)
 
@@ -155,7 +168,7 @@ def n2_by_collaborator(db: Session, date_from: date, date_to: date) -> dict[str,
     creator_key = func.lower(func.trim(OperationOrder.creator))
     orders_query = (
         select(creator_key, func.count(OperationOrder.id))
-        .where(creator_key.in_(ixc_n1.n2_user_name_keys()))
+        .where(creator_key.in_(ixc_n1.n2_user_name_keys()), OperationOrder.sector.in_(PRIMARY_SECTOR_NAMES))
         .group_by(creator_key)
     )
     orders = {key: int(count) for key, count in db.execute(_apply_period(orders_query, OperationOrder.opened_at, date_from, date_to)).all()}
@@ -220,8 +233,16 @@ def _card(
     direction: str = "min",
     source: str,
     note: str | None = None,
+    coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     change = None if current is None or previous is None else current - previous
+    status = metric_status(current, target, direction)
+    if (
+        coverage is not None
+        and status not in ("no_data", "no_target")
+        and (coverage["percentage"] or 0) < MIN_COVERAGE_PERCENT
+    ):
+        status = "partial"
     return {
         "key": key,
         "label": label,
@@ -231,7 +252,8 @@ def _card(
         "change": change,
         "target": target,
         "direction": direction,
-        "status": metric_status(current, target, direction),
+        "status": status,
+        "coverage": coverage,
         "source": source,
         "note": note,
     }
@@ -306,16 +328,19 @@ def macro_dashboard(db: Session, *, date_from: date, date_to: date) -> dict[str,
             "tmr", "Tempo médio de resposta ao cliente - OPA", "seconds",
             current_opa["average_tmr_effective_seconds"], previous_opa["average_tmr_effective_seconds"],
             target=TMR_TARGET_SECONDS, direction="max", source="opa", note="TMR Geral (inclui as respostas do bot)",
+            coverage=current_opa["tmr_effective_coverage"],
         ),
         _card(
             "tmr_human", "TMR Humano - OPA", "seconds",
             current_opa["average_tmr_human_live_seconds"], previous_opa["average_tmr_human_live_seconds"],
             direction="max", source="opa", note="Só respostas de humano (sem o bot); sem meta definida",
+            coverage=current_opa["tmr_human_live_coverage"],
         ),
         _card(
             "tma", "Tempo médio de atendimento - OPA", "seconds",
             current_opa["average_tma_effective_seconds"], previous_opa["average_tma_effective_seconds"],
             target=TMA_TARGET_SECONDS, direction="max", source="opa", note="TMA Humano (1ª msg do atendente até a conclusão)",
+            coverage=current_opa["tma_effective_coverage"],
         ),
         _card(
             "performed", "Quantidade de atendimentos realizados - IXC", "count",

@@ -2476,7 +2476,14 @@ export type SupportIxcN1Summary = {
 
 // Dashboard Suporte - macros (2026-10-14): ver `dashboard_macros.macro_dashboard` no backend, que traz
 // valor, meta e status já calculados - a tela só formata.
-export type SupportMacroCardStatus = "ok" | "attention" | "critical" | "no_data" | "no_target";
+// `partial`: média do OPA com cobertura baixa (poucos atendimentos já calculados) - não é comparada com a meta.
+export type SupportMacroCardStatus = "ok" | "attention" | "critical" | "partial" | "no_data" | "no_target";
+
+export type SupportMacroCoverage = {
+  count: number;
+  total: number;
+  percentage: number | null;
+};
 
 export type SupportMacroCard = {
   key: string;
@@ -2489,6 +2496,7 @@ export type SupportMacroCard = {
   // "min": quanto maior melhor; "max": quanto menor melhor.
   direction: "min" | "max";
   status: SupportMacroCardStatus;
+  coverage?: SupportMacroCoverage | null;
   source: "opa" | "ixc";
   note: string | null;
 };
