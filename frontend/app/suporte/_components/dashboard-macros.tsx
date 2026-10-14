@@ -17,7 +17,7 @@ import type { Tone } from "@/lib/tones";
 
 import { DashboardGoalRings } from "./dashboard-goal-rings";
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, isGoodWhenUp } from "./dashboard-format";
-import { IxcPeriodBar, initialIxcPeriod } from "./ixc-n1-panel";
+import { IxcPeriodBar, useIxcPeriod } from "./ixc-n1-panel";
 
 // Dashboard Suporte (pedido do usuário, 2026-10-14), montado com os mesmos componentes e gráficos da Visão
 // Geral (`/visao-geral`): faixa de cartões com mini-gráfico, anéis de meta, blocos de números, fluxo diário.
@@ -282,7 +282,7 @@ function DashboardBody({ data }: { data: SupportMacroDashboard }) {
 }
 
 export function DashboardMacros() {
-  const [period, setPeriod] = useState(initialIxcPeriod);
+  const [period, setPeriod] = useIxcPeriod();
   // Filtros do OPA (departamento e colaborador/atendente): valem só para os indicadores do OPA (CSAT, TMR, TMA).
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [attendantIds, setAttendantIds] = useState<string[]>([]);

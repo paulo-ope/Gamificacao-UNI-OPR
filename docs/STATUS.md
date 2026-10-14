@@ -43,6 +43,10 @@ ligado, teto 12.000/noite, 5.263 atendimentos de 01/10-06/10 ainda sem TMA (prev
 `dashboard_macros.SUPPORT_TEAM`, resolvida para o id do usuário no OPA pelo cadastro `user` (`GET
 /support/dashboard/collaborators`). O OPA não traz o departamento de cada usuário, então **quem entrar ou sair da equipe
 precisa ser editado nessa lista**. "Wendher Moura" e "Wendher Lopes de Moura" são o mesmo usuário do OPA (mesmo id).
+**Período compartilhado (branch `feat/periodo-compartilhado-indicadores-n2`, não mesclada):** a data escolhida em
+"Indicadores do Suporte" vale também em "Atendimento Suporte Interno N1" e "Atendimento Operacional N2" (antes cada aba
+voltava para "Mês atual"); fica em `useIxcPeriod` (memória + sessionStorage, só nesta aba do navegador). "Atendimento
+IXC" (indicador antecipado) continua com os filtros próprios.
 Segue o registro do que entrou:
 
 - **Indicadores do Suporte** (`/suporte?tab=dashboard`, antes "Dashboard Suporte"; `GET /support/dashboard/macros`,
