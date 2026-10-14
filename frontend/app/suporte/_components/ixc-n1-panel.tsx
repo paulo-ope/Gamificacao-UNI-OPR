@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import type { EChartsOption } from "echarts";
 import { AlertTriangle, CalendarDays, ChevronDown, Users } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { api } from "@/lib/api";
 import { CHART_INK } from "@/lib/chart-palette";
@@ -200,6 +200,54 @@ export function initialIxcPeriod(): IxcPeriod {
   return PRESETS[0].range();
 }
 
+// Período COMPARTILHADO entre "Indicadores do Suporte" e "Atendimento Suporte Interno N1/N2" (pedido do usuário,
+// 2026-10-15: o alinhamento é semanal, e a data escolhida num lugar precisava valer nos outros). Antes cada aba tinha
+// o próprio `useState` e voltava para "Mês atual" ao trocar de aba. Vale enquanto a página está aberta e sobrevive a
+// recarregar (sessionStorage, só nesta aba do navegador); sem armazenamento, segue em memória.
+const PERIOD_STORAGE_KEY = "uni_support_ixc_period";
+const periodListeners = new Set<() => void>();
+let sharedPeriod: IxcPeriod | null = null;
+
+function loadStoredPeriod(): IxcPeriod | null {
+  try {
+    const raw = window.sessionStorage.getItem(PERIOD_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Partial<IxcPeriod>) : null;
+    return parsed && typeof parsed.date_from === "string" && typeof parsed.date_to === "string"
+      ? { date_from: parsed.date_from, date_to: parsed.date_to }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function currentSharedPeriod(): IxcPeriod {
+  if (!sharedPeriod) sharedPeriod = (typeof window === "undefined" ? null : loadStoredPeriod()) ?? initialIxcPeriod();
+  return sharedPeriod;
+}
+
+function setSharedPeriod(next: IxcPeriod) {
+  sharedPeriod = next;
+  try {
+    window.sessionStorage.setItem(PERIOD_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Armazenamento indisponível: a escolha continua valendo em memória.
+  }
+  periodListeners.forEach((listener) => listener());
+}
+
+function subscribeToPeriod(listener: () => void) {
+  periodListeners.add(listener);
+  return () => {
+    periodListeners.delete(listener);
+  };
+}
+
+/** Período das abas do IXC no Suporte, o mesmo em todas elas. */
+export function useIxcPeriod(): [IxcPeriod, (next: IxcPeriod) => void] {
+  const period = useSyncExternalStore(subscribeToPeriod, currentSharedPeriod, currentSharedPeriod);
+  return [period, setSharedPeriod];
+}
+
 // Barra de período das abas do IXC (presets + De/Até) - compartilhada com o Dashboard Suporte.
 export function IxcPeriodBar({ period, onChange }: { period: IxcPeriod; onChange: (next: IxcPeriod) => void }) {
   const activePreset = PRESETS.find((preset) => {
@@ -252,7 +300,7 @@ const COLLAPSED_ATTENDANT_COUNT = 5;
 
 export function IxcN1Panel({ level = "n1" }: { level?: "n1" | "n2" }) {
   const copy = LEVEL_COPY[level];
-  const [period, setPeriod] = useState(() => PRESETS[0].range());
+  const [period, setPeriod] = useIxcPeriod();
   const [showAllAttendants, setShowAllAttendants] = useState(false);
   const [summary, setSummary] = useState<SupportIxcN1Summary | null>(null);
   const [loading, setLoading] = useState(true);
