@@ -39,7 +39,7 @@ from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 
 from . import ixc_n1, ixc_new_login, opa_overview_service
 from .ixc_ticket_queries import _previous_period_bounds
-from .models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance
+from .models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance, SupportOpaDimension
 from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters
 
 logger = logging.getLogger(__name__)
@@ -110,6 +110,54 @@ def _ixc_daily(db: Session, date_from: date, date_to: date) -> list[dict[str, An
     for point, n2_point in zip(points, n2_points, strict=True):
         point["n2_total"] = n2_point["operational"] + n2_point["financial"]
     return points
+
+
+# Equipe do Suporte Técnico (OPA) que aparece FIXA no filtro "Colaborador" dos Indicadores do Suporte (lista
+# informada pelo usuário em 2026-10-15). Cada item é (nome mostrado, nome do usuário no cadastro do OPA). O OPA não
+# traz o departamento de cada usuário, então a equipe é uma lista fixa: quem entrar ou sair precisa ser editado aqui.
+# "Wendher Moura" e "Wendher Lopes de Moura" são o MESMO usuário do OPA (mesmo id; o nome mudou), então é um item só.
+SUPPORT_TEAM: tuple[tuple[str, str], ...] = (
+    ("Maycon Batista", "Maycon Batista"),
+    ("Eduardo Leite", "Eduardo Leite"),
+    ("Julio César", "Julio César"),
+    ("Weslley Meguro", "Weslley Meguro"),
+    ("Vinicius Burg", "Vinicius Burg"),
+    ("Kaline Vitoria", "Kaline Vitoria"),
+    ("Vinicius Santiago", "Vinicius Santiago"),
+    ("Jennyfer Tavares", "Jennyfer Tavares"),
+    ("Bruna Vieira", "Bruna Vieira"),
+    ("Joao Barbosa", "Joao Barbosa"),
+    ("Lucas de Oliveira", "Lucas de Oliveira"),
+    ("Emanuele Araújo", "Emanuele Araújo"),
+    ("Anna Andrade", "Anna Andrade"),
+    ("Bruno Assis", "Bruno Assis"),
+    ("Adelaidy Vitoria", "Adelaidy Vitoria"),
+    ("Wendher Lopes de Moura", "Wendher Moura"),
+    ("Gabrieli Milani", "Gabrieli Milani"),
+    ("Ana Virgínia", "Ana Virgínia"),
+    ("Anna Heloisa", "Anna Heloisa"),
+    ("Welington Souza", "Welington Souza"),
+    ("Matheus Henrique", "Matheus Henrique"),
+    ("Willamy Carrilho", "Willamy Carrilho"),
+    ("Weverton Cordeiro", "Weverton Cordeiro"),
+)
+
+
+def support_team_options(db: Session) -> list[dict[str, str]]:
+    """Opções do filtro "Colaborador": a equipe fixa acima, com o id do usuário no OPA (cadastro `user`) para o
+    filtro por atendente. Quem ainda não existe no cadastro do OPA fica de fora até aparecer lá."""
+    rows = db.execute(
+        select(SupportOpaDimension.source_id, SupportOpaDimension.name).where(
+            SupportOpaDimension.dimension_type == "user",
+            func.lower(func.trim(SupportOpaDimension.name)).in_([opa_name.lower() for _, opa_name in SUPPORT_TEAM]),
+        )
+    ).all()
+    id_by_name = {str(name).strip().lower(): source_id for source_id, name in rows}
+    return [
+        {"value": id_by_name[opa_name.lower()], "label": label}
+        for label, opa_name in SUPPORT_TEAM
+        if opa_name.lower() in id_by_name
+    ]
 
 
 def time_coverage(db: Session, filters: OpaAttendanceFilters) -> dict[str, Any]:

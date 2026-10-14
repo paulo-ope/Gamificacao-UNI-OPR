@@ -6,7 +6,7 @@ import pytest
 
 from app.modules.operations.models import OperationOrder
 from app.modules.support import dashboard_macros, ixc_n1, ixc_new_login
-from app.modules.support.models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance
+from app.modules.support.models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance, SupportOpaDimension
 
 
 @pytest.fixture(autouse=True)
@@ -369,3 +369,28 @@ def test_department_and_attendant_filters_apply_to_opa_cards_only(db_session):
     assert both["tma"]["value"] == pytest.approx(1800)  # vários departamentos, separados por vírgula
     # Os cartões do IXC não têm essa dimensão: não mudam com o filtro do OPA.
     assert only_d1["solved"]["value"] == everyone["solved"]["value"] == 1
+
+
+def test_support_team_options_are_fixed_and_resolve_opa_user_ids(db_session):
+    db_session.add_all(
+        [
+            SupportOpaDimension(dimension_type="user", source_id="id-maycon", name="Maycon Batista"),
+            SupportOpaDimension(dimension_type="user", source_id="id-wendher", name="Wendher Moura"),
+            SupportOpaDimension(dimension_type="user", source_id="id-fora", name="Alguém fora da equipe"),
+            SupportOpaDimension(dimension_type="department", source_id="id-dep", name="Maycon Batista"),  # outro tipo: ignora
+        ]
+    )
+    db_session.commit()
+
+    options = dashboard_macros.support_team_options(db_session)
+
+    # Só quem está na lista fixa e existe no cadastro do OPA; o nome mostrado é o da lista, na ordem dela.
+    assert options == [
+        {"value": "id-maycon", "label": "Maycon Batista"},
+        {"value": "id-wendher", "label": "Wendher Lopes de Moura"},
+    ]
+
+
+def test_support_team_has_no_duplicate_people():
+    opa_names = [opa_name.lower() for _, opa_name in dashboard_macros.SUPPORT_TEAM]
+    assert len(opa_names) == len(set(opa_names)) == 23
