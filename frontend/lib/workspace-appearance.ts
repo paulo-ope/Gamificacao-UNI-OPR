@@ -1,6 +1,6 @@
 /**
  * Preferência de aparência do Workspace guardada NO NAVEGADOR (decisão do usuário, 2026-10-10): cada
- * navegador lembra o tema da barra lateral escolhido na aba "Personalização" da Administração. Não há
+ * navegador lembra o tema da barra lateral escolhido no botão de sol/lua do cabeçalho. Não há
  * backend nem preferência por conta - quem abrir o Workspace em outro navegador volta ao tema padrão.
  */
 

@@ -1,4 +1,4 @@
-import { PlugZap, Tv, type LucideIcon } from "lucide-react";
+import { Database, PlugZap, RefreshCw, Tv, type LucideIcon } from "lucide-react";
 
 import { GAMIFICATION_NAV_ITEMS } from "@/components/gamification/gamification-nav-items";
 import { MANAGEMENT_NAV_ITEMS } from "@/components/management/management-module-sidebar";
@@ -59,6 +59,13 @@ const SUPPORT_TV_SCREEN: ModuleScreen = {
   path: "/suporte/tv",
   opensInNewTab: true,
 };
+
+// Dados e Sincronização são sub-abas de "Configuração" no Suporte (`?tab=settings&sub=...`): não têm item
+// próprio no menu lateral, mas a busca global ainda os encontra.
+const SUPPORT_SETTINGS_SCREENS: ModuleScreen[] = [
+  { value: "data", label: "Dados", description: "Tabela analítica", icon: Database, requiredPermissions: [], parentValue: "settings", parentLabel: "Configuração", searchOnly: true },
+  { value: "sync", label: "Sincronização", description: "Status do OPA", icon: RefreshCw, requiredPermissions: [], parentValue: "settings", parentLabel: "Configuração", searchOnly: true },
+];
 
 // A Governança de IA é uma aba da Administração (`?tab=ai_governance`) que não está em
 // `ADMIN_NAV_ITEMS`: só se chega nela por um botão dentro de Integrações. Entra aqui para a busca
@@ -181,7 +188,7 @@ export function moduleScreens(moduleKey: WorkspaceModule["key"], icon: LucideIco
   }
   if (moduleKey === "support") {
     // Só as abas ativas: as "Planejado" do módulo existem na lista mas não têm tela.
-    return [...withPermissions(OPA_NAV_ITEMS, {}, ACTIVE_OPA_TABS), SUPPORT_TV_SCREEN];
+    return [...withPermissions(OPA_NAV_ITEMS, {}, ACTIVE_OPA_TABS), ...SUPPORT_SETTINGS_SCREENS, SUPPORT_TV_SCREEN];
   }
   if (moduleKey === "management") {
     return withPermissions(MANAGEMENT_NAV_ITEMS, MANAGEMENT_SCREEN_PERMISSIONS);

@@ -475,7 +475,27 @@ const SLA_RING_COLORS: Record<ReturnType<typeof slaTone>, [string, string]> = {
 };
 
 export function buildSlaRingOption(rate: number | null): EChartsOption {
-  const [from, to] = SLA_RING_COLORS[slaTone(rate)];
+  return buildRingOption(rate, SLA_RING_COLORS[slaTone(rate)], (value) => `${shareFormat.format(value)}{u|%}`);
+}
+
+/**
+ * Mesmo anel do SLA, para qualquer indicador com meta: `progress` (0 a 100) é o quanto da meta foi
+ * atingido, `centerText` é o valor já formatado que aparece no meio e `tone` define a cor.
+ */
+export function buildMetricRingOption(
+  progress: number | null,
+  tone: ReturnType<typeof slaTone>,
+  centerText: string,
+): EChartsOption {
+  return buildRingOption(progress, SLA_RING_COLORS[tone], () => centerText, 17);
+}
+
+function buildRingOption(
+  rate: number | null,
+  [from, to]: [string, string],
+  centerFormatter: (value: number) => string,
+  fontSize = 21,
+): EChartsOption {
   return {
     animation: false,
     series: [
@@ -514,11 +534,10 @@ export function buildSlaRingOption(rate: number | null): EChartsOption {
         title: { show: false },
         detail: {
           offsetCenter: [0, 0],
-          fontSize: 21,
+          fontSize,
           fontWeight: 800,
           color: CHART_INK.primary,
-          formatter: (value: number) =>
-            rate === null ? "-" : `${shareFormat.format(value)}{u|%}`,
+          formatter: (value: number) => (rate === null ? "-" : centerFormatter(value)),
           rich: { u: { fontSize: 11, color: "#94a3b8", padding: [6, 0, 0, 1] } },
         },
         data: [{ value: rate ?? 0 }],

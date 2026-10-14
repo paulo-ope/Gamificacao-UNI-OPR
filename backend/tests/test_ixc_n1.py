@@ -167,3 +167,28 @@ def test_n1_summary_endpoint_validates_period_and_returns_payload(db_session, cl
     assert inverted.status_code == 400
     too_long = client.get("/api/support/ixc/n1/summary", params={"date_from": "2024-01-01", "date_to": "2026-09-01"})
     assert too_long.status_code == 400
+
+
+def test_n2_summary_counts_subjects_80_and_81_from_any_operator(db_session):
+    _user(db_session, "10", name="Ana", group_id="105")
+    _user(db_session, "20", name="Carlos N2", group_id="32")  # grupo qualquer entra no N2
+    _n1_ticket(db_session, "T1", subject_id="80", opened_by="10")
+    _n1_ticket(db_session, "T2", subject_id="80", opened_by="20")
+    _n1_ticket(db_session, "T3", subject_id="81", opened_by="20")
+    _n1_ticket(db_session, "T4", subject_id="81", opened_by="99")  # operador sem linha em SupportIxcUser
+    _n1_ticket(db_session, "T5", subject_id="90", opened_by="10")  # motivo do N1: fora
+    _n1_ticket(db_session, "T6", subject_id="80", opened_by=None)  # sem operador: só nos totais
+    db_session.commit()
+
+    summary = ixc_n1.n1_summary(db_session, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), level="n2")
+
+    assert (summary["operational"], summary["financial"], summary["total"]) == (3, 2, 5)
+    assert summary["group_ids"] == []
+    by_id = {row["user_id"]: row for row in summary["attendants"]}
+    assert set(by_id) == {"10", "20", "99"}
+    assert by_id["20"]["operational"] == 1 and by_id["20"]["financial"] == 1
+    assert by_id["99"]["name"] == "Usuário 99" and by_id["99"]["active"] is True
+
+    # O N1 segue sem contar 80/81.
+    n1 = ixc_n1.n1_summary(db_session, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30))
+    assert n1["total"] == 1

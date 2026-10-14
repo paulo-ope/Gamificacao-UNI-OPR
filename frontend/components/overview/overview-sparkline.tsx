@@ -10,13 +10,15 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), {
   loading: () => <div className="h-[46px] animate-pulse bg-slate-50" aria-hidden="true" />,
 });
 
+const DEFAULT_HEIGHT = 46;
+
 /** Tendência decorativa do cartão: o número do cartão já diz tudo, então fica fora da árvore de acessibilidade. */
-export function OverviewSparkline({ values, color }: { values: readonly number[]; color: string }) {
+export function OverviewSparkline({ values, color, height = DEFAULT_HEIGHT }: { values: readonly number[]; color: string; height?: number }) {
   const option = useMemo(() => buildSparklineOption(values, color), [values, color]);
-  if (values.length < 2) return <div className="h-[46px]" aria-hidden="true" />;
+  if (values.length < 2) return <div style={{ height }} aria-hidden="true" />;
   return (
     <div aria-hidden="true">
-      <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height: 46, width: "100%" }} />
+      <ReactECharts option={option} notMerge lazyUpdate opts={{ renderer: "canvas" }} style={{ height, width: "100%" }} />
     </div>
   );
 }

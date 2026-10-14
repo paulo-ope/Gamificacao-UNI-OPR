@@ -69,7 +69,11 @@ function KpiTile({ label, value, helper, accent }: { label: string; value: strin
 // quando o dia foge muito do padrão), uma linha por tipo e uma linha tracejada com o total do período
 // anterior. As duas séries vêm do backend com um ponto por dia, então o alinhamento é por posição
 // (dia 1 com dia 1), nunca por data.
-function buildDailyOption(points: SupportIxcN1DailyPoint[], previous: SupportIxcN1DailyPoint[]): EChartsOption {
+function buildDailyOption(
+  points: SupportIxcN1DailyPoint[],
+  previous: SupportIxcN1DailyPoint[],
+  copy: (typeof LEVEL_COPY)[keyof typeof LEVEL_COPY],
+): EChartsOption {
   const labels = points.map((point) => dayLabel(point.day));
   const totals = points.map((point) => point.operational + point.financial);
   const threshold = openingAnomalyThreshold(totals);
@@ -77,7 +81,7 @@ function buildDailyOption(points: SupportIxcN1DailyPoint[], previous: SupportIxc
 
   const series: NonNullable<EChartsOption["series"]> = [
     {
-      name: "Total N1",
+      name: copy.total,
       type: "bar",
       data: totals.map((value) => ({
         value,
@@ -86,7 +90,7 @@ function buildDailyOption(points: SupportIxcN1DailyPoint[], previous: SupportIxc
       barMaxWidth: 34,
     },
     {
-      name: "Operacional",
+      name: copy.first,
       type: "line",
       data: points.map((point) => point.operational),
       smooth: 0.2,
@@ -95,7 +99,7 @@ function buildDailyOption(points: SupportIxcN1DailyPoint[], previous: SupportIxc
       itemStyle: { color: "#16a34a" },
     },
     {
-      name: "Financeiro",
+      name: copy.second,
       type: "line",
       data: points.map((point) => point.financial),
       smooth: 0.2,
@@ -134,9 +138,9 @@ function buildDailyOption(points: SupportIxcN1DailyPoint[], previous: SupportIxc
         if (!point) return "";
         const lines = [
           `<strong>${labels[index]}</strong>`,
-          `Total N1: ${number(totals[index])}`,
-          `Operacional: ${number(point.operational)}`,
-          `Financeiro: ${number(point.financial)}`,
+          `${copy.total}: ${number(totals[index])}`,
+          `${copy.first}: ${number(point.operational)}`,
+          `${copy.second}: ${number(point.financial)}`,
         ];
         if (previousTotals.length) {
           const previousValue = previousTotals[index];
@@ -163,17 +167,91 @@ function buildDailyOption(points: SupportIxcN1DailyPoint[], previous: SupportIxc
   };
 }
 
+// Rótulos por nível. No N2 (motivos 80 e 81, sem filtro de grupo) as colunas "operational"/"financial"
+// da API são, nessa ordem, Interno (80) e Externo (81).
+const LEVEL_COPY = {
+  n1: {
+    first: "Operacional",
+    second: "Financeiro",
+    total: "Total N1",
+    empty: "Nenhum protocolo do N1 no período.",
+    noAttendants: "Nenhum atendente do N1 abriu protocolos no período.",
+    error: "Falha ao carregar o Suporte Interno N1.",
+  },
+  n2: {
+    first: "Interno N2",
+    second: "Externo N2",
+    total: "Total N2",
+    empty: "Nenhum atendimento do N2 no período.",
+    noAttendants: "Nenhum atendente abriu atendimentos do N2 no período.",
+    error: "Falha ao carregar o Atendimento Operacional N2.",
+  },
+} as const;
+
 const PRESETS = [
   { key: "month", label: "Mês atual", range: () => ({ date_from: monthStartIso(), date_to: localIso(new Date()) }) },
   { key: "7d", label: "Últimos 7 dias", range: () => ({ date_from: daysAgoIso(6), date_to: localIso(new Date()) }) },
   { key: "30d", label: "Últimos 30 dias", range: () => ({ date_from: daysAgoIso(29), date_to: localIso(new Date()) }) },
 ] as const;
 
+export type IxcPeriod = { date_from: string; date_to: string };
+
+export function initialIxcPeriod(): IxcPeriod {
+  return PRESETS[0].range();
+}
+
+// Barra de período das abas do IXC (presets + De/Até) - compartilhada com o Dashboard Suporte.
+export function IxcPeriodBar({ period, onChange }: { period: IxcPeriod; onChange: (next: IxcPeriod) => void }) {
+  const activePreset = PRESETS.find((preset) => {
+    const range = preset.range();
+    return range.date_from === period.date_from && range.date_to === period.date_to;
+  })?.key;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+      <CalendarDays className="h-4 w-4 text-slate-400" aria-hidden />
+      <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+        {PRESETS.map((preset) => (
+          <button
+            key={preset.key}
+            type="button"
+            onClick={() => onChange(preset.range())}
+            className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${activePreset === preset.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      <label className="flex items-center gap-1.5 text-xs text-slate-500">
+        De
+        <input
+          type="date"
+          value={period.date_from}
+          max={period.date_to || undefined}
+          onChange={(event) => onChange({ ...period, date_from: event.target.value })}
+          className="h-8 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
+        />
+      </label>
+      <label className="flex items-center gap-1.5 text-xs text-slate-500">
+        Até
+        <input
+          type="date"
+          value={period.date_to}
+          min={period.date_from || undefined}
+          onChange={(event) => onChange({ ...period, date_to: event.target.value })}
+          className="h-8 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
+        />
+      </label>
+    </div>
+  );
+}
+
 // A tabela por atendente começa recolhida (só os de maior volume) pra não ficar longa demais - pedido
 // do usuário (2026-10-06); o botão abaixo da tabela expande/recolhe a lista completa.
 const COLLAPSED_ATTENDANT_COUNT = 5;
 
-export function IxcN1Panel() {
+export function IxcN1Panel({ level = "n1" }: { level?: "n1" | "n2" }) {
+  const copy = LEVEL_COPY[level];
   const [period, setPeriod] = useState(() => PRESETS[0].range());
   const [showAllAttendants, setShowAllAttendants] = useState(false);
   const [summary, setSummary] = useState<SupportIxcN1Summary | null>(null);
@@ -188,12 +266,12 @@ export function IxcN1Panel() {
     setLoading(true);
     setError(null);
     api
-      .supportIxcN1Summary(period)
+      .supportIxcN1Summary({ ...period, level })
       .then((data) => {
         if (!cancelled) setSummary(data);
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Falha ao carregar o Suporte Interno N1.");
+        if (!cancelled) setError(reason instanceof Error ? reason.message : copy.error);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -201,50 +279,11 @@ export function IxcN1Panel() {
     return () => {
       cancelled = true;
     };
-  }, [period, invalidPeriod]);
-
-  const activePreset = PRESETS.find((preset) => {
-    const range = preset.range();
-    return range.date_from === period.date_from && range.date_to === period.date_to;
-  })?.key;
+  }, [period, invalidPeriod, level, copy.error]);
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-        <CalendarDays className="h-4 w-4 text-slate-400" aria-hidden />
-        <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.key}
-              type="button"
-              onClick={() => setPeriod(preset.range())}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${activePreset === preset.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-        <label className="flex items-center gap-1.5 text-xs text-slate-500">
-          De
-          <input
-            type="date"
-            value={period.date_from}
-            max={period.date_to || undefined}
-            onChange={(event) => setPeriod((current) => ({ ...current, date_from: event.target.value }))}
-            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
-          />
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-slate-500">
-          Até
-          <input
-            type="date"
-            value={period.date_to}
-            min={period.date_from || undefined}
-            onChange={(event) => setPeriod((current) => ({ ...current, date_to: event.target.value }))}
-            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
-          />
-        </label>
-      </div>
+      <IxcPeriodBar period={period} onChange={setPeriod} />
 
       {invalidPeriod ? (
         <div className="flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 shadow-sm">
@@ -268,19 +307,19 @@ export function IxcN1Panel() {
         <>
           <div className="grid gap-3 sm:grid-cols-3">
             <KpiTile
-              label="Operacional"
+              label={copy.first}
               value={number(summary.operational)}
               helper={deltaHelper(summary.operational, summary.previous_operational)}
               accent="bg-blue-600"
             />
             <KpiTile
-              label="Financeiro"
+              label={copy.second}
               value={number(summary.financial)}
               helper={deltaHelper(summary.financial, summary.previous_financial)}
               accent="bg-amber-500"
             />
             <KpiTile
-              label="Total N1"
+              label={copy.total}
               value={number(summary.total)}
               helper={deltaHelper(summary.total, summary.previous_operational + summary.previous_financial)}
               accent="bg-emerald-600"
@@ -290,9 +329,9 @@ export function IxcN1Panel() {
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <p className="mb-3 text-sm font-semibold text-slate-900">Protocolos por dia</p>
             {summary.total > 0 ? (
-              <ReactECharts option={buildDailyOption(summary.daily, summary.previous_daily)} notMerge lazyUpdate style={{ height: 280, width: "100%" }} />
+              <ReactECharts option={buildDailyOption(summary.daily, summary.previous_daily, copy)} notMerge lazyUpdate style={{ height: 280, width: "100%" }} />
             ) : (
-              <p className="py-10 text-center text-sm text-slate-500">Nenhum protocolo do N1 no período.</p>
+              <p className="py-10 text-center text-sm text-slate-500">{copy.empty}</p>
             )}
           </div>
 
@@ -301,7 +340,11 @@ export function IxcN1Panel() {
               <Users className="h-4 w-4 text-blue-600" aria-hidden />
               <div>
                 <p className="text-sm font-semibold text-slate-900">Por atendente</p>
-                <p className="text-xs text-slate-500">Colaboradores {summary.group_ids.length === 1 ? "do grupo" : "dos grupos"} {summary.group_ids.join(" e ")} do IXC que abriram protocolos no período.</p>
+                <p className="text-xs text-slate-500">
+                  {summary.group_ids.length
+                    ? `Colaboradores ${summary.group_ids.length === 1 ? "do grupo" : "dos grupos"} ${summary.group_ids.join(" e ")} do IXC que abriram protocolos no período.`
+                    : "Colaboradores que abriram atendimentos dos motivos 80 e 81 do IXC no período."}
+                </p>
               </div>
             </div>
             {summary.attendants.length ? (
@@ -310,8 +353,8 @@ export function IxcN1Panel() {
                   <thead>
                     <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
                       <th className="py-2 pr-3 font-medium">Atendente</th>
-                      <th className="px-3 py-2 text-right font-medium">Operacional</th>
-                      <th className="px-3 py-2 text-right font-medium">Financeiro</th>
+                      <th className="px-3 py-2 text-right font-medium">{copy.first}</th>
+                      <th className="px-3 py-2 text-right font-medium">{copy.second}</th>
                       <th className="py-2 pl-3 text-right font-medium">Total</th>
                     </tr>
                   </thead>
@@ -346,7 +389,7 @@ export function IxcN1Panel() {
                 ) : null}
               </div>
             ) : (
-              <p className="py-6 text-center text-sm text-slate-500">Nenhum atendente do N1 abriu protocolos no período.</p>
+              <p className="py-6 text-center text-sm text-slate-500">{copy.noAttendants}</p>
             )}
           </div>
         </>

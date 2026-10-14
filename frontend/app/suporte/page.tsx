@@ -24,6 +24,7 @@ import type { AuthUser } from "@/lib/types";
 import { api } from "@/lib/api";
 import {
   ACTIVE_OPA_TABS,
+  OPA_SETTINGS_VIEWS,
   BotHumanSummary,
   ChannelSummary,
   customerCodeLabel,
@@ -52,6 +53,7 @@ import {
 import { BotHumanChart, RankingChart, TimeTrendChart, VolumeTrendChart } from "@/app/suporte/_components/opa-charts";
 import { OpaDrilldownSheet, type OpaDrilldown } from "@/app/suporte/_components/opa-drilldown";
 import { useDepartmentAttendantsSync } from "@/app/suporte/_components/use-department-attendants-sync";
+import { DashboardMacros } from "@/app/suporte/_components/dashboard-macros";
 import { IxcN1Panel } from "@/app/suporte/_components/ixc-n1-panel";
 import { IxcTicketAnalyticsPanel } from "@/app/suporte/_components/ixc-ticket-analytics-panel";
 import { IxcTicketDrilldownPanel } from "@/app/suporte/_components/ixc-ticket-drilldown";
@@ -165,9 +167,21 @@ function overviewFilters(period: { date_from: string; date_to: string }, filters
   };
 }
 
+/** `tab=...` (e `sub=...` para Dados/Sincronização, que vivem em "Configuração") sem datas nem filtros. */
+function settingsAwareTabQuery(tab: OpaModuleTab) {
+  return tab === "data" || tab === "sync" ? `tab=settings&sub=${tab}` : `tab=${tab}`;
+}
+
 function queryStringFor(tab: OpaModuleTab, period: { date_from: string; date_to: string }, filters: SupportOpaAttendanceFilters) {
   const params = new URLSearchParams();
-  if (tab !== "overview") params.set("tab", tab);
+  // Dados e Sincronização vivem dentro de "Configuração": a URL carrega a aba-mãe (que o menu lateral usa
+  // para marcar o item ativo) e a sub-aba.
+  if (tab === "data" || tab === "sync") {
+    params.set("tab", "settings");
+    params.set("sub", tab);
+  } else if (tab !== "overview") {
+    params.set("tab", tab);
+  }
   params.set("date_from", period.date_from);
   params.set("date_to", period.date_to);
   URL_FILTER_KEYS.forEach((key) => {
@@ -280,6 +294,8 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const initialTab = useMemo<OpaModuleTab>(() => {
     const tab = initialQueryParams.get("tab") as OpaModuleTab | null;
     if (tab === "agents") return "attendants";
+    // "Configuração" abre na sub-aba pedida (`sub=sync`) ou, sem `sub`, em Dados.
+    if (tab === "settings") return initialQueryParams.get("sub") === "sync" ? "sync" : "data";
     return tab && ACTIVE_OPA_TABS.includes(tab) ? tab : "overview";
   }, [initialQueryParams]);
   const [period, setPeriod] = useState(initialPeriod);
@@ -291,9 +307,9 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const [overviewRankingLoading, setOverviewRankingLoading] = useState(false);
   const [drilldown, setDrilldown] = useState<OpaDrilldown | null>(null);
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
-  // As abas do IXC ("Atendimento IXC" e "Atendimento Suporte Interno N1") são outra fonte de dado,
+  // As abas do IXC ("Atendimento IXC", "Atendimento Suporte Interno N1" e "Atendimento Operacional N2") são outra fonte de dado,
   // com período próprio dentro do painel - os filtros globais do OPA Suite não se aplicam a elas.
-  const isIxcView = activeView === "ixc_tickets" || activeView === "ixc_n1";
+  const isIxcView = activeView === "ixc_tickets" || activeView === "ixc_n1" || activeView === "ixc_n2" || activeView === "dashboard";
   // Visão Geral (KPIs/gráfico/prioridades) é a entrada da aba "Atendimento IXC" - clicar numa
   // prioridade aprofunda pro drill-down já existente, pré-selecionando a regional clicada.
   const [ixcTicketFocusRegional, setIxcTicketFocusRegional] = useState<string | null>(null);
@@ -520,7 +536,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
     };
     setPeriod(clearedPeriod);
     setAttendanceFilters(clearedFilters);
-    router.replace(activeView === "overview" ? pathname : `${pathname}?tab=${activeView}`, { scroll: false });
+    router.replace(activeView === "overview" ? pathname : `${pathname}?${settingsAwareTabQuery(activeView)}`, { scroll: false });
     void load(clearedPeriod, clearedFilters, activeView, false);
   }
 
@@ -883,6 +899,23 @@ function SupportPageContent({ user }: { user: AuthUser }) {
 
       <section className="px-4 py-6 lg:px-7">
         <div className="grid gap-5">
+          {activeView === "data" || activeView === "sync" ? (
+            <div role="tablist" aria-label="Configuração" className="flex w-fit rounded-lg border border-slate-200 bg-slate-50 p-1">
+              {OPA_SETTINGS_VIEWS.map(({ value, label, icon: Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeView === value}
+                  onClick={() => navigateToTab(value)}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${activeView === value ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+                >
+                  <Icon className="h-3.5 w-3.5" aria-hidden />
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {activeView === "overview" ? (
             <div className="grid gap-5">
               <div className="grid gap-3 xl:grid-cols-2">
@@ -989,7 +1022,9 @@ function SupportPageContent({ user }: { user: AuthUser }) {
               )}
             </div>
           ) : null}
+          {activeView === "dashboard" ? <DashboardMacros /> : null}
           {activeView === "ixc_n1" ? <IxcN1Panel /> : null}
+          {activeView === "ixc_n2" ? <IxcN1Panel level="n2" /> : null}
           {activeView === "sync" ? (
             <div className="grid gap-5">
               <OpaSyncPanel

@@ -13,6 +13,51 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-14** — Branch `feat/suporte-indicadores-n2-configuracao` (5 commits + este) com **Indicadores do Suporte**,
+**Atendimento Operacional N2**, aba **Configuração** e tema claro/escuro; **PR aberto contra a `master`, ainda não
+mesclado e sem deploy**. Validado só no banco local (Docker) e no navegador do app; **a conferência visual em tela
+cheia e em produção não foi feita**. O que entrou:
+
+- **Indicadores do Suporte** (`/suporte?tab=dashboard`, antes "Dashboard Suporte"; `GET /support/dashboard/macros`,
+  regra em `backend/app/modules/support/dashboard_macros.py`): 3 macros grandes (CSAT, TMR Geral, TMA) e micros
+  (TMR Humano, realizados, foi a campo, solucionados, resolutividade, total N2), anéis de meta, fluxo diário,
+  evolução semanal (semanas dom-sáb cortadas no mês; só as já iniciadas) e seção Suporte N2. Fórmulas: realizados =
+  protocolos N1 (motivos 90+29) + O.S. abertas pelo N1; solucionados = protocolos; resolutividade = solucionados /
+  realizados. Metas (informadas pelo usuário): CSAT >= 4,5, TMR <= 2 min, TMA <= 1 h, resolutividade >= 80%; TMR
+  Humano e os contadores sem meta. **A margem de "Atenção" (10% da meta) foi suposição minha**, constante no service.
+- **O.S. do N1/N2 por nome do criador** (`OperationOrder.creator` casado com `SupportIxcUser.name`): o ticket da O.S.
+  tem o motivo do cliente, não o 90/29, então não dá para ligar por ticket. **É aproximado** (homônimos ou grafia
+  diferente desviam a conta). Validado contra uma semana de referência do usuário: solucionados igual, "a campo"
+  com diferença de 7 em ~445.
+- **Colaboradores N2** ficam fora de toda contagem do N1 e de "foi a campo": lista fixa por id do IXC em
+  `ixc_n1.N1_EXCLUDED_IXC_USER_IDS` (165, 124, 417, 997, 1109, 168, 615, 771; informada pelo usuário). **Quando
+  alguém entrar ou sair do N2, é preciso editar o código.**
+- **Atendimento Operacional N2** (`?level=n2` em `/support/ixc/n1/summary`): motivos 80 (interno) e 81 (externo),
+  sem filtro de grupo. Tabela por colaborador N2 (interno, externo, O.S. abertas) com linha "Outros operadores".
+- **Migration `20261014_0116` (só dados):** preenche `opened_by_user_id` dos protocolos N2 (motivos 80/81) a partir de
+  `raw_payload->id_usuarios`; antes só os motivos 90/29 tinham sido retroalimentados e ~176 protocolos N2 de duas
+  semanas caíam em "Outros operadores". No banco local atualizou ~9.000 linhas. **Conferir na VM:** `alembic
+  current` = `20261014_0116 (head)`.
+- **Ativação de Novo Login finalizadas (assunto 74)**: consultada **ao vivo no IXC** (`ixc_new_login.py`, cache de 2
+  min), porque essas O.S. ficam no **setor 10 (Suporte Interno)**, fora da importação da Operação Analítica
+  (`ixc_sync_sector_ids` = 7,8,9). IXC fora do ar mostra "-" com aviso, nunca zero. Conta por **data de
+  finalização**; quem finalizou = responsável da O.S. (`id_tecnico`). **Decisão: não incluir o setor 10 na
+  importação** - isso somaria ~130 O.S./mês aos números da Operação e da Visão Geral (+2,5% em outubro). No banco
+  local o setor 10 foi importado por engano e revertido; sobraram só as 192 O.S. de um teste de julho.
+- **Aba Configuração** (`?tab=settings&sub=data|sync`): Dados e Sincronização viraram sub-abas; `?tab=data` e
+  `?tab=sync` seguem valendo (busca global e links antigos).
+- **Tema claro/escuro:** botão de sol/lua ao lado de "Buscar telas"; a aba Personalização da Administração foi
+  **removida** (um link antigo cai na Visão geral). O botão só troca a **barra lateral** - não existe modo escuro do
+  sistema inteiro. Preferência continua só no navegador.
+- **Layout:** selo de datas do SectionCard sem quebra de linha; cartões da Gamificação e do Suporte Interno na Visão
+  Geral com 2 colunas (4/5 só em 2xl).
+- **Pendências:** (1) TMR/TMA do período anterior aparecem "-" porque o histórico ainda não tem essas colunas
+  calculadas (backfill noturno, ver entrada abaixo); (2) o dashboard herda o limite de **32 dias** das consultas do
+  OPA; (3) conferir em produção os números do Novo Login e a tabela por colaborador N2; (4) o teste
+  `test_n1_summary_endpoint_validates_period_and_returns_payload` dá erro de encerramento (SQLite entre threads, Python
+  3.14 local) já existente, sem asserção falhando; (5) o servidor de desenvolvimento do frontend (porta 3001) caiu
+  algumas vezes durante os testes locais.
+
 **2026-10-13** — PR **#69** (ajustes de tela e **indicadores de tempo do Suporte Interno (OPA)**) **mesclado na
 `master` e com deploy feito na VM em 2026-10-13** (informado pelo dono do sistema). Conferido por ele na VM:
 `alembic current` = `20261013_0115 (head)`, `/api/health` e a página principal respondem 200. **A conferência

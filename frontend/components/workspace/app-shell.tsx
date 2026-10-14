@@ -7,6 +7,7 @@ import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { NotificationBell } from "@/components/workspace/notification-bell";
 import { NavigationSearch } from "@/components/workspace/navigation-search";
+import { ThemeToggle } from "@/components/workspace/theme-toggle";
 import { WorkspaceLoading } from "@/components/ui/workspace-loading";
 import { SIDEBAR_STYLES, SidebarStylesContext, useSidebarStyles } from "@/components/workspace/sidebar-theme";
 import { WorkspaceLogin } from "@/components/workspace/workspace-login";
@@ -64,7 +65,7 @@ export function WorkspaceAppShell({
   children: ReactNode | ((user: AuthUser) => ReactNode);
 }) {
   const { user, checking, error, login, logout } = useWorkspaceAuth();
-  // Tema da barra lateral escolhido neste navegador (aba Personalização da Administração).
+  // Tema da barra lateral escolhido neste navegador (botão de sol/lua do cabeçalho).
   const styles = SIDEBAR_STYLES[useSidebarTheme()];
   const modules = useVisibleModules(user);
   const headerRef = useRef<HTMLElement>(null);
@@ -211,6 +212,7 @@ export function WorkspaceAppShell({
             <div className="ml-auto flex max-w-full flex-wrap items-center gap-2">
               {actions}
               <NavigationSearch modules={modules} permissions={user.permissions} />
+              <ThemeToggle />
               <NotificationBell />
               <Button type="button" variant="ghost" onClick={logout} aria-label="Sair">
                 <LogOut className="h-4 w-4" />

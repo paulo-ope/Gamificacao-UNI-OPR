@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import Float, case, cast, func, or_, select, update
@@ -42,7 +42,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_presence_service, opa_timeline_service, opa_tv_service
+from . import dashboard_macros, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_presence_service, opa_timeline_service, opa_tv_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -72,6 +72,7 @@ from .schemas import (
     SupportIxcAnalyticsPriorityItem,
     SupportIxcAnalyticsDriverItem,
     SupportIxcN1Summary,
+    SupportMacroDashboard,
     SupportIxcTicketBurstWindow,
     SupportIxcTicketMomentum,
     SupportIxcTicketOsConversion,
@@ -1748,16 +1749,34 @@ def ixc_ticket_breakdown(
 def ixc_n1_summary(
     date_from: date,
     date_to: date,
+    level: Literal["n1", "n2"] = "n1",
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Protocolos do Suporte Interno N1 (grupos 105 e 117 do IXC) no período: operacional (motivo 90) e
+    """`level=n2`: Atendimento Operacional N2 (motivos 80 e 81, sem filtro de grupo; pedido de 2026-10-14).
+    Protocolos do Suporte Interno N1 (grupos 105 e 117 do IXC) no período: operacional (motivo 90) e
     financeiro (motivo 29), série diária e quebra por atendente. Pedido do usuário, 2026-10-06."""
     if date_to < date_from:
         raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
     if (date_to - date_from).days > 366:
         raise HTTPException(status_code=400, detail="O período máximo é de 366 dias.")
-    return ixc_n1.n1_summary(db, date_from=date_from, date_to=date_to)
+    return ixc_n1.n1_summary(db, date_from=date_from, date_to=date_to, level=level)
+
+
+@router.get("/dashboard/macros", response_model=SupportMacroDashboard)
+def support_macro_dashboard(
+    date_from: date,
+    date_to: date,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Macros do Dashboard Suporte: atendimentos N1 do IXC (realizados, campo, solucionados,
+    resolutividade) e CSAT/TMR/TMA do OPA, com meta e comparação com o período anterior."""
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
+    if (date_to - date_from).days > 366:
+        raise HTTPException(status_code=400, detail="O período máximo é de 366 dias.")
+    return dashboard_macros.macro_dashboard(db, date_from=date_from, date_to=date_to)
 
 
 @router.get("/ixc/tickets/filter-options")
