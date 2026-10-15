@@ -17,8 +17,9 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 TMA/TMR estão mesclados na `master` (PRs #71 a #78) e em produção** (deploy feito pelo dono do sistema em 15/10). Conferido
 por ele na VM: `alembic current` = `20261015_0117 (head)`, `/api/health` e a página principal respondem 200. O recálculo do
 histórico rodou na VM para 01/10-14/10 (**0 pendentes**; 15/10 e os meses anteriores ficam para o backfill noturno).
-**Ainda NÃO registrado: a conferência dos números de TMA e TMR em produção contra o relatório do OPA, por atendente** - fazer
-agora que 01/10-14/10 está completo. O que existe hoje e o que é suposição:
+**Conferência em produção:** o dono do sistema informou em 15/10 que, **aparentemente, tudo ficou resolvido**
+(TMA/TMR e o 504 dos Indicadores), **sem anexar os números** - o que foi conferido contra o relatório do OPA, e com que erro, não
+está registrado aqui. O que existe hoje e o que é suposição:
 
 **Indicadores do Suporte** (`/suporte?tab=dashboard`; `GET /support/dashboard/macros`, regra em
 `backend/app/modules/support/dashboard_macros.py`; telas em `frontend/app/suporte/_components/dashboard-*.tsx`)
@@ -61,20 +62,24 @@ agora que 01/10-14/10 está completo. O que existe hoje e o que é suposição:
   resposta de humano ou bot, depois da entrada do humano, corte em 1 h), não a média das médias por conversa (16% contra 30%).
   **O corte de 1 h não é regra documentada do OPA, é o que melhor ajusta** (50 e 75 min deram 16%). O TMR Humano não mudou.
 - Validação no banco local (código dos painéis, por atendente): erro médio TMA 15%, TMR 16%; mediana 11% e 8%. Quem tem
-  amostra local pequena (o banco local não tem o dia 10/10) diverge mais. **Em produção ainda não conferido.**
+  amostra local pequena (o banco local não tem o dia 10/10) diverge mais. **Em produção: o dono informou que aparentemente está ok, sem números anexados.**
 - **Backfill/recálculo:** o backfill noturno (1h-6h, teto 12.000/noite) dá 80% do lote a quem ainda não tem as colunas, mais
   recentes primeiro. Para fechar um período na hora: `docker compose exec backend python -m
   app.modules.support.recompute_active_metrics --date-from ... --date-to ... --limit 4000` (segura o lock da importação do OPA
   durante a rodada; ~7 atendimentos/s). Em 15/10 a produção tinha 58.498 atendimentos com humano pendentes (17.680 em outubro);
   depois do recálculo manual, 01/10-14/10 ficou com 0. Meses anteriores seguem pelo backfill noturno (~6 noites).
 
-**Pendências:** (1) conferir TMA/TMR em produção contra o relatório do OPA (por atendente) e se o 504 sumiu; (2) o "foi a
-campo" por setor (hipótese acima) e os números do Novo Login e da tabela N2; (3) o dia 10/10 não existe no banco local - em
-produção tem 948 atendimentos com humano, mas vale conferir se houve buraco de importação lá; (4) o teste
-`test_n1_summary_endpoint_validates_period_and_returns_payload` e outros que usam o fixture `client` dão erro no Python 3.14
-local (SQLite entre threads), e `test_mcp_ixc_intelligence_tools::test_brief_reflete_o_escopo_pedido` e
+**Resolvido / esclarecido em 15/10 (informado pelo dono do sistema, não verificado por mim):** TMA/TMR em produção e o 504
+ok ("aparentemente tudo resolvido"); o **dia 10/10 não existia só no banco LOCAL (a sincronização local não o trouxe)** - em
+produção ele tem dados (948 atendimentos com humano), então **não houve buraco de importação**. Sem confirmação explícita, ainda
+valem como "a conferir" quando surgir oportunidade: a hipótese do "foi a campo" por setor (o `SELECT` está acima) e os números do
+Novo Login e da tabela N2.
+
+**Pendências:** (1) os testes que usam o fixture `client` dão erro no Python 3.14 local (SQLite entre threads, por exemplo
+`test_n1_summary_endpoint_validates_period_and_returns_payload`), e
+`test_mcp_ixc_intelligence_tools::test_brief_reflete_o_escopo_pedido` e
 `test_localiza::test_create_without_order_code_succeeds_using_opa_protocol` falham também na `master`, sem relação com estas
-mudanças; (5) existe o PR #28 (`claude/slim-login-status-snapshots`, reduz a tabela de snapshots de status de login) **aberto e
+mudanças; (2) existe o PR #28 (`claude/slim-login-status-snapshots`, reduz a tabela de snapshots de status de login) **aberto e
 não mesclado**, fora desta frente.
 
 **2026-10-13** — PR **#69** (ajustes de tela e **indicadores de tempo do Suporte Interno (OPA)**) **mesclado na
