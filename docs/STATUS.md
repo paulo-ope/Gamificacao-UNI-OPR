@@ -13,6 +13,28 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-15** - **TMA e TMR passam a seguir a regra do relatório do OPA** (branch `feat/opa-tma-tmr-regra-do-opa`,
+**PR aberto, não mesclado, sem deploy**). Motivo: o relatório por atendente do OPA (07/10-14/10) divergia do sistema.
+Testei variantes sobre 2.603 conversas buscadas no OPA (18 atendentes com a média do OPA em mãos):
+- **TMA:** o OPA não conta o silêncio do cliente por inteiro. A melhor regra soma os intervalos entre mensagens do cliente
+  e do humano com **cada silêncio limitado a 1 h** (`tma_active_seconds`): erro médio 15% contra 28% da regra antiga (que
+  ficava ~25% acima do OPA). Cortes de 50 e 75 min deram 16% - **o 1 h não é regra documentada do OPA, é o que melhor
+  ajusta**.
+- **TMR ("TMR Geral"):** o OPA faz a média de **todas as respostas juntas**, não a média das médias por conversa. Mesma
+  regra de intervalo (última msg do cliente -> resposta de humano ou bot, depois da entrada do humano, corte em 1 h), mas
+  agrupada: `tmr_gap_sum_seconds` / `tmr_gap_count`. Erro médio 16% contra 30%. O TMR Humano não mudou.
+- **Migration `20261015_0117`** (só colunas nullable: `tma_active_seconds`, `tmr_gap_sum_seconds`, `tmr_gap_count`,
+  `active_metrics_at`). O histórico fica NULL: **após o deploy, os Indicadores mostram "Dado parcial" até recalcular**.
+  O backfill noturno passa a dar 80% do lote (teto atual 12.000/noite) a quem ainda não tem as colunas, mais recentes
+  primeiro; para fechar um período na hora existe o comando
+  `docker compose exec backend python -m app.modules.support.recompute_active_metrics --date-from 2026-10-01
+  --date-to 2026-10-14 --limit 12000` (1 chamada ao OPA por atendimento; no banco local rodou ~7 atendimentos/s).
+  Fila do histórico inteiro: ~150 mil atendimentos com humano (meses anteriores a outubro só terminam em semanas).
+- Validação de ponta a ponta no banco local (código dos painéis, por atendente): erro médio TMA 15%, TMR 16%; mediana do
+  erro 11% e 8%. Quem tem amostra local pequena (o banco local não tem o dia 10/10) ainda diverge mais - **conferir em
+  produção depois do recálculo**. Os nomes dos campos da API foram mantidos (`average_tma_effective_seconds` etc.), só o
+  cálculo mudou; MCP e textos da tela foram atualizados.
+
 **2026-10-14** — **Indicadores do Suporte**, **Atendimento Operacional N2**, aba **Configuração** e tema claro/escuro
 (PR **#71**) e o ajuste dos cartões da Visão Geral (PR **#72**) **mesclados na `master` e já em produção** (informado
 pelo dono do sistema, que mandou um print do painel de produção). **Primeiro achado em produção:** filtrando 01/10 a
