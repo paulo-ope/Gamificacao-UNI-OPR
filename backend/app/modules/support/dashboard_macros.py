@@ -161,15 +161,16 @@ def support_team_options(db: Session) -> list[dict[str, str]]:
 
 
 def time_coverage(db: Session, filters: OpaAttendanceFilters) -> dict[str, Any]:
-    """Quantos dos atendimentos encerrados que chegaram a um humano já têm TMA calculado. Como TMA, TMR Geral e
-    TMR Humano são preenchidos na mesma passada (sincronização e backfill noturno), isso mede o andamento do
-    histórico para os três; as lacunas naturais do TMR (sem mensagem do cliente) não contam como atraso."""
+    """Quantos dos atendimentos encerrados que chegaram a um humano já têm os tempos calculados pela regra do OPA
+    (`active_metrics_at`). TMA, TMR Geral e TMR Humano são preenchidos na mesma passada (sincronização,
+    backfill noturno e comando de recálculo), então isso mede o andamento do histórico para os três; as lacunas
+    naturais do TMR (sem mensagem do cliente) não contam como atraso."""
     eligible_where = (SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.reached_human.is_(True))
     eligible = int(db.scalar(apply_opa_attendance_filters(select(func.count(SupportOpaAttendance.id)).where(*eligible_where), filters)) or 0)
     processed = int(
         db.scalar(
             apply_opa_attendance_filters(
-                select(func.count(SupportOpaAttendance.id)).where(*eligible_where, SupportOpaAttendance.tma_effective_seconds.isnot(None)),
+                select(func.count(SupportOpaAttendance.id)).where(*eligible_where, SupportOpaAttendance.active_metrics_at.isnot(None)),
                 filters,
             )
         )

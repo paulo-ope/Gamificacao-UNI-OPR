@@ -82,6 +82,10 @@ def test_macro_dashboard_combines_n1_protocols_field_orders_and_opa(db_session):
             tma_effective_seconds=1800,
             tmr_effective_seconds=60,
             tmr_human_live_seconds=45,
+            tma_active_seconds=1800,
+            tmr_gap_sum_seconds=60,
+            tmr_gap_count=1,
+            active_metrics_at=datetime(2026, 10, 15, tzinfo=timezone.utc),
         )
     )
     db_session.commit()
@@ -298,6 +302,8 @@ def _closed_attendance(db, source_id, tma_effective, *, human=True, day=5, depar
             status="encerrado",
             reached_human=human,
             tma_effective_seconds=tma_effective,
+            tma_active_seconds=tma_effective,
+            active_metrics_at=datetime(2026, 10, 15, tzinfo=timezone.utc) if (human and tma_effective is not None) else None,
             department_id=department_id,
             attendant_id=attendant_id,
         )

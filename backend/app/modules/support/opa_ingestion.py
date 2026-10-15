@@ -24,7 +24,7 @@ from .models import (
     SupportOpaImportMonth,
     SupportOpaImportRun,
 )
-from .opa_filters import SUPPORT_TIMEZONE, TAG_SEPARATOR
+from .opa_filters import SUPPORT_TIMEZONE, TAG_SEPARATOR, opa_period_bounds
 
 
 SUPPORT_OPA_IMPORT_LOCK_KEY = 913_275_003
@@ -446,9 +446,9 @@ def _message_is_from_any_attendant(message: dict[str, Any]) -> bool:
 _TMR_EFFECTIVE_MAX_GAP_SECONDS = 3600
 
 
-def _effective_tmr_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
-    """TMR efetivo (aproximado) de UM atendimento, em segundos. `None` quando não houve atendente
-    humano ou nenhuma resposta a uma mensagem do cliente depois da entrada dele: nunca vira 0."""
+def _effective_tmr_gaps(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> list[float]:
+    """Intervalos de resposta de UM atendimento, em segundos (regra do TMR efetivo, ver acima). Lista vazia
+    quando não houve atendente humano ou nenhuma resposta a uma mensagem do cliente depois da entrada dele."""
     events: list[tuple[datetime, str]] = []
     for message in messages:
         timestamp = _message_timestamp(message)
@@ -463,7 +463,7 @@ def _effective_tmr_seconds(messages: list[dict[str, Any]], human_attendant_ids: 
     events.sort(key=lambda event: event[0])
     first_human_at = next((timestamp for timestamp, role in events if role == "human"), None)
     if first_human_at is None:
-        return None
+        return []
 
     gaps: list[float] = []
     last_client_at: datetime | None = None
@@ -476,7 +476,60 @@ def _effective_tmr_seconds(messages: list[dict[str, Any]], human_attendant_ids: 
             if 0 <= gap <= _TMR_EFFECTIVE_MAX_GAP_SECONDS:
                 gaps.append(gap)
             last_client_at = None
+    return gaps
+
+
+def _effective_tmr_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
+    """TMR efetivo (média por conversa, regra antiga) de UM atendimento, em segundos. `None` quando não
+    houve atendente humano ou nenhuma resposta a uma mensagem do cliente depois da entrada dele: nunca vira 0."""
+    gaps = _effective_tmr_gaps(messages, human_attendant_ids)
     return round(sum(gaps) / len(gaps)) if gaps else None
+
+
+# REGRA DO OPA (2026-10-15): o TMA do relatório do OPA não conta o silêncio do cliente por inteiro. Testando
+# 2.603 conversas contra o relatório por atendente do OPA (07/10 a 14/10), a variante "cada silêncio entre
+# mensagens limitado a 1 h" deu erro médio de 15% (28% com a regra antiga, que contava o silêncio todo e
+# ficava ~25% acima do OPA). Cortes de 50 e 75 minutos ficaram em 16%: o corte de 1 h não é exato.
+_ACTIVE_TMA_MAX_SILENCE_SECONDS = 3600
+
+
+def _active_tma_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
+    """TMA "ativo": da 1ª mensagem humana até a mensagem de conclusão (ou a última humana), somando os
+    intervalos entre mensagens consecutivas do cliente e do atendente humano, cada um limitado a 1 h.
+    Atendimento sem mensagem humana (só bot) devolve `None`: nunca vira 0."""
+    conversation: list[datetime] = []
+    human: list[tuple[datetime, bool]] = []
+    for message in messages:
+        timestamp = _message_timestamp(message)
+        if timestamp is None:
+            continue
+        if _message_is_from_human_attendant(message, human_attendant_ids):
+            human.append((timestamp, _CONCLUSION_MARKER in _message_text(message)))
+            conversation.append(timestamp)
+        elif _message_is_from_client(message):
+            conversation.append(timestamp)
+    if not human:
+        return None
+    human.sort(key=lambda item: item[0])
+    start = human[0][0]
+    conclusion_times = [timestamp for timestamp, is_conclusion in human if is_conclusion]
+    end = conclusion_times[-1] if conclusion_times else human[-1][0]
+    inside = sorted(timestamp for timestamp in conversation if start <= timestamp <= end)
+    total = sum(
+        min((later - earlier).total_seconds(), _ACTIVE_TMA_MAX_SILENCE_SECONDS)
+        for earlier, later in zip(inside, inside[1:])
+    )
+    return max(0, round(total))
+
+
+def _apply_active_metrics(attendance: Any, messages: list[dict[str, Any]], human_attendant_ids: set[str], now: datetime) -> None:
+    """Grava o TMA ativo e a soma/contagem do TMR agrupado e marca o atendimento como calculado (mesmo que
+    o resultado seja NULL, para o backfill não voltar nele toda noite). Sobrescreve valores antigos."""
+    attendance.tma_active_seconds = _active_tma_seconds(messages, human_attendant_ids)
+    gaps = _effective_tmr_gaps(messages, human_attendant_ids)
+    attendance.tmr_gap_sum_seconds = round(sum(gaps)) if gaps else None
+    attendance.tmr_gap_count = len(gaps) if gaps else None
+    attendance.active_metrics_at = now
 
 
 def _human_tmr_after_entry_seconds(messages: list[dict[str, Any]], human_attendant_ids: set[str]) -> int | None:
@@ -1140,10 +1193,13 @@ def _process_attendance_pages(
     attendant_types = _load_attendant_types(db)
     human_attendant_ids = _human_attendant_ids(attendant_types)
     errors: list[dict[str, Any]] = list(run.errors or [])
+    # `active_metrics_at` fica de fora da comparação: é um carimbo de "quando calculei", que mudaria em toda
+    # reimportação e faria todo atendimento parecer alterado. É gravado só quando ainda está vazio (abaixo).
     comparable_fields = set(SupportOpaAttendance.__table__.columns.keys()) - {
         "id",
         "first_imported_at",
         "last_imported_at",
+        "active_metrics_at",
     }
 
     skip = start_skip
@@ -1210,6 +1266,13 @@ def _process_attendance_pages(
                         if human_wait is not None:
                             payload["human_wait_seconds"] = human_wait
 
+                        # Regra do OPA (TMA ativo e TMR agrupado): sempre recalculado, inclusive para NULL.
+                        payload["tma_active_seconds"] = _active_tma_seconds(messages, human_attendant_ids)
+                        tmr_gaps = _effective_tmr_gaps(messages, human_attendant_ids)
+                        payload["tmr_gap_sum_seconds"] = round(sum(tmr_gaps)) if tmr_gaps else None
+                        payload["tmr_gap_count"] = len(tmr_gaps) if tmr_gaps else None
+                        payload["active_metrics_at"] = now
+
                         handled_by_bot, reached_human, handoff = _classify_bot_human(messages, attendant_types)
                         payload["handled_by_bot"] = handled_by_bot
                         payload["reached_human"] = reached_human
@@ -1257,6 +1320,9 @@ def _process_attendance_pages(
                         if _comparable_value(getattr(existing, field_name)) != _comparable_value(value):
                             setattr(existing, field_name, value)
                             changed = True
+                    if payload.get("active_metrics_at") is not None and existing.active_metrics_at is None:
+                        existing.active_metrics_at = payload["active_metrics_at"]
+                        changed = True
                     existing.last_imported_at = now
                     if changed:
                         run.updated_count += 1
@@ -1524,6 +1590,79 @@ def pending_tmr_backfill_count(db: Session) -> int:
     )
 
 
+def pending_active_metrics_count(db: Session) -> int:
+    """Quantos atendimentos encerrados que chegaram a um humano ainda não têm o TMA ativo / TMR agrupado
+    calculados - o que o backfill noturno e o comando de recálculo ainda têm para processar."""
+    return (
+        db.scalar(
+            select(func.count(SupportOpaAttendance.id)).where(
+                SupportOpaAttendance.closed_at.isnot(None),
+                SupportOpaAttendance.reached_human.is_(True),
+                SupportOpaAttendance.active_metrics_at.is_(None),
+            )
+        )
+        or 0
+    )
+
+
+def run_active_metrics_recompute(
+    db: Session,
+    client: OpaClient,
+    *,
+    date_from: date,
+    date_to: date,
+    limit: int,
+    delay_seconds: float = 0.0,
+    commit_every: int = 100,
+) -> dict[str, Any]:
+    """Recalcula o TMA ativo e o TMR agrupado dos atendimentos abertos em [date_from, date_to] (datas locais) que
+    ainda não os têm, dos mais recentes para os mais antigos, com 1 chamada ao OPA por atendimento. Serve para
+    fechar um período já, sem esperar as madrugadas do backfill. Quem a chamada falhar fica para a próxima rodada."""
+    start_at, end_at = opa_period_bounds(date_from, date_to)
+    human_attendant_ids = _human_attendant_ids(_load_attendant_types(db))
+    candidates = db.scalars(
+        select(SupportOpaAttendance)
+        .where(
+            SupportOpaAttendance.closed_at.isnot(None),
+            SupportOpaAttendance.reached_human.is_(True),
+            SupportOpaAttendance.active_metrics_at.is_(None),
+            SupportOpaAttendance.opened_at >= start_at,
+            SupportOpaAttendance.opened_at < end_at,
+        )
+        .order_by(SupportOpaAttendance.closed_at.desc())
+        .limit(limit)
+    ).all()
+    processed = failed = 0
+    for attendance in candidates:
+        try:
+            messages = client.list_messages(attendance.source_id)
+        except Exception as exc:
+            failed += 1
+            logger.warning("falha_recalculo_tempos source_id=%s erro=%s", attendance.source_id, exc)
+            continue
+        _apply_active_metrics(attendance, messages, human_attendant_ids, datetime.now(timezone.utc))
+        # Os demais tempos saem das mesmas mensagens (zero chamada extra): preenche quem ainda não os tinha.
+        tma_effective = _effective_tma_seconds(messages, human_attendant_ids)
+        if tma_effective is not None:
+            attendance.tma_effective_seconds = tma_effective
+        tmr_effective = _effective_tmr_seconds(messages, human_attendant_ids)
+        if tmr_effective is not None:
+            attendance.tmr_effective_seconds = tmr_effective
+        tmr_human_live = _human_tmr_after_entry_seconds(messages, human_attendant_ids)
+        if tmr_human_live is not None:
+            attendance.tmr_human_live_seconds = tmr_human_live
+        human_wait = _human_wait_seconds(messages, human_attendant_ids)
+        if human_wait is not None:
+            attendance.human_wait_seconds = human_wait
+        processed += 1
+        if processed % commit_every == 0:
+            db.commit()
+        if delay_seconds:
+            time.sleep(delay_seconds)
+    db.commit()
+    return {"processed": processed, "failed": failed, "selected": len(candidates)}
+
+
 def run_tmr_history_backfill(db: Session, client: OpaClient, *, limit: int) -> dict[str, Any]:
     """Reprocessa TMR (humano e geral) de atendimentos históricos JÁ GRAVADOS cujo
     `tmr_all_responses_seconds` ainda está `NULL` — cobre principalmente o histórico
@@ -1545,19 +1684,20 @@ def run_tmr_history_backfill(db: Session, client: OpaClient, *, limit: int) -> d
     attendant_types = _load_attendant_types(db)
     human_attendant_ids = _human_attendant_ids(attendant_types)
 
-    # Até METADE do lote vai para o TMA efetivo pendente (só quem já se sabe que teve humano; mais
-    # RECENTES primeiro, que é o período que o time consulta); o resto segue com o TMR histórico
-    # (mais antigos primeiro, como sempre). Sem a divisão, os ~45 mil sem TMR ocupariam a cota por
-    # dias. Sem TMA pendente, o TMR usa o lote inteiro - o comportamento anterior.
+    # Até 80% do lote vão para os indicadores de tempo pela regra do OPA (TMA ativo e TMR agrupado): só quem
+    # já se sabe que teve humano e ainda não foi calculado (`active_metrics_at` NULL), os mais RECENTES
+    # primeiro, que é o período que o time consulta. O resto segue com o TMR histórico (mais antigos
+    # primeiro, como sempre). Sem a divisão, os ~45 mil sem TMR ocupariam a cota por dias. Sem pendência dos
+    # novos, o TMR usa o lote inteiro - o comportamento anterior.
     tma_candidates = db.scalars(
         select(SupportOpaAttendance)
         .where(
             SupportOpaAttendance.closed_at.isnot(None),
             SupportOpaAttendance.reached_human.is_(True),
-            SupportOpaAttendance.tma_effective_seconds.is_(None),
+            SupportOpaAttendance.active_metrics_at.is_(None),
         )
         .order_by(SupportOpaAttendance.closed_at.desc())
-        .limit(limit // 2)
+        .limit(limit * 4 // 5)
     ).all()
     tmr_query = select(SupportOpaAttendance).where(
         SupportOpaAttendance.closed_at.isnot(None),
@@ -1586,6 +1726,8 @@ def run_tmr_history_backfill(db: Session, client: OpaClient, *, limit: int) -> d
             failed += 1
             logger.warning("falha_backfill_tmr source_id=%s erro=%s", attendance.source_id, exc)
             continue
+
+        _apply_active_metrics(attendance, messages, human_attendant_ids, now)
 
         # O TMA efetivo é independente do TMR: preenche mesmo quando o atendimento nunca teve
         # resposta a cliente (que é o motivo de o TMR geral ficar vazio).

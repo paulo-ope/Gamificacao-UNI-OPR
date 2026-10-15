@@ -115,13 +115,21 @@ def test_backfill_fills_effective_tma_for_human_attendances_and_keeps_total_dura
 
     result = run_tmr_history_backfill(db_session, client, limit=10)
 
-    assert result["processed"] == 1
+    # "com-humano" e "ja-calculado" ainda não têm os tempos pela regra do OPA (active_metrics_at NULL); o só-bot
+    # nunca é candidato.
+    assert result["processed"] == 2
     db_session.expire_all()
     rows = {row.source_id: row for row in db_session.query(SupportOpaAttendance)}
     assert rows["com-humano"].tma_effective_seconds == 9 * 60
+    assert rows["com-humano"].tma_active_seconds == 9 * 60
+    assert rows["com-humano"].active_metrics_at is not None
     assert rows["com-humano"].tma_seconds == 3 * 3600
     assert rows["so-bot"].tma_effective_seconds is None
+    assert rows["so-bot"].active_metrics_at is None
+    # Sem mensagens devolvidas, nada é sobrescrito, mas fica marcado como calculado (não volta toda noite).
     assert rows["ja-calculado"].tma_effective_seconds == 60
+    assert rows["ja-calculado"].tma_active_seconds is None
+    assert rows["ja-calculado"].active_metrics_at is not None
 
 
 def test_backfill_processes_the_most_recent_pending_effective_tma_first(db_session):
@@ -138,8 +146,8 @@ def test_backfill_processes_the_most_recent_pending_effective_tma_first(db_sessi
         for key in ("velho", "meio", "recente")
     }
 
-    # Lote de 4: metade (2) vai para o TMA efetivo, e a fila de TMR (vazia aqui) não consome mais.
-    run_tmr_history_backfill(db_session, FakeOpaClient([], messages=messages), limit=4)
+    # Lote de 3: 80% (2) vão para os tempos pela regra do OPA, e a fila de TMR (vazia aqui) não consome mais.
+    run_tmr_history_backfill(db_session, FakeOpaClient([], messages=messages), limit=3)
 
     db_session.expire_all()
     done = {row.source_id for row in db_session.query(SupportOpaAttendance) if row.tma_effective_seconds is not None}
@@ -154,9 +162,9 @@ def test_overview_exposes_effective_tma_next_to_total_duration_with_explicit_cov
 
     db_session.add_all(
         [
-            _closed("a", 16, tma_effective_seconds=600),
-            _closed("b", 17, tma_effective_seconds=1200),
-            _closed("c", 18),  # humano, mas ainda sem TMA efetivo (histórico não reprocessado)
+            _closed("a", 16, tma_active_seconds=600),
+            _closed("b", 17, tma_active_seconds=1200),
+            _closed("c", 18),  # humano, mas ainda sem TMA pela regra do OPA (histórico não reprocessado)
             _closed("d", 19, reached_human=False),  # só bot: nunca entra na média
         ]
     )
@@ -265,8 +273,10 @@ def test_overview_exposes_effective_tmr_with_coverage_over_closed_attendances(db
 
     db_session.add_all(
         [
-            _closed("a", 16, tmr_effective_seconds=30),
-            _closed("b", 17, tmr_effective_seconds=90),
+            # "a": 1 resposta de 30 s; "b": 2 respostas somando 180 s. A média é de TODAS as respostas juntas
+            # (210 s / 3 = 70 s), não a média das médias por conversa ((30 + 90) / 2 = 60 s).
+            _closed("a", 16, tmr_gap_sum_seconds=30, tmr_gap_count=1),
+            _closed("b", 17, tmr_gap_sum_seconds=180, tmr_gap_count=2),
             _closed("c", 18),
         ]
     )
@@ -276,9 +286,9 @@ def test_overview_exposes_effective_tmr_with_coverage_over_closed_attendances(db
     metrics = opa_overview_service.overview_metrics(db_session, filters)
     expanded = opa_overview_service.expanded_overview(db_session, filters)
 
-    assert metrics["average_tmr_effective_seconds"] == 60.0
+    assert metrics["average_tmr_effective_seconds"] == 70.0
     assert metrics["tmr_effective_coverage"] == {"count": 2, "total": 3, "percentage": (2 / 3) * 100}
-    assert expanded["average_tmr_effective_seconds"]["current"] == 60.0
+    assert expanded["average_tmr_effective_seconds"]["current"] == 70.0
 
 
 # ---- TMR HUMANO (só humano, a partir da entrada dele) ----------------------------------------
@@ -401,3 +411,115 @@ def test_backfill_fills_human_wait_and_the_overview_averages_it_with_coverage(db
     )
     assert metrics["average_human_wait_seconds"] == 240.0  # (180 + 300) / 2
     assert metrics["human_wait_coverage"]["count"] == 2 and metrics["human_wait_coverage"]["total"] == 3
+
+
+# ---- REGRA DO OPA: TMA ativo (silêncio limitado a 1 h) e TMR agrupado ------------------------------
+
+from app.modules.support.opa_ingestion import (  # noqa: E402
+    _active_tma_seconds,
+    _apply_active_metrics,
+    _effective_tmr_gaps,
+    pending_active_metrics_count,
+    run_active_metrics_recompute,
+)
+
+
+def test_active_tma_caps_each_silence_at_one_hour():
+    messages = [
+        {"id_atend": "agente-1", "data": _at(0), "mensagem": "Oi"},
+        _client(2, 0),  # 2 min depois
+        {"id_user": "cliente", "data": "2026-10-04T20:02:00+00:00"},  # o cliente some por 3 h: conta só 1 h
+        {"id_atend": "agente-1", "data": "2026-10-04T20:05:00+00:00", "mensagem": CONCLUSION},  # + 3 min
+    ]
+
+    # 2 min + 60 min (silêncio limitado) + 3 min = 65 min. A regra antiga daria 3 h 5 min.
+    assert _active_tma_seconds(messages, HUMANS) == 65 * 60
+    assert _effective_tma_seconds(messages, HUMANS) == 3 * 3600 + 5 * 60
+
+
+def test_active_tma_equals_the_old_rule_when_there_are_no_long_silences():
+    messages = [
+        {"id_atend": "agente-1", "data": _at(0), "mensagem": "Oi"},
+        _client(3, 0),
+        {"id_atend": "agente-1", "data": _at(9), "mensagem": CONCLUSION},
+    ]
+
+    assert _active_tma_seconds(messages, HUMANS) == _effective_tma_seconds(messages, HUMANS) == 9 * 60
+
+
+def test_active_tma_ignores_the_bot_phase_and_bot_messages_and_is_none_without_a_human():
+    with_bot = [
+        _client(0),
+        {"tipo": "assistant", "data": _at(1)},  # fase do bot antes do humano: não entra
+        {"id_atend": "agente-1", "data": _at(10), "mensagem": "Olá"},
+        {"id_atend": "bot-1", "data": _at(12), "mensagem": "mensagem automática"},  # bot no meio: ignorado
+        {"id_atend": "agente-1", "data": _at(14), "mensagem": CONCLUSION},
+    ]
+    no_human = [_client(0), {"id_atend": "bot-1", "data": _at(1), "mensagem": "Bot"}]
+
+    assert _active_tma_seconds(with_bot, HUMANS) == 4 * 60
+    assert _active_tma_seconds(no_human, HUMANS) is None
+
+
+def test_effective_tmr_gaps_returns_every_response_interval_after_the_human_joined():
+    messages = [
+        {"id_atend": "agente-1", "data": _at(0), "mensagem": "Oi"},
+        _client(1, 0),
+        {"id_atend": "agente-1", "data": _at(1, 30), "mensagem": "a"},  # 30 s
+        _client(5, 0),
+        {"tipo": "assistant", "data": _at(5, 20)},  # resposta do bot também fecha: 20 s
+        _client(8, 0),
+        {"id_atend": "agente-1", "data": _at(10, 0), "mensagem": "c"},  # 120 s
+    ]
+
+    assert _effective_tmr_gaps(messages, HUMANS) == [30.0, 20.0, 120.0]
+    assert _effective_tmr_gaps([_client(0)], HUMANS) == []
+
+
+def test_apply_active_metrics_marks_the_attendance_as_calculated_even_when_there_is_no_result():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    human_conversation = SupportOpaAttendance(source_id="h", opened_at=now, reached_human=True, raw_payload={})
+    bot_only = SupportOpaAttendance(source_id="b", opened_at=now, reached_human=False, raw_payload={})
+    messages = [
+        {"id_atend": "agente-1", "data": _at(0), "mensagem": "Oi"},
+        _client(1, 0),
+        {"id_atend": "agente-1", "data": _at(1, 40), "mensagem": CONCLUSION},
+    ]
+
+    _apply_active_metrics(human_conversation, messages, HUMANS, now)
+    _apply_active_metrics(bot_only, [_client(0)], HUMANS, now)
+
+    assert (human_conversation.tma_active_seconds, human_conversation.tmr_gap_sum_seconds, human_conversation.tmr_gap_count) == (100, 40, 1)
+    assert human_conversation.active_metrics_at == now
+    assert (bot_only.tma_active_seconds, bot_only.tmr_gap_sum_seconds, bot_only.tmr_gap_count) == (None, None, None)
+    assert bot_only.active_metrics_at == now
+
+
+def test_recompute_fills_the_period_most_recent_first_and_is_idempotent(db_session):
+    from datetime import date
+
+    _human_agent(db_session)
+    db_session.add_all([_closed("a", 15), _closed("b", 20), _closed("fora", 16, opened_at=datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc))])
+    db_session.flush()
+    messages = {
+        key: [
+            {"id_atend": "agente-1", "data": _at(0), "mensagem": "Oi"},
+            {"id_atend": "agente-1", "data": _at(5), "mensagem": "Tchau"},
+        ]
+        for key in ("a", "b", "fora")
+    }
+    client = FakeOpaClient([], messages=messages)
+
+    first = run_active_metrics_recompute(db_session, client, date_from=date(2026, 10, 4), date_to=date(2026, 10, 4), limit=1)
+    assert first == {"processed": 1, "failed": 0, "selected": 1}
+    db_session.expire_all()
+    assert db_session.query(SupportOpaAttendance).filter_by(source_id="b").one().tma_active_seconds == 300  # o mais recente
+
+    second = run_active_metrics_recompute(db_session, client, date_from=date(2026, 10, 4), date_to=date(2026, 10, 4), limit=10)
+    third = run_active_metrics_recompute(db_session, client, date_from=date(2026, 10, 4), date_to=date(2026, 10, 4), limit=10)
+
+    assert second["processed"] == 1  # só o "a": o "b" já foi calculado e o "fora" é de outro período
+    assert third["selected"] == 0
+    assert pending_active_metrics_count(db_session) == 1  # o "fora"
