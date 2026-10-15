@@ -13,103 +13,69 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
-**2026-10-15** - **TMA e TMR passam a seguir a regra do relatório do OPA** (branch `feat/opa-tma-tmr-regra-do-opa`,
-**PR aberto, não mesclado, sem deploy**). Motivo: o relatório por atendente do OPA (07/10-14/10) divergia do sistema.
-Testei variantes sobre 2.603 conversas buscadas no OPA (18 atendentes com a média do OPA em mãos):
-- **TMA:** o OPA não conta o silêncio do cliente por inteiro. A melhor regra soma os intervalos entre mensagens do cliente
-  e do humano com **cada silêncio limitado a 1 h** (`tma_active_seconds`): erro médio 15% contra 28% da regra antiga (que
-  ficava ~25% acima do OPA). Cortes de 50 e 75 min deram 16% - **o 1 h não é regra documentada do OPA, é o que melhor
-  ajusta**.
-- **TMR ("TMR Geral"):** o OPA faz a média de **todas as respostas juntas**, não a média das médias por conversa. Mesma
-  regra de intervalo (última msg do cliente -> resposta de humano ou bot, depois da entrada do humano, corte em 1 h), mas
-  agrupada: `tmr_gap_sum_seconds` / `tmr_gap_count`. Erro médio 16% contra 30%. O TMR Humano não mudou.
-- **Migration `20261015_0117`** (só colunas nullable: `tma_active_seconds`, `tmr_gap_sum_seconds`, `tmr_gap_count`,
-  `active_metrics_at`). O histórico fica NULL: **após o deploy, os Indicadores mostram "Dado parcial" até recalcular**.
-  O backfill noturno passa a dar 80% do lote (teto atual 12.000/noite) a quem ainda não tem as colunas, mais recentes
-  primeiro; para fechar um período na hora existe o comando
-  `docker compose exec backend python -m app.modules.support.recompute_active_metrics --date-from 2026-10-01
-  --date-to 2026-10-14 --limit 12000` (1 chamada ao OPA por atendimento; no banco local rodou ~7 atendimentos/s).
-  Fila do histórico inteiro: ~150 mil atendimentos com humano (meses anteriores a outubro só terminam em semanas).
-- Validação de ponta a ponta no banco local (código dos painéis, por atendente): erro médio TMA 15%, TMR 16%; mediana do
-  erro 11% e 8%. Quem tem amostra local pequena (o banco local não tem o dia 10/10) ainda diverge mais - **conferir em
-  produção depois do recálculo**. Os nomes dos campos da API foram mantidos (`average_tma_effective_seconds` etc.), só o
-  cálculo mudou; MCP e textos da tela foram atualizados.
+**2026-10-15** — **Indicadores do Suporte, Atendimento Operacional N2, aba Configuração, tema claro/escuro e a regra nova de
+TMA/TMR estão mesclados na `master` (PRs #71 a #78) e em produção** (deploy feito pelo dono do sistema em 15/10). Conferido
+por ele na VM: `alembic current` = `20261015_0117 (head)`, `/api/health` e a página principal respondem 200. O recálculo do
+histórico rodou na VM para 01/10-14/10 (**0 pendentes**; 15/10 e os meses anteriores ficam para o backfill noturno).
+**Ainda NÃO registrado: a conferência dos números de TMA e TMR em produção contra o relatório do OPA, por atendente** - fazer
+agora que 01/10-14/10 está completo. O que existe hoje e o que é suposição:
 
-**2026-10-14** — **Indicadores do Suporte**, **Atendimento Operacional N2**, aba **Configuração** e tema claro/escuro
-(PR **#71**) e o ajuste dos cartões da Visão Geral (PR **#72**) **mesclados na `master` e já em produção** (informado
-pelo dono do sistema, que mandou um print do painel de produção). **Primeiro achado em produção:** filtrando 01/10 a
-03/10 o painel mostrou "foi a campo" = 667 (61% das O.S.), resolutividade 50,9% e TMA de 94 h; o banco local, com o mesmo
-filtro, dava 260 e 72% e não reproduzia. Corrigido no PR seguinte (branch `fix/indicadores-suporte-escopo-os-e-cobertura`,
-**ainda não mesclado nem em produção**): (1) "foi a campo" só conta O.S. dos setores 7, 8 e 9 - antes contava qualquer
-setor de `operations_orders`, e o N1 também abre O.S. de Comercial/Retenção etc.; **hipótese não confirmada em
-produção** (não tenho acesso ao banco de lá; no local o efeito já aparece, 1.881 -> 1.603 em 01/10-14/10) - conferir
-com `SELECT sector, count(*) FROM operations_orders WHERE opened_at::date BETWEEN '2026-10-01' AND '2026-10-03' GROUP BY 1`;
-(2) TMR/TMA levam a cobertura e, abaixo de 50% dos atendimentos, viram "parcial" (cinza, sem status contra a meta) em vez
-de serem julgados - uma média de poucos atendimentos (TMA de 94 h) enganava. **Segundo achado em produção: 504 (nginx) ao abrir os Indicadores do Suporte** - o endpoint
-`/support/dashboard/macros` fazia ~20 consultas com `date(coluna)` (sem índice) e a evolução semanal repetia as consultas
-por semana: 6,1 s no banco local, bem pior em produção. Corrigido na branch `fix/indicadores-suporte-timeout-e-erro-amigavel`
-(**não mesclada**): filtros de período em intervalo UTC (usam o índice; mesmos totais, conferido no banco), evolução
-semanal a partir de uma única série diária, consulta do Novo Login ao IXC em threads com limite de 10 s por chamada e 15 s
-no total (estourou, o indicador sai "indisponível" e o resto aparece), e a tela mostra uma mensagem legível em vez do HTML do
-504. Local: 6,1 s -> 0,8 s. **Conferir em produção** que o 504 sumiu. **Terceiro ajuste (branch `fix/indicadores-suporte-cobertura-e-filtros`, não mesclada):** o aviso "Dado parcial" dos
-cartões de TMR/TMA media a cobertura sobre TODOS os encerrados; como conversa só do bot nunca tem TMA, um período 100%
-calculado (07/10-14/10 em produção) aparecia como 46% e "parcial". Agora é sobre os encerrados que chegaram a um
-humano, e o período anterior só entra na comparação se a cobertura dele também for boa (antes, "-57,2%" vinha de
-comparar com uma amostra pequena). Novos filtros de **departamento** e **colaborador** do OPA nos Indicadores (valem
-só para CSAT/TMR/TMA; protocolos, O.S. e N2 do IXC não têm essa dimensão). **Em aberto:** o TMA médio de 07/10-14/10 é
-2 h 41 min, bem acima dos 56 min do painel de referência do usuário - não sei qual é o critério do OPA para o TMA
-oficial; só foi validado por atendente (5 atendentes, erro de -6% a +4%). Backfill de produção conferido em 14/10:
-ligado, teto 12.000/noite, 5.263 atendimentos de 01/10-06/10 ainda sem TMA (previsão: 2 madrugadas).
-**Filtro "Colaborador" dos Indicadores do Suporte = equipe FIXA do Suporte Técnico** (branch
-`feat/indicadores-suporte-equipe-fixa`, não mesclada): 23 pessoas, lista informada pelo usuário em 2026-10-15, em
-`dashboard_macros.SUPPORT_TEAM`, resolvida para o id do usuário no OPA pelo cadastro `user` (`GET
-/support/dashboard/collaborators`). O OPA não traz o departamento de cada usuário, então **quem entrar ou sair da equipe
-precisa ser editado nessa lista**. "Wendher Moura" e "Wendher Lopes de Moura" são o mesmo usuário do OPA (mesmo id).
-**Período compartilhado (branch `feat/periodo-compartilhado-indicadores-n2`, não mesclada):** a data escolhida em
-"Indicadores do Suporte" vale também em "Atendimento Suporte Interno N1" e "Atendimento Operacional N2" (antes cada aba
-voltava para "Mês atual"); fica em `useIxcPeriod` (memória + sessionStorage, só nesta aba do navegador). "Atendimento
-IXC" (indicador antecipado) continua com os filtros próprios.
-Segue o registro do que entrou:
+**Indicadores do Suporte** (`/suporte?tab=dashboard`; `GET /support/dashboard/macros`, regra em
+`backend/app/modules/support/dashboard_macros.py`; telas em `frontend/app/suporte/_components/dashboard-*.tsx`)
+- 3 macros grandes (CSAT, TMR Geral, TMA) e micros (TMR Humano, realizados, foi a campo, solucionados, resolutividade, total
+  N2), anéis de meta, fluxo diário, evolução semanal (semanas dom-sáb do mês, só as já iniciadas) e seção Suporte N2.
+- Fórmulas: realizados = protocolos N1 (motivos 90+29) + O.S. abertas pelo N1; solucionados = protocolos; foi a campo = O.S.;
+  resolutividade = solucionados / realizados. Metas (informadas pelo usuário): CSAT >= 4,5, TMR <= 2 min, TMA <= 1 h,
+  resolutividade >= 80%; TMR Humano e os contadores sem meta. **A margem de "Atenção" (10% da meta) foi suposição minha.**
+- **O.S. do N1/N2 ligadas pelo nome do criador** (`OperationOrder.creator` x `SupportIxcUser.name`; o ticket da O.S. tem o
+  motivo do cliente, não o 90/29): **aproximado** (homônimos/grafia). "Foi a campo" só conta os **setores 7, 8 e 9**.
+  **Hipótese não confirmada em produção** de que isso explicava o "foi a campo" inflado de 01/10-03/10 (não há acesso ao banco
+  de lá); conferir com `SELECT sector, count(*) FROM operations_orders WHERE opened_at::date BETWEEN '2026-10-01' AND
+  '2026-10-03' GROUP BY 1`.
+- **Colaboradores N2** (fora das contagens do N1): lista fixa por id do IXC em `ixc_n1.N1_EXCLUDED_IXC_USER_IDS` (165, 124,
+  417, 997, 1109, 168, 615, 771). **Equipe do Suporte Técnico** no filtro "Colaborador": 23 pessoas em
+  `dashboard_macros.SUPPORT_TEAM` (o OPA não traz o departamento do usuário). **Quem entrar/sair precisa de edição no código.**
+  "Wendher Moura" e "Wendher Lopes de Moura" são o mesmo usuário do OPA. Filtros de departamento e colaborador valem só para
+  CSAT/TMR/TMA; protocolos, O.S. e N2 do IXC não têm essa dimensão.
+- **Ativação de Novo Login (assunto 74)**: consulta **ao vivo no IXC** (`ixc_new_login.py`, cache de 2 min, 10 s por chamada e
+  15 s no total; IXC fora do ar mostra "-" com aviso). Essas O.S. ficam no **setor 10**, fora da importação da Operação
+  Analítica (`ixc_sync_sector_ids` = 7,8,9). **Decisão: não importar o setor 10** (somaria ~130 O.S./mês, +2,5%, aos números
+  da Operação e da Visão Geral). Conta por data de finalização; quem finalizou = responsável (`id_tecnico`).
+- **Atendimento Operacional N2** (`?level=n2`): motivos 80/81, tabela por colaborador N2. Migration `20261014_0116` (só dados)
+  preencheu `opened_by_user_id` dos protocolos N2 a partir do `raw_payload`.
+- **Cobertura:** TMR/TMA/TMR Humano mostram "Dado parcial" (cinza, sem julgar a meta) quando menos de 50% dos encerrados com
+  humano estão calculados, e o período anterior só entra na comparação se tiver cobertura boa.
+- **504 em produção** ao abrir os Indicadores: consultas sem índice (`date(coluna)`) e evolução semanal repetida; corrigido
+  (período em intervalo UTC, série diária única, Novo Login em threads), 6,1 s -> 0,8 s no banco local. **A causa foi inferida,
+  não reproduzida em produção; conferir que o 504 sumiu.** O dashboard herda o limite de **32 dias** das consultas do OPA.
+- **Período compartilhado**: a data escolhida nos Indicadores vale também em "Atendimento Suporte Interno N1/N2"
+  (`useIxcPeriod`, memória + sessionStorage). "Atendimento IXC" mantém filtros próprios.
+- **Configuração** (`?tab=settings&sub=data|sync`; `?tab=data|sync` seguem valendo) e **tema claro/escuro** (botão ao lado de
+  "Buscar telas"; troca só a barra lateral; aba Personalização da Administração removida).
 
-- **Indicadores do Suporte** (`/suporte?tab=dashboard`, antes "Dashboard Suporte"; `GET /support/dashboard/macros`,
-  regra em `backend/app/modules/support/dashboard_macros.py`): 3 macros grandes (CSAT, TMR Geral, TMA) e micros
-  (TMR Humano, realizados, foi a campo, solucionados, resolutividade, total N2), anéis de meta, fluxo diário,
-  evolução semanal (semanas dom-sáb cortadas no mês; só as já iniciadas) e seção Suporte N2. Fórmulas: realizados =
-  protocolos N1 (motivos 90+29) + O.S. abertas pelo N1; solucionados = protocolos; resolutividade = solucionados /
-  realizados. Metas (informadas pelo usuário): CSAT >= 4,5, TMR <= 2 min, TMA <= 1 h, resolutividade >= 80%; TMR
-  Humano e os contadores sem meta. **A margem de "Atenção" (10% da meta) foi suposição minha**, constante no service.
-- **O.S. do N1/N2 por nome do criador** (`OperationOrder.creator` casado com `SupportIxcUser.name`): o ticket da O.S.
-  tem o motivo do cliente, não o 90/29, então não dá para ligar por ticket. **É aproximado** (homônimos ou grafia
-  diferente desviam a conta). Validado contra uma semana de referência do usuário: solucionados igual, "a campo"
-  com diferença de 7 em ~445.
-- **Colaboradores N2** ficam fora de toda contagem do N1 e de "foi a campo": lista fixa por id do IXC em
-  `ixc_n1.N1_EXCLUDED_IXC_USER_IDS` (165, 124, 417, 997, 1109, 168, 615, 771; informada pelo usuário). **Quando
-  alguém entrar ou sair do N2, é preciso editar o código.**
-- **Atendimento Operacional N2** (`?level=n2` em `/support/ixc/n1/summary`): motivos 80 (interno) e 81 (externo),
-  sem filtro de grupo. Tabela por colaborador N2 (interno, externo, O.S. abertas) com linha "Outros operadores".
-- **Migration `20261014_0116` (só dados):** preenche `opened_by_user_id` dos protocolos N2 (motivos 80/81) a partir de
-  `raw_payload->id_usuarios`; antes só os motivos 90/29 tinham sido retroalimentados e ~176 protocolos N2 de duas
-  semanas caíam em "Outros operadores". No banco local atualizou ~9.000 linhas. **Conferir na VM:** `alembic
-  current` = `20261014_0116 (head)`.
-- **Ativação de Novo Login finalizadas (assunto 74)**: consultada **ao vivo no IXC** (`ixc_new_login.py`, cache de 2
-  min), porque essas O.S. ficam no **setor 10 (Suporte Interno)**, fora da importação da Operação Analítica
-  (`ixc_sync_sector_ids` = 7,8,9). IXC fora do ar mostra "-" com aviso, nunca zero. Conta por **data de
-  finalização**; quem finalizou = responsável da O.S. (`id_tecnico`). **Decisão: não incluir o setor 10 na
-  importação** - isso somaria ~130 O.S./mês aos números da Operação e da Visão Geral (+2,5% em outubro). No banco
-  local o setor 10 foi importado por engano e revertido; sobraram só as 192 O.S. de um teste de julho.
-- **Aba Configuração** (`?tab=settings&sub=data|sync`): Dados e Sincronização viraram sub-abas; `?tab=data` e
-  `?tab=sync` seguem valendo (busca global e links antigos).
-- **Tema claro/escuro:** botão de sol/lua ao lado de "Buscar telas"; a aba Personalização da Administração foi
-  **removida** (um link antigo cai na Visão geral). O botão só troca a **barra lateral** - não existe modo escuro do
-  sistema inteiro. Preferência continua só no navegador.
-- **Layout:** selo de datas do SectionCard sem quebra de linha; cartões da Gamificação e do Suporte Interno na Visão
-  Geral com 2 colunas (4/5 só em 2xl).
-- **Pendências:** (1) TMR/TMA do período anterior aparecem "-" porque o histórico ainda não tem essas colunas
-  calculadas (backfill noturno, ver entrada abaixo); (2) o dashboard herda o limite de **32 dias** das consultas do
-  OPA; (3) conferir em produção os números do Novo Login e a tabela por colaborador N2; (4) o teste
-  `test_n1_summary_endpoint_validates_period_and_returns_payload` dá erro de encerramento (SQLite entre threads, Python
-  3.14 local) já existente, sem asserção falhando; (5) o servidor de desenvolvimento do frontend (porta 3001) caiu
-  algumas vezes durante os testes locais.
+**TMA e TMR pela regra do relatório do OPA** (migration `20261015_0117`: `tma_active_seconds`, `tmr_gap_sum_seconds`,
+`tmr_gap_count`, `active_metrics_at`; painéis, MCP e textos da tela atualizados; nomes de campo da API mantidos)
+- O relatório por atendente do OPA (07/10-14/10) divergia do sistema. Testei variantes sobre 2.603 conversas buscadas no OPA
+  contra a média de 18 atendentes: **TMA** = soma dos intervalos entre mensagens do cliente e do humano com **cada silêncio
+  limitado a 1 h** (erro médio 15% contra 28%); **TMR Geral** = média de **todas as respostas juntas** (última msg do cliente ->
+  resposta de humano ou bot, depois da entrada do humano, corte em 1 h), não a média das médias por conversa (16% contra 30%).
+  **O corte de 1 h não é regra documentada do OPA, é o que melhor ajusta** (50 e 75 min deram 16%). O TMR Humano não mudou.
+- Validação no banco local (código dos painéis, por atendente): erro médio TMA 15%, TMR 16%; mediana 11% e 8%. Quem tem
+  amostra local pequena (o banco local não tem o dia 10/10) diverge mais. **Em produção ainda não conferido.**
+- **Backfill/recálculo:** o backfill noturno (1h-6h, teto 12.000/noite) dá 80% do lote a quem ainda não tem as colunas, mais
+  recentes primeiro. Para fechar um período na hora: `docker compose exec backend python -m
+  app.modules.support.recompute_active_metrics --date-from ... --date-to ... --limit 4000` (segura o lock da importação do OPA
+  durante a rodada; ~7 atendimentos/s). Em 15/10 a produção tinha 58.498 atendimentos com humano pendentes (17.680 em outubro);
+  depois do recálculo manual, 01/10-14/10 ficou com 0. Meses anteriores seguem pelo backfill noturno (~6 noites).
+
+**Pendências:** (1) conferir TMA/TMR em produção contra o relatório do OPA (por atendente) e se o 504 sumiu; (2) o "foi a
+campo" por setor (hipótese acima) e os números do Novo Login e da tabela N2; (3) o dia 10/10 não existe no banco local - em
+produção tem 948 atendimentos com humano, mas vale conferir se houve buraco de importação lá; (4) o teste
+`test_n1_summary_endpoint_validates_period_and_returns_payload` e outros que usam o fixture `client` dão erro no Python 3.14
+local (SQLite entre threads), e `test_mcp_ixc_intelligence_tools::test_brief_reflete_o_escopo_pedido` e
+`test_localiza::test_create_without_order_code_succeeds_using_opa_protocol` falham também na `master`, sem relação com estas
+mudanças; (5) existe o PR #28 (`claude/slim-login-status-snapshots`, reduz a tabela de snapshots de status de login) **aberto e
+não mesclado**, fora desta frente.
 
 **2026-10-13** — PR **#69** (ajustes de tela e **indicadores de tempo do Suporte Interno (OPA)**) **mesclado na
 `master` e com deploy feito na VM em 2026-10-13** (informado pelo dono do sistema). Conferido por ele na VM:
