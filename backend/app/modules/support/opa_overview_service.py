@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from . import opa_time_metrics
 from .models import SupportOpaAttendance
 from .opa_filters import (
     DATE_BASIS_COLUMNS,
@@ -118,10 +119,11 @@ def overview_metrics(db: Session, filters: OpaAttendanceFilters) -> dict[str, An
             # TMR geral sem precisar de uma segunda consulta. Ver `coverage()`.
             func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
             # TMA efetivo (o do painel do OPA): só atendimentos com humano e já processados.
-            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))).label("avg_tma_effective"),
-            func.count(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))).label("tma_effective_count"),
-            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_effective_seconds))).label("avg_tmr_effective"),
-            func.count(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_effective_seconds))).label("tmr_effective_count"),
+            # TMA ativo e TMR agrupado (regra do OPA, ver opa_time_metrics).
+            opa_time_metrics.avg_tma_active().label("avg_tma_effective"),
+            opa_time_metrics.count_tma_active().label("tma_effective_count"),
+            opa_time_metrics.avg_tmr_pooled().label("avg_tmr_effective"),
+            opa_time_metrics.count_tmr_pooled().label("tmr_effective_count"),
             func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_human_live_seconds))).label("avg_tmr_human_live"),
             func.count(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_human_live_seconds))).label("tmr_human_live_count"),
             func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.human_wait_seconds))).label("avg_human_wait"),
@@ -402,9 +404,9 @@ def daily_timeseries(db: Session, filters: OpaAttendanceFilters) -> list[dict[st
             func.avg(SupportOpaAttendance.tmr_seconds).label("avg_tmr"),
             func.avg(SupportOpaAttendance.tmr_all_responses_seconds).label("avg_tmr_all"),
             func.count(SupportOpaAttendance.tmr_all_responses_seconds).label("tmr_all_count"),
-            func.avg(case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))).label("avg_tma_effective"),
+            opa_time_metrics.avg_tma_active().label("avg_tma_effective"),
             func.avg(SupportOpaAttendance.tmr_human_live_seconds).label("avg_tmr_human_live"),
-            func.avg(SupportOpaAttendance.tmr_effective_seconds).label("avg_tmr_effective"),
+            opa_time_metrics.avg_tmr_pooled().label("avg_tmr_effective"),
             func.avg(SupportOpaAttendance.rating).label("avg_rating"),
         ),
         filters,

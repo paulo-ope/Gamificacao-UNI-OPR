@@ -434,6 +434,24 @@ class SupportOpaAttendance(Base):
     # conversa do cliente com o bot (que o `first_response_at - opened_at` legado inclui). NULL = sem
     # humano ou mensagens ainda não buscadas. Ver opa_ingestion._human_wait_seconds.
     human_wait_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # REGRA DO OPA (2026-10-15): TMA e TMR ajustados contra o relatório por atendente do próprio OPA
+    # (18 atendentes, 07/10 a 14/10, 2.603 conversas). Os painéis passam a usar estas colunas; as
+    # `tma_effective_seconds`/`tmr_effective_seconds` acima ficam como histórico.
+    # - `tma_active_seconds`: da 1ª mensagem humana até a conclusão (ou a última humana), somando os intervalos
+    #   entre mensagens do cliente e do atendente com cada SILÊNCIO LIMITADO a 1 h (o cliente que some não
+    #   infla o TMA). Erro médio contra o OPA: 15% (28% com a regra antiga).
+    # - `tmr_gap_sum_seconds` e `tmr_gap_count`: soma e quantidade dos intervalos de resposta (última mensagem
+    #   do cliente -> resposta de humano ou bot, depois da entrada do humano, cortando acima de 1 h). A média
+    #   do painel é soma/contagem de TODAS as respostas juntas, não a média das médias por conversa (erro
+    #   médio contra o OPA: 16% contra 30%).
+    # NULL = sem humano, sem resposta medível ou ainda não calculado; use `active_metrics_at` para saber se
+    # já foi calculado.
+    tma_active_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tmr_gap_sum_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tmr_gap_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Quando as três colunas acima foram calculadas (mesmo que o resultado seja NULL: conversa só do bot).
+    # O backfill noturno só reprocessa quem ainda não tem isto.
+    active_metrics_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Nullable de propósito: NULL = atendimento ainda não classificado (histórico
     # anterior à Fase 2, ou mensagens indisponíveis) — nunca tratar como False.
     # Ver opa_ingestion._classify_bot_human.

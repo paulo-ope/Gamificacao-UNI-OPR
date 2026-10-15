@@ -42,7 +42,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import dashboard_macros, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_presence_service, opa_timeline_service, opa_tv_service
+from . import dashboard_macros, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -405,7 +405,7 @@ def _attendance_list_item(row: SupportOpaAttendance) -> dict:
         "closed_at": row.closed_at,
         "rating": row.rating,
         "tma_seconds": row.tma_seconds,
-        "tma_effective_seconds": row.tma_effective_seconds,
+        "tma_effective_seconds": row.tma_active_seconds,
         "tmr_seconds": row.tmr_seconds,
         "tmr_all_responses_seconds": row.tmr_all_responses_seconds,
     }
@@ -431,7 +431,7 @@ def _attendance_local_detail(row: SupportOpaAttendance) -> dict:
         "first_response_at": row.first_response_at,
         "duration_seconds": row.tma_seconds or _duration_seconds(row.opened_at, row.closed_at),
         "tma_seconds": row.tma_seconds,
-        "tma_effective_seconds": row.tma_effective_seconds,
+        "tma_effective_seconds": row.tma_active_seconds,
         "tmr_seconds": row.tmr_seconds,
         "tmr_all_responses_seconds": row.tmr_all_responses_seconds,
         "rating": row.rating,
@@ -607,12 +607,8 @@ def _opa_breakdown_rows(
         average_duration = func.avg(
             case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_seconds))
         ).label("avg_duration_seconds")
-        average_tma_effective = func.avg(
-            case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tma_effective_seconds))
-        ).label("avg_tma_effective_seconds")
-        average_tmr_effective = func.avg(
-            case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_effective_seconds))
-        ).label("avg_tmr_effective_seconds")
+        average_tma_effective = opa_time_metrics.avg_tma_active().label("avg_tma_effective_seconds")
+        average_tmr_effective = opa_time_metrics.avg_tmr_pooled().label("avg_tmr_effective_seconds")
         average_tmr_human_live = func.avg(
             case((SupportOpaAttendance.closed_at.isnot(None), SupportOpaAttendance.tmr_human_live_seconds))
         ).label("avg_tmr_human_live_seconds")

@@ -722,9 +722,9 @@ export function tmrCoverageNote(coverage: SupportOpaMetricCoverage | null | unde
 
 // Explicações curtas do "i" de cada cartão da faixa "Tempo" (aparecem ao passar o mouse ou tocar).
 export const TIME_METRIC_INFO = {
-  tma: "Da 1ª mensagem do atendente humano até a mensagem de conclusão. Só conta atendimentos com humano.",
+  tma: "Da 1ª mensagem do atendente humano até a mensagem de conclusão, com cada silêncio do cliente limitado a 1 h (quem some não infla o tempo). Só conta atendimentos com humano. Aproxima o TMA do relatório do OPA.",
   tmrGeneral:
-    "Inclui as respostas do bot depois que o humano entra. Aproxima o TMR do painel do OPA (diferença de até ~35%); não é o número oficial.",
+    "Média de TODAS as respostas juntas (humano ou bot) depois que o humano entra, ignorando esperas acima de 1 h. Aproxima o TMR do relatório do OPA (erro médio de ~16% por atendente); não é o número oficial.",
   tmrHuman: "Só as respostas de humano, contadas a partir da entrada dele na conversa.",
   tmrGeneralBot: "A conversa toda, inclusive a fase em que o cliente só falou com o bot (referência do agente virtual).",
   firstResponse:

@@ -266,11 +266,13 @@ Returns:
     JSON com o período atual e o anterior, e os indicadores. Os campos de comparação vêm
     como {"current", "previous", "absolute_change", "percentage_change"}: total_attendances,
     closed_attendances, open_attendances, closure_rate (percentual),
-    average_tma_effective_seconds (TMA EFETIVO: da 1ª mensagem do atendente humano até a mensagem
-    de conclusão - é o que o painel/cockpit do OPA chama de TMA; atendimento só do bot não entra),
+    average_tma_effective_seconds (TMA: da 1ª mensagem do atendente humano até a mensagem de conclusão,
+    com cada silêncio do cliente limitado a 1 h - aproxima o TMA do relatório do OPA, erro médio de ~15%
+    por atendente; atendimento só do bot não entra),
     average_duration_seconds (DURAÇÃO TOTAL: abertura até o encerramento, inclui bot, fila e espera -
-    NÃO é o TMA do OPA), average_tmr_effective_seconds (TMR EFETIVO, mostrado na tela como "TMR Geral": INCLUI as respostas do bot depois da entrada do
-    humano; APROXIMAÇÃO do TMR do painel do OPA, ±35% nos atendentes testados - não é exato; use no
+    NÃO é o TMA do OPA), average_tmr_effective_seconds (TMR, mostrado na tela como "TMR Geral": média de TODAS as respostas
+    juntas, INCLUINDO as do bot depois da entrada do humano, ignorando esperas acima de 1 h; APROXIMAÇÃO do TMR
+    do relatório do OPA, erro médio de ~16% por atendente - não é exato; use no
     lugar de average_tmr_seconds quando a pergunta for "qual o TMR do OPA"), tmr_effective_coverage, average_tmr_human_live_seconds (TMR
     HUMANO: só respostas de atendente humano, a partir da entrada dele - a rapidez do atendente),
     average_tmr_all_responses_seconds (conversa toda, inclusive a fase só com o bot; NÃO é o "TMR Geral" da tela),
