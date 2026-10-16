@@ -2497,6 +2497,14 @@ def collaborator_sla(db: Session, date_from: date, date_to: date, user: User, **
     }
 
 
+def _calendar_regional_condition(regional: str):
+    """Filtro de detalhe do calendário: a regional exibida é a AGRUPADA (Rolim + São Felipe;
+    São Francisco + São Miguel + Seringueiras), então casa com todas as filiais do grupo."""
+    granular = granular_regionals_for_group(regional)
+    column = func.coalesce(OperationOrder.regional, "Não identificada")
+    return column.in_(granular) if granular else column == regional
+
+
 def monthly_calendar(
     db: Session,
     competence: date,
@@ -2512,7 +2520,10 @@ def monthly_calendar(
     query_end = min(month_end, allowed_to)
     conditions, start, end = _query_conditions(db, query_start, query_end, user, filters)
     responsible = func.coalesce(OperationOrder.responsible, "Não identificado")
-    regional = func.coalesce(OperationOrder.regional, "Não identificada")
+    regional = case(
+        *_REGIONAL_MATRIX_GROUP_WHENS,
+        else_=func.coalesce(OperationOrder.regional, "Não identificada"),
+    )
     closed_day = _local_closed_date(db)
     rows = db.execute(
         select(regional, responsible, closed_day, func.count(OperationOrder.id))
@@ -2665,7 +2676,7 @@ def _calendar_order_conditions(
     if responsible != "__ALL__":
         conditions.append(func.coalesce(OperationOrder.responsible, "Não identificado") == responsible)
     if group_by == "regional":
-        conditions.append(func.coalesce(OperationOrder.regional, "Não identificada") == regional)
+        conditions.append(_calendar_regional_condition(regional))
     return conditions
 
 
@@ -2687,7 +2698,7 @@ def _calendar_period_order_conditions(
     if responsible != "__ALL__":
         conditions.append(func.coalesce(OperationOrder.responsible, "Não identificado") == responsible)
     if group_by == "regional":
-        conditions.append(func.coalesce(OperationOrder.regional, "Não identificada") == regional)
+        conditions.append(_calendar_regional_condition(regional))
     return conditions
 
 
@@ -2836,7 +2847,7 @@ def _calendar_month_order_conditions(
         func.coalesce(OperationOrder.responsible, "Não identificado") == responsible,
     ])
     if group_by == "regional":
-        conditions.append(func.coalesce(OperationOrder.regional, "Não identificada") == regional)
+        conditions.append(_calendar_regional_condition(regional))
     return conditions
 
 
