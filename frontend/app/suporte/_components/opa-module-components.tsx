@@ -20,6 +20,7 @@ import {
   LayoutDashboard,
   ListFilter,
   Loader2,
+  MessageSquareText,
   Minus,
   RefreshCw,
   RotateCcw,
@@ -29,6 +30,7 @@ import {
   Star,
   Timer,
   TriangleAlert,
+  Trophy,
   Users,
   X,
 } from "lucide-react";
@@ -69,9 +71,12 @@ export type OpaModuleTab =
   | "settings"
   | "data"
   | "sync"
+  | "rules"
   | "ixc_tickets"
   | "ixc_n1"
   | "ixc_n2"
+  | "feedback"
+  | "ranking"
   | "operation"
   | "queues"
   | "agents"
@@ -95,6 +100,8 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "ixc_tickets", label: "Atendimento IXC", description: "Indicador antecipado", icon: TriangleAlert },
   { value: "ixc_n1", label: "Atendimento Suporte Interno N1", description: "Operacional e financeiro", icon: Headphones },
   { value: "ixc_n2", label: "Atendimento Operacional N2", description: "Interno e externo", icon: Headphones },
+  { value: "feedback", label: "Feedback", description: "Metas por colaborador", icon: MessageSquareText },
+  { value: "ranking", label: "Ranking", description: "Pontuação mensal", icon: Trophy },
   { value: "settings", label: "Configuração", description: "Dados e sincronização", icon: Settings2 },
   { value: "operation", label: "Operação", description: "Planejado", icon: BarChart3 },
   { value: "queues", label: "Filas", description: "Planejado", icon: GitBranch },
@@ -105,12 +112,13 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
 
 // `data` e `sync` não têm item próprio no menu: vivem como sub-abas de "Configuração" (`settings`), mas
 // continuam válidas na URL (`?tab=data`, `?tab=sync`) para links já existentes.
-export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "dashboard", "attendants", "settings", "data", "sync", "ixc_tickets", "ixc_n1", "ixc_n2"];
+export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "dashboard", "attendants", "settings", "data", "sync", "rules", "ixc_tickets", "ixc_n1", "ixc_n2", "feedback", "ranking"];
 
 /** Sub-abas de "Configuração". */
-export const OPA_SETTINGS_VIEWS: { value: "data" | "sync"; label: string; icon: LucideIcon }[] = [
+export const OPA_SETTINGS_VIEWS: { value: "data" | "sync" | "rules"; label: string; icon: LucideIcon }[] = [
   { value: "data", label: "Dados", icon: Database },
   { value: "sync", label: "Sincronização", icon: RefreshCw },
+  { value: "rules", label: "Regras", icon: SlidersHorizontal },
 ];
 
 const OPA_STATUS_LABELS: Record<string, string> = {

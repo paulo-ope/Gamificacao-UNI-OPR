@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 from app.modules.operations.models import OperationOrder
 from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 
-from . import ixc_n1, ixc_new_login, opa_overview_service
+from . import ixc_n1, ixc_new_login, opa_overview_service, support_rules
 from .ixc_ticket_queries import _previous_period_bounds
 from .models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance, SupportOpaDimension
 from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters
@@ -57,7 +57,7 @@ ATTENTION_MARGIN = 0.10
 MIN_COVERAGE_PERCENT = 50.0
 
 
-def metric_status(value: float | None, target: float | None, direction: str) -> str:
+def metric_status(value: float | None, target: float | None, direction: str, margin: float = ATTENTION_MARGIN) -> str:
     """ok = bateu a meta; attention = a até 10% da meta; critical = pior que isso;
     no_data = sem valor no período; no_target = card sem meta definida."""
     if target is None:
@@ -67,10 +67,10 @@ def metric_status(value: float | None, target: float | None, direction: str) -> 
     if direction == "min":
         if value >= target:
             return "ok"
-        return "attention" if value >= target * (1 - ATTENTION_MARGIN) else "critical"
+        return "attention" if value >= target * (1 - margin) else "critical"
     if value <= target:
         return "ok"
-    return "attention" if value <= target * (1 + ATTENTION_MARGIN) else "critical"
+    return "attention" if value <= target * (1 + margin) else "critical"
 
 
 def _n1_field_orders(db: Session, date_from: date, date_to: date) -> int:
@@ -310,9 +310,10 @@ def _card(
     source: str,
     note: str | None = None,
     coverage: dict[str, Any] | None = None,
+    margin: float = ATTENTION_MARGIN,
 ) -> dict[str, Any]:
     change = None if current is None or previous is None else current - previous
-    status = metric_status(current, target, direction)
+    status = metric_status(current, target, direction, margin)
     if (
         coverage is not None
         and status not in ("no_data", "no_target")
@@ -355,7 +356,7 @@ def month_week_buckets(reference: date) -> list[dict[str, Any]]:
     return buckets
 
 
-def weekly_evolution(db: Session, reference: date) -> dict[str, Any]:
+def weekly_evolution(db: Session, reference: date, resolutivity_target: float = RESOLUTIVITY_TARGET_PERCENT) -> dict[str, Any]:
     """Uma única série diária cobrindo todas as semanas (4 consultas no total) agregada em Python. Antes cada
     uma das ~7 semanas fazia as suas próprias consultas (~16), o que pesava na abertura do dashboard."""
     buckets = month_week_buckets(reference)
@@ -380,7 +381,7 @@ def weekly_evolution(db: Session, reference: date) -> dict[str, Any]:
         )
     return {
         "month": reference.strftime("%Y-%m"),
-        "resolutivity_target": RESOLUTIVITY_TARGET_PERCENT,
+        "resolutivity_target": resolutivity_target,
         "buckets": items,
     }
 
@@ -403,6 +404,8 @@ def _macro_dashboard(
 ) -> dict[str, Any]:
     bounds = _previous_period_bounds(date_from, date_to)
     previous_from, previous_to = bounds if bounds else (None, None)
+    goals = support_rules.load_current(db).indicator_goals
+    margin = goals.attention_margin_percent / 100
 
     current_ixc = _ixc_block(db, date_from, date_to)
     previous_ixc = (
@@ -429,12 +432,12 @@ def _macro_dashboard(
         _card(
             "csat", "Qualidade percebida na avaliação geral - OPA", "score",
             current_opa["average_rating"], previous_opa["average_rating"],
-            target=CSAT_TARGET, direction="min", source="opa",
+            target=goals.csat, direction="min", source="opa", margin=margin,
         ),
         _card(
             "tmr", "Tempo médio de resposta ao cliente - OPA", "seconds",
             current_opa["average_tmr_effective_seconds"], previous_time(previous_opa["average_tmr_effective_seconds"]),
-            target=TMR_TARGET_SECONDS, direction="max", source="opa", note="TMR Geral (inclui as respostas do bot)",
+            target=goals.tmr_seconds, direction="max", source="opa", note="TMR Geral (inclui as respostas do bot)", margin=margin,
             coverage=current_coverage,
         ),
         _card(
@@ -446,7 +449,7 @@ def _macro_dashboard(
         _card(
             "tma", "Tempo médio de atendimento - OPA", "seconds",
             current_opa["average_tma_effective_seconds"], previous_time(previous_opa["average_tma_effective_seconds"]),
-            target=TMA_TARGET_SECONDS, direction="max", source="opa", note="TMA Humano (1ª msg do atendente até a conclusão)",
+            target=goals.tma_seconds, direction="max", source="opa", note="TMA Humano (1ª msg do atendente até a conclusão)", margin=margin,
             coverage=current_coverage,
         ),
         _card(
@@ -467,7 +470,7 @@ def _macro_dashboard(
         _card(
             "resolutivity", "Resolutividade - IXC", "percent",
             current_ixc["resolutivity"], previous_ixc["resolutivity"],
-            target=RESOLUTIVITY_TARGET_PERCENT, direction="min", source="ixc",
+            target=goals.resolutivity_percent, direction="min", source="ixc", margin=margin,
             note="Solucionados ÷ (solucionados + O.S. para campo)",
         ),
         _card(
@@ -494,5 +497,5 @@ def _macro_dashboard(
         "n2_collaborators": n2_by_collaborator(db, date_from, date_to),
         "previous_n2": _n2_block(db, previous_from, previous_to, live_previous) if previous_from and previous_to else None,
         # Evolução semanal do mês de `date_to` (independe do recorte escolhido: sempre o mês inteiro).
-        "weekly": weekly_evolution(db, date_to),
+        "weekly": weekly_evolution(db, date_to, goals.resolutivity_percent),
     }

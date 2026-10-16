@@ -42,7 +42,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import dashboard_macros, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
+from . import dashboard_macros, feedback_service, ranking_service, support_rules, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -72,6 +72,9 @@ from .schemas import (
     SupportIxcAnalyticsPriorityItem,
     SupportIxcAnalyticsDriverItem,
     SupportIxcN1Summary,
+    SupportFeedback,
+    SupportRanking,
+    SupportRulesState,
     SupportMacroDashboard,
     SupportOpaFilterOption,
     SupportIxcTicketBurstWindow,
@@ -1788,6 +1791,71 @@ def support_dashboard_collaborators(
 ):
     """Equipe fixa do Suporte Técnico (OPA) para o filtro "Colaborador" dos Indicadores do Suporte."""
     return dashboard_macros.support_team_options(db)
+
+
+@router.get("/feedback", response_model=SupportFeedback)
+def support_feedback(
+    date_from: date,
+    date_to: date,
+    attendant_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Feedback individual: indicadores e metas de UM colaborador da equipe do Suporte Técnico (OPA + IXC).
+    `attendant_id` é o id do usuário no OPA, como devolvido por `/dashboard/collaborators`."""
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
+    if (date_to - date_from).days + 1 > feedback_service.MAX_PERIOD_DAYS:
+        raise HTTPException(status_code=400, detail=f"O período máximo do feedback é de {feedback_service.MAX_PERIOD_DAYS} dias.")
+    feedback = feedback_service.collaborator_feedback(db, date_from=date_from, date_to=date_to, attendant_id=attendant_id)
+    if feedback is None:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado na equipe do Suporte.")
+    return feedback
+
+
+@router.get("/ranking", response_model=SupportRanking)
+def support_ranking(
+    month: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Ranking MENSAL do Suporte pelo Quadro de Pontuação; `month` é qualquer dia do mês. Sem ele, o mês corrente."""
+    today = datetime.now(SUPPORT_TIMEZONE).date()
+    if month is not None and month > today:
+        raise HTTPException(status_code=400, detail="O mês não pode estar no futuro.")
+    return ranking_service.monthly_ranking(db, month=month or today, reference=today)
+
+
+def _rules_state(db: Session) -> dict[str, Any]:
+    updated_at, updated_by = support_rules.last_change(db)
+    return {
+        "rules": support_rules.load_current(db),
+        "defaults": support_rules.DEFAULT_RULES,
+        "updated_at": updated_at,
+        "updated_by": updated_by,
+    }
+
+
+@router.get("/rules", response_model=SupportRulesState)
+def get_support_rules(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Regras do Ranking e metas do Feedback/Indicadores em vigor (qualquer um do Suporte consulta)."""
+    return _rules_state(db)
+
+
+@router.put("/rules", response_model=SupportRulesState)
+def update_support_rules(
+    payload: support_rules.SupportRules,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("support:sync_opa")),
+):
+    """Grava uma nova versão das regras, a valer de hoje: o ranking de meses já fechados continua com a regra
+    que estava em vigor neles. Valores inválidos (faixas fora de ordem, meta zero) voltam como 422."""
+    before = support_rules.load_current(db)
+    today = datetime.now(SUPPORT_TIMEZONE).date()
+    support_rules.save(db, payload, saved_by=user.name, today=today)
+    record_audit_log(db, user, "update", "support_rules", "support", before.model_dump(), payload.model_dump())
+    db.commit()
+    return _rules_state(db)
 
 
 @router.get("/ixc/tickets/filter-options")

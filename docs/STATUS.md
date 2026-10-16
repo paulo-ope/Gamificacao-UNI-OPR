@@ -13,6 +13,50 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-16** — **Abas Feedback e Ranking e sub-aba Regras (Configuração) no SGP Suporte**, na branch
+`feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**; sem migration nova). Testado só no banco local
+(Docker em modo dev): os números reais de outubro/setembro saíram, mas **não foram comparados com o painel do OPA nem com
+o IXC**. Os endpoints novos não foram exercitados por HTTP em teste (o fixture `client` não sobe no Python 3.14 local, ver
+pendência abaixo); a lógica tem 62 testes que passam.
+
+**Feedback** (`/suporte?tab=feedback`; `GET /support/feedback`; `feedback_service.py`, `feedback-panel.tsx`, PDF em
+`feedback-print.ts`): escolhe um colaborador da equipe fixa (`dashboard_macros.SUPPORT_TEAM`) e mostra 8 indicadores com meta e
+status (Dentro da Meta / Atenção / Evoluir), cartões, "Meta para a próxima semana", "Como acompanhar" e o PDF no papel timbrado
+da Uni (mesma paleta do e-mail do workspace).
+- **Vínculo com o IXC**: pelo NOME, só dentro dos grupos N1 (105 e 117): casa quando todas as palavras do nome do OPA estão
+  no nome do IXC (sem acento/caixa); empate sem desempate = sem vínculo (aviso na tela). **Aproximado**: homônimos e grafia.
+  O.S. a campo = O.S. dos setores de campo cujo criador tem esse nome (mesma aproximação dos Indicadores).
+- **Chamadas atendidas** = atendimentos do canal `pabx` em que o colaborador foi o PRIMEIRO humano
+  (`first_human_attendant_id`). O valor `pabx` existe no banco local (26.520 atendimentos); **o total por pessoa não foi
+  conferido com o OPA**. Depende do backfill noturno (`first_human_attendant_id` fica vazio sem as mensagens).
+- **Metas** (informadas pelo usuário, iguais para todos): Registro Operacional/Financeiro >= 38, O.S. a campo <= 25, OPASuite >= 96,
+  Chamadas >= 12, Avaliação >= 4,30, TMA <= 1:30:00, TMR <= 2:20. As de contagem são SEMANAIS e a tela as ajusta ao período
+  (dias/7, arredonda para cima); período máximo de 30 dias. TMA/TMR com cobertura < 50% saem como "Dado parcial".
+- O "Combinado da conversa" **não é salvo** (só Copiar e Imprimir/PDF). Foram feitos e retirados a pedido: gráfico de fluxo diário
+  e comparativo semanal.
+
+**Ranking** (`/suporte?tab=ranking`; `GET /support/ranking?month=`; `ranking_service.py`): **mensal** (mês em andamento + 5
+anteriores). Regras PADRÃO (editáveis, ver abaixo): avaliação >= 4,0 = +5 e <= 3,9 = -3; TMR até 1/2/3 min = +5/+3/+1 e -2 a
+cada 3 min acima de 3; ligações: +20 a cada 12 no mês e -10 por SEMANA COMPLETA (dom-sáb inteira dentro do mês e já encerrada)
+com menos de 12. Desempate: menor TMR, depois maior avaliação. Quem não teve atendimento no mês fica fora do ranking. **Ainda
+fora da pontuação** (sem fonte de dados): O.S. incorreta (-2 por O.S.) e desclassificação por advertência/falta injustificada.
+**As ligações dominam o resultado** (em outubro, quem passa de 12 ligações já abre vantagem grande); confirmar com o dono se é o
+peso desejado. A tela (`ranking-panel.tsx`, `opa-ranking.module.css`, `ranking-panel.test.tsx`, 7 testes vitest) foi
+redesenhada por OUTRA sessão (a pasta "Gamificação Codex") sobre o mesmo contrato da API.
+
+**Regras editáveis** (Configuração > Regras, `?tab=settings&sub=rules`; `GET/PUT /support/rules`; `support_rules.py`,
+`rules-panel.tsx`): pontos do Ranking, as 8 metas do Feedback e as metas dos Indicadores do Suporte (CSAT, TMR, TMA,
+resolutividade) + a margem de "Atenção" (10%, vale no Feedback e nos Indicadores). Guardado em `app_settings`
+(`support_rules_history`) como VERSÕES com a data de vigência. **O ranking de um mês FECHADO usa a versão em vigor no último dia
+dele** (mudar a regra não mexe nos meses passados; o mês em andamento usa a atual); números de um mês fechado ainda podem mudar
+se o OPA corrigir dados antigos. Quem altera: permissão `support:sync_opa`; toda gravação entra na auditoria. Valores
+inválidos (faixas fora de ordem, meta zero) voltam 422 do servidor.
+
+**Pendências / a conferir:** (1) comparar com o OPA/IXC o total de chamadas, os tempos e os registros de uma pessoa; (2) abrir as
+três telas logado (visual, PDF, salvar regra) - nada disso foi visto em produção; (3) definir a fonte de "O.S. incorreta" e de
+advertência/falta; (4) `frontend/docs/SUPORTE_RANKING.md` e `frontend/docs/screenshots/suporte-ranking-modernizado.jpg`
+(da outra sessão) ficaram **fora do commit**, o texto cita pastas de outra máquina de desenvolvimento.
+
 **2026-10-15** — **Indicadores do Suporte, Atendimento Operacional N2, aba Configuração, tema claro/escuro e a regra nova de
 TMA/TMR estão mesclados na `master` (PRs #71 a #78) e em produção** (deploy feito pelo dono do sistema em 15/10). Conferido
 por ele na VM: `alembic current` = `20261015_0117 (head)`, `/api/health` e a página principal respondem 200. O recálculo do

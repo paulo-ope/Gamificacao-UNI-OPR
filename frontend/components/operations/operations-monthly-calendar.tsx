@@ -72,12 +72,29 @@ function normalizeKeyPart(value: string): string {
 // só porque o nome batia com o de outra pessoa na mesma data (achado real, 2026-09-21). Backend
 // também identifica o caso por (responsavel, regional) - nunca só pelo nome - ver
 // `get_or_create_daily_case`/`get_or_create_monthly_case` em cases.py.
+// O calendário exibe a regional AGRUPADA (Rolim + São Felipe; São Francisco + São Miguel +
+// Seringueiras), mas o caso fica gravado na filial canônica do colaborador - normaliza as duas
+// pontas pro mesmo grupo, senão o status de casos antigos de São Felipe/São Miguel/Seringueiras
+// sumiria da célula.
+const REGIONAL_GROUP_BY_BRANCH: Record<string, string> = {
+  "uni - sao felipe doeste": "uni - rolim de moura",
+  "uni - sao miguel do guapore": "uni - sao francisco do guapore",
+  "uni - seringueiras": "uni - sao francisco do guapore",
+};
+
+function caseRegionalKey(regional: string | null): string {
+  const key = normalizeKeyPart(regional ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+  return REGIONAL_GROUP_BY_BRANCH[key] ?? key;
+}
+
 function dailyCaseKey(responsibleName: string, regional: string | null, referenceDate: string): string {
-  return `${normalizeKeyPart(responsibleName)}|${normalizeKeyPart(regional ?? "")}|${referenceDate}`;
+  return `${normalizeKeyPart(responsibleName)}|${caseRegionalKey(regional)}|${referenceDate}`;
 }
 
 function monthlyCaseKey(responsibleName: string, regional: string | null): string {
-  return `${normalizeKeyPart(responsibleName)}|${normalizeKeyPart(regional ?? "")}`;
+  return `${normalizeKeyPart(responsibleName)}|${caseRegionalKey(regional)}`;
 }
 
 // "pending" (caso aberto, ainda não justificado) fica de fora deste mapa de propósito: ele usa o

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import User
 from app.services import shift_schedule
+from app.services.regional import normalize_regional_grouped
 
 from . import queries
 from .models import OperationResponsibleAssignment, OperationTeamModel
@@ -277,7 +278,9 @@ def _calendar_day_metrics(orders, reference_regional: str | None) -> dict:
     cross_regional_orders = sum(
         1
         for order in orders
-        if reference_regional and (order.regional or "Não identificada") != reference_regional
+        if reference_regional
+        and normalize_regional_grouped(order.regional or "Não identificada")
+        != normalize_regional_grouped(reference_regional)
     )
     operational_window_orders = [
         order

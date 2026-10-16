@@ -54,6 +54,9 @@ import { BotHumanChart, RankingChart, TimeTrendChart, VolumeTrendChart } from "@
 import { OpaDrilldownSheet, type OpaDrilldown } from "@/app/suporte/_components/opa-drilldown";
 import { useDepartmentAttendantsSync } from "@/app/suporte/_components/use-department-attendants-sync";
 import { DashboardMacros } from "@/app/suporte/_components/dashboard-macros";
+import { FeedbackPanel } from "@/app/suporte/_components/feedback-panel";
+import { RankingPanel } from "@/app/suporte/_components/ranking-panel";
+import { RulesPanel } from "@/app/suporte/_components/rules-panel";
 import { IxcN1Panel } from "@/app/suporte/_components/ixc-n1-panel";
 import { IxcTicketAnalyticsPanel } from "@/app/suporte/_components/ixc-ticket-analytics-panel";
 import { IxcTicketDrilldownPanel } from "@/app/suporte/_components/ixc-ticket-drilldown";
@@ -169,14 +172,14 @@ function overviewFilters(period: { date_from: string; date_to: string }, filters
 
 /** `tab=...` (e `sub=...` para Dados/Sincronização, que vivem em "Configuração") sem datas nem filtros. */
 function settingsAwareTabQuery(tab: OpaModuleTab) {
-  return tab === "data" || tab === "sync" ? `tab=settings&sub=${tab}` : `tab=${tab}`;
+  return tab === "data" || tab === "sync" || tab === "rules" ? `tab=settings&sub=${tab}` : `tab=${tab}`;
 }
 
 function queryStringFor(tab: OpaModuleTab, period: { date_from: string; date_to: string }, filters: SupportOpaAttendanceFilters) {
   const params = new URLSearchParams();
   // Dados e Sincronização vivem dentro de "Configuração": a URL carrega a aba-mãe (que o menu lateral usa
   // para marcar o item ativo) e a sub-aba.
-  if (tab === "data" || tab === "sync") {
+  if (tab === "data" || tab === "sync" || tab === "rules") {
     params.set("tab", "settings");
     params.set("sub", tab);
   } else if (tab !== "overview") {
@@ -295,7 +298,8 @@ function SupportPageContent({ user }: { user: AuthUser }) {
     const tab = initialQueryParams.get("tab") as OpaModuleTab | null;
     if (tab === "agents") return "attendants";
     // "Configuração" abre na sub-aba pedida (`sub=sync`) ou, sem `sub`, em Dados.
-    if (tab === "settings") return initialQueryParams.get("sub") === "sync" ? "sync" : "data";
+    const sub = initialQueryParams.get("sub");
+    if (tab === "settings") return sub === "sync" ? "sync" : sub === "rules" ? "rules" : "data";
     return tab && ACTIVE_OPA_TABS.includes(tab) ? tab : "overview";
   }, [initialQueryParams]);
   const [period, setPeriod] = useState(initialPeriod);
@@ -309,7 +313,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
   // As abas do IXC ("Atendimento IXC", "Atendimento Suporte Interno N1" e "Atendimento Operacional N2") são outra fonte de dado,
   // com período próprio dentro do painel - os filtros globais do OPA Suite não se aplicam a elas.
-  const isIxcView = activeView === "ixc_tickets" || activeView === "ixc_n1" || activeView === "ixc_n2" || activeView === "dashboard";
+  const isIxcView = activeView === "ixc_tickets" || activeView === "ixc_n1" || activeView === "ixc_n2" || activeView === "dashboard" || activeView === "feedback" || activeView === "ranking" || activeView === "rules";
   // Visão Geral (KPIs/gráfico/prioridades) é a entrada da aba "Atendimento IXC" - clicar numa
   // prioridade aprofunda pro drill-down já existente, pré-selecionando a regional clicada.
   const [ixcTicketFocusRegional, setIxcTicketFocusRegional] = useState<string | null>(null);
@@ -899,7 +903,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
 
       <section className="px-4 py-6 lg:px-7">
         <div className="grid gap-5">
-          {activeView === "data" || activeView === "sync" ? (
+          {activeView === "data" || activeView === "sync" || activeView === "rules" ? (
             <div role="tablist" aria-label="Configuração" className="flex w-fit rounded-lg border border-slate-200 bg-slate-50 p-1">
               {OPA_SETTINGS_VIEWS.map(({ value, label, icon: Icon }) => (
                 <button
@@ -1025,6 +1029,9 @@ function SupportPageContent({ user }: { user: AuthUser }) {
           {activeView === "dashboard" ? <DashboardMacros /> : null}
           {activeView === "ixc_n1" ? <IxcN1Panel /> : null}
           {activeView === "ixc_n2" ? <IxcN1Panel level="n2" /> : null}
+          {activeView === "feedback" ? <FeedbackPanel /> : null}
+          {activeView === "ranking" ? <RankingPanel /> : null}
+          {activeView === "rules" ? <RulesPanel canEdit={canSync} /> : null}
           {activeView === "sync" ? (
             <div className="grid gap-5">
               <OpaSyncPanel
