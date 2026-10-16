@@ -2764,3 +2764,112 @@ export type RevisionRunResult = {
     };
   } | null;
 };
+
+// Feedback individual do Suporte (`GET /support/feedback`): indicadores e metas de um colaborador.
+export type SupportFeedbackIndicator = {
+  key: string;
+  label: string;
+  unit: "count" | "score" | "seconds";
+  value: number | null;
+  previous: number | null;
+  // Meta já ajustada ao período (contagens são semanais, proporcionais aos dias) e a meta semanal original.
+  target: number;
+  weekly_target: number;
+  direction: "min" | "max";
+  status: SupportMacroCardStatus;
+  source: "ixc" | "opa";
+  coverage: SupportMacroCoverage | null;
+  note: string | null;
+};
+
+export type SupportFeedbackDailyPoint = {
+  day: string;
+  opa_attendances: number;
+  operational: number;
+  financial: number;
+  field: number;
+  rating: number | null;
+  tma_seconds: number | null;
+  tmr_seconds: number | null;
+};
+
+export type SupportFeedback = {
+  attendant_id: string;
+  name: string;
+  date_from: string;
+  date_to: string;
+  previous_date_from: string | null;
+  previous_date_to: string | null;
+  goal_scale: number;
+  ixc_linked: boolean;
+  indicators: SupportFeedbackIndicator[];
+  summary: { ok: number; attention: number; critical: number; overall: "ok" | "attention" | "critical" };
+  daily: SupportFeedbackDailyPoint[];
+};
+
+// Ranking mensal do Suporte (`GET /support/ranking`), pelo Quadro de Pontuação.
+// `detail`: como os pontos foram formados (hoje só nas ligações: blocos de 12 e semanas abaixo de 12).
+export type SupportRankingCriterion = { value: number | null; points: number; partial: boolean; detail?: string | null };
+
+export type SupportRankingRow = {
+  attendant_id: string;
+  name: string;
+  // false = sem atendimento no mês: fica no fim, sem posição nem pontos.
+  active: boolean;
+  position: number | null;
+  attendances: number;
+  rating: SupportRankingCriterion;
+  tmr: SupportRankingCriterion;
+  calls: SupportRankingCriterion;
+  total_points: number | null;
+};
+
+export type SupportRanking = {
+  date_from: string;
+  date_to: string;
+  months: { date_from: string; date_to: string }[];
+  rows: SupportRankingRow[];
+  rules: { key: string; label: string; lines: string[] }[];
+  tie_break: string;
+  not_included: string;
+};
+
+// Regras editáveis do Suporte (`GET/PUT /support/rules`), em Configuração > Regras.
+export type SupportRankingRules = {
+  rating: { good_min: number; good_points: number; bad_max: number; bad_points: number };
+  tmr_steps: { max_seconds: number; points: number }[];
+  tmr_penalty: { after_seconds: number; block_seconds: number; points: number };
+  calls: { block: number; block_points: number; week_penalty: number };
+};
+
+export type SupportFeedbackGoals = {
+  operational: number;
+  financial: number;
+  field: number;
+  opa_attendances: number;
+  calls: number;
+  rating: number;
+  tma_seconds: number;
+  tmr_seconds: number;
+};
+
+export type SupportIndicatorGoals = {
+  csat: number;
+  tmr_seconds: number;
+  tma_seconds: number;
+  resolutivity_percent: number;
+  attention_margin_percent: number;
+};
+
+export type SupportRules = {
+  ranking: SupportRankingRules;
+  feedback_goals: SupportFeedbackGoals;
+  indicator_goals: SupportIndicatorGoals;
+};
+
+export type SupportRulesState = {
+  rules: SupportRules;
+  defaults: SupportRules;
+  updated_at: string | null;
+  updated_by: string | null;
+};

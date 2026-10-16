@@ -1,4 +1,4 @@
-import { Database, PlugZap, RefreshCw, Tv, type LucideIcon } from "lucide-react";
+import { Database, PlugZap, RefreshCw, SlidersHorizontal, Tv, type LucideIcon } from "lucide-react";
 
 import { GAMIFICATION_NAV_ITEMS } from "@/components/gamification/gamification-nav-items";
 import { MANAGEMENT_NAV_ITEMS } from "@/components/management/management-module-sidebar";
@@ -65,6 +65,7 @@ const SUPPORT_TV_SCREEN: ModuleScreen = {
 const SUPPORT_SETTINGS_SCREENS: ModuleScreen[] = [
   { value: "data", label: "Dados", description: "Tabela analítica", icon: Database, requiredPermissions: [], parentValue: "settings", parentLabel: "Configuração", searchOnly: true },
   { value: "sync", label: "Sincronização", description: "Status do OPA", icon: RefreshCw, requiredPermissions: [], parentValue: "settings", parentLabel: "Configuração", searchOnly: true },
+  { value: "rules", label: "Regras", description: "Ranking e metas", icon: SlidersHorizontal, requiredPermissions: [], parentValue: "settings", parentLabel: "Configuração", searchOnly: true },
 ];
 
 // A Governança de IA é uma aba da Administração (`?tab=ai_governance`) que não está em

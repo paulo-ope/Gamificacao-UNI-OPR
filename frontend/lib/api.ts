@@ -104,6 +104,10 @@ import type {
   SupportIxcTicketBurstWindow,
   SupportIxcTicketDailyPoint,
   SupportIxcN1Summary,
+  SupportFeedback,
+  SupportRanking,
+  SupportRules,
+  SupportRulesState,
   SupportMacroDashboard,
   SupportOpaFilterOption,
   SupportIxcTicketFilterOptions,
@@ -1170,6 +1174,16 @@ export const api = {
     if (params.attendant_id) query.set("attendant_id", params.attendant_id);
     return request<SupportMacroDashboard>(`/support/dashboard/macros?${query.toString()}`);
   },
+
+  supportFeedback: (params: { date_from: string; date_to: string; attendant_id: string }) =>
+    request<SupportFeedback>(`/support/feedback?${new URLSearchParams(params).toString()}`),
+
+  supportRanking: (month?: string) =>
+    request<SupportRanking>(`/support/ranking${month ? `?${new URLSearchParams({ month }).toString()}` : ""}`),
+
+  supportRules: () => request<SupportRulesState>("/support/rules"),
+  updateSupportRules: (rules: SupportRules) =>
+    request<SupportRulesState>("/support/rules", { method: "PUT", body: JSON.stringify(rules) }),
 
   supportIxcTicketFilterOptions: () =>
     request<SupportIxcTicketFilterOptions>(`/support/ixc/tickets/filter-options`),

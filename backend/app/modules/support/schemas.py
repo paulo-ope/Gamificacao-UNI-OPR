@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from .support_rules import SupportRules
+
 
 class SupportPeriodRequest(BaseModel):
     date_from: date
@@ -597,6 +599,116 @@ class SupportMacroDashboard(BaseModel):
     daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
     previous_daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
     weekly: SupportMacroWeekly
+
+
+class SupportFeedbackIndicator(BaseModel):
+    key: str
+    label: str
+    # count, score (nota 0-5) ou seconds - quem formata é a tela.
+    unit: str
+    value: float | None = None
+    previous: float | None = None
+    # Meta já ajustada ao período (as de contagem são semanais, proporcionais aos dias) e a meta semanal original.
+    target: float
+    weekly_target: float
+    # "min": quanto maior melhor; "max": quanto menor melhor.
+    direction: str
+    # ok | attention | critical | partial (cobertura baixa) | no_data
+    status: str
+    source: str
+    coverage: SupportMacroCoverage | None = None
+    note: str | None = None
+
+
+class SupportFeedbackSummary(BaseModel):
+    ok: int
+    attention: int
+    critical: int
+    overall: str
+
+
+class SupportFeedbackDailyPoint(BaseModel):
+    day: date
+    opa_attendances: int
+    operational: int
+    financial: int
+    field: int
+    rating: float | None = None
+    tma_seconds: float | None = None
+    tmr_seconds: float | None = None
+
+
+class SupportFeedback(BaseModel):
+    """`feedback_service.collaborator_feedback`: indicadores e metas individuais de um colaborador do Suporte."""
+
+    attendant_id: str
+    name: str
+    date_from: date
+    date_to: date
+    previous_date_from: date | None = None
+    previous_date_to: date | None = None
+    goal_scale: float
+    # False quando o nome do colaborador não foi encontrado no IXC (registros e O.S. ficam sem valor).
+    ixc_linked: bool
+    indicators: list[SupportFeedbackIndicator]
+    summary: SupportFeedbackSummary
+    daily: list[SupportFeedbackDailyPoint] = Field(default_factory=list)
+
+
+class SupportRulesState(BaseModel):
+    """Regras do Suporte em vigor (Configuração > Regras), com o padrão para o botão "Restaurar padrão"."""
+
+    rules: SupportRules
+    defaults: SupportRules
+    # Dia a partir do qual a versão atual vale e quem a gravou; vazios enquanto nunca foi alterada.
+    updated_at: date | None = None
+    updated_by: str | None = None
+
+
+class SupportRankingCriterion(BaseModel):
+    # Média/quantidade do mês (nota, segundos ou ligações); None sem dado.
+    value: float | None = None
+    points: int
+    # TMR com cobertura baixa: a pontuação sai de uma amostra pequena.
+    partial: bool = False
+    # Como os pontos foram formados (hoje, só nas ligações: blocos de 12 e semanas abaixo de 12).
+    detail: str | None = None
+
+
+class SupportRankingRow(BaseModel):
+    attendant_id: str
+    name: str
+    # False = nenhum atendimento no mês: fica no fim, sem posição nem pontos.
+    active: bool
+    position: int | None = None
+    attendances: int
+    rating: SupportRankingCriterion
+    tmr: SupportRankingCriterion
+    calls: SupportRankingCriterion
+    total_points: int | None = None
+
+
+class SupportRankingMonth(BaseModel):
+    date_from: date
+    date_to: date
+
+
+class SupportRankingRule(BaseModel):
+    key: str
+    label: str
+    lines: list[str]
+
+
+class SupportRanking(BaseModel):
+    """`ranking_service.monthly_ranking`: ranking mensal do Suporte pelo Quadro de Pontuação."""
+
+    date_from: date
+    date_to: date
+    months: list[SupportRankingMonth]
+    rows: list[SupportRankingRow]
+    rules: list[SupportRankingRule]
+    tie_break: str
+    not_included: str
 
 
 class SupportIxcTicketOverviewKpis(BaseModel):
