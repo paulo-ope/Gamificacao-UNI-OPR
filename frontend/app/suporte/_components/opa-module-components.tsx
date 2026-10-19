@@ -20,6 +20,7 @@ import {
   LayoutDashboard,
   ListFilter,
   Loader2,
+  ClipboardList,
   MessageSquareText,
   Minus,
   RefreshCw,
@@ -77,6 +78,7 @@ export type OpaModuleTab =
   | "ixc_n2"
   | "feedback"
   | "ranking"
+  | "occurrences"
   | "operation"
   | "queues"
   | "agents"
@@ -102,6 +104,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "ixc_n2", label: "Atendimento Operacional N2", description: "Interno e externo", icon: Headphones },
   { value: "feedback", label: "Feedback", description: "Metas por colaborador", icon: MessageSquareText },
   { value: "ranking", label: "Ranking", description: "Pontuação mensal", icon: Trophy },
+  { value: "occurrences", label: "Ocorrências", description: "Registros do assunto 211", icon: ClipboardList },
   { value: "settings", label: "Configuração", description: "Dados e sincronização", icon: Settings2 },
   { value: "operation", label: "Operação", description: "Planejado", icon: BarChart3 },
   { value: "queues", label: "Filas", description: "Planejado", icon: GitBranch },
@@ -112,7 +115,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
 
 // `data` e `sync` não têm item próprio no menu: vivem como sub-abas de "Configuração" (`settings`), mas
 // continuam válidas na URL (`?tab=data`, `?tab=sync`) para links já existentes.
-export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "dashboard", "attendants", "settings", "data", "sync", "rules", "ixc_tickets", "ixc_n1", "ixc_n2", "feedback", "ranking"];
+export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "dashboard", "attendants", "settings", "data", "sync", "rules", "ixc_tickets", "ixc_n1", "ixc_n2", "feedback", "ranking", "occurrences"];
 
 /** Sub-abas de "Configuração". */
 export const OPA_SETTINGS_VIEWS: { value: "data" | "sync" | "rules"; label: string; icon: LucideIcon }[] = [

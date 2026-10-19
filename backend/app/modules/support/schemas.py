@@ -459,6 +459,99 @@ class SupportIxcTicketOut(BaseModel):
     subtema_inferido: str | None = None
 
 
+class SupportOccurrenceOut(BaseModel):
+    id: int
+    source_id: str
+    protocol: str | None = None
+    created_at: datetime | None = None
+    regional: str
+    city: str | None = None
+    neighborhood: str | None = None
+    customer_name: str | None = None
+    status: str | None = None
+    report: str | None = None
+    diagnosis_id: str | None = None
+    diagnosis_name: str | None = None
+    is_open: bool = True
+    finalized_at: datetime | None = None
+    finalization_report: str | None = None
+    resolution_minutes: float | None = None
+    open_minutes: float | None = None
+
+
+class SupportOccurrenceGroupStat(BaseModel):
+    """Totais de um grupo (regional ou diagnóstico) na visão geral das ocorrências."""
+
+    name: str | None = None
+    regional: str | None = None
+    total: int
+    open: int
+    finalized: int
+    share_pct: float
+    avg_resolution_minutes: float | None = None
+
+
+class SupportOccurrenceKpis(BaseModel):
+    total: int
+    previous_total: int | None = None
+    delta_pct: float | None = None
+    open: int
+    finalized: int
+    finalization_rate_pct: float | None = None
+    avg_resolution_minutes: float | None = None
+    median_resolution_minutes: float | None = None
+    oldest_open_minutes: float | None = None
+    without_diagnosis: int
+
+
+class SupportOccurrenceMatrixCell(BaseModel):
+    regional: str
+    diagnosis: str
+    count: int
+
+
+class SupportOccurrenceDailyPoint(BaseModel):
+    day: date
+    opened: int
+    finalized: int
+    open: int = 0
+    avg_resolution_minutes: float | None = None
+
+
+class SupportOccurrenceHourPoint(BaseModel):
+    hour: int
+    count: int
+
+
+class SupportOccurrenceOverview(BaseModel):
+    kpis: SupportOccurrenceKpis
+    top_regional: SupportOccurrenceGroupStat | None = None
+    top_open_regional: SupportOccurrenceGroupStat | None = None
+    top_diagnosis: SupportOccurrenceGroupStat | None = None
+    by_regional: list[SupportOccurrenceGroupStat] = Field(default_factory=list)
+    by_diagnosis: list[SupportOccurrenceGroupStat] = Field(default_factory=list)
+    matrix: list[SupportOccurrenceMatrixCell] = Field(default_factory=list)
+    matrix_regionals: list[str] = Field(default_factory=list)
+    matrix_diagnoses: list[str] = Field(default_factory=list)
+    daily: list[SupportOccurrenceDailyPoint] = Field(default_factory=list)
+    by_hour: list[SupportOccurrenceHourPoint] = Field(default_factory=list)
+    open_items: list[SupportOccurrenceOut] = Field(default_factory=list)
+    recent_finalizations: list[SupportOccurrenceOut] = Field(default_factory=list)
+
+
+class SupportOccurrenceRegionalCount(BaseModel):
+    regional: str
+    count: int
+
+
+class SupportOccurrencePage(BaseModel):
+    """Registros de Ocorrências (assunto 211 do IXC): página + total por regional do recorte."""
+
+    total: int
+    items: list[SupportOccurrenceOut] = Field(default_factory=list)
+    by_regional: list[SupportOccurrenceRegionalCount] = Field(default_factory=list)
+
+
 class SupportIxcN1DailyPoint(BaseModel):
     day: date
     operational: int

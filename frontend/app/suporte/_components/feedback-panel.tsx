@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { OverviewBlock } from "@/components/overview/overview-block";
 import { KpiCard, SPARK_COLOR } from "@/components/overview/overview-kpi-strip";
+import { sparkDayLabel } from "@/components/overview/overview-sparkline";
 import { api } from "@/lib/api";
 import { percentChange } from "@/lib/period";
 import type { SupportFeedback, SupportFeedbackIndicator, SupportMacroCardStatus, SupportOpaFilterOption } from "@/lib/types";
@@ -61,28 +62,40 @@ function buildPlainText(data: SupportFeedback, pending: SupportFeedbackIndicator
   return lines.join("\n");
 }
 
-function sparkFor(key: string, daily: SupportFeedback["daily"]): number[] {
-  const compact = (values: (number | null)[]) => values.filter((value): value is number => typeof value === "number");
-  switch (key) {
-    case "operational":
-    case "financial":
-    case "field":
-    case "opa_attendances":
-      return daily.map((point) => point[key]);
-    case "rating":
-      return compact(daily.map((point) => point.rating));
-    case "tma":
-      return compact(daily.map((point) => point.tma_seconds));
-    case "tmr":
-      return compact(daily.map((point) => point.tmr_seconds));
-    default:
-      return [];
+// Valor e dia de cada ponto do mini-gráfico (e do tooltip); dia sem valor não entra.
+function sparkFor(key: string, daily: SupportFeedback["daily"]): { values: number[]; labels: string[] } {
+  const read = (point: SupportFeedback["daily"][number]): number | null => {
+    switch (key) {
+      case "operational":
+      case "financial":
+      case "field":
+      case "opa_attendances":
+        return point[key];
+      case "rating":
+        return point.rating;
+      case "tma":
+        return point.tma_seconds;
+      case "tmr":
+        return point.tmr_seconds;
+      default:
+        return null;
+    }
+  };
+  const result: { values: number[]; labels: string[] } = { values: [], labels: [] };
+  for (const point of daily) {
+    const value = read(point);
+    if (typeof value === "number") {
+      result.values.push(value);
+      result.labels.push(sparkDayLabel(point.day));
+    }
   }
+  return result;
 }
 
 function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportFeedbackIndicator; daily: SupportFeedback["daily"]; previousLabel: string }) {
   const tone: Tone = STATUS_TONE[indicator.status];
   const change = indicator.value !== null && indicator.previous !== null ? indicator.value - indicator.previous : null;
+  const spark = sparkFor(indicator.key, daily);
   const hint = [
     periodTargetLabel(indicator).replace("Mínimo", "Meta ≥").replace("Até", "Meta ≤"),
     coverageNote({ status: indicator.status, coverage: indicator.coverage }),
@@ -101,7 +114,9 @@ function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportF
         againstLabel: previousLabel,
       }}
       hint={hint || (change !== null ? `${formatCardChange({ unit: indicator.unit, change })} vs. ${previousLabel}` : undefined)}
-      spark={sparkFor(indicator.key, daily)}
+      spark={spark.values}
+      sparkLabels={spark.labels}
+      sparkFormat={(point) => formatCardValue({ unit: indicator.unit }, point)}
       sparkColor={SPARK_BY_STATUS[indicator.status]}
     />
   );

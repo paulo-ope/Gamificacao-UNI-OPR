@@ -12,9 +12,31 @@ const ReactECharts = dynamic(() => import("echarts-for-react"), {
 
 const DEFAULT_HEIGHT = 46;
 
-/** Tendência decorativa do cartão: o número do cartão já diz tudo, então fica fora da árvore de acessibilidade. */
-export function OverviewSparkline({ values, color, height = DEFAULT_HEIGHT }: { values: readonly number[]; color: string; height?: number }) {
-  const option = useMemo(() => buildSparklineOption(values, color), [values, color]);
+/** "2026-10-17" -> "17/10" (rótulo do dia no tooltip dos mini-gráficos). */
+export function sparkDayLabel(iso: string) {
+  const [, month, day] = iso.split("-");
+  return day && month ? `${day.slice(0, 2)}/${month}` : iso;
+}
+
+/**
+ * Tendência do cartão. O número do cartão já diz tudo, então o desenho fica fora da árvore de
+ * acessibilidade; passar o mouse mostra o ponto (dia, valor, diferença para o anterior, pico).
+ * `labels` tem um rótulo por valor (mesma ordem/tamanho); `format` formata o valor do tooltip.
+ */
+export function OverviewSparkline({
+  values,
+  color,
+  height = DEFAULT_HEIGHT,
+  labels,
+  format,
+}: {
+  values: readonly number[];
+  color: string;
+  height?: number;
+  labels?: readonly string[];
+  format?: (value: number) => string;
+}) {
+  const option = useMemo(() => buildSparklineOption(values, color, labels, format), [values, color, labels, format]);
   if (values.length < 2) return <div style={{ height }} aria-hidden="true" />;
   return (
     <div aria-hidden="true">

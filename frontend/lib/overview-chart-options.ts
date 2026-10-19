@@ -620,9 +620,42 @@ export function buildOverviewSlaBacklogOption(
  * `min`/`max` seguem os próprios valores (com folga) porque a escala do cartão não é comparável
  * com a dos outros - o sparkline mostra tendência, não magnitude.
  */
-export function buildSparklineOption(values: readonly number[], color: string): EChartsOption {
+export function buildSparklineOption(
+  values: readonly number[],
+  color: string,
+  labels?: readonly string[],
+  format: (value: number) => string = (value) => new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(value),
+): EChartsOption {
+  const max = Math.max(...values);
+  const min = Math.min(...values);
   return {
     animation: false,
+    // Passar o mouse mostra o dia, o valor, a diferença para o ponto anterior e se é o pico/mínimo.
+    tooltip: {
+      trigger: "axis",
+      appendToBody: true,
+      confine: false,
+      backgroundColor: "#0f172a",
+      borderWidth: 0,
+      padding: [8, 10],
+      textStyle: { color: "#f8fafc", fontSize: 11 },
+      axisPointer: { type: "line", lineStyle: { color, width: 1, type: "dashed" } },
+      formatter: (params: unknown) => {
+        const first = (Array.isArray(params) ? params[0] : params) as { dataIndex?: number } | undefined;
+        const index = Number(first?.dataIndex ?? -1);
+        const value = values[index];
+        if (value === undefined) return "";
+        const lines = [`<strong>${labels?.[index] ?? `Ponto ${index + 1}`}</strong>`, format(value)];
+        if (index > 0) {
+          const diff = value - values[index - 1];
+          const sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
+          lines.push(`<span style="color:#94a3b8">${sign}${format(Math.abs(diff))} vs. ponto anterior</span>`);
+        }
+        if (max !== min && value === max) lines.push('<span style="color:#fbbf24">▲ Pico do período</span>');
+        else if (max !== min && value === min) lines.push('<span style="color:#7dd3fc">▼ Menor valor do período</span>');
+        return lines.join("<br/>");
+      },
+    },
     grid: { left: 0, right: 0, top: 6, bottom: 0 },
     xAxis: { type: "category", show: false, boundaryGap: false, data: values.map((_, index) => index) },
     yAxis: {
@@ -636,9 +669,18 @@ export function buildSparklineOption(values: readonly number[], color: string): 
         type: "line",
         data: [...values],
         smooth: true,
-        symbol: "none",
+        // Sem marcas fixas; o ponto sob o mouse aparece no hover (`emphasis`).
+        symbol: "circle",
+        symbolSize: 7,
+        showSymbol: false,
         lineStyle: { width: 2, color },
+        itemStyle: { color, borderColor: "#ffffff", borderWidth: 2 },
         areaStyle: { color, opacity: 0.12 },
+        // Marca discreta no pico, para o cartão já mostrar onde foi o ponto mais alto.
+        markPoint:
+          values.length > 1 && max !== min
+            ? { symbol: "circle", symbolSize: 6, silent: true, itemStyle: { color, borderColor: "#ffffff", borderWidth: 1.5 }, label: { show: false }, data: [{ name: "Pico", type: "max" }] }
+            : undefined,
       },
     ],
   };

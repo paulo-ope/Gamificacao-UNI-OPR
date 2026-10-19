@@ -207,14 +207,14 @@ def test_top_attendants_never_shows_the_raw_id_as_a_name(db_session):
     assert ranking[0]["name"] == "Atendente sem nome"
 
 
-def test_snapshot_reports_missing_reason_as_not_informed(db_session):
+def test_snapshot_reports_missing_reason_as_sem_motivo_registrado(db_session):
     _seed_day(db_session)
 
     snapshot = opa_tv_service.build_snapshot(db_session, now=NOW)
 
     labels = {item["label"]: item["total"] for item in snapshot["top_reasons"]}
     assert labels["Sem conexão"] == 2
-    assert labels["Não informado"] == 1
+    assert labels["Sem motivo registrado"] == 1
 
 
 def test_snapshot_isolates_a_failing_block_instead_of_blanking_the_whole_tv(db_session, monkeypatch):

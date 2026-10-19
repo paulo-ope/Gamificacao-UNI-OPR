@@ -140,6 +140,10 @@ SUPPORT_TEAM: tuple[tuple[str, str], ...] = (
     ("Matheus Henrique", "Matheus Henrique"),
     ("Willamy Carrilho", "Willamy Carrilho"),
     ("Weverton Cordeiro", "Weverton Cordeiro"),
+    # Incluído em 2026-10-19 a pedido do usuário: atende pelo Suporte (grupo 105 do IXC, usuário 1143).
+    ("Gilson Melgar", "Gilson Hadley da Costa Melgar"),
+    # Incluída em 2026-10-19 a pedido do usuário (grupo 105 do IXC, usuário 551).
+    ("Victoria Celestino", "Victoria Celestino"),
 )
 
 

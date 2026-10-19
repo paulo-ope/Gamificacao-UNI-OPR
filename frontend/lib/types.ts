@@ -2428,6 +2428,69 @@ export type SupportIxcTicketPage = {
   items: SupportIxcTicketOut[];
 };
 
+export type SupportOccurrence = {
+  id: number;
+  source_id: string;
+  protocol: string | null;
+  created_at: string | null;
+  regional: string;
+  city: string | null;
+  neighborhood: string | null;
+  customer_name: string | null;
+  status: string | null;
+  report: string | null;
+  diagnosis_id: string | null;
+  diagnosis_name: string | null;
+  is_open: boolean;
+  finalized_at: string | null;
+  finalization_report: string | null;
+  resolution_minutes: number | null;
+  open_minutes: number | null;
+};
+
+export type SupportOccurrencePage = {
+  total: number;
+  items: SupportOccurrence[];
+  by_regional: { regional: string; count: number }[];
+};
+
+export type SupportOccurrenceGroupStat = {
+  name?: string | null;
+  regional?: string | null;
+  total: number;
+  open: number;
+  finalized: number;
+  share_pct: number;
+  avg_resolution_minutes: number | null;
+};
+
+export type SupportOccurrenceOverview = {
+  kpis: {
+    total: number;
+    previous_total: number | null;
+    delta_pct: number | null;
+    open: number;
+    finalized: number;
+    finalization_rate_pct: number | null;
+    avg_resolution_minutes: number | null;
+    median_resolution_minutes: number | null;
+    oldest_open_minutes: number | null;
+    without_diagnosis: number;
+  };
+  top_regional: SupportOccurrenceGroupStat | null;
+  top_open_regional: SupportOccurrenceGroupStat | null;
+  top_diagnosis: SupportOccurrenceGroupStat | null;
+  by_regional: SupportOccurrenceGroupStat[];
+  by_diagnosis: SupportOccurrenceGroupStat[];
+  matrix: { regional: string; diagnosis: string; count: number }[];
+  matrix_regionals: string[];
+  matrix_diagnoses: string[];
+  daily: { day: string; opened: number; finalized: number; open: number; avg_resolution_minutes: number | null }[];
+  by_hour: { hour: number; count: number }[];
+  open_items: SupportOccurrence[];
+  recent_finalizations: SupportOccurrence[];
+};
+
 export type SupportIxcTicketFilterOption = {
   id: string;
   name: string;

@@ -81,6 +81,8 @@ class SupportTvAttendant(BaseModel):
     # TMR geral do atendente no dia (inclui resposta de bot) - mesmo critério do TMR principal da TV.
     average_tmr_seconds: float | None = None
     average_rating: float | None = None
+    # Atendimentos em andamento agora (status EA). Só na TV do Agendamento; None = não é o painel.
+    in_progress: int | None = None
 
 
 class SupportTvBurst(BaseModel):
@@ -125,6 +127,21 @@ class SupportTvN1(BaseModel):
     financial: int
     total: int
     previous_total: int
+
+
+class SupportTvQueueItem(BaseModel):
+    # Nome abreviado do cliente (ou o protocolo, se o OPA não trouxe nome).
+    label: str
+    wait_seconds: int
+
+
+class SupportTvQueue(BaseModel):
+    """Clientes aguardando na fila (status `AG`, sem atendente, abertos nas últimas 24 h). Só na TV do
+    Agendamento; `items` traz os mais antigos e `total` conta todos."""
+
+    total: int
+    longest_wait_seconds: int | None = None
+    items: list[SupportTvQueueItem] = Field(default_factory=list)
 
 
 class SupportTvSync(BaseModel):
@@ -197,6 +214,7 @@ class SupportTvSnapshot(BaseModel):
     attendants: list[SupportTvAttendant] | None = None
     radar: SupportTvRadar
     n1: SupportTvN1 | None = None
+    queue: SupportTvQueue | None = None
     sync: SupportTvSync
     # Blocos que não puderam ser calculados (ex.: "radar.bursts"), para a tela avisar.
     unavailable: list[str] = Field(default_factory=list)

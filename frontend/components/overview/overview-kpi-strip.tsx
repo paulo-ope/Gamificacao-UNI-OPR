@@ -15,6 +15,8 @@ export type OverviewKpiSeries = {
   completed: readonly number[];
   backlog: readonly number[];
   sla: readonly number[];
+  /** Rótulo (dia) de cada ponto das séries acima, na mesma ordem; usado no tooltip do mini-gráfico. */
+  labels?: { opened: readonly string[]; completed: readonly string[]; backlog: readonly string[]; sla: readonly string[] };
 };
 
 /** Atendimentos do Suporte Interno no mesmo período; `null` quando o perfil não tem acesso ao Suporte. */
@@ -59,6 +61,8 @@ export function KpiCard({
   delta,
   spark,
   sparkColor,
+  sparkLabels,
+  sparkFormat,
   large = false,
 }: {
   label: string;
@@ -68,6 +72,10 @@ export function KpiCard({
   delta?: SummaryMetricDelta;
   spark: readonly number[];
   sparkColor: string;
+  /** Um rótulo (ex.: o dia) por ponto de `spark`, para o tooltip ao passar o mouse. */
+  sparkLabels?: readonly string[];
+  /** Formata o valor de cada ponto no tooltip (ex.: segundos -> hh:mm:ss). */
+  sparkFormat?: (value: number) => string;
   /** Cartão de destaque (macro): número maior e mini-gráfico mais alto. */
   large?: boolean;
 }) {
@@ -93,7 +101,7 @@ export function KpiCard({
         {hint ? <p className="mt-1 text-[11px] leading-snug text-slate-500">{hint}</p> : null}
       </div>
       <div className="mt-auto pt-2">
-        <OverviewSparkline values={spark} color={sparkColor} height={large ? 120 : undefined} />
+        <OverviewSparkline values={spark} color={sparkColor} labels={sparkLabels} format={sparkFormat} height={large ? 120 : undefined} />
       </div>
     </div>
   );
@@ -158,6 +166,8 @@ export function OverviewKpiStrip({
         delta={delta(overview?.opened, previous?.opened, null)}
         hint="Demanda que entrou, qualquer equipe"
         spark={series.opened}
+        sparkLabels={series.labels?.opened}
+        sparkFormat={formatInteger}
         sparkColor={SPARK_COLOR.blue}
       />
       <KpiCard
@@ -167,6 +177,8 @@ export function OverviewKpiStrip({
         delta={delta(overview?.completed, previous?.completed, true)}
         hint="Com os filtros aplicados"
         spark={series.completed}
+        sparkLabels={series.labels?.completed}
+        sparkFormat={formatInteger}
         sparkColor={SPARK_COLOR.emerald}
       />
       <KpiCard
@@ -179,6 +191,8 @@ export function OverviewKpiStrip({
             : "Estoque de agora, qualquer equipe"
         }
         spark={series.backlog}
+        sparkLabels={series.labels?.backlog}
+        sparkFormat={formatInteger}
         sparkColor={SPARK_COLOR.amber}
       />
       {canSeeSla ? (
@@ -189,6 +203,8 @@ export function OverviewKpiStrip({
           delta={delta(overview?.sla_rate, previous?.sla_rate, true)}
           hint="Finalizadas no prazo, com filtros"
           spark={series.sla}
+          sparkLabels={series.labels?.sla}
+          sparkFormat={formatPercent}
           sparkColor={slaTone === "red" ? SPARK_COLOR.red : SPARK_COLOR.blue}
         />
       ) : null}

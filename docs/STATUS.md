@@ -13,6 +13,60 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-19** — **TV Agendamento** (`/agendamento/tv`, `GET /api/scheduling/tv/{snapshot,presence}`, permissão `scheduling:read`),
+na branch `feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**). Testada por testes de lógica
+(`test_scheduling_tv_snapshot.py`, 7 casos) e contra o banco/OPA locais; **não foi aberta num navegador logado nesta sessão**.
+Sem migration.
+- **Mesma tela da TV do Suporte**, agora um componente compartilhado (`components/support-tv/tv-screen.tsx`; as páginas
+  `/suporte/tv` e `/agendamento/tv` só passam título, permissão e funções de busca). A regra continua em `opa_tv_service.py`
+  (`build_snapshot(scope="scheduling")`); a rota nova só troca permissão e escopo.
+- **Recorte fixo**, sem engrenagem de configuração: todo departamento do OPA cujo nome contém "agendament" (no banco local, 12
+  de 14 com atendimento: "Agendamentos" e "(JPA) Agendamento" etc.). Casa por nome, então filial nova entra sozinha. Sem nenhum
+  departamento encontrado a TV fica zerada, nunca cai em "todos".
+- **Diferenças da TV do Agendamento**: sem o chip "N1 hoje"; no lugar do radar de incidente fica a **Fila de espera** (status `AG`
+  do OPA, sem atendente, abertos nas últimas 24 h; nome abreviado, ex. "Aline S."; faixas de cor 5 min/15 min são só sinalização
+  visual, não meta do negócio). **A fila é lida AO VIVO da API do OPA** (cache de 10 s; cai no banco local se o OPA falhar),
+  porque a importação roda de tempos em tempos e deixava a fila velha. O ranking de atendentes mostra a equipe toda (até 12).
+- **Nas DUAS TVs, painel de atendentes = "em atendimento agora"**: o número grande é a quantidade de atendimentos em andamento
+  de cada um (status `EA`, sem encerramento, abertos nas últimas 24 h - o OPA deixa `EA` parado por meses), não o volume do
+  dia. TMR e nota (CSAT) seguem sendo os do dia. Atendimento pausado (`PS`) não conta. TV do Suporte continua com top 5.
+- **"Sem motivo registrado" (era "Não informado") em Principais motivos, nas duas TVs.** Causa confirmada no OPA: o atendimento vem com `motivos: []` (o atendente encerrou sem classificar, ou ainda está em andamento); não é falha da importação. No Agendamento ~39% dos atendimentos dos últimos 30 dias (46% a 69% por atendente; 89% nos que fecham em menos de 2 min) e subindo (26% em agosto, 42-50% em outubro). Só o rótulo da TV mudou; a Visão Geral segue "Não informado". Não se sabe se o motivo é obrigatório no OPA nem por que subiu.
+- **Falha de teste que já existia**: `test_scheduling_sync_health.py::test_sync_health_reflects_appsetting_values` falha também
+  sem estas mudanças.
+
+**2026-10-19** — **Aba Ocorrências no SGP Suporte** (assunto 211 do IXC, "Registro de Ocorrência"), na branch
+`feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**). Testada só no banco local (96 ocorrências de
+15 a 19/10) e por 14 testes de lógica; **não foi aberta por um navegador logado nesta sessão** (o visual foi validado pelo
+usuário em capturas de tela durante o trabalho), e os endpoints não foram exercitados por HTTP (fixture `client` não sobe no
+Python 3.14 local). **Tem migration nova: `20261019_0118` (tabela `support_occurrence_details`) - precisa rodar no deploy.**
+- **Fonte**: os tickets já eram importados (`SupportIxcTicket`, sem filtro de assunto). O novo `occurrences_sync.py` roda depois
+  da importação de atendimentos e, só para o assunto 211, grava o diagnóstico (`su_ticket.id_su_diagnostico` x `su_diagnostico`)
+  e a finalização (mensagem de `su_mensagens` com `su_status = 'S'`: horário, relato, operador). Backfill do que já existia:
+  `occurrences_sync.backfill_occurrence_details` (rodado no banco local; **rodar também em produção após a migration**).
+- **Regras** (`occurrences_service.py`): "em aberto" = sem finalização (sem mensagem de finalização e `su_status != 'S'`);
+  **diagnóstico só vale entre as finalizadas** (em aberto aparece como "Aguardando finalização", nunca "Sem diagnóstico");
+  regional vem do `id_filial` normalizado; respeita o escopo regional do usuário; permissão `support:read`. Horários seguem a
+  convenção do módulo (relógio do IXC gravado como UTC; a tela exibe sem conversão de fuso).
+- **Telas** (`/suporte?tab=occurrences`): sub-abas **Visão geral** (no desenho dos Indicadores do Suporte: cartões com mini-gráfico,
+  blocos de números, ranking de regionais, rosca de diagnósticos, fluxo diário, horário de abertura, mapa de calor regional x
+  diagnóstico, listas de em aberto/finalizadas recolhidas por padrão) e **Registros** (lista com filtros de situação, diagnóstico,
+  regional e busca no relato). Todo número/gráfico/item é clicável e abre um painel lateral com as ocorrências. Endpoints:
+  `GET /support/ixc/occurrences` e `/ixc/occurrences/overview`.
+- **Atenção - tempo de finalização**: no banco local, 69 das 76 finalizadas foram registradas **depois do fato, em segundos**
+  (relatos citam 14 a 16/10; começou a ser usado em 15/10), então o tempo médio/mediana saem muito baixos por enquanto. Não foi
+  confirmado com o dono se o indicador deve ignorar finalizações quase imediatas.
+- **Mudanças em componentes compartilhados**: o mini-gráfico dos cartões (`OverviewSparkline`/`KpiCard`) agora tem tooltip ao
+  passar o mouse (dia, valor, diferença para o ponto anterior, pico/mínimo) - vale na Visão Geral da operação, Indicadores do
+  Suporte, Feedback e Ocorrências. Em Indicadores do Suporte, o departamento já abre com **Suporte Técnico e Financeiro**
+  (casados pelo nome; a escolha do usuário é lembrada em `localStorage`).
+- **Equipe fixa do Suporte** (`dashboard_macros.SUPPORT_TEAM`, usada também no Feedback e no Ranking): incluídos **Gilson Melgar** e
+  **Victoria Celestino** (agora 25). Ficaram de fora, por decisão do usuário ou por serem de outra área: Ezequiel Ricardo (N1 ativo
+  no IXC, não incluído), Loryan Paulo (inativo no IXC), Theo (sem vínculo no IXC), Emanuelly Cavalheiro/Eberton Oliveira/Sabrina da
+  Cunha (grupo N2).
+- **Pendências**: (1) migration + backfill em produção; (2) decidir o fluxo diário (barras + linha, eixo só nos dias com dado) e o
+  horário de abertura (área suavizada 6h-22h), propostos e não feitos; (3) confirmar a regra do tempo de finalização; (4) o
+  padrão `frontend/docs/SUPORTE_RANKING.md` e a imagem em `frontend/docs/screenshots/` seguem fora do commit (outra sessão).
+
 **2026-10-16** — **Abas Feedback e Ranking e sub-aba Regras (Configuração) no SGP Suporte**, na branch
 `feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**; sem migration nova). Testado só no banco local
 (Docker em modo dev): os números reais de outubro/setembro saíram, mas **não foram comparados com o painel do OPA nem com
