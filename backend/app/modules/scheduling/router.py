@@ -18,8 +18,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import permissions_for_user, require_permission
 from app.db.session import SessionLocal, get_db
+from app.services.opa_client import OpaApiError, get_opa_client
 from app.models import SchedulingJob, User
 from app.modules.scheduling import metrics as metrics_engine
+from app.modules.support import opa_presence_service, opa_tv_service
+from app.modules.support.tv_schemas import SupportTvPresence, SupportTvSnapshot
 from app.modules.scheduling.models import (
     SchedulingEvent,
     SchedulingOperator,
@@ -714,3 +717,36 @@ def sync_health(
         last_error_at=get_setting(db, SCHEDULING_SYNC_LAST_ERROR_AT_KEY, "") or None,
         consecutive_failures=consecutive_failures,
     )
+
+
+# --- TV do Agendamento ---------------------------------------------------------------------
+# Mesma TV do Suporte Interno, com recorte FIXO nos departamentos de agendamento do OPA (ver
+# `opa_tv_service.scheduling_department_ids`). A regra de negócio vive no módulo de suporte (dono do
+# dado do OPA); aqui só muda a permissão (`scheduling:read`) e o escopo.
+
+
+@router.get("/tv/snapshot", response_model=SupportTvSnapshot)
+def scheduling_tv_snapshot(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Atendimentos do dia dos departamentos de agendamento do OPA, só agregados (sem cliente)."""
+    return opa_tv_service.build_snapshot(db, scope="scheduling", opa_client=get_opa_client())
+
+
+@router.get("/tv/presence", response_model=SupportTvPresence)
+def scheduling_tv_presence(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission("scheduling:read")),
+):
+    """Presença (campo `online` do OPA) só dos atendentes dos departamentos de agendamento."""
+    try:
+        return opa_presence_service.build_presence(
+            db,
+            get_opa_client(),
+            datetime.now(timezone.utc),
+            opa_tv_service.scheduling_department_ids(db),
+        )
+    except OpaApiError as exc:
+        logger.warning("scheduling_tv_presence_indisponivel erro=%s", exc)
+        raise HTTPException(status_code=502, detail="Não foi possível consultar a presença dos atendentes no OPA agora.") from exc

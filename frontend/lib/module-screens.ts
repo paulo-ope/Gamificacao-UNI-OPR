@@ -60,6 +60,17 @@ const SUPPORT_TV_SCREEN: ModuleScreen = {
   opensInNewTab: true,
 };
 
+// Mesma ideia da TV do Suporte: rota própria (`/agendamento/tv`), só no menu global.
+const SCHEDULING_TV_SCREEN: ModuleScreen = {
+  value: "tv",
+  label: "TV Agendamento",
+  description: "Painel para televisão",
+  icon: Tv,
+  requiredPermissions: [],
+  path: "/agendamento/tv",
+  opensInNewTab: true,
+};
+
 // Dados e Sincronização são sub-abas de "Configuração" no Suporte (`?tab=settings&sub=...`): não têm item
 // próprio no menu lateral, mas a busca global ainda os encontra.
 const SUPPORT_SETTINGS_SCREENS: ModuleScreen[] = [
@@ -185,7 +196,7 @@ export function moduleScreens(moduleKey: WorkspaceModule["key"], icon: LucideIco
     ];
   }
   if (moduleKey === "scheduling") {
-    return withPermissions(SCHEDULING_NAV_ITEMS, {});
+    return [...withPermissions(SCHEDULING_NAV_ITEMS, {}), SCHEDULING_TV_SCREEN];
   }
   if (moduleKey === "support") {
     // Só as abas ativas: as "Planejado" do módulo existem na lista mas não têm tela.

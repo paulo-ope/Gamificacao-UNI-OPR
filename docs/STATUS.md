@@ -13,6 +13,28 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-19** — **TV Agendamento** (`/agendamento/tv`, `GET /api/scheduling/tv/{snapshot,presence}`, permissão `scheduling:read`),
+na branch `feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**). Testada por testes de lógica
+(`test_scheduling_tv_snapshot.py`, 7 casos) e contra o banco/OPA locais; **não foi aberta num navegador logado nesta sessão**.
+Sem migration.
+- **Mesma tela da TV do Suporte**, agora um componente compartilhado (`components/support-tv/tv-screen.tsx`; as páginas
+  `/suporte/tv` e `/agendamento/tv` só passam título, permissão e funções de busca). A regra continua em `opa_tv_service.py`
+  (`build_snapshot(scope="scheduling")`); a rota nova só troca permissão e escopo.
+- **Recorte fixo**, sem engrenagem de configuração: todo departamento do OPA cujo nome contém "agendament" (no banco local, 12
+  de 14 com atendimento: "Agendamentos" e "(JPA) Agendamento" etc.). Casa por nome, então filial nova entra sozinha. Sem nenhum
+  departamento encontrado a TV fica zerada, nunca cai em "todos".
+- **Diferenças da TV do Agendamento**: sem o chip "N1 hoje"; no lugar do radar de incidente fica a **Fila de espera** (status `AG`
+  do OPA, sem atendente, abertos nas últimas 24 h; nome abreviado, ex. "Aline S."; faixas de cor 5 min/15 min são só sinalização
+  visual, não meta do negócio). **A fila é lida AO VIVO da API do OPA** (cache de 10 s; cai no banco local se o OPA falhar),
+  porque a importação roda de tempos em tempos e deixava a fila velha. O ranking de atendentes mostra a equipe toda (até 12).
+- **Nas DUAS TVs, painel de atendentes = "em atendimento agora"**: o número grande é a quantidade de atendimentos em andamento
+  de cada um (status `EA`, sem encerramento, abertos nas últimas 24 h - o OPA deixa `EA` parado por meses), não o volume do
+  dia. TMR e nota (CSAT) seguem sendo os do dia. Atendimento pausado (`PS`) não conta. TV do Suporte continua com top 5.
+- **Pendente**: "Não informado" em Principais motivos são atendimentos sem motivo registrado no OPA (~39% no Agendamento, ~68% no
+  resto, últimos 30 dias); o usuário ainda não escolheu entre renomear para "Sem motivo registrado" com % ou tirar do ranking.
+- **Falha de teste que já existia**: `test_scheduling_sync_health.py::test_sync_health_reflects_appsetting_values` falha também
+  sem estas mudanças.
+
 **2026-10-19** — **Aba Ocorrências no SGP Suporte** (assunto 211 do IXC, "Registro de Ocorrência"), na branch
 `feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**). Testada só no banco local (96 ocorrências de
 15 a 19/10) e por 14 testes de lógica; **não foi aberta por um navegador logado nesta sessão** (o visual foi validado pelo

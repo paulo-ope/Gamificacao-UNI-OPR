@@ -10,8 +10,12 @@ function ratingLabel(value: number | null) {
 
 export function TvAttendantsPanel({ items, theme }: { items: SupportTvAttendant[] | null; theme: TvTheme }) {
   const t = TV_CLASSES[theme];
+  // Equipe grande (TV do Agendamento lista até 12): linhas mais compactas para caber sem rolar.
+  const dense = (items?.length ?? 0) > 6;
+  // TV do Agendamento: o número grande é o que cada um tem aberto agora, não o volume do dia.
+  const inProgressMode = Boolean(items?.some((item) => item.in_progress !== null));
   return (
-    <TvCard theme={theme} eyebrow="Atendentes — volume do dia">
+    <TvCard theme={theme} eyebrow={inProgressMode ? "Atendentes — em atendimento agora" : "Atendentes — volume do dia"}>
       {!items ? (
         <TvUnavailable theme={theme} />
       ) : items.length === 0 ? (
@@ -21,16 +25,16 @@ export function TvAttendantsPanel({ items, theme }: { items: SupportTvAttendant[
           {items.map((item, index) => {
             const tmr = item.average_tmr_seconds === null ? "—" : secondsLabel(item.average_tmr_seconds);
             return (
-              <li key={item.attendant_id} className={cn("flex items-center gap-4 border-b py-2 last:border-b-0", t.divider)}>
+              <li key={item.attendant_id} className={cn("flex items-center gap-4 border-b last:border-b-0", dense ? "py-0.5" : "py-2", t.divider)}>
                 <span className={cn("w-6 text-center text-xl font-bold tabular-nums", t.muted)}>{index + 1}</span>
                 <span className="min-w-0 flex-1">
-                  <span className={cn("block text-xl font-semibold leading-tight md:truncate md:text-2xl", t.title)}>{item.name}</span>
+                  <span className={cn("block font-semibold leading-tight md:truncate", dense ? "text-lg md:text-xl" : "text-xl md:text-2xl", t.title)}>{item.name}</span>
                   {/* Em tela estreita o TMR e a nota descem para baixo do nome em vez de sumirem. */}
                   <span className={cn("block text-sm tabular-nums md:hidden", t.muted)}>
                     TMR {tmr} · ★ {ratingLabel(item.average_rating)}
                   </span>
                 </span>
-                <span className={cn("w-16 text-right text-3xl font-extrabold tabular-nums", t.value)}>{formatCount(item.total)}</span>
+                <span className={cn("w-16 text-right font-extrabold tabular-nums", dense ? "text-2xl" : "text-3xl", t.value)}>{formatCount(inProgressMode ? item.in_progress : item.total)}</span>
                 <span className={cn("hidden w-40 text-right text-lg tabular-nums md:block", t.muted)}>TMR {tmr}</span>
                 <span className={cn("hidden w-16 text-right text-lg tabular-nums md:block", t.muted)}>★ {ratingLabel(item.average_rating)}</span>
               </li>

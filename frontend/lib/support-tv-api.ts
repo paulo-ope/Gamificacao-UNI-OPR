@@ -51,6 +51,8 @@ export type SupportTvAttendant = {
   closed: number;
   average_tmr_seconds: number | null;
   average_rating: number | null;
+  // Atendimentos em andamento agora (só na TV do Agendamento; null = painel de volume do dia).
+  in_progress: number | null;
 };
 
 export type SupportTvBurst = {
@@ -80,6 +82,8 @@ export type SupportTvRadar = {
   bursts: SupportTvBurst[] | null;
   cities_at_risk: SupportTvCityAlert[] | null;
 };
+
+export type SupportTvQueue = { total: number; longest_wait_seconds: number | null; items: { label: string; wait_seconds: number }[] };
 
 export type SupportTvN1 = { operational: number; financial: number; total: number; previous_total: number };
 
@@ -117,6 +121,7 @@ export type SupportTvSnapshot = {
   attendants: SupportTvAttendant[] | null;
   radar: SupportTvRadar;
   n1: SupportTvN1 | null;
+  queue: SupportTvQueue | null;
   sync: { last_success_at: string | null; consecutive_failures: number };
   unavailable: string[];
 };
@@ -160,3 +165,9 @@ export const saveSupportTvConfig = (departmentIds: string[]) =>
     { method: "PUT", body: JSON.stringify({ department_ids: departmentIds }) },
     "Não foi possível salvar a configuração.",
   );
+
+// TV do Agendamento: mesmo contrato, recorte fixo nos departamentos de agendamento (`/api/scheduling/tv/*`).
+export const fetchSchedulingTvSnapshot = () => request<SupportTvSnapshot>("/scheduling/tv/snapshot");
+
+export const fetchSchedulingTvPresence = () =>
+  request<SupportTvPresence>("/scheduling/tv/presence", undefined, "Não foi possível consultar a presença dos atendentes agora.");
