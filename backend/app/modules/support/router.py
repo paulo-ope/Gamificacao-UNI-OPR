@@ -17,6 +17,7 @@ from app.services.audit_log import record_audit_log
 from app.services.calculation import get_setting, upsert_setting
 from app.services.notifications import create_notification
 from app.services.opa_client import OpaApiError, get_opa_client
+from app.services.regional import regional_scope_or_deny
 from app.services.opa_scheduler import (
     SUPPORT_OPA_BACKFILL_ENABLED_KEY,
     SUPPORT_OPA_BACKFILL_LOOKBACK_MONTHS_KEY,
@@ -42,7 +43,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import dashboard_macros, feedback_service, ranking_service, support_rules, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
+from . import dashboard_macros, feedback_service, occurrences_service, ranking_service, support_rules, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -91,6 +92,8 @@ from .schemas import (
     SupportIxcTicketSavedFilterCreate,
     SupportIxcTicketSavedFilterOut,
     SupportIxcTicketSavedFilterUpdate,
+    SupportOccurrenceOverview,
+    SupportOccurrencePage,
     SupportOpaImportMonthOut,
     SupportOpaAttendanceDetail,
     SupportOpaAttendancePage,
@@ -2212,6 +2215,64 @@ def ixc_tickets_list(
     return _ixc_tickets_page(
         db, regional=regional, city=city, neighborhood=neighborhood, subject_id=subject_id, sector_id=sector_id,
         date_from=date_from, date_to=date_to, limit=limit, offset=offset,
+    )
+
+
+@router.get("/ixc/occurrences/overview", response_model=SupportOccurrenceOverview)
+def ixc_occurrences_overview(
+    date_from: date,
+    date_to: date,
+    regional: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Visão geral das ocorrências (assunto 211): regional mais afetada, diagnóstico mais usado,
+    em aberto e finalizações com horário e relato. Período máximo de 366 dias."""
+    if date_to < date_from:
+        raise HTTPException(status_code=422, detail="A data final não pode ser anterior à inicial.")
+    if (date_to - date_from).days > 365:
+        raise HTTPException(status_code=422, detail="O período máximo é de 366 dias.")
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    return occurrences_service.overview(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        regional=regional,
+        allowed_regionals=allowed_regionals,
+        deny_all=deny_all,
+    )
+
+
+@router.get("/ixc/occurrences", response_model=SupportOccurrencePage)
+def ixc_occurrences_list(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    regional: str | None = None,
+    q: str | None = Query(default=None, max_length=120),
+    status: Literal["all", "open", "finalized"] = "all",
+    diagnosis: str | None = Query(default=None, max_length=220),
+    hour: int | None = Query(default=None, ge=0, le=23),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Registros de Ocorrências (assunto 211 do IXC) com relato, regional, diagnóstico e finalização -
+    só leitura. Respeita o escopo regional do usuário (gestor regional só vê as próprias filiais)."""
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    return occurrences_service.list_occurrences(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        regional=regional,
+        search=q,
+        status=status,
+        diagnosis=diagnosis,
+        hour=hour,
+        allowed_regionals=allowed_regionals,
+        deny_all=deny_all,
+        limit=limit,
+        offset=offset,
     )
 
 

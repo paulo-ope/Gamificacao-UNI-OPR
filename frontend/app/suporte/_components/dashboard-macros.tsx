@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { OperationsTrendChart } from "@/components/operations/operations-trend-chart";
 import { OverviewBlock } from "@/components/overview/overview-block";
 import { KpiCard, SPARK_COLOR } from "@/components/overview/overview-kpi-strip";
+import { sparkDayLabel } from "@/components/overview/overview-sparkline";
 import { OverviewProgress, OverviewSectionHeading, OverviewTile } from "@/components/overview/overview-layout-parts";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { api } from "@/lib/api";
@@ -41,33 +42,44 @@ const STATUS_SPARK: Record<SupportMacroCardStatus, string> = {
   no_target: SPARK_COLOR.blue,
 };
 
-function compact(values: readonly (number | null | undefined)[]) {
-  return values.filter((value): value is number => typeof value === "number");
+type SparkPoints = { values: number[]; labels: string[] };
+
+// Valor e dia de cada ponto; dia sem valor (sem atendimento no OPA) não entra (sem inventar zero).
+function pointsOf(daily: readonly SupportMacroDailyPoint[], read: (point: SupportMacroDailyPoint) => number | null | undefined): SparkPoints {
+  const result: SparkPoints = { values: [], labels: [] };
+  for (const point of daily) {
+    const value = read(point);
+    if (typeof value === "number") {
+      result.values.push(value);
+      result.labels.push(sparkDayLabel(point.day));
+    }
+  }
+  return result;
 }
 
-// Série diária de cada cartão para o mini-gráfico; dia sem atendimento no OPA não entra (sem inventar zero).
-function sparkSeries(key: string, daily: readonly SupportMacroDailyPoint[]): number[] {
+// Série diária de cada cartão para o mini-gráfico (e para o tooltip ao passar o mouse).
+function sparkSeries(key: string, daily: readonly SupportMacroDailyPoint[]): SparkPoints {
   switch (key) {
     case "csat":
-      return compact(daily.map((point) => point.rating));
+      return pointsOf(daily, (point) => point.rating);
     case "tmr":
-      return compact(daily.map((point) => point.tmr_seconds));
+      return pointsOf(daily, (point) => point.tmr_seconds);
     case "tmr_human":
-      return compact(daily.map((point) => point.tmr_human_seconds));
+      return pointsOf(daily, (point) => point.tmr_human_seconds);
     case "tma":
-      return compact(daily.map((point) => point.tma_seconds));
+      return pointsOf(daily, (point) => point.tma_seconds);
     case "performed":
-      return daily.map((point) => point.performed);
+      return pointsOf(daily, (point) => point.performed);
     case "solved":
-      return daily.map((point) => point.solved);
+      return pointsOf(daily, (point) => point.solved);
     case "field":
-      return daily.map((point) => point.field);
+      return pointsOf(daily, (point) => point.field);
     case "n2_total":
-      return daily.map((point) => point.n2_total ?? 0);
+      return pointsOf(daily, (point) => point.n2_total ?? 0);
     case "resolutivity":
-      return daily.filter((point) => point.performed > 0).map((point) => (point.solved / point.performed) * 100);
+      return pointsOf(daily, (point) => (point.performed > 0 ? (point.solved / point.performed) * 100 : null));
     default:
-      return [];
+      return { values: [], labels: [] };
   }
 }
 
@@ -81,6 +93,7 @@ function MacroKpiCard({ card, daily, previousLabel, large = false }: { card: Sup
   // Percentual relativo não faz sentido sobre um indicador que já é percentual: aí a variação é em p.p.
   const showPercentDelta = card.unit !== "percent";
   const hint = [card.unit === "percent" ? `${formatCardChange(card) ?? "sem base"} vs. ${previousLabel}` : null, target, coverageNote(card)].filter(Boolean).join(" · ");
+  const spark = sparkSeries(card.key, daily);
   return (
     <KpiCard
       label={card.label}
@@ -89,7 +102,9 @@ function MacroKpiCard({ card, daily, previousLabel, large = false }: { card: Sup
       delta={showPercentDelta ? { value: percentChange(card.value, card.previous), goodWhenUp: isGoodWhenUp(card), againstLabel: previousLabel } : undefined}
       hint={hint || undefined}
       large={large}
-      spark={sparkSeries(card.key, daily)}
+      spark={spark.values}
+      sparkLabels={spark.labels}
+      sparkFormat={(point) => formatCardValue(card, point)}
       sparkColor={card.status === "no_target" || card.status === "no_data" || card.status === "partial" ? (noTarget?.spark ?? SPARK_COLOR.blue) : STATUS_SPARK[card.status]}
     />
   );
@@ -281,10 +296,39 @@ function DashboardBody({ data }: { data: SupportMacroDashboard }) {
   );
 }
 
+// Departamentos que já vêm selecionados (pedido do usuário, 2026-10-19). Casados pelo nome, sem acento nem caixa,
+// porque o id vem do OPA e não é fixo. A escolha feita na tela é lembrada neste navegador; sem escolha guardada, vale este padrão.
+const DEFAULT_DEPARTMENT_LABELS = ["suporte tecnico", "financeiro"];
+const DEPARTMENT_STORAGE_KEY = "uni_support_dashboard_departments";
+
+function normalizeLabel(value: string) {
+  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+}
+
+function storedDepartments(): string[] | null {
+  try {
+    const raw = window.localStorage.getItem(DEPARTMENT_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveDepartments(values: string[]) {
+  try {
+    window.localStorage.setItem(DEPARTMENT_STORAGE_KEY, JSON.stringify(values));
+  } catch {
+    // Sem armazenamento disponível: o filtro continua valendo só nesta sessão da tela.
+  }
+}
+
 export function DashboardMacros() {
   const [period, setPeriod] = useIxcPeriod();
   // Filtros do OPA (departamento e colaborador/atendente): valem só para os indicadores do OPA (CSAT, TMR, TMA).
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+  // Só carrega os números depois de aplicar o departamento padrão, para não buscar tudo duas vezes.
+  const [filtersReady, setFiltersReady] = useState(false);
   const [attendantIds, setAttendantIds] = useState<string[]>([]);
   const [departments, setDepartments] = useState<SupportOpaFilterOption[]>([]);
   const [attendants, setAttendants] = useState<SupportOpaFilterOption[]>([]);
@@ -302,9 +346,20 @@ export function DashboardMacros() {
     api
       .supportOpaFilters()
       .then((options) => {
-        if (!cancelled) setDepartments(options.departments);
+        if (cancelled) return;
+        setDepartments(options.departments);
+        const saved = storedDepartments();
+        setDepartmentIds(
+          saved ??
+            options.departments
+              .filter((option) => DEFAULT_DEPARTMENT_LABELS.includes(normalizeLabel(option.label)))
+              .map((option) => option.value),
+        );
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setFiltersReady(true);
+      });
     api
       .supportDashboardCollaborators()
       .then((options) => {
@@ -320,7 +375,7 @@ export function DashboardMacros() {
   const attendantKey = attendantIds.join(",");
 
   useEffect(() => {
-    if (invalidPeriod) return;
+    if (invalidPeriod || !filtersReady) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -338,7 +393,7 @@ export function DashboardMacros() {
     return () => {
       cancelled = true;
     };
-  }, [period, invalidPeriod, departmentKey, attendantKey]);
+  }, [period, invalidPeriod, filtersReady, departmentKey, attendantKey]);
 
   return (
     <div className="grid gap-3">
@@ -353,7 +408,10 @@ export function DashboardMacros() {
           formatOption={(option) => option.label}
           placeholder="Todos os departamentos"
           ariaLabel="Departamento do OPA"
-          onChange={setDepartmentIds}
+          onChange={(next) => {
+            setDepartmentIds(next);
+            saveDepartments(next);
+          }}
         />
         <MultiSelect<SupportOpaFilterOption>
           className="h-8 w-56 text-[11px]"

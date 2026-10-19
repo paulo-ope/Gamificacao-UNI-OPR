@@ -13,6 +13,39 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-19** — **Aba Ocorrências no SGP Suporte** (assunto 211 do IXC, "Registro de Ocorrência"), na branch
+`feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**). Testada só no banco local (96 ocorrências de
+15 a 19/10) e por 14 testes de lógica; **não foi aberta por um navegador logado nesta sessão** (o visual foi validado pelo
+usuário em capturas de tela durante o trabalho), e os endpoints não foram exercitados por HTTP (fixture `client` não sobe no
+Python 3.14 local). **Tem migration nova: `20261019_0118` (tabela `support_occurrence_details`) - precisa rodar no deploy.**
+- **Fonte**: os tickets já eram importados (`SupportIxcTicket`, sem filtro de assunto). O novo `occurrences_sync.py` roda depois
+  da importação de atendimentos e, só para o assunto 211, grava o diagnóstico (`su_ticket.id_su_diagnostico` x `su_diagnostico`)
+  e a finalização (mensagem de `su_mensagens` com `su_status = 'S'`: horário, relato, operador). Backfill do que já existia:
+  `occurrences_sync.backfill_occurrence_details` (rodado no banco local; **rodar também em produção após a migration**).
+- **Regras** (`occurrences_service.py`): "em aberto" = sem finalização (sem mensagem de finalização e `su_status != 'S'`);
+  **diagnóstico só vale entre as finalizadas** (em aberto aparece como "Aguardando finalização", nunca "Sem diagnóstico");
+  regional vem do `id_filial` normalizado; respeita o escopo regional do usuário; permissão `support:read`. Horários seguem a
+  convenção do módulo (relógio do IXC gravado como UTC; a tela exibe sem conversão de fuso).
+- **Telas** (`/suporte?tab=occurrences`): sub-abas **Visão geral** (no desenho dos Indicadores do Suporte: cartões com mini-gráfico,
+  blocos de números, ranking de regionais, rosca de diagnósticos, fluxo diário, horário de abertura, mapa de calor regional x
+  diagnóstico, listas de em aberto/finalizadas recolhidas por padrão) e **Registros** (lista com filtros de situação, diagnóstico,
+  regional e busca no relato). Todo número/gráfico/item é clicável e abre um painel lateral com as ocorrências. Endpoints:
+  `GET /support/ixc/occurrences` e `/ixc/occurrences/overview`.
+- **Atenção - tempo de finalização**: no banco local, 69 das 76 finalizadas foram registradas **depois do fato, em segundos**
+  (relatos citam 14 a 16/10; começou a ser usado em 15/10), então o tempo médio/mediana saem muito baixos por enquanto. Não foi
+  confirmado com o dono se o indicador deve ignorar finalizações quase imediatas.
+- **Mudanças em componentes compartilhados**: o mini-gráfico dos cartões (`OverviewSparkline`/`KpiCard`) agora tem tooltip ao
+  passar o mouse (dia, valor, diferença para o ponto anterior, pico/mínimo) - vale na Visão Geral da operação, Indicadores do
+  Suporte, Feedback e Ocorrências. Em Indicadores do Suporte, o departamento já abre com **Suporte Técnico e Financeiro**
+  (casados pelo nome; a escolha do usuário é lembrada em `localStorage`).
+- **Equipe fixa do Suporte** (`dashboard_macros.SUPPORT_TEAM`, usada também no Feedback e no Ranking): incluídos **Gilson Melgar** e
+  **Victoria Celestino** (agora 25). Ficaram de fora, por decisão do usuário ou por serem de outra área: Ezequiel Ricardo (N1 ativo
+  no IXC, não incluído), Loryan Paulo (inativo no IXC), Theo (sem vínculo no IXC), Emanuelly Cavalheiro/Eberton Oliveira/Sabrina da
+  Cunha (grupo N2).
+- **Pendências**: (1) migration + backfill em produção; (2) decidir o fluxo diário (barras + linha, eixo só nos dias com dado) e o
+  horário de abertura (área suavizada 6h-22h), propostos e não feitos; (3) confirmar a regra do tempo de finalização; (4) o
+  padrão `frontend/docs/SUPORTE_RANKING.md` e a imagem em `frontend/docs/screenshots/` seguem fora do commit (outra sessão).
+
 **2026-10-16** — **Abas Feedback e Ranking e sub-aba Regras (Configuração) no SGP Suporte**, na branch
 `feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**; sem migration nova). Testado só no banco local
 (Docker em modo dev): os números reais de outubro/setembro saíram, mas **não foram comparados com o painel do OPA nem com

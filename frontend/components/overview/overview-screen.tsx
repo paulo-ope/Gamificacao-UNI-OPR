@@ -7,6 +7,7 @@ import { OverviewAiHumanCard } from "@/components/overview/overview-ai-human-car
 import { OverviewAttentionPoints } from "@/components/overview/overview-attention-points";
 import { OverviewMonitorsCard } from "@/components/overview/overview-monitors-card";
 import { OverviewSectionHeading } from "@/components/overview/overview-layout-parts";
+import { sparkDayLabel } from "@/components/overview/overview-sparkline";
 import { OverviewOrdersCard } from "@/components/overview/overview-orders-card";
 import { OverviewOverdueOrdersDrawer } from "@/components/overview/overview-overdue-orders-drawer";
 import { OverviewRecommendations } from "@/components/overview/overview-recommendations";
@@ -405,15 +406,24 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     : undefined;
   // Séries dos mini-gráficos dos cartões de KPI: as mesmas respostas que já alimentam os gráficos
   // grandes, sem chamada nova. SLA sem dado no dia (null) fica de fora em vez de virar zero.
-  const kpiSeries = useMemo(
-    () => ({
-      opened: (trends.data?.points ?? []).map((point) => point.opened_operation),
-      completed: (trends.data?.points ?? []).map((point) => point.completed),
-      backlog: (backlogTrend.data?.points ?? []).map((point) => point.backlog),
-      sla: (trends.data?.points ?? []).flatMap((point) => (point.sla_cumulative_rate === null ? [] : [point.sla_cumulative_rate])),
-    }),
-    [trends.data, backlogTrend.data],
-  );
+  const kpiSeries = useMemo(() => {
+    const trendPoints = trends.data?.points ?? [];
+    const backlogPoints = backlogTrend.data?.points ?? [];
+    const slaPoints = trendPoints.filter((point) => point.sla_cumulative_rate !== null);
+    return {
+      opened: trendPoints.map((point) => point.opened_operation),
+      completed: trendPoints.map((point) => point.completed),
+      backlog: backlogPoints.map((point) => point.backlog),
+      sla: slaPoints.map((point) => point.sla_cumulative_rate as number),
+      // Um rótulo por ponto (mesma ordem), para o tooltip do mini-gráfico mostrar o dia.
+      labels: {
+        opened: trendPoints.map((point) => sparkDayLabel(point.period_start)),
+        completed: trendPoints.map((point) => sparkDayLabel(point.period_start)),
+        backlog: backlogPoints.map((point) => sparkDayLabel(point.snapshot_date)),
+        sla: slaPoints.map((point) => sparkDayLabel(point.period_start)),
+      },
+    };
+  }, [trends.data, backlogTrend.data]);
   const completedByTeamModel = useMemo(
     () => (workSchedule.data?.by_model ?? []).map((item) => ({ label: item.model_name, value: item.completed })),
     [workSchedule.data],

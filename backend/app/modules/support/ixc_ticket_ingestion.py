@@ -388,4 +388,13 @@ def import_tickets_for_period(
         except Exception:
             db.rollback()
             logger.exception("Falha ao sincronizar usuários do IXC após a importação de atendimentos.")
+
+        # Diagnóstico e finalização das ocorrências (assunto 211) - também depois do commit.
+        try:
+            from .occurrences_sync import sync_occurrence_details
+
+            sync_occurrence_details(db, client, records)
+        except Exception:
+            db.rollback()
+            logger.exception("Falha ao sincronizar diagnóstico/finalização das ocorrências do IXC.")
         return result

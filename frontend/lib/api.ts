@@ -105,6 +105,8 @@ import type {
   SupportIxcTicketDailyPoint,
   SupportIxcN1Summary,
   SupportFeedback,
+  SupportOccurrenceOverview,
+  SupportOccurrencePage,
   SupportRanking,
   SupportRules,
   SupportRulesState,
@@ -1160,6 +1162,31 @@ export const api = {
       query.set(key, String(value));
     });
     return request<SupportIxcTicketPage>(`/support/ixc/tickets?${query.toString()}`);
+  },
+
+  supportOccurrences: (params: {
+    date_from?: string;
+    date_to?: string;
+    regional?: string;
+    q?: string;
+    status?: "all" | "open" | "finalized";
+    diagnosis?: string;
+    hour?: number;
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      query.set(key, String(value));
+    });
+    return request<SupportOccurrencePage>(`/support/ixc/occurrences?${query.toString()}`);
+  },
+
+  supportOccurrencesOverview: (params: { date_from: string; date_to: string; regional?: string }) => {
+    const query = new URLSearchParams({ date_from: params.date_from, date_to: params.date_to });
+    if (params.regional) query.set("regional", params.regional);
+    return request<SupportOccurrenceOverview>(`/support/ixc/occurrences/overview?${query.toString()}`);
   },
 
   supportIxcN1Summary: (params: { date_from: string; date_to: string; level?: "n1" | "n2" }) =>

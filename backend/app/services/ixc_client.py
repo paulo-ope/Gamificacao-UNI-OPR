@@ -646,3 +646,22 @@ def fetch_usuarios_by_ids(client: IxcClient, usuario_ids: list[int], *, rp: int 
         return
     grid_param = [{"TB": "usuarios.id", "OP": "IN", "P": ",".join(str(uid) for uid in usuario_ids)}]
     yield from client.list_all("usuarios", grid_param=grid_param, rp=rp, sortname="usuarios.id")
+
+
+def fetch_diagnosticos(client: IxcClient) -> Iterator[dict[str, Any]]:
+    """Diagnósticos do atendimento (`su_diagnostico`, ~300 linhas) - nome de `su_ticket.id_su_diagnostico`."""
+    yield from client.list_all("su_diagnostico", rp=200, sortname="su_diagnostico.id")
+
+
+def fetch_ticket_finalization_messages(
+    client: IxcClient, ticket_ids: list[str], *, rp: int = 200
+) -> Iterator[dict[str, Any]]:
+    """Mensagens de finalização (`su_mensagens` com `su_status = 'S'`) dos tickets informados - a
+    mensagem traz o horário (`data`), o relato (`mensagem`), o operador e o diagnóstico escolhido."""
+    if not ticket_ids:
+        return
+    grid_param = [
+        {"TB": "su_mensagens.id_ticket", "OP": "IN", "P": ",".join(ticket_ids)},
+        {"TB": "su_mensagens.su_status", "OP": "=", "P": "S"},
+    ]
+    yield from client.list_all("su_mensagens", grid_param=grid_param, rp=rp, sortname="su_mensagens.id")

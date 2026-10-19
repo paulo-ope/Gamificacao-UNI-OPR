@@ -493,3 +493,31 @@ class SupportOpaAttendance(Base):
     raw_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     first_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     last_imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class SupportOccurrenceDetail(Base):
+    """Diagnóstico e finalização de uma ocorrência (atendimento IXC do assunto 211).
+
+    Uma linha por `su_ticket` do assunto 211, alimentada junto da importação de atendimentos
+    (`occurrences_sync.py`). `diagnosis_id/name` vêm de `su_ticket.id_su_diagnostico` x tabela
+    `su_diagnostico`; `finalized_at`/`finalization_report` vêm da mensagem de finalização do ticket
+    (`su_mensagens` com `su_status = 'S'`). Ocorrência sem `finalized_at` está em aberto.
+
+    Os horários seguem a convenção do restante do módulo: relógio do servidor IXC gravado como se
+    fosse UTC (ver `ixc_ticket_ingestion._parse_ixc_datetime`)."""
+
+    __tablename__ = "support_occurrence_details"
+    __table_args__ = (
+        UniqueConstraint("source_id", name="uq_support_occurrence_details_source_id"),
+        Index("ix_support_occurrence_details_diagnosis", "diagnosis_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    diagnosis_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    diagnosis_name: Mapped[str | None] = mapped_column(String(220), nullable=True)
+    ticket_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    finalization_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    finalized_by_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)

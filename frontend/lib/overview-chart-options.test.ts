@@ -74,3 +74,25 @@ describe("buildSparklineOption", () => {
     expect(series.data).toEqual([1, 2, 3]);
   });
 });
+
+describe("buildSparklineOption (tooltip)", () => {
+  const format = (value: number) => `${value} un`;
+  const tooltip = (labels?: string[]) =>
+    (buildSparklineOption([10, 30, 20], "#000", labels, format).tooltip as { formatter: (params: unknown) => string }).formatter;
+
+  it("mostra dia, valor e a diferença para o ponto anterior", () => {
+    const text = tooltip(["15/10", "16/10", "17/10"])([{ dataIndex: 2 }]);
+    expect(text).toContain("17/10");
+    expect(text).toContain("20 un");
+    expect(text).toContain("-10 un vs. ponto anterior");
+  });
+
+  it("marca o pico e o menor valor do período", () => {
+    expect(tooltip()([{ dataIndex: 1 }])).toContain("Pico do período");
+    expect(tooltip()([{ dataIndex: 0 }])).toContain("Menor valor do período");
+  });
+
+  it("no primeiro ponto não há diferença para mostrar", () => {
+    expect(tooltip()([{ dataIndex: 0 }])).not.toContain("vs. ponto anterior");
+  });
+});
