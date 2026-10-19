@@ -69,6 +69,10 @@ OPEN_NOW_LOOKBACK_HOURS = 24
 HOURLY_BASELINE_WEEKS = 4
 TOP_ATTENDANTS_LIMIT = 5
 TOP_REASONS_LIMIT = 5
+# A Visão Geral rotula "Não informado" o atendimento sem motivo; na TV o texto diz o que de fato aconteceu:
+# o OPA devolveu `motivos` vazio (atendente encerrou sem classificar, ou ainda está em andamento).
+OVERVIEW_NO_REASON_LABEL = "Não informado"
+TV_NO_REASON_LABEL = "Sem motivo registrado"
 
 # Fila de espera (TV do Agendamento): atendimento `AG` ("aguardando" no OPA) ainda sem atendente. A API
 # do OPA mantém `AG` parado por semanas (dado sujo, ver docs/opa-suite-api-referencia.md), então só
@@ -533,7 +537,7 @@ def build_snapshot(db: Session, *, now: datetime | None = None, scope: Literal["
         "top_reasons",
         unavailable,
         lambda: [
-            {"label": item["label"], "total": item["total"]}
+            {"label": TV_NO_REASON_LABEL if item["label"] == OVERVIEW_NO_REASON_LABEL else item["label"], "total": item["total"]}
             for item in opa_overview_service.top_reasons(db, today_filters, limit=TOP_REASONS_LIMIT)
         ],
     )

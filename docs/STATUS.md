@@ -30,8 +30,7 @@ Sem migration.
 - **Nas DUAS TVs, painel de atendentes = "em atendimento agora"**: o número grande é a quantidade de atendimentos em andamento
   de cada um (status `EA`, sem encerramento, abertos nas últimas 24 h - o OPA deixa `EA` parado por meses), não o volume do
   dia. TMR e nota (CSAT) seguem sendo os do dia. Atendimento pausado (`PS`) não conta. TV do Suporte continua com top 5.
-- **Pendente**: "Não informado" em Principais motivos são atendimentos sem motivo registrado no OPA (~39% no Agendamento, ~68% no
-  resto, últimos 30 dias); o usuário ainda não escolheu entre renomear para "Sem motivo registrado" com % ou tirar do ranking.
+- **"Sem motivo registrado" (era "Não informado") em Principais motivos, nas duas TVs.** Causa confirmada no OPA: o atendimento vem com `motivos: []` (o atendente encerrou sem classificar, ou ainda está em andamento); não é falha da importação. No Agendamento ~39% dos atendimentos dos últimos 30 dias (46% a 69% por atendente; 89% nos que fecham em menos de 2 min) e subindo (26% em agosto, 42-50% em outubro). Só o rótulo da TV mudou; a Visão Geral segue "Não informado". Não se sabe se o motivo é obrigatório no OPA nem por que subiu.
 - **Falha de teste que já existia**: `test_scheduling_sync_health.py::test_sync_health_reflects_appsetting_values` falha também
   sem estas mudanças.
 

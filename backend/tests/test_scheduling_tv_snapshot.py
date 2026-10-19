@@ -154,3 +154,10 @@ def test_scheduling_queue_comes_live_from_opa_ignoring_stale_local_rows(db_sessi
 
     assert queue["total"] == 1  # a linha local velha não vale; quem já tem atendente sai
     assert queue["items"] == [{"label": "Protocolo UNI1", "wait_seconds": 240}]
+
+
+def test_tv_reasons_label_attendance_without_reason_as_sem_motivo_registrado(db_session):
+    _seed(db_session)  # nenhum dos atendimentos tem motivo
+    reasons = opa_tv_service.build_snapshot(db_session, now=NOW, scope="scheduling")["top_reasons"]
+
+    assert reasons == [{"label": "Sem motivo registrado", "total": 3}]
