@@ -521,3 +521,32 @@ class SupportOccurrenceDetail(Base):
     finalization_report: Mapped[str | None] = mapped_column(Text, nullable=True)
     finalized_by_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class SupportContactGeo(Base):
+    """Onde mora o cliente de um atendimento do OPA - base do Radar de Contatos do Suporte Interno.
+
+    Uma linha por cliente do OPA (não por atendimento): `opa_customer_id` é o `_id` do cliente no OPA
+    (`SupportOpaAttendance.customer_id`) e `ixc_customer_id` é o `id` do cadastro do OPA, que é o
+    `id_cliente` do IXC (validado em 2026-10-20 contra os tickets do IXC). Cidade/bairro/regional vêm
+    do cadastro do IXC (mesma regra de `ixc_ticket_ingestion._normalize_ticket_record`); latitude e
+    longitude vêm do cadastro do OPA. `status = "not_found"` guarda quem não foi achado no IXC, para
+    tentar de novo só depois de alguns dias em vez de a cada ciclo.
+
+    Não guarda CPF, telefone nem texto de mensagem."""
+
+    __tablename__ = "support_contact_geo"
+    __table_args__ = (
+        UniqueConstraint("opa_customer_id", name="uq_support_contact_geo_opa_customer"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    opa_customer_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    ixc_customer_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ok")
+    regional: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    neighborhood: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)

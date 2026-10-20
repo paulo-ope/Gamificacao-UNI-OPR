@@ -13,6 +13,35 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-20** — **Radar de Contatos (SGP Suporte) + linha "Antes" no Dashboard Suporte**, na branch
+`feat/suporte-radar-contatos` (parte do `master` atual, PR único). Testado no banco/OPA/IXC locais e por testes de lógica
+(`test_support_contact_radar.py`, 32 casos; frontend 38); aberto num navegador logado no ambiente local. **Tem migration nova:
+`20261020_0119` (`support_contact_geo`) - sobe sozinha no deploy.**
+- **O que é**: nova aba `/suporte?tab=contact_radar`. Mostra de onde (regional > cidade > bairro) os clientes entram em contato
+  pelo OPA, por cliente distinto, comparado com o habitual. Endpoints: `GET /api/support/opa/contact-radar` e
+  `GET /api/support/opa/contact-radar/protocols` (protocolos de um bairro, com etiquetas na cor do OPA). Permissão `support:read`,
+  respeita o escopo regional. Não expõe CPF, telefone nem nome de cliente.
+- **Chave OPA↔IXC**: o `id` do cadastro do cliente no OPA (`support_opa_dimensions.payload_json["id"]`) é o `id_cliente` do IXC
+  (validado contra 72 mil tickets). `support_contact_geo` guarda, uma vez por cliente, cidade/bairro/regional/lat-lon; é
+  preenchida pelo ciclo de tickets do IXC (`ixc_ticket_scheduler._sync_contact_geo`, 1.500 clientes por ciclo, os mais recentes
+  primeiro). **Na primeira subida a cobertura começa baixa e sobe ao longo dos ciclos** (~60 mil clientes nos últimos 35 dias).
+- **Regras** (`contact_radar_service.py`): a regional de cada contato é a da CIDADE (regional onde está a maioria dos clientes dela),
+  não a do contrato de cada um; usa o agrupamento oficial `normalize_regional_grouped` (São Miguel+Seringueiras+São Francisco =
+  São Francisco do Guaporé; São Felipe = Rolim de Moura) - o escopo de gestor regional também é agrupado (quem gere uma das três
+  filiais vê as três). Alerta "acima do usual" = >= 5 clientes e >= 2x o habitual; **só liga quando a comparação tem cobertura >= 70%
+  e >= 90% da cobertura atual** (senão a carga parcial gera alarme falso). Limiares são uma primeira estimativa, a calibrar.
+- **Etiquetas sem cadastro**: ~23% dos usos de etiqueta em 30 dias (no banco local) são de etiquetas sem nome em
+  `support_opa_dimensions` (o OPA só filtra etiqueta por nome exato desde 08/10, não dá para listar). Aparecem como "Etiqueta sem
+  cadastro" em cinza, com o id no tooltip. **Pendente**: mapa manual id -> nome/cor para as mais usadas (ex.: `690f472a…`, ~10 mil usos).
+- **Atualização**: a tela relê a cada 60 s, mas o dado vem da sincronização do OPA (20 min no local; o ciclo leva ~10-12 min, mais de
+  2/3 é reimportar ontem). **Não foi alterado o agendador do OPA**. Reduzir o intervalo para 5 min só levaria a ~16 min efetivos e
+  deixaria o bloqueio de importação ocupado ~70% do tempo; ver desenho (ciclo rápido + varredura horária) nesta conversa se for retomado.
+- **Dashboard Suporte**: cada cartão do topo ganhou a linha "Antes: valor · diferença (%)" (`formatPreviousLine`; resolutividade mostra só
+  o valor de antes). **TMR/TMA/TMR Humano não mostram a linha quando o período anterior tem < 50% de cobertura** do TMA/TMR pela regra do
+  OPA (`active_metrics_at`); no banco local isso só existe de 01/10 em diante (rodar `recompute_active_metrics` para meses antigos; usa o
+  mesmo bloqueio da importação).
+- **Falha de teste que já existia**: `test_support_dashboard_macros.py::test_support_team_has_no_duplicate_people` (equipe com 25 em vez de 23).
+
 **2026-10-19** — **TV Agendamento** (`/agendamento/tv`, `GET /api/scheduling/tv/{snapshot,presence}`, permissão `scheduling:read`),
 na branch `feat/suporte-feedback` (**não mesclada, sem PR, nunca rodou em produção**). Testada por testes de lógica
 (`test_scheduling_tv_snapshot.py`, 7 casos) e contra o banco/OPA locais; **não foi aberta num navegador logado nesta sessão**.
