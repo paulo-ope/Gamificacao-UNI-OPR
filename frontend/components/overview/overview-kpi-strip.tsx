@@ -59,6 +59,7 @@ export function KpiCard({
   tone,
   hint,
   delta,
+  previousLine,
   spark,
   sparkColor,
   sparkLabels,
@@ -70,6 +71,8 @@ export function KpiCard({
   tone: Tone;
   hint?: string;
   delta?: SummaryMetricDelta;
+  /** Linha extra abaixo da variação, ex.: o valor do período anterior ("Antes: 4,37 · -0,11 (-2,5%)"). */
+  previousLine?: string;
   spark: readonly number[];
   sparkColor: string;
   /** Um rótulo (ex.: o dia) por ponto de `spark`, para o tooltip ao passar o mouse. */
@@ -98,6 +101,7 @@ export function KpiCard({
             <span>{deltaView.text}</span>
           </p>
         ) : null}
+        {previousLine ? <p className="mt-1 text-[11px] font-medium leading-snug text-slate-600">{previousLine}</p> : null}
         {hint ? <p className="mt-1 text-[11px] leading-snug text-slate-500">{hint}</p> : null}
       </div>
       <div className="mt-auto pt-2">

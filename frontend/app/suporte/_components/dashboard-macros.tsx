@@ -17,7 +17,7 @@ import type { SupportMacroCard, SupportMacroCardStatus, SupportMacroDailyPoint, 
 import type { Tone } from "@/lib/tones";
 
 import { DashboardGoalRings } from "./dashboard-goal-rings";
-import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, isGoodWhenUp } from "./dashboard-format";
+import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
 import { IxcPeriodBar, useIxcPeriod } from "./ixc-n1-panel";
 
 // Dashboard Suporte (pedido do usuário, 2026-10-14), montado com os mesmos componentes e gráficos da Visão
@@ -100,6 +100,8 @@ function MacroKpiCard({ card, daily, previousLabel, large = false }: { card: Sup
       value={formatCardValue(card, card.value)}
       tone={tone}
       delta={showPercentDelta ? { value: percentChange(card.value, card.previous), goodWhenUp: isGoodWhenUp(card), againstLabel: previousLabel } : undefined}
+      // Pedido do usuário (2026-10-20): em todos os cartões, mostrar o que era antes e a variação, além do % já exibido.
+      previousLine={formatPreviousLine(card) ?? undefined}
       hint={hint || undefined}
       large={large}
       spark={spark.values}
