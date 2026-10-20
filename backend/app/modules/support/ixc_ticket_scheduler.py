@@ -91,6 +91,21 @@ def _contract_sync_due(db) -> bool:
     return datetime.now(timezone.utc) - last_at >= timedelta(hours=interval_hours)
 
 
+def _sync_contact_geo(db, client) -> dict | None:
+    """Radar de Contatos: resolve a localização dos clientes novos do OPA. Roda depois do commit da
+    importação de tickets e nunca derruba o ciclo - falha aqui só atrasa o radar."""
+    try:
+        from .contact_geo_sync import sync_contact_geo
+
+        result = sync_contact_geo(db, client)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        logger.exception("Falha ao resolver a localização dos clientes do Radar de Contatos")
+        return None
+
+
 def run_ixc_ticket_sync_once() -> dict | None:
     """Roda um ciclo: importa `su_ticket` de hoje + lookback, e `cliente_contrato` quando devido.
     Retorna `None` se o IXC não estiver configurado."""
@@ -120,7 +135,8 @@ def run_ixc_ticket_sync_once() -> dict | None:
             upsert_setting(db, SUPPORT_IXC_TICKET_SYNC_LAST_SUCCESS_AT_KEY, datetime.now(timezone.utc).isoformat())
             db.commit()
             logger.info("Sincronização de atendimento IXC concluída: %s", ticket_result)
-            return {"tickets": ticket_result, "contracts": contract_result}
+            geo_result = _sync_contact_geo(db, client)
+            return {"tickets": ticket_result, "contracts": contract_result, "contact_geo": geo_result}
         except RuntimeError as exc:
             # Mesmo tratamento de `scheduling/scheduler.py`: "outra importação já em andamento" é
             # condição esperada (o ciclo anterior ainda não terminou, ex.: 552 mil tickets

@@ -105,6 +105,8 @@ import type {
   SupportIxcTicketDailyPoint,
   SupportIxcN1Summary,
   SupportFeedback,
+  SupportContactRadar,
+  SupportContactRadarProtocolPage,
   SupportOccurrenceOverview,
   SupportOccurrencePage,
   SupportRanking,
@@ -1187,6 +1189,48 @@ export const api = {
     const query = new URLSearchParams({ date_from: params.date_from, date_to: params.date_to });
     if (params.regional) query.set("regional", params.regional);
     return request<SupportOccurrenceOverview>(`/support/ixc/occurrences/overview?${query.toString()}`);
+  },
+
+  supportContactRadar: (params: { window_minutes?: number; date_from?: string; date_to?: string; channel?: string; department_ids?: string[] }) => {
+    const query = new URLSearchParams();
+    // Com datas, a janela em minutos não vale: o backend usa o período.
+    if (params.date_from && params.date_to) {
+      query.set("date_from", params.date_from);
+      query.set("date_to", params.date_to);
+    } else {
+      query.set("window_minutes", String(params.window_minutes ?? 60));
+    }
+    if (params.channel) query.set("channel", params.channel);
+    // Vários departamentos viajam como lista separada por vírgula (mesmo contrato dos filtros do OPA).
+    if (params.department_ids?.length) query.set("department_id", params.department_ids.join(","));
+    return request<SupportContactRadar>(`/support/opa/contact-radar?${query.toString()}`);
+  },
+
+  supportContactRadarProtocols: (params: {
+    regional: string;
+    city: string;
+    neighborhood?: string;
+    window_minutes?: number;
+    date_from?: string;
+    date_to?: string;
+    channel?: string;
+    department_ids?: string[];
+    limit?: number;
+    offset?: number;
+  }) => {
+    const query = new URLSearchParams({ regional: params.regional, city: params.city });
+    if (params.neighborhood) query.set("neighborhood", params.neighborhood);
+    if (params.date_from && params.date_to) {
+      query.set("date_from", params.date_from);
+      query.set("date_to", params.date_to);
+    } else {
+      query.set("window_minutes", String(params.window_minutes ?? 60));
+    }
+    if (params.channel) query.set("channel", params.channel);
+    if (params.department_ids?.length) query.set("department_id", params.department_ids.join(","));
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.offset) query.set("offset", String(params.offset));
+    return request<SupportContactRadarProtocolPage>(`/support/opa/contact-radar/protocols?${query.toString()}`);
   },
 
   supportIxcN1Summary: (params: { date_from: string; date_to: string; level?: "n1" | "n2" }) =>

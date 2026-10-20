@@ -2936,3 +2936,86 @@ export type SupportRulesState = {
   updated_at: string | null;
   updated_by: string | null;
 };
+
+
+export type SupportContactRadarStats = {
+  contacts: number;
+  customers: number;
+  baseline: number;
+  ratio: number | null;
+  elevated: boolean;
+};
+
+export type SupportContactRadarNeighborhood = SupportContactRadarStats & {
+  neighborhood: string;
+  latitude: number | null;
+  longitude: number | null;
+};
+
+export type SupportContactRadarCity = SupportContactRadarStats & {
+  city: string;
+  latitude: number | null;
+  longitude: number | null;
+  neighborhoods: SupportContactRadarNeighborhood[];
+};
+
+export type SupportContactRadarRegional = SupportContactRadarStats & {
+  regional: string;
+  cities: SupportContactRadarCity[];
+};
+
+export type SupportContactRadarTag = {
+  id: string;
+  name: string;
+  /** Cor da etiqueta no OPA: yellow, blue, red, gray, green, purple ou orange. */
+  color: string | null;
+  /** false: a etiqueta não está no cadastro local; `name` é um rótulo neutro e `id` é o do OPA. */
+  known: boolean;
+};
+
+export type SupportContactRadarProtocol = {
+  source_id: string;
+  protocol: string | null;
+  opened_at: string;
+  status: string | null;
+  channel: string | null;
+  department_name: string | null;
+  attendant_name: string | null;
+  neighborhood: string | null;
+  tags: SupportContactRadarTag[];
+};
+
+export type SupportContactRadarProtocolPage = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: SupportContactRadarProtocol[];
+};
+
+export type SupportContactRadarPoint = {
+  start: string;
+  contacts: number;
+  located_contacts: number;
+  customers: number;
+  by_channel: Record<string, number>;
+};
+
+export type SupportContactRadar = {
+  mode: "window" | "range";
+  window_minutes: number | null;
+  date_from: string | null;
+  date_to: string | null;
+  generated_at: string;
+  alerts_enabled: boolean;
+  totals: {
+    contacts: number;
+    customers: number;
+    located_contacts: number;
+    unlocated_contacts: number;
+    coverage_pct: number | null;
+  };
+  by_channel: { channel: string; contacts: number }[];
+  regionals: SupportContactRadarRegional[];
+  series: { bucket_minutes: number; points: SupportContactRadarPoint[] };
+  previous: { contacts: number; customers: number; coverage_pct: number | null };
+};

@@ -43,7 +43,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import dashboard_macros, feedback_service, occurrences_service, ranking_service, support_rules, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
+from . import contact_radar_service, dashboard_macros, feedback_service, occurrences_service, ranking_service, support_rules, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -68,6 +68,8 @@ from .opa_ingestion import (
     run_opa_import_background_job,
 )
 from .schemas import (
+    SupportContactRadarOut,
+    SupportContactRadarProtocolPage,
     SupportImportResult,
     SupportIxcAnalyticsContextOut,
     SupportIxcAnalyticsPriorityItem,
@@ -2269,6 +2271,93 @@ def ixc_occurrences_list(
         status=status,
         diagnosis=diagnosis,
         hour=hour,
+        allowed_regionals=allowed_regionals,
+        deny_all=deny_all,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _validate_contact_radar_period(window_minutes: int, date_from: date | None, date_to: date | None) -> None:
+    """Mesma validação do radar e da lista de protocolos: datas juntas e em ordem, período de até 31 dias, e
+    sem datas só valem as janelas conhecidas."""
+    if (date_from is None) != (date_to is None):
+        raise HTTPException(status_code=422, detail="Informe a data inicial e a final juntas.")
+    if date_from is not None and date_to is not None:
+        if date_to < date_from:
+            raise HTTPException(status_code=422, detail="A data final não pode ser anterior à inicial.")
+        if (date_to - date_from).days + 1 > contact_radar_service.MAX_RANGE_DAYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"O período máximo do Radar de Contatos é de {contact_radar_service.MAX_RANGE_DAYS} dias.",
+            )
+    elif window_minutes not in contact_radar_service.WINDOW_CHOICES:
+        raise HTTPException(
+            status_code=422,
+            detail="Janela inválida. Use uma destas durações em minutos: "
+            + ", ".join(str(v) for v in contact_radar_service.WINDOW_CHOICES)
+            + ".",
+        )
+
+
+@router.get("/opa/contact-radar", response_model=SupportContactRadarOut)
+def opa_contact_radar(
+    window_minutes: int = Query(default=60),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: str | None = Query(default=None, max_length=40),
+    department_id: str | None = Query(default=None, max_length=1000),  # um ou vários ids separados por vírgula
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Radar de Contatos: de onde (cidade/bairro/regional) os clientes estão entrando em contato pelo
+    OPA. Sem datas, olha os últimos `window_minutes` e compara com a mesma janela dos 7 dias
+    anteriores; com `date_from` e `date_to` (inclusivas, no máximo 31 dias) olha o período e compara
+    com o período anterior de mesmo tamanho. Só leitura; respeita o escopo regional do usuário."""
+    _validate_contact_radar_period(window_minutes, date_from, date_to)
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    return contact_radar_service.build_radar(
+        db,
+        window_minutes=window_minutes,
+        date_from=date_from,
+        date_to=date_to,
+        channel=channel,
+        department_id=department_id,
+        allowed_regionals=allowed_regionals,
+        deny_all=deny_all,
+    )
+
+
+@router.get("/opa/contact-radar/protocols", response_model=SupportContactRadarProtocolPage)
+def opa_contact_radar_protocols(
+    regional: str = Query(max_length=120),
+    city: str = Query(max_length=120),
+    neighborhood: str | None = Query(default=None, max_length=160),
+    window_minutes: int = Query(default=60),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: str | None = Query(default=None, max_length=40),
+    department_id: str | None = Query(default=None, max_length=1000),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Protocolos do OPA de uma cidade (ou de um bairro dela) do Radar de Contatos, no mesmo recorte (janela ou período, canal e
+    departamentos), com as etiquetas de cada protocolo (nome e cor do OPA). Só leitura; respeita o escopo
+    regional do usuário. Não devolve nome, CPF nem telefone do cliente."""
+    _validate_contact_radar_period(window_minutes, date_from, date_to)
+    allowed_regionals, deny_all = regional_scope_or_deny(user)
+    return contact_radar_service.list_protocols(
+        db,
+        regional=regional,
+        city=city,
+        neighborhood=neighborhood,
+        window_minutes=window_minutes,
+        date_from=date_from,
+        date_to=date_to,
+        channel=channel,
+        department_id=department_id,
         allowed_regionals=allowed_regionals,
         deny_all=deny_all,
         limit=limit,

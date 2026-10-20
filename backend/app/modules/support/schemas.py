@@ -1116,3 +1116,114 @@ class SupportOpaSavedFilterCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     scope: Literal["personal", "global"] = "personal"
     filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class SupportContactRadarTotals(BaseModel):
+    contacts: int
+    customers: int
+    located_contacts: int
+    unlocated_contacts: int
+    # Percentual de atendimentos da janela com cliente localizado. None quando o usuário tem escopo
+    # regional (o total geral não pode ser exposto) ou não há atendimento na janela.
+    coverage_pct: float | None = None
+
+
+class SupportContactRadarChannel(BaseModel):
+    channel: str
+    contacts: int
+
+
+class SupportContactRadarStats(BaseModel):
+    contacts: int
+    customers: int
+    # Média de clientes distintos na comparação (mesma janela dos 7 dias anteriores, ou o período
+    # anterior); `ratio` é None quando a média é baixa demais para uma comparação que faça sentido.
+    baseline: float
+    ratio: float | None = None
+    elevated: bool
+
+
+class SupportContactRadarNeighborhood(SupportContactRadarStats):
+    neighborhood: str
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class SupportContactRadarCity(SupportContactRadarStats):
+    city: str
+    latitude: float | None = None
+    longitude: float | None = None
+    neighborhoods: list[SupportContactRadarNeighborhood] = Field(default_factory=list)
+
+
+class SupportContactRadarRegional(SupportContactRadarStats):
+    regional: str
+    cities: list[SupportContactRadarCity] = Field(default_factory=list)
+
+
+class SupportContactRadarPoint(BaseModel):
+    start: datetime
+    contacts: int
+    located_contacts: int
+    customers: int
+    by_channel: dict[str, int] = Field(default_factory=dict)
+
+
+class SupportContactRadarSeries(BaseModel):
+    bucket_minutes: int
+    points: list[SupportContactRadarPoint] = Field(default_factory=list)
+
+
+class SupportContactRadarPrevious(BaseModel):
+    """Totais do período de comparação (média das mesmas janelas dos 7 dias anteriores, ou o período
+    anterior), para a variação dos cartões."""
+
+    contacts: float
+    customers: float
+    coverage_pct: float | None = None
+
+
+class SupportContactRadarTag(BaseModel):
+    id: str
+    name: str
+    # Cor da etiqueta no OPA: yellow, blue, red, gray, green, purple ou orange.
+    color: str | None = None
+    # False quando a etiqueta não está no cadastro local: `name` é um rótulo neutro e `id` é o do OPA.
+    known: bool = True
+
+
+class SupportContactRadarProtocol(BaseModel):
+    source_id: str
+    protocol: str | None = None
+    opened_at: datetime
+    status: str | None = None
+    channel: str | None = None
+    department_name: str | None = None
+    attendant_name: str | None = None
+    neighborhood: str | None = None
+    tags: list[SupportContactRadarTag] = Field(default_factory=list)
+
+
+class SupportContactRadarProtocolPage(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[SupportContactRadarProtocol] = Field(default_factory=list)
+
+
+class SupportContactRadarOut(BaseModel):
+    # "window" = últimos N minutos (comparado com a mesma janela dos 7 dias anteriores);
+    # "range" = de `date_from` a `date_to` (comparado com o período anterior de mesmo tamanho).
+    mode: Literal["window", "range"]
+    window_minutes: int | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    generated_at: datetime
+    # False enquanto a comparação com os 7 dias anteriores não é confiável (localização dos clientes
+    # antigos ainda sendo resolvida): nenhum grupo é marcado como acima do usual.
+    alerts_enabled: bool = True
+    totals: SupportContactRadarTotals
+    by_channel: list[SupportContactRadarChannel] = Field(default_factory=list)
+    regionals: list[SupportContactRadarRegional] = Field(default_factory=list)
+    series: SupportContactRadarSeries
+    previous: SupportContactRadarPrevious
