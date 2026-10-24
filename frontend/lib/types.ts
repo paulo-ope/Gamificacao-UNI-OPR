@@ -44,6 +44,7 @@ export type Permission =
   | "scheduling:views:manage_global"
   | "support:read"
   | "support:sync_opa"
+  | "support:plan_write"
   | "localiza:read"
   | "localiza:manage"
   | "management:read"
@@ -3018,4 +3019,100 @@ export type SupportContactRadar = {
   regionals: SupportContactRadarRegional[];
   series: { bucket_minutes: number; points: SupportContactRadarPoint[] };
   previous: { contacts: number; customers: number; coverage_pct: number | null };
+};
+
+// Especialista/Analista (Suporte Interno): projetos e tarefas lançados pela equipe.
+export type SupportPlanKind = "project" | "task";
+export type SupportPlanStatus = "planned" | "in_progress" | "blocked" | "done" | "canceled";
+export type SupportPlanPriority = "low" | "medium" | "high";
+
+export type SupportPlanPerson = { id: number; name: string };
+
+export type SupportPlanItem = {
+  id: number;
+  kind: SupportPlanKind;
+  parent_id: number | null;
+  parent_title: string | null;
+  title: string;
+  description: string | null;
+  status: SupportPlanStatus;
+  priority: SupportPlanPriority;
+  due_date: string | null;
+  overdue: boolean;
+  assignees: SupportPlanPerson[];
+  result: string | null;
+  completed_at: string | null;
+  archived: boolean;
+  version: number;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+  tasks_total: number;
+  tasks_done: number;
+  updates_count: number;
+};
+
+export type SupportPlanUpdateEntry = {
+  id: number;
+  author_name: string;
+  text: string;
+  status_from: SupportPlanStatus | null;
+  status_to: SupportPlanStatus | null;
+  created_at: string;
+};
+
+export type SupportPlanChild = {
+  id: number;
+  title: string;
+  status: SupportPlanStatus;
+  due_date: string | null;
+  overdue: boolean;
+  assignees: SupportPlanPerson[];
+};
+
+export type SupportPlanItemDetail = SupportPlanItem & {
+  updates: SupportPlanUpdateEntry[];
+  children: SupportPlanChild[];
+};
+
+export type SupportPlanItemPage = { items: SupportPlanItem[]; total: number };
+
+export type SupportPlanSummary = {
+  open: number;
+  in_progress: number;
+  blocked: number;
+  overdue: number;
+  done_in_period: number;
+  period_days: number;
+};
+
+export type SupportPlanItemInput = {
+  kind: SupportPlanKind;
+  title: string;
+  description?: string | null;
+  priority: SupportPlanPriority;
+  due_date?: string | null;
+  assignee_ids: number[];
+  parent_id?: number | null;
+  status?: SupportPlanStatus;
+};
+
+export type SupportPlanItemPatch = {
+  version: number;
+  title?: string;
+  description?: string | null;
+  priority?: SupportPlanPriority;
+  due_date?: string | null;
+  clear_due_date?: boolean;
+  assignee_ids?: number[];
+  parent_id?: number | null;
+  clear_parent?: boolean;
+  result?: string | null;
+};
+
+export type SupportPlanProgressInput = {
+  version: number;
+  text: string;
+  status?: SupportPlanStatus;
+  result?: string | null;
 };

@@ -251,7 +251,7 @@ export function useDynamicSearchEntries(
     for (const attendant of data.ixcN1Attendants) {
       record(attendant.name, "", {
         href: "/suporte?tab=ixc_n1",
-        label: "SGP Suporte · Atendimento Suporte Interno N1",
+        label: "SGP Suporte · Suporte N1/N2",
         description: `${attendant.total} atendimentos no ano`,
         icon: Headphones,
       });

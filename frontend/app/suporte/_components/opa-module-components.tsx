@@ -18,6 +18,7 @@ import {
   History,
   Info,
   LayoutDashboard,
+  ListChecks,
   ListFilter,
   Loader2,
   ClipboardList,
@@ -81,6 +82,7 @@ export type OpaModuleTab =
   | "ranking"
   | "occurrences"
   | "contact_radar"
+  | "planning"
   | "operation"
   | "queues"
   | "agents"
@@ -102,12 +104,13 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
   { value: "dashboard", label: "Indicadores do Suporte", description: "Macros e micros", icon: BarChart3 },
   { value: "attendants", label: "Atendentes", description: "Volume por atendente", icon: Users },
   { value: "ixc_tickets", label: "Atendimento IXC", description: "Indicador antecipado", icon: TriangleAlert },
-  { value: "ixc_n1", label: "Atendimento Suporte Interno N1", description: "Operacional e financeiro", icon: Headphones },
-  { value: "ixc_n2", label: "Atendimento Operacional N2", description: "Interno e externo", icon: Headphones },
+  // N1 e N2 viraram um item só; `ixc_n2` segue válido na URL (links antigos) e abre no N2, mas não aparece no menu.
+  { value: "ixc_n1", label: "Suporte N1/N2", description: "Atendimento por nível", icon: Headphones },
   { value: "feedback", label: "Feedback", description: "Metas por colaborador", icon: MessageSquareText },
   { value: "ranking", label: "Ranking", description: "Pontuação mensal", icon: Trophy },
   { value: "occurrences", label: "Ocorrências", description: "Registros do assunto 211", icon: ClipboardList },
   { value: "contact_radar", label: "Radar de Contatos", description: "De onde os clientes ligam", icon: Radar },
+  { value: "planning", label: "Especialista/Analista", description: "Projetos e tarefas", icon: ListChecks },
   { value: "settings", label: "Configuração", description: "Dados e sincronização", icon: Settings2 },
   { value: "operation", label: "Operação", description: "Planejado", icon: BarChart3 },
   { value: "queues", label: "Filas", description: "Planejado", icon: GitBranch },
@@ -118,7 +121,7 @@ export const OPA_NAV_ITEMS: OpaNavigationItem[] = [
 
 // `data` e `sync` não têm item próprio no menu: vivem como sub-abas de "Configuração" (`settings`), mas
 // continuam válidas na URL (`?tab=data`, `?tab=sync`) para links já existentes.
-export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "dashboard", "attendants", "settings", "data", "sync", "rules", "ixc_tickets", "ixc_n1", "ixc_n2", "feedback", "ranking", "occurrences", "contact_radar"];
+export const ACTIVE_OPA_TABS: OpaModuleTab[] = ["overview", "dashboard", "attendants", "settings", "data", "sync", "rules", "ixc_tickets", "ixc_n1", "ixc_n2", "feedback", "ranking", "occurrences", "contact_radar", "planning"];
 
 /** Sub-abas de "Configuração". */
 export const OPA_SETTINGS_VIEWS: { value: "data" | "sync" | "rules"; label: string; icon: LucideIcon }[] = [

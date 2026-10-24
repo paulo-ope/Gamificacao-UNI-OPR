@@ -116,6 +116,7 @@ from .schemas import (
     SupportOpaTimeseries,
     SupportPeriodRequest,
 )
+from .planning_router import router as planning_router
 from .tv_schemas import SupportTvConfig, SupportTvConfigUpdate, SupportTvPresence, SupportTvSnapshot
 
 logger = logging.getLogger("support")
@@ -124,6 +125,7 @@ router = APIRouter(
     tags=["support"],
     dependencies=[Depends(require_permission("support:read"))],
 )
+router.include_router(planning_router)
 
 
 def _validate_period(date_from: date, date_to: date) -> None:
