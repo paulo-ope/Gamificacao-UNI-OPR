@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import exists, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models import Collaborator, ImportRun, ServiceOrder
@@ -50,6 +50,12 @@ from app.services.upvalue_importer import (
 OPERATIONS_SYNC_WATERMARK_KEY = "operations_sync_last_source_updated_at"
 RECONCILIATION_IMPORT_FILENAME = "operations-orders-reconciliation"
 RECONCILIATION_AUDIT_REASON = "Created by operations_orders reconciliation"
+# Janela (dias) que o ciclo automatico reconcilia a cada rodada. A marca d'agua so enxerga O.S. cuja
+# atualizacao no IXC e posterior a ela: uma O.S. que chega em operations_orders depois de a marca
+# d'agua ja ter passado da data dela nunca e selecionada (achado real, outubro/2026: 113 O.S. fora
+# da gamificacao). Esta janela recupera essas O.S. sozinha; periodos mais antigos usam o comando
+# `python -m scripts.reconcile_missing_service_orders`.
+RECONCILIATION_RECENT_DAYS = 7
 
 
 def _ensure_timezone_aware(value: datetime, field_name: str) -> None:
@@ -163,6 +169,7 @@ def _operation_reconciliation_query(
     responsible_ixc_id: int | None = None,
     operation_order_ids: list[int] | None = None,
     os_codes: list[str] | None = None,
+    only_missing: bool = False,
 ):
     query = select(OperationOrder).where(
         OperationOrder.source == "ixc",
@@ -171,6 +178,8 @@ def _operation_reconciliation_query(
         OperationOrder.closed_at >= date_from,
         OperationOrder.closed_at < date_to,
     )
+    if only_missing:
+        query = query.where(~exists().where(ServiceOrder.os_code == OperationOrder.order_code))
     if responsible_ixc_id is not None:
         query = query.where(OperationOrder.responsible_ixc_id == responsible_ixc_id)
     if operation_order_ids:
@@ -511,6 +520,7 @@ def reconcile_missing_service_orders_from_operations(
     dry_run: bool = True,
     batch_size: int = 25,
     imported_by: int | None = None,
+    only_missing: bool = False,
 ) -> dict[str, Any]:
     """Reconcilia lacunas de `operations_orders` em `service_orders` sem depender da watermark.
 
@@ -518,6 +528,10 @@ def reconcile_missing_service_orders_from_operations(
     timestamps. A execucao real usa lock consultivo transacional por lote, com a mesma chave da
     importacao IXC, para evitar corrida com sync incremental/backfills sem segurar lock de sessao
     entre commits.
+
+    `only_missing=True` so considera O.S. sem `ServiceOrder` de mesmo codigo. E o modo do ciclo
+    automatico: sem ele, toda rodada percorreria (e abriria um ImportRun por lote para) todas as
+    O.S. da janela, inclusive as que ja existem.
     """
     _ensure_timezone_aware(date_from, "date_from")
     _ensure_timezone_aware(date_to, "date_to")
@@ -537,6 +551,7 @@ def reconcile_missing_service_orders_from_operations(
                 responsible_ixc_id=responsible_ixc_id,
                 operation_order_ids=operation_order_ids,
                 os_codes=os_codes,
+                only_missing=only_missing,
             )
         )
     )
@@ -641,6 +656,7 @@ def reconcile_recent_missing_service_orders_from_operations(
     batch_size: int = 25,
     imported_by: int | None = None,
     now: datetime | None = None,
+    only_missing: bool = False,
 ) -> dict[str, Any]:
     if days <= 0:
         raise ValueError("days deve ser maior que zero.")
@@ -652,6 +668,7 @@ def reconcile_recent_missing_service_orders_from_operations(
         dry_run=dry_run,
         batch_size=batch_size,
         imported_by=imported_by,
+        only_missing=only_missing,
     )
 
 

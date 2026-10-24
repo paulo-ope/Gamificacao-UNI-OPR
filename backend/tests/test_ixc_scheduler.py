@@ -82,3 +82,42 @@ def test_ixc_loop_runs_sync_when_configured_interval_has_passed(monkeypatch):
         asyncio.run(ixc_scheduler.run_ixc_sync_loop(20, initial_enabled=True))
 
     assert calls == [("to_thread", None), ("sync", None), ("sleep", 15.0)]
+
+
+class _FakeDb:
+    def __init__(self):
+        self.rollbacks = 0
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def test_recent_reconciliation_runs_real_and_only_for_missing_orders(monkeypatch):
+    seen = {}
+
+    def fake_reconcile(db, **kwargs):
+        seen.update(kwargs)
+        return {"created_count": 3, "error_count": 0, "invalid_collaborator": 0, "blocked_paid_period": 0}
+
+    monkeypatch.setattr(ixc_scheduler, "reconcile_recent_missing_service_orders_from_operations", fake_reconcile)
+
+    result = ixc_scheduler._run_recent_reconciliation(_FakeDb())
+
+    assert result["created_count"] == 3
+    assert seen["dry_run"] is False
+    assert seen["only_missing"] is True
+    assert seen["days"] == ixc_scheduler.RECONCILIATION_RECENT_DAYS
+
+
+def test_recent_reconciliation_failure_does_not_break_the_cycle(monkeypatch):
+    def failing_reconcile(db, **kwargs):
+        raise RuntimeError("falha simulada")
+
+    monkeypatch.setattr(ixc_scheduler, "reconcile_recent_missing_service_orders_from_operations", failing_reconcile)
+    db = _FakeDb()
+
+    result = ixc_scheduler._run_recent_reconciliation(db)
+
+    assert result["created_count"] == 0
+    assert result["error_count"] == 1
+    assert db.rollbacks == 1
