@@ -107,6 +107,13 @@ import type {
   SupportFeedback,
   SupportContactRadar,
   SupportContactRadarProtocolPage,
+  SupportPlanItemDetail,
+  SupportPlanItemInput,
+  SupportPlanItemPage,
+  SupportPlanItemPatch,
+  SupportPlanPerson,
+  SupportPlanProgressInput,
+  SupportPlanSummary,
   SupportOccurrenceOverview,
   SupportOccurrencePage,
   SupportRanking,
@@ -1232,6 +1239,30 @@ export const api = {
     if (params.offset) query.set("offset", String(params.offset));
     return request<SupportContactRadarProtocolPage>(`/support/opa/contact-radar/protocols?${query.toString()}`);
   },
+
+  // Especialista/Analista: projetos e tarefas. Leitura vale para quem acessa o Suporte; escrever exige
+  // `support:plan_write` (checado no backend).
+  supportPlanItems: (params: { status?: string; kind?: string; assignee_id?: number; q?: string; include_archived?: boolean; only_overdue?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.set("status", params.status);
+    if (params.kind) query.set("kind", params.kind);
+    if (params.assignee_id) query.set("assignee_id", String(params.assignee_id));
+    if (params.q) query.set("q", params.q);
+    if (params.include_archived) query.set("include_archived", "true");
+    if (params.only_overdue) query.set("only_overdue", "true");
+    return request<SupportPlanItemPage>(`/support/planning/items?${query.toString()}`);
+  },
+  supportPlanSummary: () => request<SupportPlanSummary>("/support/planning/summary"),
+  supportPlanPeople: () => request<SupportPlanPerson[]>("/support/planning/people"),
+  supportPlanItem: (id: number) => request<SupportPlanItemDetail>(`/support/planning/items/${id}`),
+  createSupportPlanItem: (payload: SupportPlanItemInput) =>
+    request<SupportPlanItemDetail>("/support/planning/items", { method: "POST", body: JSON.stringify(payload) }),
+  updateSupportPlanItem: (id: number, payload: SupportPlanItemPatch) =>
+    request<SupportPlanItemDetail>(`/support/planning/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  addSupportPlanProgress: (id: number, payload: SupportPlanProgressInput) =>
+    request<SupportPlanItemDetail>(`/support/planning/items/${id}/updates`, { method: "POST", body: JSON.stringify(payload) }),
+  archiveSupportPlanItem: (id: number, payload: { version: number; archived: boolean }) =>
+    request<SupportPlanItemDetail>(`/support/planning/items/${id}/archive`, { method: "POST", body: JSON.stringify(payload) }),
 
   supportIxcN1Summary: (params: { date_from: string; date_to: string; level?: "n1" | "n2" }) =>
     request<SupportIxcN1Summary>(`/support/ixc/n1/summary?${new URLSearchParams(params).toString()}`),

@@ -1227,3 +1227,119 @@ class SupportContactRadarOut(BaseModel):
     regionals: list[SupportContactRadarRegional] = Field(default_factory=list)
     series: SupportContactRadarSeries
     previous: SupportContactRadarPrevious
+
+
+# ---------------------------------------------------------------------------
+# Especialista/Analista: projetos e tarefas lançados pela equipe
+# ---------------------------------------------------------------------------
+PlanKind = Literal["project", "task"]
+PlanStatus = Literal["planned", "in_progress", "blocked", "done", "canceled"]
+PlanPriority = Literal["low", "medium", "high"]
+
+
+class SupportPlanPerson(BaseModel):
+    id: int
+    name: str
+
+
+class SupportPlanItemBase(BaseModel):
+    kind: PlanKind
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    priority: PlanPriority = "medium"
+    due_date: date | None = None
+    assignee_ids: list[int] = Field(default_factory=list, max_length=10)
+    parent_id: int | None = None
+
+
+class SupportPlanItemCreate(SupportPlanItemBase):
+    status: PlanStatus = "planned"
+
+
+class SupportPlanItemUpdate(BaseModel):
+    # `version` é a versão que a tela leu: se outra pessoa salvou antes, a gravação é recusada (409).
+    version: int = Field(ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    priority: PlanPriority | None = None
+    due_date: date | None = None
+    clear_due_date: bool = False
+    assignee_ids: list[int] | None = Field(default=None, max_length=10)
+    parent_id: int | None = None
+    clear_parent: bool = False
+    result: str | None = Field(default=None, max_length=5000)
+
+
+class SupportPlanUpdateCreate(BaseModel):
+    version: int = Field(ge=1)
+    text: str = Field(default="", max_length=3000)
+    status: PlanStatus | None = None
+    # Exigido ao concluir (status "done"): o que foi feito e o que mudou.
+    result: str | None = Field(default=None, max_length=5000)
+
+
+class SupportPlanArchive(BaseModel):
+    version: int = Field(ge=1)
+    archived: bool = True
+
+
+class SupportPlanUpdateOut(BaseModel):
+    id: int
+    author_name: str
+    text: str
+    status_from: str | None = None
+    status_to: str | None = None
+    created_at: datetime
+
+
+class SupportPlanChildOut(BaseModel):
+    id: int
+    title: str
+    status: str
+    due_date: date | None = None
+    overdue: bool
+    assignees: list[SupportPlanPerson]
+
+
+class SupportPlanItemOut(BaseModel):
+    id: int
+    kind: str
+    parent_id: int | None = None
+    parent_title: str | None = None
+    title: str
+    description: str | None = None
+    status: str
+    priority: str
+    due_date: date | None = None
+    overdue: bool
+    assignees: list[SupportPlanPerson]
+    result: str | None = None
+    completed_at: datetime | None = None
+    archived: bool
+    version: int
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+    # Só projeto: tarefas ativas e quantas estão concluídas (canceladas não entram na conta).
+    tasks_total: int = 0
+    tasks_done: int = 0
+    updates_count: int = 0
+
+
+class SupportPlanItemDetail(SupportPlanItemOut):
+    updates: list[SupportPlanUpdateOut]
+    children: list[SupportPlanChildOut]
+
+
+class SupportPlanItemPage(BaseModel):
+    items: list[SupportPlanItemOut]
+    total: int
+
+
+class SupportPlanSummary(BaseModel):
+    open: int
+    in_progress: int
+    blocked: int
+    overdue: int
+    done_in_period: int
+    period_days: int

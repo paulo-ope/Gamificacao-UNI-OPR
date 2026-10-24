@@ -56,10 +56,11 @@ import { useDepartmentAttendantsSync } from "@/app/suporte/_components/use-depar
 import { DashboardMacros } from "@/app/suporte/_components/dashboard-macros";
 import { FeedbackPanel } from "@/app/suporte/_components/feedback-panel";
 import { ContactRadarPanel } from "@/app/suporte/_components/contact-radar-panel";
+import { PlanningPanel } from "@/app/suporte/_components/planning-panel";
 import { OccurrencesPanel } from "@/app/suporte/_components/occurrences-panel";
 import { RankingPanel } from "@/app/suporte/_components/ranking-panel";
 import { RulesPanel } from "@/app/suporte/_components/rules-panel";
-import { IxcN1Panel } from "@/app/suporte/_components/ixc-n1-panel";
+import { IxcLevelsPanel } from "@/app/suporte/_components/ixc-levels-panel";
 import { IxcTicketAnalyticsPanel } from "@/app/suporte/_components/ixc-ticket-analytics-panel";
 import { IxcTicketDrilldownPanel } from "@/app/suporte/_components/ixc-ticket-drilldown";
 import { IxcTicketFiltersBar } from "@/app/suporte/_components/ixc-ticket-filters-bar";
@@ -299,6 +300,8 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const initialTab = useMemo<OpaModuleTab>(() => {
     const tab = initialQueryParams.get("tab") as OpaModuleTab | null;
     if (tab === "agents") return "attendants";
+    // Link antigo do N2: a tela agora é "Suporte N1/N2" e abre no N2 (ver `IxcLevelsPanel`).
+    if (tab === "ixc_n2") return "ixc_n1";
     // "Configuração" abre na sub-aba pedida (`sub=sync`) ou, sem `sub`, em Dados.
     const sub = initialQueryParams.get("sub");
     if (tab === "settings") return sub === "sync" ? "sync" : sub === "rules" ? "rules" : "data";
@@ -315,7 +318,7 @@ function SupportPageContent({ user }: { user: AuthUser }) {
   const [activeView, setActiveView] = useState<OpaModuleTab>(initialTab);
   // As abas do IXC ("Atendimento IXC", "Atendimento Suporte Interno N1" e "Atendimento Operacional N2") são outra fonte de dado,
   // com período próprio dentro do painel - os filtros globais do OPA Suite não se aplicam a elas.
-  const isIxcView = activeView === "ixc_tickets" || activeView === "ixc_n1" || activeView === "ixc_n2" || activeView === "dashboard" || activeView === "feedback" || activeView === "ranking" || activeView === "occurrences" || activeView === "contact_radar" || activeView === "rules";
+  const isIxcView = activeView === "ixc_tickets" || activeView === "ixc_n1" || activeView === "ixc_n2" || activeView === "dashboard" || activeView === "feedback" || activeView === "ranking" || activeView === "occurrences" || activeView === "contact_radar" || activeView === "planning" || activeView === "rules";
   // Visão Geral (KPIs/gráfico/prioridades) é a entrada da aba "Atendimento IXC" - clicar numa
   // prioridade aprofunda pro drill-down já existente, pré-selecionando a regional clicada.
   const [ixcTicketFocusRegional, setIxcTicketFocusRegional] = useState<string | null>(null);
@@ -1029,12 +1032,12 @@ function SupportPageContent({ user }: { user: AuthUser }) {
             </div>
           ) : null}
           {activeView === "dashboard" ? <DashboardMacros /> : null}
-          {activeView === "ixc_n1" ? <IxcN1Panel /> : null}
-          {activeView === "ixc_n2" ? <IxcN1Panel level="n2" /> : null}
+          {activeView === "ixc_n1" || activeView === "ixc_n2" ? <IxcLevelsPanel initialLevel={initialQueryParams.get("tab") === "ixc_n2" ? "n2" : "n1"} /> : null}
           {activeView === "feedback" ? <FeedbackPanel /> : null}
           {activeView === "ranking" ? <RankingPanel /> : null}
           {activeView === "occurrences" ? <OccurrencesPanel /> : null}
           {activeView === "contact_radar" ? <ContactRadarPanel /> : null}
+          {activeView === "planning" ? <PlanningPanel canWrite={user.permissions.includes("support:plan_write")} currentUserId={user.id} /> : null}
           {activeView === "rules" ? <RulesPanel canEdit={canSync} /> : null}
           {activeView === "sync" ? (
             <div className="grid gap-5">
