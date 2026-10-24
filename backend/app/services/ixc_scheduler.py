@@ -14,7 +14,11 @@ from app.modules.operations.period import OPERATIONS_TIMEZONE
 from app.modules.operations.scope import PRIMARY_IXC_SECTOR_IDS, normalize_ixc_sector_ids
 from app.services.calculation import get_setting, recalculate_current_period, upsert_setting
 from app.services.ixc_client import IxcClient, get_ixc_client
-from app.services.operations_sync import run_operations_to_service_orders_sync
+from app.services.operations_sync import (
+    RECONCILIATION_RECENT_DAYS,
+    reconcile_recent_missing_service_orders_from_operations,
+    run_operations_to_service_orders_sync,
+)
 
 logger = logging.getLogger("ixc_sync")
 if not logger.handlers:
@@ -267,7 +271,32 @@ def _run_operations_ixc_import_cycle(db: Session, client: IxcClient) -> dict:
         "operations_imports": operations_imports,
         "ran_backlog_sweep": ran_backlog_sweep,
         "service_orders_sync": service_orders_sync,
+        "reconciliation": _run_recent_reconciliation(db),
     }
+
+
+def _run_recent_reconciliation(db: Session) -> dict:
+    """Cria em `service_orders` as O.S. recentes que a marca d'agua da projeção deixou para trás (ver
+    `RECONCILIATION_RECENT_DAYS`). Falha aqui não derruba o ciclo: a projeção incremental já foi
+    commitada e a próxima rodada tenta de novo."""
+    try:
+        result = reconcile_recent_missing_service_orders_from_operations(
+            db,
+            days=RECONCILIATION_RECENT_DAYS,
+            dry_run=False,
+            imported_by=None,
+            only_missing=True,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Falha na reconciliação de O.S. faltantes")
+        return {"created_count": 0, "error_count": 1, "errors": [str(exc)[:250]]}
+    if result["created_count"] or result["error_count"] or result["invalid_collaborator"]:
+        logger.warning(
+            "Reconciliação de O.S.: %s criada(s), %s sem colaborador ativo, %s bloqueada(s) por período pago, %s erro(s).",
+            result["created_count"], result["invalid_collaborator"], result["blocked_paid_period"], result["error_count"],
+        )
+    return result
 
 
 def run_ixc_sync_once(interval_minutes: int | None = None) -> dict | None:
@@ -303,7 +332,11 @@ def run_ixc_sync_once(interval_minutes: int | None = None) -> dict | None:
             return None
 
     summary = result["service_orders_sync"].get("summary") or {}
-    touched = int(summary.get("created_count", 0)) + int(summary.get("updated_count", 0))
+    touched = (
+        int(summary.get("created_count", 0))
+        + int(summary.get("updated_count", 0))
+        + int((result.get("reconciliation") or {}).get("created_count", 0))
+    )
     if touched > 0 and _auto_recalculate_enabled():
         with SessionLocal() as db:
             recalculate_current_period(db, execution_note="Recálculo automático após sincronização com o IXC.")

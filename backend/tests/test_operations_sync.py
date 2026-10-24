@@ -793,6 +793,38 @@ def test_recent_reconciliation_uses_bounded_window(db_session, make_collaborator
     assert result["ready_os_codes"] == ["IXC-9007"]
 
 
+def test_reconciliation_only_missing_skips_orders_already_in_service_orders(db_session, make_collaborator, monkeypatch):
+    """O ciclo automatico usa only_missing: nao pode reanalisar (nem abrir ImportRun para) O.S. que
+    ja existem em service_orders - so as que a marca d'agua deixou para tras."""
+    collaborator = make_collaborator(name="Tecnico Um", regional="UNI SUL")
+    collaborator.ixc_employee_id = 555
+    existing_order = _make_operation_order(source_order_id="9001", order_code="IXC-9001")
+    # Contrato e horario distintos: O.S. com mesmo contrato/abertura casariam por fallback.
+    missing_order = _make_operation_order(
+        source_order_id="9002",
+        order_code="IXC-9002",
+        contract_id="C-OUTRO",
+        opened_at=datetime(2026, 6, 10, 8, 0, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 10, 18, 0, tzinfo=timezone.utc),
+    )
+    db_session.add_all([existing_order, missing_order])
+    db_session.flush()
+    _add_existing_service_order(db_session, collaborator, existing_order)
+
+    simulated = _reconcile(db_session, monkeypatch, dry_run=True, only_missing=True)
+    assert simulated["analyzed_count"] == 1
+    assert simulated["ready_os_codes"] == ["IXC-9002"]
+
+    result = _reconcile(db_session, monkeypatch, only_missing=True)
+    assert result["created_os_codes"] == ["IXC-9002"]
+    assert db_session.scalar(select(func.count(ServiceOrder.id))) == 2
+    assert db_session.scalar(select(func.count(ImportRun.id))) == 1
+
+    again = _reconcile(db_session, monkeypatch, only_missing=True)
+    assert again["analyzed_count"] == 0
+    assert db_session.scalar(select(func.count(ImportRun.id))) == 1
+
+
 def test_backfill_collaborator_ixc_ids_matches_by_normalized_name(db_session, make_collaborator):
     """Colaboradores cadastrados antes do vinculo por id devem ser casados retroativamente por nome
     normalizado contra o que ja foi importado em operations_orders, sem nova chamada ao IXC."""
