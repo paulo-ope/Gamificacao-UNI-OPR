@@ -233,6 +233,10 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
     enabled: ready,
     fallbackError: "Não foi possível carregar o quadro por filial.",
   });
+  const weeklyComparison = useBlockQuery(() => operationsApi.overviewRegionalWeeklyComparison(opFilters!), [filterKey], {
+    enabled: ready,
+    fallbackError: "Não foi possível carregar o comparativo semanal das regionais.",
+  });
   const attention = useBlockQuery(() => operationsApi.overviewAttentionPoints(opFilters!), [filterKey], {
     enabled: ready,
     fallbackError: "Não foi possível carregar os pontos de atenção.",
@@ -569,7 +573,8 @@ export function OverviewScreen({ user }: { user: AuthUser }) {
           previous={previousOverview.error ? null : previousOverview.data}
           previousLabel="ant."
           backlog={matrix.data?.total ?? null}
-          state={{ loading: overview.loading || matrix.loading, error: overview.error }}
+          weekly={weeklyComparison.error ? null : weeklyComparison.data}
+          state={{ loading: overview.loading || matrix.loading || weeklyComparison.loading, error: overview.error }}
         />
         {canSeeSupport ? (
           <OverviewSupportCard

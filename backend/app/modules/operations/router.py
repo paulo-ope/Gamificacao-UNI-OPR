@@ -95,6 +95,7 @@ from .schemas import (
     OperationOverviewVisibleFiltersUpdate,
     OperationAttentionPoints,
     OperationRegionalMatrix,
+    OperationRegionalWeeklyComparison,
     OperationSavedFilterCreate,
     OperationSavedFilterOut,
     OperationSavedFilterUpdate,
@@ -1041,7 +1042,20 @@ def overview_regional_matrix(
     )
 
 
-@router.get("/overview/collaborator-production", response_model=OperationOverviewCollaboratorProduction)
+@router.get("/overview/regional-weekly-comparison", response_model=OperationRegionalWeeklyComparison)
+def overview_regional_weekly_comparison(
+    selected_filters: dict = Depends(_filter_params),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Última semana fechada (domingo a sábado) × a semana anterior a ela, por regional.
+    O período do filtro da tela é ignorado de propósito; os demais filtros valem. SLA/TMA só vêm
+    preenchidos com `operations:view_sla`, como no quadro por regional."""
+    include_sla = "operations:view_sla" in permissions_for_user(user)
+    return queries.regional_weekly_comparison(db, user, include_sla=include_sla, **selected_filters)
+
+
+@router.get("/overview/collaborator-production",response_model=OperationOverviewCollaboratorProduction)
 def overview_collaborator_production(
     date_from: date,
     date_to: date,
