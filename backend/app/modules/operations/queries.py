@@ -873,6 +873,81 @@ def regional_matrix(
     }
 
 
+def _is_unidentified_regional(label: str) -> bool:
+    """"NAO IDENTIFICADO" (valor vindo do IXC) e "Não identificada" (rótulo do `coalesce`): O.S. sem
+    regional não é uma regional para comparar."""
+    normalized = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode().upper()
+    return normalized.startswith("NAO IDENTIFICAD")
+
+
+def weekly_comparison_windows(today: date) -> tuple[tuple[date, date], tuple[date, date]]:
+    """Janelas (última semana fechada, semana anterior a ela), ambas inclusivas.
+
+    A semana da operação vai de domingo a sábado e só entra na comparação depois de terminar:
+    semana parcial contra semana cheia faria toda regional parecer em queda. Em 25/10/2026 (domingo)
+    o resultado é 18/10 a 24/10 contra 11/10 a 17/10; a semana em curso só entra no domingo seguinte."""
+    days_since_sunday = (today.weekday() + 1) % 7  # `weekday()` começa na segunda; aqui domingo = 0
+    current_end = today - timedelta(days=days_since_sunday + 1)  # sábado mais recente já encerrado
+    current_start = current_end - timedelta(days=6)
+    return (current_start, current_end), (current_start - timedelta(days=7), current_end - timedelta(days=7))
+
+
+def regional_weekly_comparison(
+    db: Session,
+    user: User,
+    *,
+    include_sla: bool = True,
+    today: date | None = None,
+    **filters,
+) -> dict:
+    """Última semana fechada × anterior por regional (mesmo agrupamento e mesmos filtros de
+    `regional_matrix`, que é quem calcula cada janela - nenhuma regra de KPI nova aqui).
+
+    Só as medidas de fluxo entram (abertas, finalizadas, SLA, TMA): "em aberto" é retrato de agora
+    e não existe para a semana passada. Regional ausente numa das semanas vem zerada/sem dado."""
+    today = today or datetime.now(timezone.utc).astimezone(OPERATIONS_TIMEZONE).date()
+    current_window, previous_window = weekly_comparison_windows(today)
+    current = regional_matrix(db, *current_window, user, include_sla=include_sla, **filters)
+    previous = regional_matrix(db, *previous_window, user, include_sla=include_sla, **filters)
+
+    def measures(item: dict | None) -> dict:
+        item = item or {}
+        return {
+            "opened": item.get("opened", 0),
+            "completed": item.get("completed", 0),
+            "sla_rate": item.get("sla_rate"),
+            "average_closing_hours": item.get("average_closing_hours"),
+        }
+
+    # `regional_matrix` também lista regional que só tem estoque em aberto; sem abertas nem
+    # finalizadas em nenhuma das semanas ela não tem o que comparar.
+    def with_flow(items: list[dict]) -> dict[str, dict]:
+        return {
+            item["regional"]: item
+            for item in items
+            if (item["opened"] or item["completed"]) and not _is_unidentified_regional(item["regional"])
+        }
+
+    current_by_label = with_flow(current["items"])
+    previous_by_label = with_flow(previous["items"])
+    return {
+        "current_from": current_window[0],
+        "current_to": current_window[1],
+        "previous_from": previous_window[0],
+        "previous_to": previous_window[1],
+        "sla_available": include_sla,
+        "items": [
+            {
+                "regional": label,
+                "current": measures(current_by_label.get(label)),
+                "previous": measures(previous_by_label.get(label)),
+            }
+            for label in sorted(set(current_by_label) | set(previous_by_label))
+        ],
+        "total": {"regional": "Total", "current": measures(current["total"]), "previous": measures(previous["total"])},
+    }
+
+
 def period_open_backlog(db: Session, date_from: date, date_to: date, user: User, **filters) -> dict:
     """O.S. ABERTAS NO PERÍODO que ainda estão em aberto, e quantas delas já estão vencidas.
 
