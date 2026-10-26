@@ -13,6 +13,19 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-25** — **Comparativo semanal das regionais na Visão Geral**, na branch `feat/operacao-comparativo-semanal` (parte do
+`master` atual). Sem migration. Bloco novo dentro do card "Ordens de serviço" (`overview-regional-weekly.tsx`), recolhido por
+padrão (só "Todas as regionais"; botão abre as regionais).
+- **Regra**: última semana FECHADA (domingo a sábado) contra a anterior a ela - em 25/10 (domingo) é 18/10-24/10 contra
+  11/10-17/10; a semana em curso só entra no domingo seguinte. Janela fixa no backend, o período do filtro da tela é ignorado,
+  regional/setor/modelo de equipe valem. Endpoint `GET /api/operations/overview/regional-weekly-comparison`
+  (`queries.regional_weekly_comparison`, reaproveita `regional_matrix` duas vezes - nenhuma regra de KPI nova).
+- **Decisões**: só medidas de fluxo (abertas, finalizadas, SLA, TMA; "em aberto" é retrato de agora e não existe para a semana
+  passada); regional sem fluxo e "NAO IDENTIFICADO" não viram linha, mas o total é o do quadro geral (pode passar um pouco da soma
+  das linhas); SLA/TMA exigem `operations:view_sla`. Cor da variação = direção x se subir é bom (abertas sem cor).
+- **Testes**: `test_operations_regional_weekly_comparison.py` (janelas e comparação). O teardown do `TestClient` acusa
+  `no such table: intelligence_monitor_runs` no ambiente local (já ocorria em `test_operations_regional_matrix.py`, não investigado).
+
 **2026-10-24** — **Aba Especialista/Analista (SGP Suporte) com kanban, e "Suporte N1/N2" num item só do menu**, na branch
 `feat/suporte-especialista-analista` (parte do `master` atual). **Tem migration nova: `20261021_0120` (tabelas
 `support_plan_items` e `support_plan_updates`) - sobe sozinha no deploy.** Testada por 17 testes de lógica
