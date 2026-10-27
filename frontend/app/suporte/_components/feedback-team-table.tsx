@@ -8,10 +8,11 @@ import { STATUS_LABEL, periodTargetLabel } from "./feedback-format";
 // Visão da equipe toda do Feedback (pedido do usuário, 2026-10-27): sem colaborador escolhido, uma listra por pessoa
 // com o resultado de cada indicador, colorido pelo status. Os valores e status vêm prontos do backend.
 
+// Célula do indicador: verde bateu a meta, amarelo atenção, vermelho não bateu.
 const VALUE_TONE: Record<SupportMacroCardStatus, string> = {
-  ok: "text-emerald-700",
-  attention: "text-amber-700",
-  critical: "text-red-600",
+  ok: "bg-emerald-100 text-emerald-800",
+  attention: "bg-amber-100 text-amber-800",
+  critical: "bg-red-100 text-red-700",
   partial: "text-slate-500",
   no_data: "text-slate-400",
   no_target: "text-slate-700",
@@ -31,6 +32,7 @@ export function FeedbackTeamTable({ team, onSelect }: { team: SupportFeedback[];
     return <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Nenhum colaborador na equipe do Suporte.</div>;
   }
   const columns = team[0].indicators;
+  const sorted = [...team].sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }));
   return (
     <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
       <table className="w-full min-w-[900px] text-sm">
@@ -47,7 +49,7 @@ export function FeedbackTeamTable({ team, onSelect }: { team: SupportFeedback[];
           </tr>
         </thead>
         <tbody>
-          {team.map((person) => (
+          {sorted.map((person) => (
             <tr
               key={person.attendant_id}
               onClick={() => onSelect(person.attendant_id)}
@@ -64,7 +66,7 @@ export function FeedbackTeamTable({ team, onSelect }: { team: SupportFeedback[];
                 </span>
               </td>
               {person.indicators.map((indicator) => (
-                <td key={indicator.key} className={`px-3 py-2 font-bold tabular-nums ${VALUE_TONE[indicator.status as SupportMacroCardStatus]}`}>
+                <td key={indicator.key} className={`border-l border-white px-3 py-2 font-bold tabular-nums ${VALUE_TONE[indicator.status as SupportMacroCardStatus]}`}>
                   {formatCardValue(indicator, indicator.value)}
                 </td>
               ))}
