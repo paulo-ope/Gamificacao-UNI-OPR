@@ -1280,6 +1280,9 @@ export const api = {
   supportFeedback: (params: { date_from: string; date_to: string; attendant_id: string }) =>
     request<SupportFeedback>(`/support/feedback?${new URLSearchParams(params).toString()}`),
 
+  supportFeedbackTeam: (params: { date_from: string; date_to: string }) =>
+    request<SupportFeedback[]>(`/support/feedback/team?${new URLSearchParams(params).toString()}`),
+
   supportRanking: (month?: string) =>
     request<SupportRanking>(`/support/ranking${month ? `?${new URLSearchParams({ month }).toString()}` : ""}`),
 

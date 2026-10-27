@@ -14,6 +14,7 @@ import type { Tone } from "@/lib/tones";
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
 import { FOLLOW_UP, STATUS_LABEL, dateBr, periodTargetLabel, weeklyTargetLabel } from "./feedback-format";
 import { printFeedback } from "./feedback-print";
+import { FeedbackTeamTable } from "./feedback-team-table";
 import { IxcPeriodBar, useIxcPeriod } from "./ixc-n1-panel";
 
 // Feedback individual do Suporte (pedido do usuário, 2026-10-16): escolhe o colaborador e mostra, no mesmo desenho
@@ -284,6 +285,7 @@ export function FeedbackPanel() {
   const [collaborators, setCollaborators] = useState<SupportOpaFilterOption[]>([]);
   const [attendantId, setAttendantId] = useState("");
   const [data, setData] = useState<SupportFeedback | null>(null);
+  const [team, setTeam] = useState<SupportFeedback[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -303,6 +305,24 @@ export function FeedbackPanel() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (attendantId || invalidPeriod) return;
+    let cancelled = false;
+    setTeam(null);
+    setError(null);
+    api
+      .supportFeedbackTeam(period)
+      .then((result) => {
+        if (!cancelled) setTeam(result);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Falha ao carregar o feedback da equipe.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period, invalidPeriod, attendantId]);
 
   useEffect(() => {
     if (!attendantId || invalidPeriod) return;
@@ -343,7 +363,7 @@ export function FeedbackPanel() {
             }}
             className="h-8 w-64 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
           >
-            <option value="">Selecione o colaborador</option>
+            <option value="">Todos os colaboradores</option>
             {collaborators.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -363,7 +383,15 @@ export function FeedbackPanel() {
           <AlertTriangle className="h-4 w-4" aria-hidden /> {error}
         </div>
       ) : !attendantId ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Selecione um colaborador para ver o feedback.</div>
+        team ? (
+          <FeedbackTeamTable team={team} onSelect={setAttendantId} />
+        ) : (
+          <div aria-busy className="grid gap-2">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div key={index} className="h-10 animate-pulse rounded-xl bg-slate-100" />
+            ))}
+          </div>
+        )
       ) : loading || !data ? (
         <div aria-busy className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
           {Array.from({ length: 8 }).map((_, index) => (

@@ -1820,6 +1820,21 @@ def support_feedback(
     return feedback
 
 
+@router.get("/feedback/team", response_model=list[SupportFeedback])
+def support_feedback_team(
+    date_from: date,
+    date_to: date,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Feedback de TODOS os colaboradores da equipe do Suporte no período (sem a série diária), para a visão em listras."""
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
+    if (date_to - date_from).days + 1 > feedback_service.MAX_PERIOD_DAYS:
+        raise HTTPException(status_code=400, detail=f"O período máximo do feedback é de {feedback_service.MAX_PERIOD_DAYS} dias.")
+    return feedback_service.team_feedback(db, date_from=date_from, date_to=date_to)
+
+
 @router.get("/ranking", response_model=SupportRanking)
 def support_ranking(
     month: date | None = None,
