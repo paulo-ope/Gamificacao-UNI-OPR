@@ -1,7 +1,6 @@
 "use client";
 
 import { AlertTriangle, Copy, Printer, UserRound } from "lucide-react";
-import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { OverviewBlock } from "@/components/overview/overview-block";
@@ -13,7 +12,6 @@ import type { SupportFeedback, SupportFeedbackDetails, SupportFeedbackIndicator,
 import type { Tone } from "@/lib/tones";
 
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
-import { ImproperOrdersSection, RatingsSection } from "./feedback-details";
 import { FOLLOW_UP, STATUS_LABEL, dateBr, periodTargetLabel, weeklyTargetLabel } from "./feedback-format";
 import { printFeedback } from "./feedback-print";
 import { FeedbackTeamTable } from "./feedback-team-table";
@@ -95,7 +93,7 @@ function sparkFor(key: string, daily: SupportFeedback["daily"]): { values: numbe
   return result;
 }
 
-function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportFeedbackIndicator; daily: SupportFeedback["daily"]; previousLabel: string }) {
+function IndicatorKpi({ indicator, daily, previousLabel, extra }: { indicator: SupportFeedbackIndicator; daily: SupportFeedback["daily"]; previousLabel: string; extra?: string }) {
   const tone: Tone = STATUS_TONE[indicator.status];
   const change = indicator.value !== null && indicator.previous !== null ? indicator.value - indicator.previous : null;
   const spark = sparkFor(indicator.key, daily);
@@ -103,6 +101,7 @@ function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportF
     periodTargetLabel(indicator).replace("Mínimo", "Meta ≥").replace("Até", "Meta ≤"),
     coverageNote({ status: indicator.status, coverage: indicator.coverage }),
     indicator.note,
+    extra,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -127,19 +126,8 @@ function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportF
   );
 }
 
-// Cartão que abre a análise detalhada (avaliação -> notas do OPA; O.S. a campo -> O.S. indevidas).
-function OpenDetail({ label, onOpen, children }: { label: string; onOpen: () => void; children: ReactNode }) {
-  return (
-    <div role="button" tabIndex={0} aria-label={label} title={label} onClick={onOpen} onKeyDown={(event) => (event.key === "Enter" || event.key === " ") && onOpen()} className="cursor-pointer rounded-2xl transition hover:ring-2 hover:ring-sky-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400">
-      {children}
-    </div>
-  );
-}
-
 function FeedbackBody({ data }: { data: SupportFeedback }) {
   const [details, setDetails] = useState<SupportFeedbackDetails | null>(null);
-  const [detailsError, setDetailsError] = useState<string | null>(null);
-  const [open, setOpen] = useState<{ ratings: boolean; improper: boolean }>({ ratings: false, improper: false });
   const [plan, setPlan] = useState("");
   const [copied, setCopied] = useState(false);
   const pending = useMemo(() => data.indicators.filter((item) => item.status === "attention" || item.status === "critical"), [data.indicators]);
@@ -153,17 +141,20 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
       .then((result) => {
         if (!cancelled) setDetails(result);
       })
-      .catch((reason: unknown) => {
-        if (!cancelled) setDetailsError(reason instanceof Error ? reason.message : "Falha ao carregar a análise detalhada.");
+      .catch(() => {
+        // Sem a soma o feedback continua inteiro; só some a linha extra.
       });
     return () => {
       cancelled = true;
     };
   }, [data.attendant_id, data.date_from, data.date_to]);
 
-  function openSection(key: "ratings" | "improper") {
-    setOpen((current) => ({ ...current, [key]: true }));
-    window.setTimeout(() => document.getElementById(key === "ratings" ? "feedback-ratings" : "feedback-improper")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  // Só a soma (pedido do usuário, 2026-10-27): notas boas/ruins do OPA e O.S. indevidas do IXC, em linha de texto.
+  const extra: Record<string, string> = {};
+  if (details) {
+    const { good, bad } = details.ratings;
+    if (details.ratings.rated_count) extra.rating = `${good.count} ${good.count === 1 ? "nota boa" : "notas boas"} · ${bad.count} ${bad.count === 1 ? "ruim" : "ruins"}`;
+    if (details.improper_orders) extra.field = `${details.improper_orders.improper_count} de ${details.improper_orders.total_orders} indevidas`;
   }
 
   async function copy() {
@@ -212,26 +203,10 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-        {data.indicators.map((indicator) => {
-          const card = <IndicatorKpi key={indicator.key} indicator={indicator} daily={data.daily} previousLabel={previousLabel} />;
-          if (indicator.key === "rating") return <OpenDetail key={indicator.key} label="Ver as notas boas e ruins" onOpen={() => openSection("ratings")}>{card}</OpenDetail>;
-          if (indicator.key === "field") return <OpenDetail key={indicator.key} label="Ver as O.S. abertas indevidamente" onOpen={() => openSection("improper")}>{card}</OpenDetail>;
-          return card;
-        })}
+        {data.indicators.map((indicator) => (
+          <IndicatorKpi key={indicator.key} indicator={indicator} daily={data.daily} previousLabel={previousLabel} extra={extra[indicator.key]} />
+        ))}
       </div>
-
-      {detailsError ? (
-        <div role="alert" className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 shadow-sm">
-          <AlertTriangle className="h-4 w-4" aria-hidden /> {detailsError}
-        </div>
-      ) : details ? (
-        <div className="grid gap-3">
-          <RatingsSection details={details} open={open.ratings} onToggle={() => setOpen((current) => ({ ...current, ratings: !current.ratings }))} />
-          <ImproperOrdersSection details={details} open={open.improper} onToggle={() => setOpen((current) => ({ ...current, improper: !current.improper }))} />
-        </div>
-      ) : (
-        <div aria-busy className="h-16 animate-pulse rounded-2xl bg-slate-100" />
-      )}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="grid gap-4">
@@ -247,21 +222,11 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.indicators.map((item) => {
-                    const target = item.key === "rating" ? "ratings" : item.key === "field" ? "improper" : null;
-                    return (
-                    <tr
-                      key={item.key}
-                      className={`${STATUS_ROW[item.status]}${target ? " cursor-pointer hover:brightness-95" : ""}`}
-                      onClick={target ? () => openSection(target) : undefined}
-                      onKeyDown={target ? (event) => (event.key === "Enter" || event.key === " ") && openSection(target) : undefined}
-                      tabIndex={target ? 0 : undefined}
-                      role={target ? "button" : undefined}
-                      title={target ? "Clique para ver a análise detalhada" : undefined}
-                    >
+                  {data.indicators.map((item) => (
+                    <tr key={item.key} className={STATUS_ROW[item.status]}>
                       <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-800">
                         {item.label}
-                        {target ? <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-sky-600">ver análise ›</span> : null}
+                        {extra[item.key] ? <span className="block text-[11px] font-normal text-slate-500">{extra[item.key]}</span> : null}
                       </td>
                       <td className="border border-slate-200 px-3 py-2 font-bold tabular-nums text-slate-900">{formatCardValue(item, item.value)}</td>
                       <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-700">
@@ -272,8 +237,7 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
                         <span className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-bold ${STATUS_BADGE[item.status]}`}>{STATUS_LABEL[item.status]}</span>
                       </td>
                     </tr>
-                    );
-                  })}
+                  ))}
                 </tbody>
               </table>
             </div>
