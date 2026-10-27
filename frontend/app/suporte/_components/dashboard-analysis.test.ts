@@ -18,6 +18,13 @@ const dashboard = (over: Partial<SupportMacroDashboard> = {}): SupportMacroDashb
       day: "2026-10-20", total: 210, average: 150, percent_above: 40,
       reasons: [{ reason: "Sem conexão", count: 45, usual_per_day: 20 }, { reason: "Lentidão", count: 30, usual_per_day: 28 }],
     },
+    month_projection: {
+      month_from: "2026-10-01", month_to: "2026-10-31", elapsed_days: 24, remaining_days: 7, remaining_from: "2026-10-25",
+      items: [
+        { key: "tmr", month_value: 130, target: 120, count: 400, required_value: 94, status: "reachable" },
+        { key: "tma", month_value: 1800, target: 3600, count: 400, required_value: null, status: "no_data" },
+      ],
+    },
     ...over,
   }) as unknown as SupportMacroDashboard;
 
@@ -31,29 +38,53 @@ describe("durationWords", () => {
 });
 
 describe("buildDashboardAnalysis", () => {
-  it("aponta o dia de maior aumento e os motivos que puxaram", () => {
-    const [peak] = buildDashboardAnalysis(dashboard());
+  it("aponta o dia de maior aumento e marca os motivos que puxaram", () => {
+    const { peak } = buildDashboardAnalysis(dashboard());
 
-    expect(peak.title).toBe("Dia de maior aumento");
-    expect(peak.lines[0]).toBe("Dia 20/10 teve 210 atendimentos no OPA, 40% acima da média dos outros dias do período (150 por dia).");
-    expect(peak.lines[1]).toContain("Sem conexão (45, habitual 20 por dia)");
-    expect(peak.lines[2]).toBe("Puxaram o aumento: Sem conexão.");
+    expect(peak.headline).toBe("Dia 20/10: 210 atendimentos no OPA, 40% acima da média dos outros dias (150 por dia).");
+    expect(peak.reasons).toEqual([
+      { reason: "Sem conexão", count: 45, usual: 20, heavy: true },
+      { reason: "Lentidão", count: 30, usual: 28, heavy: false },
+    ]);
+    expect(peak.note).toBeNull();
   });
 
-  it("diz quanto falta para a meta, ou que já está dentro", () => {
-    const meta = buildDashboardAnalysis(dashboard()).find((section) => section.title.startsWith("Para bater"));
+  it("diz quanto falta para a meta da semana, ou que já está dentro", () => {
+    const { goals } = buildDashboardAnalysis(dashboard());
 
-    expect(meta?.lines).toEqual([
-      "TMR: 00:02:35 contra a meta de 00:02:00. Na próxima semana precisa cair 35 segundos para bater a meta.",
-      "TMA: 00:30:00, dentro da meta de 01:00:00. Manter o ritmo na próxima semana.",
-      "Avaliação (CSAT): 4,42 contra a meta de 4,50. Na próxima semana precisa subir 0,08 pontos para bater a meta.",
+    expect(goals).toEqual([
+      { name: "TMR", current: "00:02:35", target: "≤ 00:02:00", action: "Cair 35 segundos", tone: "bad" },
+      { name: "TMA", current: "00:30:00", target: "≤ 01:00:00", action: "Dentro da meta: manter", tone: "ok" },
+      { name: "Avaliação (CSAT)", current: "4,42", target: "≥ 4,50", action: "Subir 0,08 pontos", tone: "warn" },
     ]);
   });
 
-  it("avisa quando não houve aumento relevante e não avalia dado parcial", () => {
-    const sections = buildDashboardAnalysis(dashboard({ peak_day: null, cards: [card({ status: "partial" })] }));
+  it("projeta quanto o resto do mês precisa fechar para a média do mês bater a meta", () => {
+    const { month } = buildDashboardAnalysis(dashboard());
 
-    expect(sections[0].lines).toEqual(["Nenhum dia com aumento relevante de atendimentos no período."]);
-    expect(sections[1].lines[0]).toContain("dados ainda incompletos");
+    expect(month?.range).toBe("Resto do mês: 25/10 a 31/10 (7 dias)");
+    expect(month?.rows[0]).toEqual({ name: "TMR", monthValue: "00:02:10", target: "≤ 00:02:00", verdict: "Precisa fechar o resto do mês em 00:01:34", tone: "warn" });
+    expect(month?.rows[1].verdict).toBe("Sem dado suficiente no mês");
+  });
+
+  it("trata mês inalcançável e mês já encerrado", () => {
+    const unreachable = buildDashboardAnalysis(
+      dashboard({ month_projection: { month_from: "2026-10-01", month_to: "2026-10-31", elapsed_days: 24, remaining_days: 7, remaining_from: "2026-10-25", items: [{ key: "tmr", month_value: 180, target: 120, count: 400, required_value: null, status: "unreachable" }] } }),
+    );
+    expect(unreachable.month?.rows[0]).toMatchObject({ verdict: "Não dá mais para fechar o mês na meta", tone: "bad" });
+
+    const closed = buildDashboardAnalysis(
+      dashboard({ month_projection: { month_from: "2026-10-01", month_to: "2026-10-31", elapsed_days: 31, remaining_days: 0, remaining_from: null, items: [{ key: "tmr", month_value: 110, target: 120, count: 500, required_value: null, status: "closed" }] } }),
+    );
+    expect(closed.month?.range).toBe("Mês de 01/10 a 31/10, já encerrado");
+    expect(closed.month?.rows[0]).toMatchObject({ verdict: "Mês fechou dentro da meta", tone: "ok" });
+  });
+
+  it("avisa quando não houve aumento relevante e não avalia dado parcial", () => {
+    const result = buildDashboardAnalysis(dashboard({ peak_day: null, month_projection: null, cards: [card({ status: "partial" })] }));
+
+    expect(result.peak).toEqual({ headline: "Nenhum dia com aumento relevante de atendimentos no período.", reasons: [], note: null });
+    expect(result.goals[0].action).toBe("Dados incompletos");
+    expect(result.month).toBeNull();
   });
 });
