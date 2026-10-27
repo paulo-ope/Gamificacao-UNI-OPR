@@ -2629,6 +2629,14 @@ export type SupportMacroWeekly = {
   buckets: SupportMacroWeekBucket[];
 };
 
+export type SupportMacroPeakDay = {
+  day: string;
+  total: number;
+  average: number;
+  percent_above: number;
+  reasons: { reason: string; count: number; usual_per_day: number }[];
+};
+
 export type SupportMacroDashboard = {
   date_from: string;
   date_to: string;
@@ -2642,6 +2650,8 @@ export type SupportMacroDashboard = {
   // Período anterior de mesmo tamanho, alinhado por posição do dia com `daily`.
   previous_daily: SupportMacroDailyPoint[];
   weekly: SupportMacroWeekly;
+  // Dia de maior aumento de atendimentos no OPA e os motivos; `null` sem aumento relevante.
+  peak_day: SupportMacroPeakDay | null;
 };
 
 export type SupportIxcTicketFilterOptions = {

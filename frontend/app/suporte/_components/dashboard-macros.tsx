@@ -16,6 +16,7 @@ import { buildSupportDailyFlowOption, buildSupportWeeklyOption } from "@/lib/sup
 import type { SupportMacroCard, SupportMacroCardStatus, SupportMacroDailyPoint, SupportMacroDashboard, SupportOpaFilterOption } from "@/lib/types";
 import type { Tone } from "@/lib/tones";
 
+import { buildDashboardAnalysis } from "./dashboard-analysis";
 import { DashboardGoalRings } from "./dashboard-goal-rings";
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
 import { IxcPeriodBar, useIxcPeriod } from "./ixc-n1-panel";
@@ -140,6 +141,7 @@ function DashboardBody({ data }: { data: SupportMacroDashboard }) {
   const weeklyOption = useMemo(() => buildSupportWeeklyOption(weeks), [weeks]);
   const hasWeeklyData = weeks.some((week) => week.performed > 0);
 
+  const analysis = useMemo(() => buildDashboardAnalysis(data), [data]);
   const { performed, solved, field, resolutivity, csat, tmr, tmr_human: tmrHuman, tma } = cards;
   const changeHint = (card: SupportMacroCard | undefined) => (card ? `${formatCardChange(card) ?? "sem base"} vs. ${previousLabel}` : undefined);
 
@@ -160,6 +162,24 @@ function DashboardBody({ data }: { data: SupportMacroDashboard }) {
             <MacroKpiCard key={card.key} card={card} daily={data.daily} previousLabel={previousLabel} />
           ))}
       </div>
+
+      <OverviewBlock eyebrow="Análise" title="Análise do período" subtitle="Gerada dos números do período, com os filtros de departamento e colaborador aplicados aos indicadores do OPA.">
+        <div className="grid gap-4 md:grid-cols-2">
+          {analysis.map((section) => (
+            <div key={section.title}>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{section.title}</p>
+              <ul className="grid gap-1.5 text-sm text-slate-800">
+                {section.lines.map((line) => (
+                  <li key={line} className="flex gap-2">
+                    <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" aria-hidden />
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </OverviewBlock>
 
       <OverviewSectionHeading>Qualidade e nível de serviço</OverviewSectionHeading>
       <DashboardGoalRings cards={data.cards} previousLabel="vs. ant." />

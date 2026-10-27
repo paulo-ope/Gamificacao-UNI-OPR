@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 from app.modules.operations.models import OperationOrder
 from app.modules.operations.scope import PRIMARY_SECTOR_NAMES
 
-from . import ixc_n1, ixc_new_login, opa_overview_service, support_rules
+from . import dashboard_analysis, ixc_n1, ixc_new_login, opa_overview_service, support_rules
 from .ixc_ticket_queries import _previous_period_bounds
 from .models import SupportIxcTicket, SupportIxcUser, SupportOpaAttendance, SupportOpaDimension
 from .opa_filters import OpaAttendanceFilters, apply_opa_attendance_filters
@@ -502,4 +502,6 @@ def _macro_dashboard(
         "previous_n2": _n2_block(db, previous_from, previous_to, live_previous) if previous_from and previous_to else None,
         # Evolução semanal do mês de `date_to` (independe do recorte escolhido: sempre o mês inteiro).
         "weekly": weekly_evolution(db, date_to, goals.resolutivity_percent),
+        # Dia de maior aumento de atendimentos no OPA e os motivos dele (`None` sem aumento relevante).
+        "peak_day": dashboard_analysis.peak_day(db, filters),
     }

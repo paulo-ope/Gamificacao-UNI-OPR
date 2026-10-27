@@ -678,6 +678,23 @@ class SupportMacroWeekly(BaseModel):
     buckets: list[SupportMacroWeekBucket]
 
 
+class SupportMacroPeakReason(BaseModel):
+    reason: str
+    count: int
+    # Média por dia desse motivo nos demais dias do período.
+    usual_per_day: float
+
+
+class SupportMacroPeakDay(BaseModel):
+    """Dia de maior aumento de atendimentos no OPA, contra a média dos demais dias do período."""
+
+    day: date
+    total: int
+    average: float
+    percent_above: float
+    reasons: list[SupportMacroPeakReason] = Field(default_factory=list)
+
+
 class SupportMacroDashboard(BaseModel):
     """`dashboard_macros.macro_dashboard`: macros do Dashboard Suporte (N1 do IXC + OPA)."""
 
@@ -692,6 +709,7 @@ class SupportMacroDashboard(BaseModel):
     daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
     previous_daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
     weekly: SupportMacroWeekly
+    peak_day: SupportMacroPeakDay | None = None
 
 
 class SupportFeedbackIndicator(BaseModel):
