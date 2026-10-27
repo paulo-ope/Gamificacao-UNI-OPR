@@ -748,6 +748,85 @@ class SupportFeedback(BaseModel):
     daily: list[SupportFeedbackDailyPoint] = Field(default_factory=list)
 
 
+class SupportFeedbackBand(BaseModel):
+    count: int
+    percent: float | None = None
+
+
+class SupportFeedbackRatedAttendance(BaseModel):
+    protocol: str | None = None
+    opened_at: datetime
+    channel: str | None = None
+    rating: float
+    # good | neutral | bad
+    band: str
+    reason: str | None = None
+    tma_seconds: int | None = None
+    tmr_seconds: int | None = None
+
+
+class SupportFeedbackRatingDay(BaseModel):
+    day: date
+    good: int
+    neutral: int
+    bad: int
+
+
+class SupportFeedbackRatingChannel(BaseModel):
+    channel: str
+    good: int
+    neutral: int
+    bad: int
+
+
+class SupportFeedbackRatings(BaseModel):
+    rated_count: int
+    average: float | None = None
+    good: SupportFeedbackBand
+    neutral: SupportFeedbackBand
+    bad: SupportFeedbackBand
+    by_day: list[SupportFeedbackRatingDay] = Field(default_factory=list)
+    by_channel: list[SupportFeedbackRatingChannel] = Field(default_factory=list)
+    attendances: list[SupportFeedbackRatedAttendance] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class SupportFeedbackImproperOrder(BaseModel):
+    order_code: str
+    customer_name: str | None = None
+    opened_at: datetime
+    status: str | None = None
+    diagnosis: str | None = None
+    reasons: list[str]
+
+
+class SupportFeedbackReasonCount(BaseModel):
+    reason: str
+    count: int
+
+
+class SupportFeedbackImproperOrders(BaseModel):
+    total_orders: int
+    improper_count: int
+    improper_percent: float | None = None
+    by_reason: list[SupportFeedbackReasonCount] = Field(default_factory=list)
+    orders: list[SupportFeedbackImproperOrder] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class SupportFeedbackDetails(BaseModel):
+    """`feedback_details.collaborator_details`: O.S. indevidas (IXC) e notas (OPA) de um colaborador."""
+
+    attendant_id: str
+    name: str
+    date_from: date
+    date_to: date
+    ixc_linked: bool
+    ratings: SupportFeedbackRatings
+    # `None` quando o colaborador não foi encontrado no IXC pelo nome.
+    improper_orders: SupportFeedbackImproperOrders | None = None
+
+
 class SupportRulesState(BaseModel):
     """Regras do Suporte em vigor (Configuração > Regras), com o padrão para o botão "Restaurar padrão"."""
 

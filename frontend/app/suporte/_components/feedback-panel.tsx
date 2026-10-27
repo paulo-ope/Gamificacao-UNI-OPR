@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, Copy, Printer, UserRound } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import { OverviewBlock } from "@/components/overview/overview-block";
@@ -8,10 +9,11 @@ import { KpiCard, SPARK_COLOR } from "@/components/overview/overview-kpi-strip";
 import { sparkDayLabel } from "@/components/overview/overview-sparkline";
 import { api } from "@/lib/api";
 import { percentChange } from "@/lib/period";
-import type { SupportFeedback, SupportFeedbackIndicator, SupportMacroCardStatus, SupportOpaFilterOption } from "@/lib/types";
+import type { SupportFeedback, SupportFeedbackDetails, SupportFeedbackIndicator, SupportMacroCardStatus, SupportOpaFilterOption } from "@/lib/types";
 import type { Tone } from "@/lib/tones";
 
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
+import { ImproperOrdersSection, RatingsSection } from "./feedback-details";
 import { FOLLOW_UP, STATUS_LABEL, dateBr, periodTargetLabel, weeklyTargetLabel } from "./feedback-format";
 import { printFeedback } from "./feedback-print";
 import { FeedbackTeamTable } from "./feedback-team-table";
@@ -125,12 +127,44 @@ function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportF
   );
 }
 
+// Cartão que abre a análise detalhada (avaliação -> notas do OPA; O.S. a campo -> O.S. indevidas).
+function OpenDetail({ label, onOpen, children }: { label: string; onOpen: () => void; children: ReactNode }) {
+  return (
+    <div role="button" tabIndex={0} aria-label={label} title={label} onClick={onOpen} onKeyDown={(event) => (event.key === "Enter" || event.key === " ") && onOpen()} className="cursor-pointer rounded-2xl transition hover:ring-2 hover:ring-sky-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400">
+      {children}
+    </div>
+  );
+}
+
 function FeedbackBody({ data }: { data: SupportFeedback }) {
+  const [details, setDetails] = useState<SupportFeedbackDetails | null>(null);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [open, setOpen] = useState<{ ratings: boolean; improper: boolean }>({ ratings: false, improper: false });
   const [plan, setPlan] = useState("");
   const [copied, setCopied] = useState(false);
   const pending = useMemo(() => data.indicators.filter((item) => item.status === "attention" || item.status === "critical"), [data.indicators]);
   const previousLabel = data.previous_date_from && data.previous_date_to ? `ant. (${dateBr(data.previous_date_from).slice(0, 5)} a ${dateBr(data.previous_date_to).slice(0, 5)})` : "período anterior";
   const overallStatus: SupportMacroCardStatus = data.summary.overall;
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .supportFeedbackDetails({ date_from: data.date_from, date_to: data.date_to, attendant_id: data.attendant_id })
+      .then((result) => {
+        if (!cancelled) setDetails(result);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setDetailsError(reason instanceof Error ? reason.message : "Falha ao carregar a análise detalhada.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.attendant_id, data.date_from, data.date_to]);
+
+  function openSection(key: "ratings" | "improper") {
+    setOpen((current) => ({ ...current, [key]: true }));
+    window.setTimeout(() => document.getElementById(key === "ratings" ? "feedback-ratings" : "feedback-improper")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }
 
   async function copy() {
     try {
@@ -178,10 +212,26 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-        {data.indicators.map((indicator) => (
-          <IndicatorKpi key={indicator.key} indicator={indicator} daily={data.daily} previousLabel={previousLabel} />
-        ))}
+        {data.indicators.map((indicator) => {
+          const card = <IndicatorKpi key={indicator.key} indicator={indicator} daily={data.daily} previousLabel={previousLabel} />;
+          if (indicator.key === "rating") return <OpenDetail key={indicator.key} label="Ver as notas boas e ruins" onOpen={() => openSection("ratings")}>{card}</OpenDetail>;
+          if (indicator.key === "field") return <OpenDetail key={indicator.key} label="Ver as O.S. abertas indevidamente" onOpen={() => openSection("improper")}>{card}</OpenDetail>;
+          return card;
+        })}
       </div>
+
+      {detailsError ? (
+        <div role="alert" className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 shadow-sm">
+          <AlertTriangle className="h-4 w-4" aria-hidden /> {detailsError}
+        </div>
+      ) : details ? (
+        <div className="grid gap-3">
+          <RatingsSection details={details} open={open.ratings} onToggle={() => setOpen((current) => ({ ...current, ratings: !current.ratings }))} />
+          <ImproperOrdersSection details={details} open={open.improper} onToggle={() => setOpen((current) => ({ ...current, improper: !current.improper }))} />
+        </div>
+      ) : (
+        <div aria-busy className="h-16 animate-pulse rounded-2xl bg-slate-100" />
+      )}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="grid gap-4">

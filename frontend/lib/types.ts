@@ -2871,6 +2871,55 @@ export type SupportFeedback = {
   daily: SupportFeedbackDailyPoint[];
 };
 
+export type SupportFeedbackBand = { count: number; percent: number | null };
+export type SupportFeedbackRatedAttendance = {
+  protocol: string | null;
+  opened_at: string;
+  channel: string | null;
+  rating: number;
+  band: "good" | "neutral" | "bad";
+  reason: string | null;
+  tma_seconds: number | null;
+  tmr_seconds: number | null;
+};
+export type SupportFeedbackRatings = {
+  rated_count: number;
+  average: number | null;
+  good: SupportFeedbackBand;
+  neutral: SupportFeedbackBand;
+  bad: SupportFeedbackBand;
+  by_day: { day: string; good: number; neutral: number; bad: number }[];
+  by_channel: { channel: string; good: number; neutral: number; bad: number }[];
+  attendances: SupportFeedbackRatedAttendance[];
+  truncated: boolean;
+};
+export type SupportFeedbackImproperOrder = {
+  order_code: string;
+  customer_name: string | null;
+  opened_at: string;
+  status: string | null;
+  diagnosis: string | null;
+  reasons: string[];
+};
+export type SupportFeedbackImproperOrders = {
+  total_orders: number;
+  improper_count: number;
+  improper_percent: number | null;
+  by_reason: { reason: string; count: number }[];
+  orders: SupportFeedbackImproperOrder[];
+  truncated: boolean;
+};
+// `GET /support/feedback/details`: notas do OPA e O.S. indevidas do IXC de um colaborador.
+export type SupportFeedbackDetails = {
+  attendant_id: string;
+  name: string;
+  date_from: string;
+  date_to: string;
+  ixc_linked: boolean;
+  ratings: SupportFeedbackRatings;
+  improper_orders: SupportFeedbackImproperOrders | null;
+};
+
 // Ranking mensal do Suporte (`GET /support/ranking`), pelo Quadro de Pontuação.
 // `detail`: como os pontos foram formados (hoje só nas ligações: blocos de 12 e semanas abaixo de 12).
 export type SupportRankingCriterion = { value: number | null; points: number; partial: boolean; detail?: string | null };

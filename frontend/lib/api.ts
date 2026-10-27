@@ -105,6 +105,7 @@ import type {
   SupportIxcTicketDailyPoint,
   SupportIxcN1Summary,
   SupportFeedback,
+  SupportFeedbackDetails,
   SupportContactRadar,
   SupportContactRadarProtocolPage,
   SupportPlanItemDetail,
@@ -1279,6 +1280,9 @@ export const api = {
 
   supportFeedback: (params: { date_from: string; date_to: string; attendant_id: string }) =>
     request<SupportFeedback>(`/support/feedback?${new URLSearchParams(params).toString()}`),
+
+  supportFeedbackDetails: (params: { date_from: string; date_to: string; attendant_id: string }) =>
+    request<SupportFeedbackDetails>(`/support/feedback/details?${new URLSearchParams(params).toString()}`),
 
   supportFeedbackTeam: (params: { date_from: string; date_to: string }) =>
     request<SupportFeedback[]>(`/support/feedback/team?${new URLSearchParams(params).toString()}`),
