@@ -2602,6 +2602,8 @@ export type SupportMacroDailyPoint = {
   performed: number;
   solved: number;
   field: number;
+  // Atendimentos do OPA no dia (mesmo recorte de departamento/colaborador do dashboard).
+  opa_total?: number;
   // Atendimentos N2 (motivos 80 + 81) do dia.
   n2_total?: number;
   // Médias do OPA no dia; `null` em dia sem atendimento (só no período atual).
@@ -2639,11 +2641,19 @@ export type SupportMacroPeakDay = {
 
 export type SupportMacroProjectionItem = {
   key: string;
+  // sum (volume) | mean (média ponderada pelo volume)
+  kind: "sum" | "mean";
+  // O que o mês já tem até a data final do período.
   month_value: number | null;
+  // Onde o mês fecha se o resto dele seguir no ritmo do período selecionado.
+  pace_value: number | null;
   target: number | null;
+  direction: "min" | "max" | null;
   count: number;
+  // Quanto o resto do mês precisa fechar para a média do mês terminar na meta.
   required_value: number | null;
-  status: "closed" | "reachable" | "unreachable" | "no_data";
+  pace_meets_target: boolean | null;
+  status: "closed" | "reachable" | "unreachable" | "no_target" | "no_data";
 };
 
 export type SupportMacroMonthProjection = {
@@ -2653,6 +2663,19 @@ export type SupportMacroMonthProjection = {
   remaining_days: number;
   remaining_from: string | null;
   items: SupportMacroProjectionItem[];
+};
+
+export type SupportMacroWeekOpa = {
+  key: string;
+  label: string;
+  date_from: string;
+  date_to: string;
+  future: boolean;
+  partial: boolean;
+  total: number | null;
+  tmr_seconds: number | null;
+  tma_seconds: number | null;
+  rating: number | null;
 };
 
 export type SupportMacroDashboard = {
@@ -2672,6 +2695,8 @@ export type SupportMacroDashboard = {
   peak_day: SupportMacroPeakDay | null;
   // Quanto o resto do mês precisa fechar (TMR/TMA) para a média do mês terminar na meta.
   month_projection: SupportMacroMonthProjection | null;
+  // OPA de cada semana do mês até a data final do período.
+  weeks_opa: SupportMacroWeekOpa[];
 };
 
 export type SupportIxcTicketFilterOptions = {

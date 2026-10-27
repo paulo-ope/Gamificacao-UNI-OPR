@@ -187,6 +187,7 @@ def _opa_daily(db: Session, filters: OpaAttendanceFilters) -> list[dict[str, Any
     return [
         {
             "day": point["day"],
+            "opa_total": int(point.get("total") or 0),
             "rating": point["average_rating"],
             "tmr_seconds": point["average_tmr_effective_seconds"],
             "tmr_human_seconds": point["average_tmr_human_live_seconds"],
@@ -505,5 +506,11 @@ def _macro_dashboard(
         # Dia de maior aumento de atendimentos no OPA e os motivos dele (`None` sem aumento relevante).
         "peak_day": dashboard_analysis.peak_day(db, filters),
         # Quanto o resto do mês precisa fechar (TMR/TMA) para a média do mês terminar na meta.
-        "month_projection": dashboard_analysis.month_projection(db, filters, date_to, {"tmr": goals.tmr_seconds, "tma": goals.tma_seconds}),
+        "month_projection": dashboard_analysis.month_projection(
+            db, filters, date_to=date_to, period_days=(date_to - date_from).days + 1,
+            targets={"tmr": goals.tmr_seconds, "tma": goals.tma_seconds, "csat": goals.csat, "resolutivity": goals.resolutivity_percent},
+            current_opa=current_opa, current_ixc=current_ixc, month_ixc=_ixc_block(db, date_to.replace(day=1), date_to),
+        ),
+        # OPA de cada semana do mês (até a data final do período), para a tabela semana a semana.
+        "weeks_opa": dashboard_analysis.weeks_opa(db, filters, month_week_buckets(date_to), date_to),
     }
