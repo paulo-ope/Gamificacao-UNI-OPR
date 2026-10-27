@@ -31,15 +31,6 @@ const STATUS_BADGE: Record<SupportMacroCardStatus, string> = {
   no_target: "bg-slate-200 text-slate-700",
 };
 
-const STATUS_ROW: Record<SupportMacroCardStatus, string> = {
-  ok: "bg-emerald-50/70",
-  attention: "bg-amber-50/80",
-  critical: "bg-red-50/80",
-  partial: "bg-slate-50",
-  no_data: "bg-slate-50",
-  no_target: "bg-slate-50",
-};
-
 const SPARK_BY_STATUS: Record<SupportMacroCardStatus, string> = {
   ok: SPARK_COLOR.emerald,
   attention: SPARK_COLOR.amber,
@@ -213,42 +204,6 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="grid gap-4">
-          <OverviewBlock eyebrow="Metas individuais" title="Indicadores do colaborador" subtitle="Registros e O.S. vêm do IXC (O.S. ligada pelo nome do criador, aproximado); atendimentos, chamadas, avaliação e tempos vêm do OPA.">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[480px] border border-slate-200 text-sm">
-                <thead>
-                  <tr className="bg-sky-100 text-left text-[10px] uppercase tracking-wide text-slate-600">
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Indicador</th>
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Resultado</th>
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Meta</th>
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.indicators.map((item) => (
-                    <tr key={item.key} className={STATUS_ROW[item.status]}>
-                      <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-800">
-                        {item.label}
-                        {extra[item.key] ? <span className="block text-[11px] font-normal text-slate-500">{extra[item.key]}</span> : null}
-                      </td>
-                      <td className="border border-slate-200 px-3 py-2 font-bold tabular-nums text-slate-900">{formatCardValue(item, item.value)}</td>
-                      <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-700">
-                        {periodTargetLabel(item)}
-                        {item.target !== item.weekly_target ? <span className="block text-[10px] font-normal text-slate-500">semanal: {weeklyTargetLabel(item)}</span> : null}
-                      </td>
-                      <td className="border border-slate-200 px-3 py-2">
-                        <span className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-bold ${STATUS_BADGE[item.status]}`}>{STATUS_LABEL[item.status]}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {data.indicators.some((item) => item.status === "partial") ? (
-              <p className="mt-2 text-[11px] text-slate-500">Dado parcial: TMA/TMR ainda calculados para menos da metade dos atendimentos com humano; não são julgados contra a meta.</p>
-            ) : null}
-          </OverviewBlock>
-
           <OverviewBlock eyebrow="Plano de ação" title="Combinado da conversa" subtitle="Texto livre, só nesta tela: use Copiar ou Imprimir/PDF para guardar.">
             <textarea
               value={plan}
