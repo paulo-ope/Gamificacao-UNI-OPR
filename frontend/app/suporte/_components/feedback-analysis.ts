@@ -13,6 +13,8 @@ const HIGHLIGHT_MIN_PERCENT = 10;
 const STABLE_PERCENT = 1;
 const DUPLICATE_PREFIX = "Duplicada";
 const MAX_CASES = 5;
+const MAX_ORDER_CASES = 8;
+const REPORT_SHOWN_CHARS = 300;
 
 const number = (value: number, digits = 1) => new Intl.NumberFormat("pt-BR", { maximumFractionDigits: digits }).format(value);
 const signed = (value: number) => `${value > 0 ? "+" : ""}${number(value)}%`;
@@ -124,11 +126,15 @@ export function buildFeedbackAnalysis(data: SupportFeedback, details: SupportFee
     sections.push({ title: "O.S. a campo (IXC)", lines });
 
     const cases: string[] = [];
-    const duplicateOrders = orders.orders.filter((order) => order.reasons.some((reason) => reason.startsWith(DUPLICATE_PREFIX)));
-    for (const order of duplicateOrders.slice(0, MAX_CASES)) {
-      cases.push(`${order.order_code}${order.customer_name ? ` (${order.customer_name})` : ""}: o cliente já tinha outra O.S. de campo nas 72 h anteriores. Conferir o histórico antes de abrir.`);
+    for (const order of orders.orders.slice(0, MAX_ORDER_CASES)) {
+      const duplicate = order.reasons.some((reason) => reason.startsWith(DUPLICATE_PREFIX));
+      const report = order.report && order.report.length > REPORT_SHOWN_CHARS ? `${order.report.slice(0, REPORT_SHOWN_CHARS).trimEnd()}…` : order.report;
+      cases.push(
+        `${order.order_code}${order.customer_name ? ` (${order.customer_name})` : ""}, ${dayMonth(order.opened_at)} - ${order.reasons.join(" + ").toLowerCase()}. ` +
+          `${report ? `Relato da finalização: "${report}"` : "Sem relato de finalização."}${duplicate ? " Conferir o histórico do cliente antes de abrir." : ""}`,
+      );
     }
-    if (duplicateOrders.length > MAX_CASES) cases.push(`Mais ${duplicateOrders.length - MAX_CASES} O.S. em duplicidade.`);
+    if (orders.orders.length > MAX_ORDER_CASES) cases.push(`Mais ${orders.orders.length - MAX_ORDER_CASES} O.S. indevidas na lista de O.S. do período.`);
     if (orders.repeat_customers.length) {
       cases.push(`Clientes com mais de uma O.S. aberta por ele no período: ${orders.repeat_customers.map((item) => `${item.customer_name} (${item.count})`).join(", ")}. Se o problema se repete, escalar ao N2 em vez de abrir nova O.S.`);
     }

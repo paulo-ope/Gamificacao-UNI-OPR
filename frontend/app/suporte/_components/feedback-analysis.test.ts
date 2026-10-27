@@ -21,7 +21,7 @@ const details = (over: Partial<SupportFeedbackDetails> = {}): SupportFeedbackDet
     total_orders: 45, improper_count: 7, improper_percent: 15.6, remote_resolvable: { count: 4, by_reason: [{ reason: "Equipamento travado", count: 4 }] },
     to_review: { count: 3, by_reason: [{ reason: "Problema na rede interna do cliente", count: 3 }] }, repeat_customers: [{ customer_name: "Rubens", count: 3 }], no_diagnosis_codes: ["IXC-9"],
     by_reason: [{ reason: "Desistência da solicitação", count: 4 }, { reason: "Assunto errado", count: 3 }, { reason: "Duplicada (mesmo cliente em até 72 h)", count: 1 }],
-    orders: [{ order_code: "IXC-1", customer_name: "Maria", opened_at: "2026-10-20T10:00:00Z", status: "Finalizada", diagnosis: null, reasons: ["Duplicada (mesmo cliente em até 72 h)"] }], truncated: false,
+    orders: [{ order_code: "IXC-1", customer_name: "Maria", opened_at: "2026-10-20T10:00:00Z", status: "Finalizada", diagnosis: null, reasons: ["Duplicada (mesmo cliente em até 72 h)"], report: "Cliente já tinha visita no dia anterior." }], truncated: false,
   },
   ...over,
 });
@@ -51,7 +51,8 @@ describe("buildFeedbackAnalysis", () => {
     expect(orders?.lines).toContain("Vale revisar 3: 3 problema na rede interna do cliente.");
     expect(orders?.lines).toContain("1 O.S. aberta em duplicidade: o cliente já tinha O.S. recente.");
     const cases = sections.find((section) => section.title === "Casos para conversar");
-    expect(cases?.lines[0]).toContain("IXC-1 (Maria)");
+    expect(cases?.lines[0]).toContain("IXC-1 (Maria), 20/10 - duplicada (mesmo cliente em até 72 h).");
+    expect(cases?.lines[0]).toContain('Relato da finalização: "Cliente já tinha visita no dia anterior."');
     expect(cases?.lines.some((line) => line.includes("Rubens (3)"))).toBe(true);
     expect(cases?.lines).toContain("Finalizada sem diagnóstico: IXC-9.");
     const next = sections.at(-1);

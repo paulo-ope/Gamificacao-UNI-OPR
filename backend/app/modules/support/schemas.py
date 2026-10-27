@@ -798,6 +798,8 @@ class SupportFeedbackImproperOrder(BaseModel):
     status: str | None = None
     diagnosis: str | None = None
     reasons: list[str]
+    # Relato de finalização da O.S. (escrito pelo técnico no IXC).
+    report: str | None = None
 
 
 class SupportFeedbackReasonCount(BaseModel):

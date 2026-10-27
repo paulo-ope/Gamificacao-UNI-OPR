@@ -2900,6 +2900,7 @@ export type SupportFeedbackImproperOrder = {
   status: string | null;
   diagnosis: string | null;
   reasons: string[];
+  report: string | null;
 };
 export type SupportFeedbackOrderGroup = { count: number; by_reason: { reason: string; count: number }[] };
 export type SupportFeedbackImproperOrders = {

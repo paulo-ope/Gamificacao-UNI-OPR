@@ -48,6 +48,7 @@ REVIEW_DIAGNOSES: dict[str, str] = {
 }
 NO_DIAGNOSIS_REASON = "Finalizada sem diagnóstico"
 REPEAT_CUSTOMER_MIN = 2
+REPORT_MAX_CHARS = 600
 
 
 def _plain(value: str | None) -> str:
@@ -68,6 +69,14 @@ def _group(by_reason: dict[str, int]) -> dict[str, Any]:
         "count": sum(by_reason.values()),
         "by_reason": [{"reason": reason, "count": count} for reason, count in sorted(by_reason.items(), key=lambda item: -item[1])],
     }
+
+
+def _report(order: OperationOrder) -> str | None:
+    """Relato de finalização da O.S. (`mensagem_resposta` do IXC, escrito pelo técnico), sem quebras e limitado."""
+    text = " ".join(str((order.raw_payload or {}).get("mensagem_resposta") or "").split())
+    if not text:
+        return None
+    return text if len(text) <= REPORT_MAX_CHARS else text[: REPORT_MAX_CHARS - 1].rstrip() + "…"
 
 
 def _empty_bands() -> dict[str, int]:
@@ -131,6 +140,7 @@ def improper_orders(db: Session, *, name_key: str, date_from: date, date_to: dat
                 "status": order.status,
                 "diagnosis": order.diagnosis,
                 "reasons": reasons,
+                "report": _report(order),
             }
         )
     total = len(orders)

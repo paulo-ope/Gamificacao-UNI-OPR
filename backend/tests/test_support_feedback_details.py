@@ -17,11 +17,11 @@ def _seed_team(db):
     db.add(SupportIxcUser(ixc_user_id="10", name="Adelaidy Vitoria", group_id="105", active=True))
 
 
-def _order(db, code, *, customer, day, hour=10, diagnosis=None, creator="Adelaidy Vitoria"):
+def _order(db, code, *, customer, day, hour=10, diagnosis=None, creator="Adelaidy Vitoria", report=None):
     db.add(
         OperationOrder(
             source_order_id=code, order_code=code, creator=creator, sector="Suporte Externo", customer_id=customer,
-            customer_name=f"Cliente {customer}", diagnosis=diagnosis, status="Finalizada",
+            customer_name=f"Cliente {customer}", diagnosis=diagnosis, status="Finalizada", raw_payload={"mensagem_resposta": report} if report else {},
             opened_at=datetime(2026, 10, day, hour, tzinfo=timezone.utc),
         )
     )
@@ -41,7 +41,7 @@ def test_improper_orders_flag_diagnosis_and_duplicates(db_session):
     _seed_team(db_session)
     _order(db_session, "OS1", customer="c1", day=2)
     _order(db_session, "OS2", customer="c1", day=3, diagnosis="Desistência da Solicitação")  # diagnóstico + duplicada de OS1
-    _order(db_session, "OS3", customer="c2", day=4, diagnosis="Atendimento com Assunto Errado")
+    _order(db_session, "OS3", customer="c2", day=4, diagnosis="Atendimento com Assunto Errado", report="  Cliente\n queria\tfinanceiro.  ")
     _order(db_session, "OS4", customer="c3", day=4, diagnosis="SUP: Cabo Rompido ou Danificado (Fibra)")  # válida
     _order(db_session, "OS5", customer="c4", day=1)
     _order(db_session, "OS6", customer="c4", day=6)  # mesmo cliente, mas fora da janela de 72 h
@@ -55,6 +55,8 @@ def test_improper_orders_flag_diagnosis_and_duplicates(db_session):
     by_code = {item["order_code"]: item["reasons"] for item in orders["orders"]}
     assert by_code["OS2"] == ["Desistência da solicitação", feedback_details.DUPLICATE_REASON]
     assert by_code["OS3"] == ["Assunto errado"]
+    reports = {item["order_code"]: item["report"] for item in orders["orders"]}
+    assert reports["OS3"] == "Cliente queria financeiro." and reports["OS2"] is None
     assert orders["improper_percent"] == pytest.approx(33.3)
     assert {item["reason"] for item in orders["by_reason"]} == {"Desistência da solicitação", feedback_details.DUPLICATE_REASON, "Assunto errado"}
 
