@@ -1,34 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import type { SupportMacroCard, SupportMacroDashboard } from "@/lib/types";
+import type { SupportMacroCard, SupportMacroDashboard, SupportMacroProjectionItem } from "@/lib/types";
 
-import { buildDashboardAnalysis, durationWords } from "./dashboard-analysis";
+import { buildDashboardAnalysis } from "./dashboard-analysis";
 
 const card = (over: Partial<SupportMacroCard>): SupportMacroCard => ({
-  key: "tmr", label: "TMR", unit: "seconds", value: 155, previous: 150, change: 5, target: 120, direction: "max", status: "critical",
+  key: "tmr", label: "TMR", unit: "seconds", value: 157, previous: 150, change: 7, target: 120, direction: "max", status: "critical",
   coverage: null, source: "opa", note: null, ...over,
+});
+
+const item = (over: Partial<SupportMacroProjectionItem>): SupportMacroProjectionItem => ({
+  key: "tmr", kind: "mean", month_value: 130, pace_value: 134, target: 120, direction: "max", count: 400, required_value: 94,
+  pace_meets_target: false, status: "reachable", ...over,
 });
 
 const dashboard = (over: Partial<SupportMacroDashboard> = {}): SupportMacroDashboard =>
   ({
     date_from: "2026-10-18", date_to: "2026-10-24", previous_date_from: null, previous_date_to: null,
-    cards: [card({}), card({ key: "tma", unit: "seconds", value: 1800, target: 3600, status: "ok" }), card({ key: "csat", unit: "score", value: 4.42, target: 4.5, direction: "min", status: "attention" })],
+    cards: [card({}), card({ key: "tma", value: 1800, target: 3600 }), card({ key: "csat", unit: "score", value: 4.34, target: 4.5, direction: "min" }), card({ key: "resolutivity", unit: "percent", value: 74, target: 80, direction: "min" })],
     n2: {}, previous_n2: null, n2_collaborators: { rows: [] }, daily: [], previous_daily: [], weekly: { month: "2026-10", resolutivity_target: 80, buckets: [] },
     peak_day: {
       day: "2026-10-20", total: 210, average: 150, percent_above: 40,
       reasons: [{ reason: "Sem conexão", count: 45, usual_per_day: 20 }, { reason: "Lentidão", count: 30, usual_per_day: 28 }],
     },
+    month_projection: {
+      month_from: "2026-10-01", month_to: "2026-10-31", elapsed_days: 24, remaining_days: 7, remaining_from: "2026-10-25",
+      items: [
+        item({}),
+        item({ key: "tma", month_value: 1800, pace_value: 1800, target: 3600, required_value: 5400, pace_meets_target: true }),
+        item({ key: "csat", month_value: 4.2, pace_value: 4.25, target: 4.5, direction: "min", required_value: null, status: "unreachable" }),
+        item({ key: "opa_total", kind: "sum", month_value: 2400, pace_value: 3100, target: null, direction: null, required_value: null, pace_meets_target: null, status: "no_target" }),
+      ],
+    },
     ...over,
   }) as unknown as SupportMacroDashboard;
-
-describe("durationWords", () => {
-  it("escreve segundos e minutos", () => {
-    expect(durationWords(35)).toBe("35 segundos");
-    expect(durationWords(1)).toBe("1 segundo");
-    expect(durationWords(80)).toBe("1 min 20 s");
-    expect(durationWords(1500)).toBe("25 min");
-  });
-});
 
 describe("buildDashboardAnalysis", () => {
   it("aponta o dia de maior aumento e os motivos que puxaram", () => {
@@ -40,20 +45,39 @@ describe("buildDashboardAnalysis", () => {
     expect(peak.lines[2]).toBe("Puxaram o aumento: Sem conexão.");
   });
 
-  it("diz quanto falta para a meta, ou que já está dentro", () => {
-    const meta = buildDashboardAnalysis(dashboard()).find((section) => section.title.startsWith("Para bater"));
+  it("diz quanto a próxima semana precisa fechar para o mês terminar na meta", () => {
+    const month = buildDashboardAnalysis(dashboard())[1];
 
-    expect(meta?.lines).toEqual([
-      "TMR: 00:02:35 contra a meta de 00:02:00. Na próxima semana precisa cair 35 segundos para bater a meta.",
-      "TMA: 00:30:00, dentro da meta de 01:00:00. Manter o ritmo na próxima semana.",
-      "Avaliação (CSAT): 4,42 contra a meta de 4,50. Na próxima semana precisa subir 0,08 pontos para bater a meta.",
+    expect(month.title).toBe("Para fechar o mês na meta");
+    expect(month.lines).toEqual([
+      "TMR: 00:02:37 na semana e 00:02:10 no mês (meta 00:02:00). Para fechar o mês na meta, a próxima semana (25/10 a 31/10) precisa fechar em 00:01:34. No ritmo atual o mês fecharia em 00:02:14.",
+      "TMA: 00:30:00 na semana e 00:30:00 no mês (meta 01:00:00). Para fechar o mês na meta, a próxima semana (25/10 a 31/10) precisa fechar em 01:30:00. No ritmo atual já bate a meta.",
+      "Avaliação (CSAT): 4,34 na semana e 4,20 no mês (meta 4,50). Não dá mais para fechar o mês na meta só com a próxima semana (25/10 a 31/10). No ritmo atual o mês fecharia em 4,25.",
     ]);
   });
 
-  it("avisa quando não houve aumento relevante e não avalia dado parcial", () => {
-    const sections = buildDashboardAnalysis(dashboard({ peak_day: null, cards: [card({ status: "partial" })] }));
+  it("fala em resto do mês quando falta mais de uma semana", () => {
+    const projection = { ...dashboard().month_projection!, remaining_days: 15, remaining_from: "2026-10-17" };
 
-    expect(sections[0].lines).toEqual(["Nenhum dia com aumento relevante de atendimentos no período."]);
-    expect(sections[1].lines[0]).toContain("dados ainda incompletos");
+    const month = buildDashboardAnalysis(dashboard({ month_projection: projection }))[1];
+
+    expect(month.lines[0]).toContain("o resto do mês (17/10 a 31/10) precisa fechar em 00:01:34");
+  });
+
+  it("mostra o resultado quando o mês já fechou e some sem projeção", () => {
+    const closed = buildDashboardAnalysis(
+      dashboard({
+        month_projection: {
+          month_from: "2026-10-01", month_to: "2026-10-31", elapsed_days: 31, remaining_days: 0, remaining_from: null,
+          items: [item({ month_value: 110, pace_value: 110, required_value: null, pace_meets_target: true, status: "closed" })],
+        },
+      }),
+    )[1];
+    expect(closed.title).toBe("Fechamento do mês");
+    expect(closed.lines).toEqual(["TMR: o mês fechou em 00:01:50 (meta 00:02:00), dentro da meta."]);
+
+    const none = buildDashboardAnalysis(dashboard({ peak_day: null, month_projection: null }));
+    expect(none).toHaveLength(1);
+    expect(none[0].lines).toEqual(["Nenhum dia com aumento relevante de atendimentos no período."]);
   });
 });

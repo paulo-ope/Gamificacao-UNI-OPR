@@ -2637,6 +2637,32 @@ export type SupportMacroPeakDay = {
   reasons: { reason: string; count: number; usual_per_day: number }[];
 };
 
+export type SupportMacroProjectionItem = {
+  key: string;
+  // sum (volume) | mean (média ponderada pelo volume)
+  kind: "sum" | "mean";
+  // O que o mês já tem até a data final do período.
+  month_value: number | null;
+  // Onde o mês fecha se o resto dele seguir no ritmo do período selecionado.
+  pace_value: number | null;
+  target: number | null;
+  direction: "min" | "max" | null;
+  count: number;
+  // Quanto o resto do mês precisa fechar para a média do mês terminar na meta.
+  required_value: number | null;
+  pace_meets_target: boolean | null;
+  status: "closed" | "reachable" | "unreachable" | "no_target" | "no_data";
+};
+
+export type SupportMacroMonthProjection = {
+  month_from: string;
+  month_to: string;
+  elapsed_days: number;
+  remaining_days: number;
+  remaining_from: string | null;
+  items: SupportMacroProjectionItem[];
+};
+
 export type SupportMacroDashboard = {
   date_from: string;
   date_to: string;
@@ -2652,6 +2678,8 @@ export type SupportMacroDashboard = {
   weekly: SupportMacroWeekly;
   // Dia de maior aumento de atendimentos no OPA e os motivos; `null` sem aumento relevante.
   peak_day: SupportMacroPeakDay | null;
+  // Quanto o resto do mês precisa fechar (TMR/TMA) para a média do mês terminar na meta.
+  month_projection: SupportMacroMonthProjection | null;
 };
 
 export type SupportIxcTicketFilterOptions = {
