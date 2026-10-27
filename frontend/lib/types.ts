@@ -2901,8 +2901,12 @@ export type SupportFeedbackImproperOrder = {
   diagnosis: string | null;
   reasons: string[];
 };
+export type SupportFeedbackOrderGroup = { count: number; by_reason: { reason: string; count: number }[] };
 export type SupportFeedbackImproperOrders = {
   total_orders: number;
+  remote_resolvable: SupportFeedbackOrderGroup;
+  to_review: SupportFeedbackOrderGroup;
+  repeat_customers: { customer_name: string; count: number }[];
   improper_count: number;
   improper_percent: number | null;
   by_reason: { reason: string; count: number }[];

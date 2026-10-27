@@ -805,8 +805,23 @@ class SupportFeedbackReasonCount(BaseModel):
     count: int
 
 
+class SupportFeedbackOrderGroup(BaseModel):
+    count: int
+    by_reason: list[SupportFeedbackReasonCount] = Field(default_factory=list)
+
+
+class SupportFeedbackRepeatCustomer(BaseModel):
+    customer_name: str
+    count: int
+
+
 class SupportFeedbackImproperOrders(BaseModel):
     total_orders: int
+    # O.S. que poderiam ser resolvidas por orientação remota / a revisar (não entram nas indevidas).
+    remote_resolvable: SupportFeedbackOrderGroup = Field(default_factory=lambda: SupportFeedbackOrderGroup(count=0))
+    to_review: SupportFeedbackOrderGroup = Field(default_factory=lambda: SupportFeedbackOrderGroup(count=0))
+    # Clientes com várias O.S. a campo abertas pelo colaborador no período.
+    repeat_customers: list[SupportFeedbackRepeatCustomer] = Field(default_factory=list)
     improper_count: int
     improper_percent: float | None = None
     by_reason: list[SupportFeedbackReasonCount] = Field(default_factory=list)

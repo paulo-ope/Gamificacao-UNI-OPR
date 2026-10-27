@@ -92,3 +92,25 @@ def test_details_none_for_unknown_collaborator(db_session):
 @pytest.mark.parametrize("rating,band", [(5, "good"), (4, "good"), (3.5, "neutral"), (3, "neutral"), (2, "bad"), (1, "bad")])
 def test_rating_band_cutoffs(rating, band):
     assert feedback_details.rating_band(rating) == band
+
+
+def test_orders_group_remote_review_and_repeat_customers(db_session):
+    _seed_team(db_session)
+    _order(db_session, "OS1", customer="c1", day=2, diagnosis="SUP: Equipamentos travados (Fibra)")
+    _order(db_session, "OS2", customer="c2", day=2, diagnosis="SUP: Equipamento resetado (Fibra)")
+    _order(db_session, "OS3", customer="c3", day=3, diagnosis="SUP: Procedimento Organizacional")
+    _order(db_session, "OS4", customer="c4", day=1, diagnosis="SUP: Atualização de configuração de equipamento ((Fibra))")
+    _order(db_session, "OS5", customer="c5", day=4, diagnosis="SUP: Problemas na rede interna do cliente (Rádio)")
+    _order(db_session, "OS6", customer="c6", day=4)  # finalizada sem diagnóstico
+    _order(db_session, "OS7", customer="c7", day=5, diagnosis="Desistência da Solicitação")
+    _order(db_session, "OS8", customer="c4", day=6, diagnosis="SUP: Atualização de configuração de equipamento ((Fibra))")  # c4 repete
+    db_session.commit()
+
+    orders = feedback_details.collaborator_details(db_session, attendant_id=OPA_ID, **PERIOD)["improper_orders"]
+
+    assert orders["improper_count"] == 1
+    assert orders["remote_resolvable"]["count"] == 3
+    assert {item["reason"] for item in orders["remote_resolvable"]["by_reason"]} == {"Equipamento travado", "Equipamento resetado", "Procedimento organizacional"}
+    assert orders["to_review"]["count"] == 4
+    assert {"Finalizada sem diagnóstico", "Atualização de configuração", "Problema na rede interna do cliente"} == {item["reason"] for item in orders["to_review"]["by_reason"]}
+    assert orders["repeat_customers"] == [{"customer_name": "Cliente c4", "count": 2}]

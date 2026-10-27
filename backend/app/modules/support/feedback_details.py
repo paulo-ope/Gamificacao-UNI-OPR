@@ -36,6 +36,20 @@ IMPROPER_DIAGNOSES: dict[str, str] = {
 }
 DUPLICATE_REASON = f"Duplicada (mesmo cliente em até {DUPLICATE_WINDOW_HOURS} h)"
 
+# O.S. que não entram nas indevidas mas a análise destaca (casam por trecho do diagnóstico, sem acento e sem caixa):
+# resolvíveis por orientação remota e a revisar. Uma O.S. conta em só um grupo: indevida > remota > revisar.
+REMOTE_DIAGNOSES: dict[str, str] = {
+    "equipamentos travados": "Equipamento travado",
+    "equipamento resetado": "Equipamento resetado",
+    "procedimento organizacional": "Procedimento organizacional",
+}
+REVIEW_DIAGNOSES: dict[str, str] = {
+    "atualizacao de configuracao": "Atualização de configuração",
+    "problemas na rede interna": "Problema na rede interna do cliente",
+}
+NO_DIAGNOSIS_REASON = "Finalizada sem diagnóstico"
+REPEAT_CUSTOMER_MIN = 2
+
 
 def _plain(value: str | None) -> str:
     text = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
@@ -44,6 +58,17 @@ def _plain(value: str | None) -> str:
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _match_part(plain_diagnosis: str, table: dict[str, str]) -> str | None:
+    return next((label for key, label in table.items() if key in plain_diagnosis), None)
+
+
+def _group(by_reason: dict[str, int]) -> dict[str, Any]:
+    return {
+        "count": sum(by_reason.values()),
+        "by_reason": [{"reason": reason, "count": count} for reason, count in sorted(by_reason.items(), key=lambda item: -item[1])],
+    }
 
 
 def _empty_bands() -> dict[str, int]:
@@ -74,6 +99,8 @@ def improper_orders(db: Session, *, name_key: str, date_from: date, date_to: dat
     window = timedelta(hours=DUPLICATE_WINDOW_HOURS)
     rows: list[dict[str, Any]] = []
     by_reason: dict[str, int] = defaultdict(int)
+    remote: dict[str, int] = defaultdict(int)
+    review: dict[str, int] = defaultdict(int)
     for order in orders:
         reasons: list[str] = []
         label = IMPROPER_DIAGNOSES.get(_plain(order.diagnosis))
@@ -85,6 +112,13 @@ def improper_orders(db: Session, *, name_key: str, date_from: date, date_to: dat
         ):
             reasons.append(DUPLICATE_REASON)
         if not reasons:
+            plain = _plain(order.diagnosis)
+            if (label := _match_part(plain, REMOTE_DIAGNOSES)) is not None:
+                remote[label] += 1
+            elif (label := _match_part(plain, REVIEW_DIAGNOSES)) is not None:
+                review[label] += 1
+            elif not plain and _plain(order.status) == "finalizada":
+                review[NO_DIAGNOSIS_REASON] += 1
             continue
         for reason in reasons:
             by_reason[reason] += 1
@@ -99,8 +133,17 @@ def improper_orders(db: Session, *, name_key: str, date_from: date, date_to: dat
             }
         )
     total = len(orders)
+    per_customer: dict[str, int] = defaultdict(int)
+    for order in orders:
+        if order.customer_id:
+            per_customer[order.customer_id] += 1
+    names = {order.customer_id: order.customer_name for order in orders if order.customer_id}
+    repeats = sorted(((names[cid] or cid, count) for cid, count in per_customer.items() if count >= REPEAT_CUSTOMER_MIN), key=lambda item: -item[1])
     return {
         "total_orders": total,
+        "remote_resolvable": _group(remote),
+        "to_review": _group(review),
+        "repeat_customers": [{"customer_name": name, "count": count} for name, count in repeats[:5]],
         "improper_count": len(rows),
         "improper_percent": round(len(rows) / total * 100, 1) if total else None,
         "by_reason": [{"reason": reason, "count": count} for reason, count in sorted(by_reason.items(), key=lambda item: -item[1])],

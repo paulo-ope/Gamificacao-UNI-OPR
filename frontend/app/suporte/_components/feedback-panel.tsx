@@ -12,6 +12,7 @@ import type { SupportFeedback, SupportFeedbackDetails, SupportFeedbackIndicator,
 import type { Tone } from "@/lib/tones";
 
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
+import { buildFeedbackAnalysis } from "./feedback-analysis";
 import { FOLLOW_UP, STATUS_LABEL, dateBr, periodTargetLabel, weeklyTargetLabel } from "./feedback-format";
 import { printFeedback } from "./feedback-print";
 import { FeedbackTeamTable } from "./feedback-team-table";
@@ -157,6 +158,8 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
     if (details.improper_orders) extra.field = `${details.improper_orders.improper_count} de ${details.improper_orders.total_orders} indevidas`;
   }
 
+  const analysis = useMemo(() => buildFeedbackAnalysis(data, details), [data, details]);
+
   async function copy() {
     try {
       await navigator.clipboard.writeText(buildPlainText(data, pending, plan));
@@ -207,6 +210,24 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
           <IndicatorKpi key={indicator.key} indicator={indicator} daily={data.daily} previousLabel={previousLabel} extra={extra[indicator.key]} />
         ))}
       </div>
+
+      <OverviewBlock eyebrow="Análise" title="Análise do período" subtitle="Gerada dos indicadores, das notas do OPA e das O.S. a campo deste colaborador.">
+        <div className="grid gap-4 md:grid-cols-2">
+          {analysis.map((section) => (
+            <div key={section.title}>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{section.title}</p>
+              <ul className="grid gap-1.5 text-sm text-slate-800">
+                {section.lines.map((line) => (
+                  <li key={line} className="flex gap-2">
+                    <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" aria-hidden />
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </OverviewBlock>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="grid gap-4">
