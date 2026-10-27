@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Copy, Printer, UserRound } from "lucide-react";
+import { AlertTriangle, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { OverviewBlock } from "@/components/overview/overview-block";
@@ -13,8 +13,7 @@ import type { Tone } from "@/lib/tones";
 
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
 import { buildFeedbackAnalysis } from "./feedback-analysis";
-import { FOLLOW_UP, STATUS_LABEL, dateBr, periodTargetLabel, weeklyTargetLabel } from "./feedback-format";
-import { printFeedback } from "./feedback-print";
+import { STATUS_LABEL, dateBr, periodTargetLabel } from "./feedback-format";
 import { FeedbackTeamTable } from "./feedback-team-table";
 import { IxcPeriodBar, useIxcPeriod } from "./ixc-n1-panel";
 
@@ -39,21 +38,6 @@ const SPARK_BY_STATUS: Record<SupportMacroCardStatus, string> = {
   no_data: SPARK_COLOR.blue,
   no_target: SPARK_COLOR.blue,
 };
-
-function buildPlainText(data: SupportFeedback, pending: SupportFeedbackIndicator[], plan: string) {
-  const lines = [
-    `Feedback - ${data.name}`,
-    `Período: ${dateBr(data.date_from)} a ${dateBr(data.date_to)}`,
-    "",
-    "Indicadores:",
-    ...data.indicators.map((item) => `- ${item.label}: ${formatCardValue(item, item.value)} (${periodTargetLabel(item)}) - ${STATUS_LABEL[item.status]}`),
-    "",
-    pending.length ? "Meta para a próxima semana:" : "Meta para a próxima semana: manter o desempenho atual.",
-    ...pending.map((item) => `- ${item.label}: ${weeklyTargetLabel(item)}`),
-  ];
-  if (plan.trim()) lines.push("", "Combinado da conversa:", plan.trim());
-  return lines.join("\n");
-}
 
 // Valor e dia de cada ponto do mini-gráfico (e do tooltip); dia sem valor não entra.
 function sparkFor(key: string, daily: SupportFeedback["daily"]): { values: number[]; labels: string[] } {
@@ -121,8 +105,6 @@ function IndicatorKpi({ indicator, daily, previousLabel, extra }: { indicator: S
 function FeedbackBody({ data }: { data: SupportFeedback }) {
   const [details, setDetails] = useState<SupportFeedbackDetails | null>(null);
   const [plan, setPlan] = useState("");
-  const [copied, setCopied] = useState(false);
-  const pending = useMemo(() => data.indicators.filter((item) => item.status === "attention" || item.status === "critical"), [data.indicators]);
   const previousLabel = data.previous_date_from && data.previous_date_to ? `ant. (${dateBr(data.previous_date_from).slice(0, 5)} a ${dateBr(data.previous_date_to).slice(0, 5)})` : "período anterior";
   const overallStatus: SupportMacroCardStatus = data.summary.overall;
 
@@ -150,16 +132,6 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
   }
 
   const analysis = useMemo(() => buildFeedbackAnalysis(data, details), [data, details]);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(buildPlainText(data, pending, plan));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
-  }
 
   return (
     <>
@@ -202,9 +174,9 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
         ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      <div className="grid gap-4">
         <div className="grid gap-4">
-          <OverviewBlock eyebrow="Plano de ação" title="Combinado da conversa" subtitle="Texto livre, só nesta tela: use Copiar ou Imprimir/PDF para guardar.">
+          <OverviewBlock eyebrow="Plano de ação" title="Combinado da conversa" subtitle="Texto livre, só nesta tela; não é salvo.">
             <textarea
               value={plan}
               onChange={(event) => setPlan(event.target.value)}
@@ -231,52 +203,6 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
                 </div>
               ))}
             </div>
-          </OverviewBlock>
-        </div>
-
-        <div className="grid content-start gap-4">
-          <OverviewBlock
-            eyebrow="Próximo ciclo"
-            title="Meta para a próxima semana"
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => void copy()} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                  <Copy className="h-3.5 w-3.5" aria-hidden /> {copied ? "Copiado" : "Copiar meta"}
-                </button>
-                <button type="button" onClick={() => printFeedback(data, pending, plan)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                  <Printer className="h-3.5 w-3.5" aria-hidden /> Imprimir/PDF
-                </button>
-              </div>
-            }
-          >
-            <p className="mb-3 text-xl font-bold text-slate-900">{pending.length ? `${pending.length} ${pending.length === 1 ? "meta pendente" : "metas pendentes"}` : "Tudo dentro da meta"}</p>
-            {pending.length ? (
-              <ul className="grid gap-2">
-                {pending.map((item) => (
-                  <li key={item.key} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</span>
-                    <span className="font-semibold text-slate-900">{weeklyTargetLabel(item)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-slate-600">Manter o desempenho atual na próxima semana.</p>
-            )}
-          </OverviewBlock>
-
-          <OverviewBlock eyebrow="Como acompanhar" title="Verificação diária">
-            {pending.length ? (
-              <ol className="grid gap-2">
-                {pending.map((item, index) => (
-                  <li key={item.key} className="flex gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Prioridade {index + 1}</span>
-                    <span className="text-slate-800">{FOLLOW_UP[item.key] ?? item.label}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="text-sm text-slate-600">Sem pendências: manter a rotina atual.</p>
-            )}
           </OverviewBlock>
         </div>
       </div>
