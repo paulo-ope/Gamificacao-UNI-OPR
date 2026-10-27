@@ -504,6 +504,4 @@ def _macro_dashboard(
         "weekly": weekly_evolution(db, date_to, goals.resolutivity_percent),
         # Dia de maior aumento de atendimentos no OPA e os motivos dele (`None` sem aumento relevante).
         "peak_day": dashboard_analysis.peak_day(db, filters),
-        # Quanto o resto do mês precisa fechar (TMR/TMA) para a média do mês terminar na meta.
-        "month_projection": dashboard_analysis.month_projection(db, filters, date_to, {"tmr": goals.tmr_seconds, "tma": goals.tma_seconds}),
     }

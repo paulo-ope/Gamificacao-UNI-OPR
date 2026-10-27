@@ -695,27 +695,6 @@ class SupportMacroPeakDay(BaseModel):
     reasons: list[SupportMacroPeakReason] = Field(default_factory=list)
 
 
-class SupportMacroProjectionItem(BaseModel):
-    key: str
-    # Média do mês até a data final do período (ponderada pelo volume) e quantos atendimentos entraram nela.
-    month_value: float | None = None
-    target: float | None = None
-    count: int = 0
-    # Quanto o resto do mês precisa fechar para a média do mês terminar na meta; `None` se não dá mais ou sem dado.
-    required_value: float | None = None
-    # closed (mês encerrado) | reachable | unreachable | no_data
-    status: str
-
-
-class SupportMacroMonthProjection(BaseModel):
-    month_from: date
-    month_to: date
-    elapsed_days: int
-    remaining_days: int
-    remaining_from: date | None = None
-    items: list[SupportMacroProjectionItem] = Field(default_factory=list)
-
-
 class SupportMacroDashboard(BaseModel):
     """`dashboard_macros.macro_dashboard`: macros do Dashboard Suporte (N1 do IXC + OPA)."""
 
@@ -731,7 +710,6 @@ class SupportMacroDashboard(BaseModel):
     previous_daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
     weekly: SupportMacroWeekly
     peak_day: SupportMacroPeakDay | None = None
-    month_projection: SupportMacroMonthProjection | None = None
 
 
 class SupportFeedbackIndicator(BaseModel):
