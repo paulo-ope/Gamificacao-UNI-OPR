@@ -90,7 +90,7 @@ def test_collaborator_feedback_combines_opa_and_ixc(db_session):
     assert by_key["opa_attendances"]["value"] == 2
     assert by_key["calls"]["value"] == 1
     assert by_key["rating"]["value"] == pytest.approx(4.25)
-    assert by_key["rating"]["status"] == "attention"  # 4,25 vs 4,30
+    assert by_key["rating"]["status"] == "attention"  # 4,25 vs 4,50
     assert by_key["operational"]["target"] == 38 and by_key["operational"]["status"] == "critical"
     assert by_key["field"]["status"] == "ok"
     assert result["summary"]["overall"] == "critical"

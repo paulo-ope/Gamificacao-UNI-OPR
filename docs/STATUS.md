@@ -150,7 +150,7 @@ da Uni (mesma paleta do e-mail do workspace).
   (`first_human_attendant_id`). O valor `pabx` existe no banco local (26.520 atendimentos); **o total por pessoa não foi
   conferido com o OPA**. Depende do backfill noturno (`first_human_attendant_id` fica vazio sem as mensagens).
 - **Metas** (informadas pelo usuário, iguais para todos): Registro Operacional/Financeiro >= 38, O.S. a campo <= 25, OPASuite >= 96,
-  Chamadas >= 12, Avaliação >= 4,30, TMA <= 1:30:00, TMR <= 2:20. As de contagem são SEMANAIS e a tela as ajusta ao período
+  Chamadas >= 12, Avaliação >= 4,50, TMA <= 1:00:00, TMR <= 2:00 (atualizado em 2026-10-27; antes 4,30 / 1:30:00 / 2:20). As de contagem são SEMANAIS e a tela as ajusta ao período
   (dias/7, arredonda para cima); período máximo de 30 dias. TMA/TMR com cobertura < 50% saem como "Dado parcial".
 - O "Combinado da conversa" **não é salvo** (só Copiar e Imprimir/PDF). Foram feitos e retirados a pedido: gráfico de fluxo diário
   e comparativo semanal.

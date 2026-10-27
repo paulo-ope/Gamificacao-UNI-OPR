@@ -46,9 +46,9 @@ GOALS: tuple[tuple[str, str, str, float, str, bool, str], ...] = (
     ("field", "O.S. Aberta a Campo", "count", 25, "max", True, "ixc"),
     ("opa_attendances", "Atendimento OPASuite", "count", 96, "min", True, "opa"),
     ("calls", "Chamadas Atendidas - OPA", "count", 12, "min", True, "opa"),
-    ("rating", "Avaliação Individual", "score", 4.30, "min", False, "opa"),
-    ("tma", "Tempo Médio de Atendimento", "seconds", 5400.0, "max", False, "opa"),
-    ("tmr", "Tempo Médio de Resposta", "seconds", 140.0, "max", False, "opa"),
+    ("rating", "Avaliação Individual", "score", 4.50, "min", False, "opa"),
+    ("tma", "Tempo Médio de Atendimento", "seconds", 3600.0, "max", False, "opa"),
+    ("tmr", "Tempo Médio de Resposta", "seconds", 120.0, "max", False, "opa"),
 )
 
 

@@ -86,9 +86,9 @@ class FeedbackGoals(BaseModel):
     field: float = Field(25, gt=0, le=100000)
     opa_attendances: float = Field(96, gt=0, le=100000)
     calls: float = Field(12, gt=0, le=100000)
-    rating: float = Field(4.30, gt=0, le=5)
-    tma_seconds: float = Field(5400.0, gt=0, le=86400)
-    tmr_seconds: float = Field(140.0, gt=0, le=86400)
+    rating: float = Field(4.50, gt=0, le=5)
+    tma_seconds: float = Field(3600.0, gt=0, le=86400)
+    tmr_seconds: float = Field(120.0, gt=0, le=86400)
 
 
 class IndicatorGoals(BaseModel):
