@@ -652,8 +652,6 @@ class SupportMacroDailyPoint(BaseModel):
     performed: int
     solved: int
     field: int
-    # Atendimentos do OPA no dia (mesmo recorte de departamento/colaborador do dashboard).
-    opa_total: int = 0
     # Atendimentos N2 (motivos 80 + 81) do dia.
     n2_total: int = 0
     # Médias do OPA no dia; `None` em dia sem atendimento (só no período atual).
@@ -699,20 +697,13 @@ class SupportMacroPeakDay(BaseModel):
 
 class SupportMacroProjectionItem(BaseModel):
     key: str
-    # sum (volume) | mean (média ponderada pelo volume)
-    kind: str
-    # O que o mês já tem até a data final do período.
+    # Média do mês até a data final do período (ponderada pelo volume) e quantos atendimentos entraram nela.
     month_value: float | None = None
-    # Onde o mês fecha se o resto dele seguir no ritmo do período selecionado.
-    pace_value: float | None = None
     target: float | None = None
-    direction: str | None = None
     count: int = 0
-    # Quanto o resto do mês precisa fechar para a média do mês terminar na meta; `None` se não dá mais ou sem meta.
+    # Quanto o resto do mês precisa fechar para a média do mês terminar na meta; `None` se não dá mais ou sem dado.
     required_value: float | None = None
-    # Se o ritmo atual já entrega a meta no fim do mês (`None` sem meta).
-    pace_meets_target: bool | None = None
-    # closed (mês encerrado) | reachable | unreachable | no_target | no_data
+    # closed (mês encerrado) | reachable | unreachable | no_data
     status: str
 
 
@@ -723,22 +714,6 @@ class SupportMacroMonthProjection(BaseModel):
     remaining_days: int
     remaining_from: date | None = None
     items: list[SupportMacroProjectionItem] = Field(default_factory=list)
-
-
-class SupportMacroWeekOpa(BaseModel):
-    """Números do OPA de uma semana do mês (domingo a sábado, cortada nos limites do mês)."""
-
-    key: str
-    label: str
-    date_from: date
-    date_to: date
-    # Semana que começa depois da data final do período (sem números) / semana ainda em andamento nessa data.
-    future: bool
-    partial: bool
-    total: int | None = None
-    tmr_seconds: float | None = None
-    tma_seconds: float | None = None
-    rating: float | None = None
 
 
 class SupportMacroDashboard(BaseModel):
@@ -757,7 +732,6 @@ class SupportMacroDashboard(BaseModel):
     weekly: SupportMacroWeekly
     peak_day: SupportMacroPeakDay | None = None
     month_projection: SupportMacroMonthProjection | None = None
-    weeks_opa: list[SupportMacroWeekOpa] = Field(default_factory=list)
 
 
 class SupportFeedbackIndicator(BaseModel):
