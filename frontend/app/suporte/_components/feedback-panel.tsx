@@ -247,9 +247,22 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.indicators.map((item) => (
-                    <tr key={item.key} className={STATUS_ROW[item.status]}>
-                      <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-800">{item.label}</td>
+                  {data.indicators.map((item) => {
+                    const target = item.key === "rating" ? "ratings" : item.key === "field" ? "improper" : null;
+                    return (
+                    <tr
+                      key={item.key}
+                      className={`${STATUS_ROW[item.status]}${target ? " cursor-pointer hover:brightness-95" : ""}`}
+                      onClick={target ? () => openSection(target) : undefined}
+                      onKeyDown={target ? (event) => (event.key === "Enter" || event.key === " ") && openSection(target) : undefined}
+                      tabIndex={target ? 0 : undefined}
+                      role={target ? "button" : undefined}
+                      title={target ? "Clique para ver a análise detalhada" : undefined}
+                    >
+                      <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-800">
+                        {item.label}
+                        {target ? <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-sky-600">ver análise ›</span> : null}
+                      </td>
                       <td className="border border-slate-200 px-3 py-2 font-bold tabular-nums text-slate-900">{formatCardValue(item, item.value)}</td>
                       <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-700">
                         {periodTargetLabel(item)}
@@ -259,7 +272,8 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
                         <span className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-bold ${STATUS_BADGE[item.status]}`}>{STATUS_LABEL[item.status]}</span>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
