@@ -2,7 +2,7 @@
 distribuição das notas de avaliação (OPA). Valores e listas saem prontos daqui; a tela só desenha.
 
 "O.S. indevida" é uma O.S. de campo aberta pelo colaborador que cai em pelo menos um destes motivos:
-  - diagnóstico de encerramento em `IMPROPER_DIAGNOSES` (desistência, assunto errado, improdutiva, duplicada);
+  - diagnóstico de encerramento em `IMPROPER_DIAGNOSES` (desistência, assunto errado, duplicada);
   - duplicidade: o mesmo cliente já tinha outra O.S. de campo aberta até `DUPLICATE_WINDOW_HOURS` antes.
 Nota boa = 4 a 5, neutra = entre 2 e 4, ruim = até 2 (corte definido pelo usuário)."""
 from __future__ import annotations
@@ -31,7 +31,6 @@ BAD_MAX = 2.0
 IMPROPER_DIAGNOSES: dict[str, str] = {
     "desistencia da solicitacao": "Desistência da solicitação",
     "atendimento com assunto errado": "Assunto errado",
-    "ordem de servico improdutiva": "O.S. improdutiva",
     "ordem de servico duplicada": "O.S. duplicada (diagnóstico)",
 }
 DUPLICATE_REASON = f"Duplicada (mesmo cliente em até {DUPLICATE_WINDOW_HOURS} h)"
