@@ -44,6 +44,7 @@ export type Permission =
   | "scheduling:views:manage_global"
   | "support:read"
   | "support:sync_opa"
+  | "support:plan_write"
   | "localiza:read"
   | "localiza:manage"
   | "management:read"
@@ -2628,6 +2629,40 @@ export type SupportMacroWeekly = {
   buckets: SupportMacroWeekBucket[];
 };
 
+export type SupportMacroPeakDay = {
+  day: string;
+  total: number;
+  average: number;
+  percent_above: number;
+  reasons: { reason: string; count: number; usual_per_day: number }[];
+};
+
+export type SupportMacroProjectionItem = {
+  key: string;
+  // sum (volume) | mean (média ponderada pelo volume)
+  kind: "sum" | "mean";
+  // O que o mês já tem até a data final do período.
+  month_value: number | null;
+  // Onde o mês fecha se o resto dele seguir no ritmo do período selecionado.
+  pace_value: number | null;
+  target: number | null;
+  direction: "min" | "max" | null;
+  count: number;
+  // Quanto o resto do mês precisa fechar para a média do mês terminar na meta.
+  required_value: number | null;
+  pace_meets_target: boolean | null;
+  status: "closed" | "reachable" | "unreachable" | "no_target" | "no_data";
+};
+
+export type SupportMacroMonthProjection = {
+  month_from: string;
+  month_to: string;
+  elapsed_days: number;
+  remaining_days: number;
+  remaining_from: string | null;
+  items: SupportMacroProjectionItem[];
+};
+
 export type SupportMacroDashboard = {
   date_from: string;
   date_to: string;
@@ -2641,6 +2676,10 @@ export type SupportMacroDashboard = {
   // Período anterior de mesmo tamanho, alinhado por posição do dia com `daily`.
   previous_daily: SupportMacroDailyPoint[];
   weekly: SupportMacroWeekly;
+  // Dia de maior aumento de atendimentos no OPA e os motivos; `null` sem aumento relevante.
+  peak_day: SupportMacroPeakDay | null;
+  // Quanto o resto do mês precisa fechar (TMR/TMA) para a média do mês terminar na meta.
+  month_projection: SupportMacroMonthProjection | null;
 };
 
 export type SupportIxcTicketFilterOptions = {
@@ -2870,6 +2909,61 @@ export type SupportFeedback = {
   daily: SupportFeedbackDailyPoint[];
 };
 
+export type SupportFeedbackBand = { count: number; percent: number | null };
+export type SupportFeedbackRatedAttendance = {
+  protocol: string | null;
+  opened_at: string;
+  channel: string | null;
+  rating: number;
+  band: "good" | "neutral" | "bad";
+  reason: string | null;
+  tma_seconds: number | null;
+  tmr_seconds: number | null;
+};
+export type SupportFeedbackRatings = {
+  rated_count: number;
+  average: number | null;
+  good: SupportFeedbackBand;
+  neutral: SupportFeedbackBand;
+  bad: SupportFeedbackBand;
+  by_day: { day: string; good: number; neutral: number; bad: number }[];
+  by_channel: { channel: string; good: number; neutral: number; bad: number }[];
+  attendances: SupportFeedbackRatedAttendance[];
+  truncated: boolean;
+};
+export type SupportFeedbackImproperOrder = {
+  order_code: string;
+  customer_name: string | null;
+  opened_at: string;
+  status: string | null;
+  diagnosis: string | null;
+  reasons: string[];
+  report: string | null;
+};
+export type SupportFeedbackOrderGroup = { count: number; by_reason: { reason: string; count: number }[] };
+export type SupportFeedbackImproperOrders = {
+  total_orders: number;
+  remote_resolvable: SupportFeedbackOrderGroup;
+  to_review: SupportFeedbackOrderGroup;
+  repeat_customers: { customer_name: string; count: number }[];
+  no_diagnosis_codes: string[];
+  improper_count: number;
+  improper_percent: number | null;
+  by_reason: { reason: string; count: number }[];
+  orders: SupportFeedbackImproperOrder[];
+  truncated: boolean;
+};
+// `GET /support/feedback/details`: notas do OPA e O.S. indevidas do IXC de um colaborador.
+export type SupportFeedbackDetails = {
+  attendant_id: string;
+  name: string;
+  date_from: string;
+  date_to: string;
+  ixc_linked: boolean;
+  ratings: SupportFeedbackRatings;
+  improper_orders: SupportFeedbackImproperOrders | null;
+};
+
 // Ranking mensal do Suporte (`GET /support/ranking`), pelo Quadro de Pontuação.
 // `detail`: como os pontos foram formados (hoje só nas ligações: blocos de 12 e semanas abaixo de 12).
 export type SupportRankingCriterion = { value: number | null; points: number; partial: boolean; detail?: string | null };
@@ -3018,4 +3112,100 @@ export type SupportContactRadar = {
   regionals: SupportContactRadarRegional[];
   series: { bucket_minutes: number; points: SupportContactRadarPoint[] };
   previous: { contacts: number; customers: number; coverage_pct: number | null };
+};
+
+// Especialista/Analista (Suporte Interno): projetos e tarefas lançados pela equipe.
+export type SupportPlanKind = "project" | "task";
+export type SupportPlanStatus = "planned" | "in_progress" | "blocked" | "done" | "canceled";
+export type SupportPlanPriority = "low" | "medium" | "high";
+
+export type SupportPlanPerson = { id: number; name: string };
+
+export type SupportPlanItem = {
+  id: number;
+  kind: SupportPlanKind;
+  parent_id: number | null;
+  parent_title: string | null;
+  title: string;
+  description: string | null;
+  status: SupportPlanStatus;
+  priority: SupportPlanPriority;
+  due_date: string | null;
+  overdue: boolean;
+  assignees: SupportPlanPerson[];
+  result: string | null;
+  completed_at: string | null;
+  archived: boolean;
+  version: number;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+  tasks_total: number;
+  tasks_done: number;
+  updates_count: number;
+};
+
+export type SupportPlanUpdateEntry = {
+  id: number;
+  author_name: string;
+  text: string;
+  status_from: SupportPlanStatus | null;
+  status_to: SupportPlanStatus | null;
+  created_at: string;
+};
+
+export type SupportPlanChild = {
+  id: number;
+  title: string;
+  status: SupportPlanStatus;
+  due_date: string | null;
+  overdue: boolean;
+  assignees: SupportPlanPerson[];
+};
+
+export type SupportPlanItemDetail = SupportPlanItem & {
+  updates: SupportPlanUpdateEntry[];
+  children: SupportPlanChild[];
+};
+
+export type SupportPlanItemPage = { items: SupportPlanItem[]; total: number };
+
+export type SupportPlanSummary = {
+  open: number;
+  in_progress: number;
+  blocked: number;
+  overdue: number;
+  done_in_period: number;
+  period_days: number;
+};
+
+export type SupportPlanItemInput = {
+  kind: SupportPlanKind;
+  title: string;
+  description?: string | null;
+  priority: SupportPlanPriority;
+  due_date?: string | null;
+  assignee_ids: number[];
+  parent_id?: number | null;
+  status?: SupportPlanStatus;
+};
+
+export type SupportPlanItemPatch = {
+  version: number;
+  title?: string;
+  description?: string | null;
+  priority?: SupportPlanPriority;
+  due_date?: string | null;
+  clear_due_date?: boolean;
+  assignee_ids?: number[];
+  parent_id?: number | null;
+  clear_parent?: boolean;
+  result?: string | null;
+};
+
+export type SupportPlanProgressInput = {
+  version: number;
+  text: string;
+  status?: SupportPlanStatus;
+  result?: string | null;
 };

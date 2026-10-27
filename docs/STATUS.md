@@ -13,6 +13,43 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-25** — **Comparativo semanal das regionais na Visão Geral**, na branch `feat/operacao-comparativo-semanal` (parte do
+`master` atual). Sem migration. Bloco novo dentro do card "Ordens de serviço" (`overview-regional-weekly.tsx`), recolhido por
+padrão (só "Todas as regionais"; botão abre as regionais).
+- **Regra**: última semana FECHADA (domingo a sábado) contra a anterior a ela - em 25/10 (domingo) é 18/10-24/10 contra
+  11/10-17/10; a semana em curso só entra no domingo seguinte. Janela fixa no backend, o período do filtro da tela é ignorado,
+  regional/setor/modelo de equipe valem. Endpoint `GET /api/operations/overview/regional-weekly-comparison`
+  (`queries.regional_weekly_comparison`, reaproveita `regional_matrix` duas vezes - nenhuma regra de KPI nova).
+- **Decisões**: só medidas de fluxo (abertas, finalizadas, SLA, TMA; "em aberto" é retrato de agora e não existe para a semana
+  passada); regional sem fluxo e "NAO IDENTIFICADO" não viram linha, mas o total é o do quadro geral (pode passar um pouco da soma
+  das linhas); SLA/TMA exigem `operations:view_sla`. Cor da variação = direção x se subir é bom (abertas sem cor).
+- **Testes**: `test_operations_regional_weekly_comparison.py` (janelas e comparação). O teardown do `TestClient` acusa
+  `no such table: intelligence_monitor_runs` no ambiente local (já ocorria em `test_operations_regional_matrix.py`, não investigado).
+
+**2026-10-24** — **Aba Especialista/Analista (SGP Suporte) com kanban, e "Suporte N1/N2" num item só do menu**, na branch
+`feat/suporte-especialista-analista` (parte do `master` atual). **Tem migration nova: `20261021_0120` (tabelas
+`support_plan_items` e `support_plan_updates`) - sobe sozinha no deploy.** Testada por 17 testes de lógica
+(`test_support_planning.py`; frontend 189 no total), no navegador contra um banco SQLite descartável (lançar projeto, andamento, editar
+responsáveis, quadro) e com a migration aplicada no Docker local. **O arrastar do kanban e o visual novo (cores da Uni, cartões de
+resumo) só o usuário viu; não foram exercitados por navegador logado pela sessão.**
+- **O que é**: `/suporte?tab=planning`. Projetos e tarefas que o Especialista e o Analista lançam e acompanham; **todos com
+  `support:read` veem tudo**, só quem tem `support:plan_write` lança/edita/arrasta. Endpoints `GET/POST/PATCH /api/support/planning/*`
+  (`planning_router.py`, regra em `planning_service.py`). Responsável = usuário ativo com `support:plan_write` (um ou os dois).
+- **Regras**: tarefa pode ter projeto pai (só projeto é pai); concluir exige resultado; bloquear/cancelar exige motivo; item novo não
+  nasce concluído; atraso = prazo vencido e item aberto (vem do backend); progresso do projeto = tarefas concluídas / ativas
+  (canceladas e arquivadas fora). Edição concorrente barrada por `version` (409). **Nada é excluído**, só arquivado.
+- **Permissão nova `support:plan_write`**: já entra em `operator` e `admin`. **Perfis customizados precisam recebê-la pelo Admin**;
+  sem ela a aba abre só para leitura.
+- **Kanban**: arrastar entre colunas muda o status (planejado/andamento na hora; concluído/bloqueado/cancelado abrem um painel pedindo
+  resultado/motivo). **Arrastar nativo do navegador: não funciona em toque** (celular/tablet); lá o status muda dentro do item.
+  Cores da marca (`uni-*`); vermelho/âmbar só como alerta. A barra de prazo mede o tempo entre o lançamento e o prazo (vale até o fim
+  do dia informado).
+- **Suporte N1/N2**: os itens "Atendimento Suporte Interno N1" e "Atendimento Operacional N2" viraram um só (`IxcLevelsPanel`, botões N1/N2;
+  o período segue compartilhado). `?tab=ixc_n2` continua válido e abre no N2.
+- **Atenção - outra frente em paralelo**: a sessão da **Jornada N1/N2** (escala de folgas) tem uma migration `20261022_0121` que se
+  encadeia sobre a `0120` desta branch; esta PR precisa entrar no `master` antes dela. Os arquivos compartilhados (`security.py`,
+  `models.py`, `page.tsx`, `api.ts`, `types.ts`...) foram commitados aqui **sem** nada da Jornada.
+
 **2026-10-20** — **Radar de Contatos (SGP Suporte) + linha "Antes" no Dashboard Suporte**, na branch
 `feat/suporte-radar-contatos` (parte do `master` atual, PR único). Testado no banco/OPA/IXC locais e por testes de lógica
 (`test_support_contact_radar.py`, 32 casos; frontend 38); aberto num navegador logado no ambiente local. **Tem migration nova:

@@ -502,6 +502,12 @@ mesmo quando chamadas pela própria tela web (origem `"api"`), e registra o aces
   backlog, backlog vencido, concluídas e (se o usuário tiver `operations:view_sla`) taxa de
   SLA — sem a permissão, as colunas de prazo voltam em branco em vez da tabela inteira ser
   negada.
+- `GET /overview/regional-weekly-comparison` — sessão autenticada. Última semana fechada
+  (domingo a sábado) contra a anterior a ela, por regional: abertas, finalizadas e (com
+  `operations:view_sla`) SLA e TMA, mais um `total`. Janelas fixas no fuso `America/Porto_Velho`
+  (`current_*`/`previous_*` na resposta); o período do filtro é ignorado, os demais filtros valem.
+  Regional sem fluxo nas duas semanas e O.S. sem regional ("NAO IDENTIFICADO") não viram linha;
+  o `total` é o do quadro por regional.
 - `GET /overview/collaborator-production` — sessão autenticada (só `operations:read`, sem
   `view_sla`). Concluídas por responsável no recorte atual — drill do donut de modelo de
   equipe.

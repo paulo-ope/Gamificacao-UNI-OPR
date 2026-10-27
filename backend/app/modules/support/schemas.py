@@ -678,6 +678,51 @@ class SupportMacroWeekly(BaseModel):
     buckets: list[SupportMacroWeekBucket]
 
 
+class SupportMacroPeakReason(BaseModel):
+    reason: str
+    count: int
+    # Média por dia desse motivo nos demais dias do período.
+    usual_per_day: float
+
+
+class SupportMacroPeakDay(BaseModel):
+    """Dia de maior aumento de atendimentos no OPA, contra a média dos demais dias do período."""
+
+    day: date
+    total: int
+    average: float
+    percent_above: float
+    reasons: list[SupportMacroPeakReason] = Field(default_factory=list)
+
+
+class SupportMacroProjectionItem(BaseModel):
+    key: str
+    # sum (volume) | mean (média ponderada pelo volume)
+    kind: str
+    # O que o mês já tem até a data final do período.
+    month_value: float | None = None
+    # Onde o mês fecha se o resto dele seguir no ritmo do período selecionado.
+    pace_value: float | None = None
+    target: float | None = None
+    direction: str | None = None
+    count: int = 0
+    # Quanto o resto do mês precisa fechar para a média do mês terminar na meta; `None` se não dá mais ou sem meta.
+    required_value: float | None = None
+    # Se o ritmo atual já entrega a meta no fim do mês (`None` sem meta).
+    pace_meets_target: bool | None = None
+    # closed (mês encerrado) | reachable | unreachable | no_target | no_data
+    status: str
+
+
+class SupportMacroMonthProjection(BaseModel):
+    month_from: date
+    month_to: date
+    elapsed_days: int
+    remaining_days: int
+    remaining_from: date | None = None
+    items: list[SupportMacroProjectionItem] = Field(default_factory=list)
+
+
 class SupportMacroDashboard(BaseModel):
     """`dashboard_macros.macro_dashboard`: macros do Dashboard Suporte (N1 do IXC + OPA)."""
 
@@ -692,6 +737,8 @@ class SupportMacroDashboard(BaseModel):
     daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
     previous_daily: list[SupportMacroDailyPoint] = Field(default_factory=list)
     weekly: SupportMacroWeekly
+    peak_day: SupportMacroPeakDay | None = None
+    month_projection: SupportMacroMonthProjection | None = None
 
 
 class SupportFeedbackIndicator(BaseModel):
@@ -746,6 +793,104 @@ class SupportFeedback(BaseModel):
     indicators: list[SupportFeedbackIndicator]
     summary: SupportFeedbackSummary
     daily: list[SupportFeedbackDailyPoint] = Field(default_factory=list)
+
+
+class SupportFeedbackBand(BaseModel):
+    count: int
+    percent: float | None = None
+
+
+class SupportFeedbackRatedAttendance(BaseModel):
+    protocol: str | None = None
+    opened_at: datetime
+    channel: str | None = None
+    rating: float
+    # good | neutral | bad
+    band: str
+    reason: str | None = None
+    tma_seconds: int | None = None
+    tmr_seconds: int | None = None
+
+
+class SupportFeedbackRatingDay(BaseModel):
+    day: date
+    good: int
+    neutral: int
+    bad: int
+
+
+class SupportFeedbackRatingChannel(BaseModel):
+    channel: str
+    good: int
+    neutral: int
+    bad: int
+
+
+class SupportFeedbackRatings(BaseModel):
+    rated_count: int
+    average: float | None = None
+    good: SupportFeedbackBand
+    neutral: SupportFeedbackBand
+    bad: SupportFeedbackBand
+    by_day: list[SupportFeedbackRatingDay] = Field(default_factory=list)
+    by_channel: list[SupportFeedbackRatingChannel] = Field(default_factory=list)
+    attendances: list[SupportFeedbackRatedAttendance] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class SupportFeedbackImproperOrder(BaseModel):
+    order_code: str
+    customer_name: str | None = None
+    opened_at: datetime
+    status: str | None = None
+    diagnosis: str | None = None
+    reasons: list[str]
+    # Relato de finalização da O.S. (escrito pelo técnico no IXC).
+    report: str | None = None
+
+
+class SupportFeedbackReasonCount(BaseModel):
+    reason: str
+    count: int
+
+
+class SupportFeedbackOrderGroup(BaseModel):
+    count: int
+    by_reason: list[SupportFeedbackReasonCount] = Field(default_factory=list)
+
+
+class SupportFeedbackRepeatCustomer(BaseModel):
+    customer_name: str
+    count: int
+
+
+class SupportFeedbackImproperOrders(BaseModel):
+    total_orders: int
+    # O.S. que poderiam ser resolvidas por orientação remota / a revisar (não entram nas indevidas).
+    remote_resolvable: SupportFeedbackOrderGroup = Field(default_factory=lambda: SupportFeedbackOrderGroup(count=0))
+    to_review: SupportFeedbackOrderGroup = Field(default_factory=lambda: SupportFeedbackOrderGroup(count=0))
+    # Clientes com várias O.S. a campo abertas pelo colaborador no período.
+    repeat_customers: list[SupportFeedbackRepeatCustomer] = Field(default_factory=list)
+    # Códigos (até 5) das O.S. finalizadas sem diagnóstico, para a conversa.
+    no_diagnosis_codes: list[str] = Field(default_factory=list)
+    improper_count: int
+    improper_percent: float | None = None
+    by_reason: list[SupportFeedbackReasonCount] = Field(default_factory=list)
+    orders: list[SupportFeedbackImproperOrder] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class SupportFeedbackDetails(BaseModel):
+    """`feedback_details.collaborator_details`: O.S. indevidas (IXC) e notas (OPA) de um colaborador."""
+
+    attendant_id: str
+    name: str
+    date_from: date
+    date_to: date
+    ixc_linked: bool
+    ratings: SupportFeedbackRatings
+    # `None` quando o colaborador não foi encontrado no IXC pelo nome.
+    improper_orders: SupportFeedbackImproperOrders | None = None
 
 
 class SupportRulesState(BaseModel):
@@ -1227,3 +1372,119 @@ class SupportContactRadarOut(BaseModel):
     regionals: list[SupportContactRadarRegional] = Field(default_factory=list)
     series: SupportContactRadarSeries
     previous: SupportContactRadarPrevious
+
+
+# ---------------------------------------------------------------------------
+# Especialista/Analista: projetos e tarefas lançados pela equipe
+# ---------------------------------------------------------------------------
+PlanKind = Literal["project", "task"]
+PlanStatus = Literal["planned", "in_progress", "blocked", "done", "canceled"]
+PlanPriority = Literal["low", "medium", "high"]
+
+
+class SupportPlanPerson(BaseModel):
+    id: int
+    name: str
+
+
+class SupportPlanItemBase(BaseModel):
+    kind: PlanKind
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    priority: PlanPriority = "medium"
+    due_date: date | None = None
+    assignee_ids: list[int] = Field(default_factory=list, max_length=10)
+    parent_id: int | None = None
+
+
+class SupportPlanItemCreate(SupportPlanItemBase):
+    status: PlanStatus = "planned"
+
+
+class SupportPlanItemUpdate(BaseModel):
+    # `version` é a versão que a tela leu: se outra pessoa salvou antes, a gravação é recusada (409).
+    version: int = Field(ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    priority: PlanPriority | None = None
+    due_date: date | None = None
+    clear_due_date: bool = False
+    assignee_ids: list[int] | None = Field(default=None, max_length=10)
+    parent_id: int | None = None
+    clear_parent: bool = False
+    result: str | None = Field(default=None, max_length=5000)
+
+
+class SupportPlanUpdateCreate(BaseModel):
+    version: int = Field(ge=1)
+    text: str = Field(default="", max_length=3000)
+    status: PlanStatus | None = None
+    # Exigido ao concluir (status "done"): o que foi feito e o que mudou.
+    result: str | None = Field(default=None, max_length=5000)
+
+
+class SupportPlanArchive(BaseModel):
+    version: int = Field(ge=1)
+    archived: bool = True
+
+
+class SupportPlanUpdateOut(BaseModel):
+    id: int
+    author_name: str
+    text: str
+    status_from: str | None = None
+    status_to: str | None = None
+    created_at: datetime
+
+
+class SupportPlanChildOut(BaseModel):
+    id: int
+    title: str
+    status: str
+    due_date: date | None = None
+    overdue: bool
+    assignees: list[SupportPlanPerson]
+
+
+class SupportPlanItemOut(BaseModel):
+    id: int
+    kind: str
+    parent_id: int | None = None
+    parent_title: str | None = None
+    title: str
+    description: str | None = None
+    status: str
+    priority: str
+    due_date: date | None = None
+    overdue: bool
+    assignees: list[SupportPlanPerson]
+    result: str | None = None
+    completed_at: datetime | None = None
+    archived: bool
+    version: int
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+    # Só projeto: tarefas ativas e quantas estão concluídas (canceladas não entram na conta).
+    tasks_total: int = 0
+    tasks_done: int = 0
+    updates_count: int = 0
+
+
+class SupportPlanItemDetail(SupportPlanItemOut):
+    updates: list[SupportPlanUpdateOut]
+    children: list[SupportPlanChildOut]
+
+
+class SupportPlanItemPage(BaseModel):
+    items: list[SupportPlanItemOut]
+    total: int
+
+
+class SupportPlanSummary(BaseModel):
+    open: int
+    in_progress: int
+    blocked: int
+    overdue: int
+    done_in_period: int
+    period_days: int

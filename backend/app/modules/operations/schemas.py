@@ -491,6 +491,29 @@ class OperationRegionalMatrix(BaseModel):
     total: OperationRegionalMatrixItem
 
 
+class OperationWeeklyMeasures(BaseModel):
+    opened: int
+    completed: int
+    sla_rate: float | None = None
+    average_closing_hours: float | None = None
+
+
+class OperationWeeklyComparisonItem(BaseModel):
+    regional: str
+    current: OperationWeeklyMeasures
+    previous: OperationWeeklyMeasures
+
+
+class OperationRegionalWeeklyComparison(BaseModel):
+    current_from: date
+    current_to: date
+    previous_from: date
+    previous_to: date
+    sla_available: bool
+    items: list[OperationWeeklyComparisonItem]
+    total: OperationWeeklyComparisonItem
+
+
 class OperationBacklogTrendPoint(BaseModel):
     snapshot_date: date
     backlog: int

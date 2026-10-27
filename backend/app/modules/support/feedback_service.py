@@ -218,9 +218,12 @@ def _ixc_values(db: Session, ixc_user: SupportIxcUser | None, date_from: date, d
     return {**protocols, "field": _field_orders(db, _name_key(ixc_user.name), date_from, date_to)}
 
 
-def collaborator_feedback(db: Session, *, date_from: date, date_to: date, attendant_id: str) -> dict[str, Any] | None:
+def collaborator_feedback(
+    db: Session, *, date_from: date, date_to: date, attendant_id: str, include_daily: bool = True
+) -> dict[str, Any] | None:
     """Feedback do colaborador no período, com o período anterior (mesmo tamanho) para comparação.
-    `None` quando `attendant_id` não é da equipe do Suporte Técnico."""
+    `None` quando `attendant_id` não é da equipe do Suporte Técnico. `include_daily=False` pula a série diária
+    (a visão da equipe toda não a usa)."""
     resolved = resolve_collaborator(db, attendant_id)
     if resolved is None:
         return None
@@ -266,10 +269,10 @@ def collaborator_feedback(db: Session, *, date_from: date, date_to: date, attend
         "overall": "critical" if "critical" in statuses else "attention" if "attention" in statuses else "ok",
     }
 
-    ixc_daily = _ixc_daily(db, ixc_user.ixc_user_id, _name_key(ixc_user.name), date_from, date_to) if ixc_user else {}
-    opa_daily = {point["day"]: point for point in opa_overview_service.daily_timeseries(db, filters)}
+    ixc_daily = _ixc_daily(db, ixc_user.ixc_user_id, _name_key(ixc_user.name), date_from, date_to) if ixc_user and include_daily else {}
+    opa_daily = {point["day"]: point for point in opa_overview_service.daily_timeseries(db, filters)} if include_daily else {}
     daily = []
-    for offset in range((date_to - date_from).days + 1):
+    for offset in range((date_to - date_from).days + 1 if include_daily else 0):
         day = date_from + timedelta(days=offset)
         opa_point = opa_daily.get(day, {})
         ixc_point = ixc_daily.get(day.isoformat(), {})
@@ -299,3 +302,13 @@ def collaborator_feedback(db: Session, *, date_from: date, date_to: date, attend
         "summary": summary,
         "daily": daily,
     }
+
+
+def team_feedback(db: Session, *, date_from: date, date_to: date) -> list[dict[str, Any]]:
+    """Feedback de todos os colaboradores da equipe fixa do Suporte, na ordem da equipe, sem a série diária."""
+    result = []
+    for option in dashboard_macros.support_team_options(db):
+        feedback = collaborator_feedback(db, date_from=date_from, date_to=date_to, attendant_id=option["value"], include_daily=False)
+        if feedback is not None:
+            result.append(feedback)
+    return result

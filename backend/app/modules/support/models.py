@@ -550,3 +550,48 @@ class SupportContactGeo(Base):
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class SupportPlanItem(Base):
+    """Projeto ou tarefa lançado na aba Especialista/Analista do Suporte Interno.
+
+    `kind` é "project" ou "task"; só tarefa tem `parent_id`, e o pai tem de ser projeto (a regra
+    vive em `planning_service`). `assignee_ids` guarda os ids dos usuários responsáveis (um ou os
+    dois). Tudo o que é lançado fica visível para quem acessa o Suporte Interno, por isso não há
+    recorte por dono. `version` sobe a cada edição para barrar a gravação por cima de uma edição
+    que a pessoa ainda não viu. Itens saem de cena por `archived`, nunca por exclusão."""
+
+    __tablename__ = "support_plan_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="task", index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("support_plan_items.id", ondelete="SET NULL"), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="planned", index=True)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    assignee_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_by_name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class SupportPlanUpdate(Base):
+    """Registro de andamento de um item (texto, autor e, quando houve, a mudança de status)."""
+
+    __tablename__ = "support_plan_updates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("support_plan_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    author_name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status_from: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status_to: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

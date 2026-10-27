@@ -4,9 +4,14 @@ import { Wrench } from "lucide-react";
 
 import { OverviewBlock, type OverviewBlockState } from "@/components/overview/overview-block";
 import { OverviewProgress, OverviewTile } from "@/components/overview/overview-layout-parts";
+import { OverviewRegionalWeekly } from "@/components/overview/overview-regional-weekly";
 import { deltaPresentation } from "@/components/ui/summary-metric";
 import { formatInteger, formatPercent } from "@/lib/format";
-import type { OperationOverview, OperationRegionalMatrixItem } from "@/lib/operations-api";
+import type {
+  OperationOverview,
+  OperationRegionalMatrixItem,
+  OperationRegionalWeeklyComparison,
+} from "@/lib/operations-api";
 import { percentChange } from "@/lib/period";
 
 /**
@@ -22,12 +27,15 @@ export function OverviewOrdersCard({
   previous,
   previousLabel,
   backlog,
+  weekly,
   state,
 }: {
   overview: OperationOverview | null;
   previous: OperationOverview | null;
   previousLabel: string;
   backlog: OperationRegionalMatrixItem | null;
+  /** Comparativo semanal das regionais; `undefined` = usuário sem o bloco, `null` = sem dado. */
+  weekly?: OperationRegionalWeeklyComparison | null;
   state?: OverviewBlockState;
 }) {
   const opened = overview?.opened ?? 0;
@@ -85,6 +93,7 @@ export function OverviewOrdersCard({
         rightValue={formatInteger(backlog?.backlog ?? null)}
         percent={opened > 0 ? (completed / opened) * 100 : null}
       />
+      {weekly !== undefined ? <OverviewRegionalWeekly data={weekly} /> : null}
     </OverviewBlock>
   );
 }

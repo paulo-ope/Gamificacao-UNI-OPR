@@ -924,6 +924,30 @@ export type OperationRegionalMatrix = {
   total: OperationRegionalMatrixItem;
 };
 
+export type OperationWeeklyMeasures = {
+  opened: number;
+  completed: number;
+  sla_rate: number | null;
+  average_closing_hours: number | null;
+};
+
+export type OperationWeeklyComparisonItem = {
+  regional: string;
+  current: OperationWeeklyMeasures;
+  previous: OperationWeeklyMeasures;
+};
+
+/** Semana atual (segunda até hoje) × anterior (até o mesmo dia da semana); janela fixa no backend. */
+export type OperationRegionalWeeklyComparison = {
+  current_from: string;
+  current_to: string;
+  previous_from: string;
+  previous_to: string;
+  sla_available: boolean;
+  items: OperationWeeklyComparisonItem[];
+  total: OperationWeeklyComparisonItem;
+};
+
 /**
  * Finalizadas por técnico no recorte atual (segundo nível do donut de modelo de equipe). Só nome e
  * contagem de propósito - ver `queries.overview_collaborator_production` no backend: a rota de SLA
@@ -1091,6 +1115,10 @@ export const operationsApi = {
   overviewRegionalMatrix: (filters: OperationFilterState) =>
     request<OperationRegionalMatrix>(
       `/operations/overview/regional-matrix?${query(filters)}`,
+    ),
+  overviewRegionalWeeklyComparison: (filters: OperationFilterState) =>
+    request<OperationRegionalWeeklyComparison>(
+      `/operations/overview/regional-weekly-comparison?${query(filters)}`,
     ),
   overviewAttentionPoints: (filters: OperationFilterState) =>
     request<OperationAttentionPoints>(
