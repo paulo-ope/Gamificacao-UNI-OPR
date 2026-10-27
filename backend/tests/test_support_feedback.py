@@ -133,3 +133,15 @@ def test_ixc_user_matches_full_name_inside_n1_groups_only(db_session):
     assert feedback_service._ixc_user(db_session, "Anna Andrade", "Anna Andrade").ixc_user_id == "3"
     assert feedback_service._ixc_user(db_session, "Maria Souza", "Maria Souza") is None
     assert feedback_service._ixc_user(db_session, "Pessoa Inexistente", "Pessoa Inexistente") is None
+
+
+def test_team_feedback_lists_every_collaborator_without_daily_series(db_session):
+    _seed_team(db_session)
+    _attendance(db_session, "A1", attendant=OPA_ID, first_human=OPA_ID, rating=4.5)
+    db_session.commit()
+
+    result = feedback_service.team_feedback(db_session, date_from=date(2026, 10, 1), date_to=date(2026, 10, 7))
+
+    assert [item["name"] for item in result] == ["Adelaidy Vitoria"]
+    assert result[0]["daily"] == []
+    assert {item["key"] for item in result[0]["indicators"]} >= {"operational", "rating", "tmr"}

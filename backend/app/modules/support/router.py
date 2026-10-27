@@ -43,7 +43,7 @@ from app.services.opa_scheduler import (
     recompute_support_opa_next_allowed_at,
 )
 
-from . import contact_radar_service, dashboard_macros, feedback_service, occurrences_service, ranking_service, support_rules, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
+from . import contact_radar_service, dashboard_macros, feedback_details, feedback_service, occurrences_service, ranking_service, support_rules, ixc_n1, ixc_ticket_baseline, ixc_ticket_context, ixc_ticket_momentum, ixc_ticket_os_conversion, ixc_ticket_overview, ixc_ticket_queries, ixc_ticket_taxonomy, ixc_ticket_text_signal, opa_attendant_overrides, opa_attendant_service, opa_overview_service, opa_time_metrics, opa_presence_service, opa_timeline_service, opa_tv_service
 from .models import SupportIxcTicket, SupportIxcTicketSavedFilter, SupportOpaAttendance, SupportOpaDimension, SupportOpaImportRun, SupportOpaSavedFilter
 from .opa_filters import (
     SUPPORT_TIMEZONE,
@@ -76,6 +76,7 @@ from .schemas import (
     SupportIxcAnalyticsDriverItem,
     SupportIxcN1Summary,
     SupportFeedback,
+    SupportFeedbackDetails,
     SupportRanking,
     SupportRulesState,
     SupportMacroDashboard,
@@ -1818,6 +1819,40 @@ def support_feedback(
     if feedback is None:
         raise HTTPException(status_code=404, detail="Colaborador não encontrado na equipe do Suporte.")
     return feedback
+
+
+@router.get("/feedback/team", response_model=list[SupportFeedback])
+def support_feedback_team(
+    date_from: date,
+    date_to: date,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Feedback de TODOS os colaboradores da equipe do Suporte no período (sem a série diária), para a visão em listras."""
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
+    if (date_to - date_from).days + 1 > feedback_service.MAX_PERIOD_DAYS:
+        raise HTTPException(status_code=400, detail=f"O período máximo do feedback é de {feedback_service.MAX_PERIOD_DAYS} dias.")
+    return feedback_service.team_feedback(db, date_from=date_from, date_to=date_to)
+
+
+@router.get("/feedback/details", response_model=SupportFeedbackDetails)
+def support_feedback_details(
+    date_from: date,
+    date_to: date,
+    attendant_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Análise detalhada de UM colaborador: O.S. abertas indevidamente (IXC) e notas boas/ruins (OPA)."""
+    if date_to < date_from:
+        raise HTTPException(status_code=400, detail="A data final não pode ser anterior à data inicial.")
+    if (date_to - date_from).days + 1 > feedback_service.MAX_PERIOD_DAYS:
+        raise HTTPException(status_code=400, detail=f"O período máximo do feedback é de {feedback_service.MAX_PERIOD_DAYS} dias.")
+    details = feedback_details.collaborator_details(db, date_from=date_from, date_to=date_to, attendant_id=attendant_id)
+    if details is None:
+        raise HTTPException(status_code=404, detail="Colaborador não encontrado na equipe do Suporte.")
+    return details
 
 
 @router.get("/ranking", response_model=SupportRanking)

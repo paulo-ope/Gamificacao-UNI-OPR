@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Copy, Printer, UserRound } from "lucide-react";
+import { AlertTriangle, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { OverviewBlock } from "@/components/overview/overview-block";
@@ -8,12 +8,13 @@ import { KpiCard, SPARK_COLOR } from "@/components/overview/overview-kpi-strip";
 import { sparkDayLabel } from "@/components/overview/overview-sparkline";
 import { api } from "@/lib/api";
 import { percentChange } from "@/lib/period";
-import type { SupportFeedback, SupportFeedbackIndicator, SupportMacroCardStatus, SupportOpaFilterOption } from "@/lib/types";
+import type { SupportFeedback, SupportFeedbackDetails, SupportFeedbackIndicator, SupportMacroCardStatus, SupportOpaFilterOption } from "@/lib/types";
 import type { Tone } from "@/lib/tones";
 
 import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
-import { FOLLOW_UP, STATUS_LABEL, dateBr, periodTargetLabel, weeklyTargetLabel } from "./feedback-format";
-import { printFeedback } from "./feedback-print";
+import { buildFeedbackAnalysis } from "./feedback-analysis";
+import { STATUS_LABEL, dateBr, periodTargetLabel } from "./feedback-format";
+import { FeedbackTeamTable } from "./feedback-team-table";
 import { IxcPeriodBar, useIxcPeriod } from "./ixc-n1-panel";
 
 // Feedback individual do Suporte (pedido do usuário, 2026-10-16): escolhe o colaborador e mostra, no mesmo desenho
@@ -29,15 +30,6 @@ const STATUS_BADGE: Record<SupportMacroCardStatus, string> = {
   no_target: "bg-slate-200 text-slate-700",
 };
 
-const STATUS_ROW: Record<SupportMacroCardStatus, string> = {
-  ok: "bg-emerald-50/70",
-  attention: "bg-amber-50/80",
-  critical: "bg-red-50/80",
-  partial: "bg-slate-50",
-  no_data: "bg-slate-50",
-  no_target: "bg-slate-50",
-};
-
 const SPARK_BY_STATUS: Record<SupportMacroCardStatus, string> = {
   ok: SPARK_COLOR.emerald,
   attention: SPARK_COLOR.amber,
@@ -46,21 +38,6 @@ const SPARK_BY_STATUS: Record<SupportMacroCardStatus, string> = {
   no_data: SPARK_COLOR.blue,
   no_target: SPARK_COLOR.blue,
 };
-
-function buildPlainText(data: SupportFeedback, pending: SupportFeedbackIndicator[], plan: string) {
-  const lines = [
-    `Feedback - ${data.name}`,
-    `Período: ${dateBr(data.date_from)} a ${dateBr(data.date_to)}`,
-    "",
-    "Indicadores:",
-    ...data.indicators.map((item) => `- ${item.label}: ${formatCardValue(item, item.value)} (${periodTargetLabel(item)}) - ${STATUS_LABEL[item.status]}`),
-    "",
-    pending.length ? "Meta para a próxima semana:" : "Meta para a próxima semana: manter o desempenho atual.",
-    ...pending.map((item) => `- ${item.label}: ${weeklyTargetLabel(item)}`),
-  ];
-  if (plan.trim()) lines.push("", "Combinado da conversa:", plan.trim());
-  return lines.join("\n");
-}
 
 // Valor e dia de cada ponto do mini-gráfico (e do tooltip); dia sem valor não entra.
 function sparkFor(key: string, daily: SupportFeedback["daily"]): { values: number[]; labels: string[] } {
@@ -92,7 +69,7 @@ function sparkFor(key: string, daily: SupportFeedback["daily"]): { values: numbe
   return result;
 }
 
-function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportFeedbackIndicator; daily: SupportFeedback["daily"]; previousLabel: string }) {
+function IndicatorKpi({ indicator, daily, previousLabel, extra }: { indicator: SupportFeedbackIndicator; daily: SupportFeedback["daily"]; previousLabel: string; extra?: string }) {
   const tone: Tone = STATUS_TONE[indicator.status];
   const change = indicator.value !== null && indicator.previous !== null ? indicator.value - indicator.previous : null;
   const spark = sparkFor(indicator.key, daily);
@@ -100,6 +77,7 @@ function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportF
     periodTargetLabel(indicator).replace("Mínimo", "Meta ≥").replace("Até", "Meta ≤"),
     coverageNote({ status: indicator.status, coverage: indicator.coverage }),
     indicator.note,
+    extra,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -125,21 +103,35 @@ function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportF
 }
 
 function FeedbackBody({ data }: { data: SupportFeedback }) {
+  const [details, setDetails] = useState<SupportFeedbackDetails | null>(null);
   const [plan, setPlan] = useState("");
-  const [copied, setCopied] = useState(false);
-  const pending = useMemo(() => data.indicators.filter((item) => item.status === "attention" || item.status === "critical"), [data.indicators]);
   const previousLabel = data.previous_date_from && data.previous_date_to ? `ant. (${dateBr(data.previous_date_from).slice(0, 5)} a ${dateBr(data.previous_date_to).slice(0, 5)})` : "período anterior";
   const overallStatus: SupportMacroCardStatus = data.summary.overall;
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(buildPlainText(data, pending, plan));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setCopied(false);
-    }
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .supportFeedbackDetails({ date_from: data.date_from, date_to: data.date_to, attendant_id: data.attendant_id })
+      .then((result) => {
+        if (!cancelled) setDetails(result);
+      })
+      .catch(() => {
+        // Sem a soma o feedback continua inteiro; só some a linha extra.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.attendant_id, data.date_from, data.date_to]);
+
+  // Só a soma (pedido do usuário, 2026-10-27): notas boas/ruins do OPA e O.S. indevidas do IXC, em linha de texto.
+  const extra: Record<string, string> = {};
+  if (details) {
+    const { good, bad } = details.ratings;
+    if (details.ratings.rated_count) extra.rating = `${good.count} ${good.count === 1 ? "nota boa" : "notas boas"} · ${bad.count} ${bad.count === 1 ? "ruim" : "ruins"}`;
+    if (details.improper_orders) extra.field = `${details.improper_orders.improper_count} de ${details.improper_orders.total_orders} indevidas`;
   }
+
+  const analysis = useMemo(() => buildFeedbackAnalysis(data, details), [data, details]);
 
   return (
     <>
@@ -178,46 +170,31 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
         {data.indicators.map((indicator) => (
-          <IndicatorKpi key={indicator.key} indicator={indicator} daily={data.daily} previousLabel={previousLabel} />
+          <IndicatorKpi key={indicator.key} indicator={indicator} daily={data.daily} previousLabel={previousLabel} extra={extra[indicator.key]} />
         ))}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      <div className="grid gap-4">
         <div className="grid gap-4">
-          <OverviewBlock eyebrow="Metas individuais" title="Indicadores do colaborador" subtitle="Registros e O.S. vêm do IXC (O.S. ligada pelo nome do criador, aproximado); atendimentos, chamadas, avaliação e tempos vêm do OPA.">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[480px] border border-slate-200 text-sm">
-                <thead>
-                  <tr className="bg-sky-100 text-left text-[10px] uppercase tracking-wide text-slate-600">
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Indicador</th>
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Resultado</th>
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Meta</th>
-                    <th className="border border-slate-200 px-3 py-2 font-semibold">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.indicators.map((item) => (
-                    <tr key={item.key} className={STATUS_ROW[item.status]}>
-                      <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-800">{item.label}</td>
-                      <td className="border border-slate-200 px-3 py-2 font-bold tabular-nums text-slate-900">{formatCardValue(item, item.value)}</td>
-                      <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-700">
-                        {periodTargetLabel(item)}
-                        {item.target !== item.weekly_target ? <span className="block text-[10px] font-normal text-slate-500">semanal: {weeklyTargetLabel(item)}</span> : null}
-                      </td>
-                      <td className="border border-slate-200 px-3 py-2">
-                        <span className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-bold ${STATUS_BADGE[item.status]}`}>{STATUS_LABEL[item.status]}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <OverviewBlock eyebrow="Análise" title="Análise do período" subtitle="Gerada dos indicadores, das notas do OPA e das O.S. a campo deste colaborador.">
+            <div className="grid gap-4">
+              {analysis.map((section) => (
+                <div key={section.title}>
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{section.title}</p>
+                  <ul className="grid gap-1.5 text-sm text-slate-800">
+                    {section.lines.map((line) => (
+                      <li key={line} className="flex gap-2">
+                        <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" aria-hidden />
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
             </div>
-            {data.indicators.some((item) => item.status === "partial") ? (
-              <p className="mt-2 text-[11px] text-slate-500">Dado parcial: TMA/TMR ainda calculados para menos da metade dos atendimentos com humano; não são julgados contra a meta.</p>
-            ) : null}
           </OverviewBlock>
 
-          <OverviewBlock eyebrow="Plano de ação" title="Combinado da conversa" subtitle="Texto livre, só nesta tela: use Copiar ou Imprimir/PDF para guardar.">
+          <OverviewBlock eyebrow="Plano de ação" title="Combinado da conversa" subtitle="Texto livre, só nesta tela; não é salvo.">
             <textarea
               value={plan}
               onChange={(event) => setPlan(event.target.value)}
@@ -226,52 +203,6 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
               placeholder="Ex.: Meta da próxima semana: reduzir o TMR para até 00:02:20 e manter a O.S. a campo em até 25. Acompanhar diariamente."
               className="w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
             />
-          </OverviewBlock>
-        </div>
-
-        <div className="grid content-start gap-4">
-          <OverviewBlock
-            eyebrow="Próximo ciclo"
-            title="Meta para a próxima semana"
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => void copy()} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                  <Copy className="h-3.5 w-3.5" aria-hidden /> {copied ? "Copiado" : "Copiar meta"}
-                </button>
-                <button type="button" onClick={() => printFeedback(data, pending, plan)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                  <Printer className="h-3.5 w-3.5" aria-hidden /> Imprimir/PDF
-                </button>
-              </div>
-            }
-          >
-            <p className="mb-3 text-xl font-bold text-slate-900">{pending.length ? `${pending.length} ${pending.length === 1 ? "meta pendente" : "metas pendentes"}` : "Tudo dentro da meta"}</p>
-            {pending.length ? (
-              <ul className="grid gap-2">
-                {pending.map((item) => (
-                  <li key={item.key} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</span>
-                    <span className="font-semibold text-slate-900">{weeklyTargetLabel(item)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-slate-600">Manter o desempenho atual na próxima semana.</p>
-            )}
-          </OverviewBlock>
-
-          <OverviewBlock eyebrow="Como acompanhar" title="Verificação diária">
-            {pending.length ? (
-              <ol className="grid gap-2">
-                {pending.map((item, index) => (
-                  <li key={item.key} className="flex gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
-                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Prioridade {index + 1}</span>
-                    <span className="text-slate-800">{FOLLOW_UP[item.key] ?? item.label}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="text-sm text-slate-600">Sem pendências: manter a rotina atual.</p>
-            )}
           </OverviewBlock>
         </div>
       </div>
@@ -284,6 +215,7 @@ export function FeedbackPanel() {
   const [collaborators, setCollaborators] = useState<SupportOpaFilterOption[]>([]);
   const [attendantId, setAttendantId] = useState("");
   const [data, setData] = useState<SupportFeedback | null>(null);
+  const [team, setTeam] = useState<SupportFeedback[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -303,6 +235,24 @@ export function FeedbackPanel() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (attendantId || invalidPeriod) return;
+    let cancelled = false;
+    setTeam(null);
+    setError(null);
+    api
+      .supportFeedbackTeam(period)
+      .then((result) => {
+        if (!cancelled) setTeam(result);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Falha ao carregar o feedback da equipe.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period, invalidPeriod, attendantId]);
 
   useEffect(() => {
     if (!attendantId || invalidPeriod) return;
@@ -343,7 +293,7 @@ export function FeedbackPanel() {
             }}
             className="h-8 w-64 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700"
           >
-            <option value="">Selecione o colaborador</option>
+            <option value="">Todos os colaboradores</option>
             {collaborators.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -363,7 +313,15 @@ export function FeedbackPanel() {
           <AlertTriangle className="h-4 w-4" aria-hidden /> {error}
         </div>
       ) : !attendantId ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Selecione um colaborador para ver o feedback.</div>
+        team ? (
+          <FeedbackTeamTable team={team} onSelect={setAttendantId} />
+        ) : (
+          <div aria-busy className="grid gap-2">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div key={index} className="h-10 animate-pulse rounded-xl bg-slate-100" />
+            ))}
+          </div>
+        )
       ) : loading || !data ? (
         <div aria-busy className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
           {Array.from({ length: 8 }).map((_, index) => (
