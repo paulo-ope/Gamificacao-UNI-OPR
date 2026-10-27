@@ -211,24 +211,6 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
         ))}
       </div>
 
-      <OverviewBlock eyebrow="Análise" title="Análise do período" subtitle="Gerada dos indicadores, das notas do OPA e das O.S. a campo deste colaborador.">
-        <div className="grid gap-4 md:grid-cols-2">
-          {analysis.map((section) => (
-            <div key={section.title}>
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{section.title}</p>
-              <ul className="grid gap-1.5 text-sm text-slate-800">
-                {section.lines.map((line) => (
-                  <li key={line} className="flex gap-2">
-                    <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" aria-hidden />
-                    <span>{line}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </OverviewBlock>
-
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="grid gap-4">
           <OverviewBlock eyebrow="Metas individuais" title="Indicadores do colaborador" subtitle="Registros e O.S. vêm do IXC (O.S. ligada pelo nome do criador, aproximado); atendimentos, chamadas, avaliação e tempos vêm do OPA.">
@@ -276,6 +258,24 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
               placeholder="Ex.: Meta da próxima semana: reduzir o TMR para até 00:02:20 e manter a O.S. a campo em até 25. Acompanhar diariamente."
               className="w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
             />
+          </OverviewBlock>
+
+          <OverviewBlock eyebrow="Análise" title="Análise do período" subtitle="Gerada dos indicadores, das notas do OPA e das O.S. a campo deste colaborador.">
+            <div className="grid gap-4">
+              {analysis.map((section) => (
+                <div key={section.title}>
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{section.title}</p>
+                  <ul className="grid gap-1.5 text-sm text-slate-800">
+                    {section.lines.map((line) => (
+                      <li key={line} className="flex gap-2">
+                        <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-400" aria-hidden />
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
           </OverviewBlock>
         </div>
 
