@@ -176,17 +176,6 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
 
       <div className="grid gap-4">
         <div className="grid gap-4">
-          <OverviewBlock eyebrow="Plano de ação" title="Combinado da conversa" subtitle="Texto livre, só nesta tela; não é salvo.">
-            <textarea
-              value={plan}
-              onChange={(event) => setPlan(event.target.value)}
-              rows={6}
-              aria-label="Combinado da conversa"
-              placeholder="Ex.: Meta da próxima semana: reduzir o TMR para até 00:02:20 e manter a O.S. a campo em até 25. Acompanhar diariamente."
-              className="w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
-            />
-          </OverviewBlock>
-
           <OverviewBlock eyebrow="Análise" title="Análise do período" subtitle="Gerada dos indicadores, das notas do OPA e das O.S. a campo deste colaborador.">
             <div className="grid gap-4">
               {analysis.map((section) => (
@@ -203,6 +192,17 @@ function FeedbackBody({ data }: { data: SupportFeedback }) {
                 </div>
               ))}
             </div>
+          </OverviewBlock>
+
+          <OverviewBlock eyebrow="Plano de ação" title="Combinado da conversa" subtitle="Texto livre, só nesta tela; não é salvo.">
+            <textarea
+              value={plan}
+              onChange={(event) => setPlan(event.target.value)}
+              rows={6}
+              aria-label="Combinado da conversa"
+              placeholder="Ex.: Meta da próxima semana: reduzir o TMR para até 00:02:20 e manter a O.S. a campo em até 25. Acompanhar diariamente."
+              className="w-full resize-y rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
+            />
           </OverviewBlock>
         </div>
       </div>

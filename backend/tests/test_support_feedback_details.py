@@ -114,3 +114,4 @@ def test_orders_group_remote_review_and_repeat_customers(db_session):
     assert orders["to_review"]["count"] == 4
     assert {"Finalizada sem diagnóstico", "Atualização de configuração", "Problema na rede interna do cliente"} == {item["reason"] for item in orders["to_review"]["by_reason"]}
     assert orders["repeat_customers"] == [{"customer_name": "Cliente c4", "count": 2}]
+    assert orders["no_diagnosis_codes"] == ["OS6"]

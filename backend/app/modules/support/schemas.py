@@ -822,6 +822,8 @@ class SupportFeedbackImproperOrders(BaseModel):
     to_review: SupportFeedbackOrderGroup = Field(default_factory=lambda: SupportFeedbackOrderGroup(count=0))
     # Clientes com várias O.S. a campo abertas pelo colaborador no período.
     repeat_customers: list[SupportFeedbackRepeatCustomer] = Field(default_factory=list)
+    # Códigos (até 5) das O.S. finalizadas sem diagnóstico, para a conversa.
+    no_diagnosis_codes: list[str] = Field(default_factory=list)
     improper_count: int
     improper_percent: float | None = None
     by_reason: list[SupportFeedbackReasonCount] = Field(default_factory=list)

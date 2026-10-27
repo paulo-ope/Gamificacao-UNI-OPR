@@ -19,8 +19,9 @@ const details = (over: Partial<SupportFeedbackDetails> = {}): SupportFeedbackDet
   ratings: { rated_count: 27, average: 4.6, good: { count: 25, percent: 92.6 }, neutral: { count: 0, percent: 0 }, bad: { count: 2, percent: 7.4 }, by_day: [], by_channel: [], attendances: [], truncated: false },
   improper_orders: {
     total_orders: 45, improper_count: 7, improper_percent: 15.6, remote_resolvable: { count: 4, by_reason: [{ reason: "Equipamento travado", count: 4 }] },
-    to_review: { count: 3, by_reason: [{ reason: "Problema na rede interna do cliente", count: 3 }] }, repeat_customers: [{ customer_name: "Rubens", count: 3 }],
-    by_reason: [{ reason: "Desistência da solicitação", count: 4 }, { reason: "Assunto errado", count: 3 }], orders: [], truncated: false,
+    to_review: { count: 3, by_reason: [{ reason: "Problema na rede interna do cliente", count: 3 }] }, repeat_customers: [{ customer_name: "Rubens", count: 3 }], no_diagnosis_codes: ["IXC-9"],
+    by_reason: [{ reason: "Desistência da solicitação", count: 4 }, { reason: "Assunto errado", count: 3 }, { reason: "Duplicada (mesmo cliente em até 72 h)", count: 1 }],
+    orders: [{ order_code: "IXC-1", customer_name: "Maria", opened_at: "2026-10-20T10:00:00Z", status: "Finalizada", diagnosis: null, reasons: ["Duplicada (mesmo cliente em até 72 h)"] }], truncated: false,
   },
   ...over,
 });
@@ -34,28 +35,34 @@ describe("buildFeedbackAnalysis", () => {
 
     const sections = buildFeedbackAnalysis(data, null);
 
-    expect(sections.map((section) => section.title)).toEqual(["Resumo", "Destaques", "A evoluir"]);
-    expect(sections[0].lines[0]).toContain("Evoluir");
-    expect(sections[1].lines[0]).toBe("Registros Operacional: 98, +63,3% contra o período anterior");
-    expect(sections[2].lines[0]).toContain("O.S. Aberta a Campo: 45");
+    expect(sections.map((section) => section.title)).toEqual(["Resumo", "Destaques", "A evoluir", "Sugestão para a próxima semana"]);
+    expect(sections[0].lines[0]).toContain("Status: Evoluir");
+    expect(sections[1].lines[0]).toBe("Registros Operacional: 98, +63,3% contra o período anterior (melhorou)");
+    expect(sections[2].lines[0]).toBe("O.S. Aberta a Campo: 45 (até 25), 20 acima da meta, +18,4% contra o período anterior (piorou)");
   });
 
   it("junta notas e O.S. a campo do colaborador", () => {
     const sections = buildFeedbackAnalysis(feedback([indicator({})]), details());
 
     const satisfaction = sections.find((section) => section.title.startsWith("Pesquisa"));
-    expect(satisfaction?.lines[0]).toBe("27 avaliações: 25 boas (92,6%), 0 neutras e 2 ruins.");
+    expect(satisfaction?.lines[0]).toBe("27 avaliações, nota média 4,6: 25 boas (92,6%), 0 neutras e 2 ruins.");
     const orders = sections.find((section) => section.title.startsWith("O.S."));
     expect(orders?.lines[0]).toBe("Das 45 O.S. abertas, 11 (24%) poderiam ter sido evitadas: 4 desistência da solicitação, 3 assunto errado, 4 equipamento travado.");
     expect(orders?.lines).toContain("Vale revisar 3: 3 problema na rede interna do cliente.");
-    expect(orders?.lines).toContain("Nenhuma O.S. aberta em duplicidade.");
-    expect(orders?.lines.at(-1)).toBe("Clientes com mais de uma O.S. aberta por ele: Rubens (3).");
+    expect(orders?.lines).toContain("1 O.S. aberta em duplicidade: o cliente já tinha O.S. recente.");
+    const cases = sections.find((section) => section.title === "Casos para conversar");
+    expect(cases?.lines[0]).toContain("IXC-1 (Maria)");
+    expect(cases?.lines.some((line) => line.includes("Rubens (3)"))).toBe(true);
+    expect(cases?.lines).toContain("Finalizada sem diagnóstico: IXC-9.");
+    const next = sections.at(-1);
+    expect(next?.lines).toContain("Escolher o assunto correto na abertura da O.S.");
   });
 
   it("não inventa seções sem dado", () => {
     const base = details();
     const sections = buildFeedbackAnalysis(feedback([indicator({ previous: null })]), { ...base, improper_orders: null, ratings: { ...base.ratings, rated_count: 0 } });
 
-    expect(sections.map((section) => section.title)).toEqual(["Resumo"]);
+    expect(sections.map((section) => section.title)).toEqual(["Resumo", "Sugestão para a próxima semana"]);
+    expect(sections[1].lines).toEqual(["Manter o desempenho atual."]);
   });
 });

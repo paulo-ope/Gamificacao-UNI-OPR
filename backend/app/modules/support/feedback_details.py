@@ -101,6 +101,7 @@ def improper_orders(db: Session, *, name_key: str, date_from: date, date_to: dat
     by_reason: dict[str, int] = defaultdict(int)
     remote: dict[str, int] = defaultdict(int)
     review: dict[str, int] = defaultdict(int)
+    no_diagnosis_codes: list[str] = []
     for order in orders:
         reasons: list[str] = []
         label = IMPROPER_DIAGNOSES.get(_plain(order.diagnosis))
@@ -119,6 +120,7 @@ def improper_orders(db: Session, *, name_key: str, date_from: date, date_to: dat
                 review[label] += 1
             elif not plain and _plain(order.status) == "finalizada":
                 review[NO_DIAGNOSIS_REASON] += 1
+                no_diagnosis_codes.append(order.order_code)
             continue
         for reason in reasons:
             by_reason[reason] += 1
@@ -143,6 +145,7 @@ def improper_orders(db: Session, *, name_key: str, date_from: date, date_to: dat
         "total_orders": total,
         "remote_resolvable": _group(remote),
         "to_review": _group(review),
+        "no_diagnosis_codes": no_diagnosis_codes[:5],
         "repeat_customers": [{"customer_name": name, "count": count} for name, count in repeats[:5]],
         "improper_count": len(rows),
         "improper_percent": round(len(rows) / total * 100, 1) if total else None,

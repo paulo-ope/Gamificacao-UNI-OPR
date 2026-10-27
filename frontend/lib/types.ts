@@ -2907,6 +2907,7 @@ export type SupportFeedbackImproperOrders = {
   remote_resolvable: SupportFeedbackOrderGroup;
   to_review: SupportFeedbackOrderGroup;
   repeat_customers: { customer_name: string; count: number }[];
+  no_diagnosis_codes: string[];
   improper_count: number;
   improper_percent: number | null;
   by_reason: { reason: string; count: number }[];
