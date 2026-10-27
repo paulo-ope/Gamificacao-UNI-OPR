@@ -23,7 +23,7 @@ def test_defaults_match_the_values_that_used_to_be_hardcoded():
     assert rules.indicator_goals.attention_margin_percent / 100 == dashboard_macros.ATTENTION_MARGIN
     default_goals = {key: target for key, _, _, target, _, _, _ in feedback_service.GOALS}
     assert feedback_service.goals_with(FeedbackGoals()) == feedback_service.GOALS
-    assert default_goals["operational"] == 38 and default_goals["tmr"] == 140.0
+    assert default_goals["operational"] == 38 and default_goals["tmr"] == 120.0
 
 
 def test_invalid_rules_are_rejected():

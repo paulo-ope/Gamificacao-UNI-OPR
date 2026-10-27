@@ -11,7 +11,7 @@ import { percentChange } from "@/lib/period";
 import type { SupportFeedback, SupportFeedbackIndicator, SupportMacroCardStatus, SupportOpaFilterOption } from "@/lib/types";
 import type { Tone } from "@/lib/tones";
 
-import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, isGoodWhenUp } from "./dashboard-format";
+import { STATUS_TONE, coverageNote, formatCardChange, formatCardTarget, formatCardValue, formatPreviousLine, isGoodWhenUp } from "./dashboard-format";
 import { FOLLOW_UP, STATUS_LABEL, dateBr, periodTargetLabel, weeklyTargetLabel } from "./feedback-format";
 import { printFeedback } from "./feedback-print";
 import { IxcPeriodBar, useIxcPeriod } from "./ixc-n1-panel";
@@ -113,6 +113,8 @@ function IndicatorKpi({ indicator, daily, previousLabel }: { indicator: SupportF
         goodWhenUp: isGoodWhenUp({ target: indicator.target, direction: indicator.direction }),
         againstLabel: previousLabel,
       }}
+      // Pedido do usuário (2026-10-27): mostrar o resultado da semana anterior ("Antes"), igual aos Indicadores do Suporte.
+      previousLine={formatPreviousLine({ unit: indicator.unit, value: indicator.value, previous: indicator.previous, change }) ?? undefined}
       hint={hint || (change !== null ? `${formatCardChange({ unit: indicator.unit, change })} vs. ${previousLabel}` : undefined)}
       spark={spark.values}
       sparkLabels={spark.labels}
