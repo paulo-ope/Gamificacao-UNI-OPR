@@ -3114,8 +3114,10 @@ export type SupportContactRadar = {
   previous: { contacts: number; customers: number; coverage_pct: number | null };
 };
 
-// Especialista/Analista (Suporte Interno): projetos e tarefas lançados pela equipe.
-export type SupportPlanKind = "project" | "task";
+// Especialista/Analista (Suporte Interno): projetos, tarefas, resultados-chave e ações lançados pela equipe.
+// Projeto > resultado-chave > ação (o check-in é dado na ação); tarefa pertence a um projeto ou fica avulsa.
+export type SupportPlanKind = "project" | "task" | "key_result" | "action";
+export type SupportPlanHealth = "on_track" | "at_risk" | "off_track";
 export type SupportPlanStatus = "planned" | "in_progress" | "blocked" | "done" | "canceled";
 export type SupportPlanPriority = "low" | "medium" | "high";
 
@@ -3143,6 +3145,11 @@ export type SupportPlanItem = {
   tasks_total: number;
   tasks_done: number;
   updates_count: number;
+  // Avanço (0 a 100): ação = último check-in; resultado-chave = média das ações; projeto = média dos resultados-chave
+  // e das tarefas. `null` em tarefa e em projeto sem nada dentro.
+  progress: number | null;
+  health: SupportPlanHealth | null;
+  last_check_in_at: string | null;
 };
 
 export type SupportPlanUpdateEntry = {
@@ -3152,11 +3159,20 @@ export type SupportPlanUpdateEntry = {
   status_from: SupportPlanStatus | null;
   status_to: SupportPlanStatus | null;
   created_at: string;
+  // Só no check-in.
+  progress: number | null;
+  health: SupportPlanHealth | null;
+  is_check_in: boolean;
 };
 
 export type SupportPlanChild = {
   id: number;
+  kind: SupportPlanKind;
   title: string;
+  progress: number | null;
+  health: SupportPlanHealth | null;
+  children_total: number;
+  children_done: number;
   status: SupportPlanStatus;
   due_date: string | null;
   overdue: boolean;
@@ -3201,6 +3217,13 @@ export type SupportPlanItemPatch = {
   parent_id?: number | null;
   clear_parent?: boolean;
   result?: string | null;
+};
+
+export type SupportPlanCheckInInput = {
+  version: number;
+  text: string;
+  progress: number;
+  health: SupportPlanHealth;
 };
 
 export type SupportPlanProgressInput = {

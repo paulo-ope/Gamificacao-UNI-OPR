@@ -555,8 +555,8 @@ class SupportContactGeo(Base):
 class SupportPlanItem(Base):
     """Projeto ou tarefa lançado na aba Especialista/Analista do Suporte Interno.
 
-    `kind` é "project" ou "task"; só tarefa tem `parent_id`, e o pai tem de ser projeto (a regra
-    vive em `planning_service`). `assignee_ids` guarda os ids dos usuários responsáveis (um ou os
+    `kind` é "project", "task", "key_result" (resultado-chave, filho de projeto) ou "action" (ação, filha de
+    resultado-chave, onde se dá check-in); a regra de pai vive em `planning_service`. `assignee_ids` guarda os ids dos usuários responsáveis (um ou os
     dois). Tudo o que é lançado fica visível para quem acessa o Suporte Interno, por isso não há
     recorte por dono. `version` sobe a cada edição para barrar a gravação por cima de uma edição
     que a pessoa ainda não viu. Itens saem de cena por `archived`, nunca por exclusão."""
@@ -574,6 +574,11 @@ class SupportPlanItem(Base):
     assignee_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Avanço (0 a 100) e situação do último check-in; só a ação os recebe de check-in. Resultado-chave e projeto
+    # têm o avanço calculado pelo que há dentro deles (`planning_service.progress_by_item`).
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    health: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_check_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
@@ -594,4 +599,8 @@ class SupportPlanUpdate(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     status_from: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status_to: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Check-in: avanço (0 a 100) e situação (on_track | at_risk | off_track) informados na hora.
+    progress: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    health: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    is_check_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)

@@ -13,6 +13,35 @@ Mantenha só o estado atual — não vire changelog. Histórico detalhado já ex
 
 ## Última atualização
 
+**2026-10-28** — **Resultados-chave e Ações no Kanban do Especialista/Analista (OKR), com check-in**, na branch
+`feat/suporte-planejamento-acoes` (parte do `master` atual). **Tem migration nova: `20261028_0122` (só colunas novas, idempotente) -
+sobe sozinha no deploy.** Testada por 24 testes de lógica (`test_support_planning.py`; frontend 57 em `app/suporte`) e conferida no
+Postgres local dentro de uma transação desfeita; **a tela não foi aberta por navegador logado pela sessão**.
+- **Estrutura**: Projeto > Resultado-chave > Ação (tarefa continua dentro do projeto ou avulsa). Reaproveita `support_plan_items`
+  (novos `kind`: `key_result` e `action`) e `support_plan_updates` (check-in = andamento com avanço, situação e `is_check_in`).
+  O **quadro, a lista e o resumo continuam só com projeto e tarefa**; resultado-chave e ação aparecem dentro do painel do projeto
+  (clicar no projeto lista os resultados-chave; clicar no resultado-chave lista as ações; clicar na ação abre o check-in).
+- **Regras**: resultado-chave exige projeto pai e ação exige resultado-chave pai (não trocam de pai); check-in só em ação aberta
+  (não arquivada, não concluída/cancelada), com texto, avanço 0-100 e situação (no prazo / em risco / atrasada); o primeiro check-in
+  de ação planejada passa para em andamento; concluir ação põe 100%. **Avanço calculado**: ação = último check-in (100 se concluída);
+  resultado-chave = média das ações; projeto = média dos resultados-chave e das tarefas (concluída = 100, senão 0); cancelados e
+  arquivados ficam fora. Endpoint novo `POST /api/support/planning/items/{id}/check-ins`; `GET .../items?kind=key_result|action`.
+- **Atenção - migrations**: a Jornada N1/N2 tem a `20261022_0121`, que também parte da `0120` e ainda não está no `master`. Quando
+  entrar, uma das duas precisa apontar `down_revision` para a outra (senão o Alembic acusa duas cabeças). O banco local de
+  desenvolvimento já está na `0121`; as colunas da `0122` foram criadas nele à mão (por isso a migration é idempotente).
+
+**2026-10-27** — **Feedback do Suporte: equipe em listras, análise individual e análise dos Indicadores** (PRs #88, #89 e #90, já no
+`master`). Sem migration. Detalhes técnicos no código; o que não é óbvio:
+- **Feedback sem colaborador** lista a equipe (`GET /api/support/feedback/team`); **individual** ganhou o bloco "Análise do período"
+  (`feedback-analysis.ts`, texto curto) e os cartões mostram a soma de notas boas (4-5) / ruins (1-2) e de O.S. indevidas
+  (`GET /api/support/feedback/details`). Removidos a tabela "Indicadores do colaborador" e Próximo ciclo/Verificação diária (e com
+  eles Copiar meta e Imprimir/PDF; `feedback-print.ts` ficou sem uso).
+- **O.S. indevida** = diagnóstico Desistência da Solicitação, Atendimento com Assunto Errado ou Ordem de Serviço Duplicada, ou mesmo
+  cliente com outra O.S. de campo nas 72 h anteriores (lista fixa em `feedback_details.py`, sem tela de edição). Relato = `mensagem_resposta` da O.S.
+- **Metas padrão do Feedback** passaram a TMR 2:00, TMA 1:00:00 e avaliação 4,50 (metas já salvas em Configuração continuam valendo).
+- **Indicadores do Suporte**: bloco "Análise do período" com o dia de maior aumento de atendimentos (motivos contra o habitual) e a
+  projeção para fechar o mês (TMR, TMA, CSAT, resolutividade; média ponderada pelo volume, resto do mês estimado pelo ritmo do período).
+
 **2026-10-25** — **Comparativo semanal das regionais na Visão Geral**, na branch `feat/operacao-comparativo-semanal` (parte do
 `master` atual). Sem migration. Bloco novo dentro do card "Ordens de serviço" (`overview-regional-weekly.tsx`), recolhido por
 padrão (só "Todas as regionais"; botão abre as regionais).

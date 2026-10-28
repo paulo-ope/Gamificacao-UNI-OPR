@@ -56,6 +56,9 @@ const PRIORITY_CHIP: Record<SupportPlanItem["priority"], string> = {
 const KIND_CHIP: Record<SupportPlanItem["kind"], string> = {
   project: "bg-uni-midnight text-white",
   task: "bg-uni-mist text-uni-impact",
+  // O quadro só lista projeto e tarefa; estes dois existem para o tipo ficar completo.
+  key_result: "bg-uni-mist text-uni-impact",
+  action: "bg-uni-mist text-uni-impact",
 };
 
 function Avatars({ item }: { item: SupportPlanItem }) {

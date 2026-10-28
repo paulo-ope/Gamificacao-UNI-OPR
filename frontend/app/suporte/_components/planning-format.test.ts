@@ -3,14 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import type { SupportPlanItem } from "@/lib/types";
 
-import { assigneesLabel, avatarColor, dateLabel, deadlineInfo, dueLabel, durationText, initials, progressPercent } from "./planning-format";
+import { CHILD_LABEL, HEALTH_LABEL, KIND_LABEL, assigneesLabel, avatarColor, dateLabel, deadlineInfo, dueLabel, durationText, initials, itemProgress, progressPercent } from "./planning-format";
 
 const item = (overrides: Partial<SupportPlanItem> = {}): SupportPlanItem => ({
   id: 1, kind: "task", parent_id: null, parent_title: null, title: "Revisar fila", description: null,
   status: "planned", priority: "medium", due_date: null, overdue: false, assignees: [], result: null,
   completed_at: null, archived: false, version: 1, created_by_name: "Admin",
   created_at: "2026-10-21T10:00:00Z", updated_at: "2026-10-21T10:00:00Z",
-  tasks_total: 0, tasks_done: 0, updates_count: 0, ...overrides,
+  tasks_total: 0, tasks_done: 0, updates_count: 0, progress: null, health: null, last_check_in_at: null, ...overrides,
 });
 
 describe("formatação da aba Especialista/Analista", () => {
@@ -28,6 +28,21 @@ describe("formatação da aba Especialista/Analista", () => {
   it("calcula o progresso só quando há tarefas", () => {
     expect(progressPercent(item())).toBeNull();
     expect(progressPercent(item({ tasks_total: 3, tasks_done: 1 }))).toBe(33);
+  });
+
+  it("usa o avanço calculado e, sem ele, as tarefas concluídas", () => {
+    expect(itemProgress(item({ progress: 58, tasks_total: 4, tasks_done: 1 }))).toBe(58);
+    expect(itemProgress(item({ progress: 0 }))).toBe(0);
+    expect(itemProgress(item({ tasks_total: 4, tasks_done: 1 }))).toBe(25);
+    expect(itemProgress(item())).toBeNull();
+  });
+
+  it("nomeia os tipos do OKR, as situações do check-in e o que há dentro de cada um", () => {
+    expect([KIND_LABEL.project, KIND_LABEL.key_result, KIND_LABEL.action]).toEqual(["Projeto", "Resultado-chave", "Ação"]);
+    expect(HEALTH_LABEL).toEqual({ on_track: "No prazo", at_risk: "Em risco", off_track: "Atrasada" });
+    expect(CHILD_LABEL.project).toMatchObject({ plural: "Resultados-chave", kind: "key_result" });
+    expect(CHILD_LABEL.key_result).toMatchObject({ plural: "Ações", kind: "action" });
+    expect(CHILD_LABEL.action).toBeUndefined();
   });
 
   it("junta os dois responsáveis e avisa quando não há nenhum", () => {
@@ -90,6 +105,7 @@ describe("chamadas da API do planejamento", () => {
 
     await api.supportPlanItems({ status: "planned,blocked", assignee_id: 7, q: "fila", only_overdue: true });
     await api.addSupportPlanProgress(5, { version: 3, text: "Feito", status: "done", result: "ok" });
+    await api.addSupportPlanCheckIn(8, { version: 2, text: "Fechei o desenho", progress: 40, health: "at_risk" });
 
     const listUrl = String(fetchMock.mock.calls[0][0]);
     expect(listUrl).toContain("/support/planning/items?");
@@ -99,5 +115,8 @@ describe("chamadas da API do planejamento", () => {
     expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/support\/planning\/items\/5\/updates$/);
     expect(fetchMock.mock.calls[1][1].method).toBe("POST");
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ version: 3, text: "Feito", status: "done", result: "ok" });
+    expect(String(fetchMock.mock.calls[2][0])).toMatch(/\/support\/planning\/items\/8\/check-ins$/);
+    expect(fetchMock.mock.calls[2][1].method).toBe("POST");
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ version: 2, text: "Fechei o desenho", progress: 40, health: "at_risk" });
   });
 });
