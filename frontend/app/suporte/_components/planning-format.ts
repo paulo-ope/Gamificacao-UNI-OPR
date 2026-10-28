@@ -1,5 +1,5 @@
 import type { Tone } from "@/lib/tones";
-import type { SupportPlanItem, SupportPlanKind, SupportPlanPriority, SupportPlanStatus } from "@/lib/types";
+import type { SupportPlanHealth, SupportPlanItem, SupportPlanKind, SupportPlanPriority, SupportPlanStatus } from "@/lib/types";
 
 // Rótulos, tons e formatação da aba Especialista/Analista. Só apresentação: atraso, progresso e
 // transições de status vivem no backend (`planning_service.py`).
@@ -23,7 +23,23 @@ export const STATUS_TONE: Record<SupportPlanStatus, Tone> = {
 export const STATUS_ORDER: SupportPlanStatus[] = ["planned", "in_progress", "blocked", "done", "canceled"];
 export const BOARD_COLUMNS: SupportPlanStatus[] = ["planned", "in_progress", "blocked", "done"];
 
-export const KIND_LABEL: Record<SupportPlanKind, string> = { project: "Projeto", task: "Tarefa" };
+export const KIND_LABEL: Record<SupportPlanKind, string> = { project: "Projeto", task: "Tarefa", key_result: "Resultado-chave", action: "Ação" };
+
+// Situação dada no check-in de uma ação.
+export const HEALTH_LABEL: Record<SupportPlanHealth, string> = { on_track: "No prazo", at_risk: "Em risco", off_track: "Atrasada" };
+export const HEALTH_TONE: Record<SupportPlanHealth, Tone> = { on_track: "emerald", at_risk: "amber", off_track: "red" };
+export const HEALTH_ORDER: SupportPlanHealth[] = ["on_track", "at_risk", "off_track"];
+
+/** O que há dentro de cada tipo, para os títulos e botões do painel do item. */
+export const CHILD_LABEL: Partial<Record<SupportPlanKind, { plural: string; new: string; kind: SupportPlanKind }>> = {
+  project: { plural: "Resultados-chave", new: "Novo resultado-chave", kind: "key_result" },
+  key_result: { plural: "Ações", new: "Nova ação", kind: "action" },
+};
+
+/** Avanço do item: o calculado pelo backend (resultado-chave, ação, projeto com resultados-chave) ou, sem ele, tarefas concluídas. */
+export function itemProgress(item: Pick<SupportPlanItem, "progress" | "tasks_total" | "tasks_done">): number | null {
+  return item.progress ?? progressPercent(item);
+}
 
 export const PRIORITY_LABEL: Record<SupportPlanPriority, string> = { low: "Baixa", medium: "Média", high: "Alta" };
 export const PRIORITY_TONE: Record<SupportPlanPriority, Tone> = { low: "slate", medium: "amber", high: "red" };

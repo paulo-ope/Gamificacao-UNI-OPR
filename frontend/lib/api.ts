@@ -108,6 +108,7 @@ import type {
   SupportFeedbackDetails,
   SupportContactRadar,
   SupportContactRadarProtocolPage,
+  SupportPlanCheckInInput,
   SupportPlanItemDetail,
   SupportPlanItemInput,
   SupportPlanItemPage,
@@ -1262,6 +1263,8 @@ export const api = {
     request<SupportPlanItemDetail>(`/support/planning/items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   addSupportPlanProgress: (id: number, payload: SupportPlanProgressInput) =>
     request<SupportPlanItemDetail>(`/support/planning/items/${id}/updates`, { method: "POST", body: JSON.stringify(payload) }),
+  addSupportPlanCheckIn: (id: number, payload: SupportPlanCheckInInput) =>
+    request<SupportPlanItemDetail>(`/support/planning/items/${id}/check-ins`, { method: "POST", body: JSON.stringify(payload) }),
   archiveSupportPlanItem: (id: number, payload: { version: number; archived: boolean }) =>
     request<SupportPlanItemDetail>(`/support/planning/items/${id}/archive`, { method: "POST", body: JSON.stringify(payload) }),
 

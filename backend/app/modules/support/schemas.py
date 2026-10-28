@@ -1377,7 +1377,8 @@ class SupportContactRadarOut(BaseModel):
 # ---------------------------------------------------------------------------
 # Especialista/Analista: projetos e tarefas lançados pela equipe
 # ---------------------------------------------------------------------------
-PlanKind = Literal["project", "task"]
+PlanKind = Literal["project", "task", "key_result", "action"]
+PlanHealth = Literal["on_track", "at_risk", "off_track"]
 PlanStatus = Literal["planned", "in_progress", "blocked", "done", "canceled"]
 PlanPriority = Literal["low", "medium", "high"]
 
@@ -1423,6 +1424,15 @@ class SupportPlanUpdateCreate(BaseModel):
     result: str | None = Field(default=None, max_length=5000)
 
 
+class SupportPlanCheckInCreate(BaseModel):
+    """Check-in de uma ação: o que andou, o avanço atual (0 a 100) e a situação."""
+
+    version: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=3000)
+    progress: int = Field(ge=0, le=100)
+    health: PlanHealth = "on_track"
+
+
 class SupportPlanArchive(BaseModel):
     version: int = Field(ge=1)
     archived: bool = True
@@ -1435,12 +1445,22 @@ class SupportPlanUpdateOut(BaseModel):
     status_from: str | None = None
     status_to: str | None = None
     created_at: datetime
+    # Só no check-in.
+    progress: int | None = None
+    health: str | None = None
+    is_check_in: bool = False
 
 
 class SupportPlanChildOut(BaseModel):
     id: int
+    kind: str = "task"
     title: str
     status: str
+    # Avanço calculado (resultado-chave e ação); `None` em tarefa.
+    progress: int | None = None
+    health: str | None = None
+    children_total: int = 0
+    children_done: int = 0
     due_date: date | None = None
     overdue: bool
     assignees: list[SupportPlanPerson]
@@ -1469,6 +1489,11 @@ class SupportPlanItemOut(BaseModel):
     tasks_total: int = 0
     tasks_done: int = 0
     updates_count: int = 0
+    # Avanço (0 a 100): projeto = média dos resultados-chave (ou tarefas concluídas); resultado-chave = média das ações;
+    # ação = o do último check-in (100 se concluída). `None` em tarefa e em projeto sem nada dentro.
+    progress: int | None = None
+    health: str | None = None
+    last_check_in_at: datetime | None = None
 
 
 class SupportPlanItemDetail(SupportPlanItemOut):

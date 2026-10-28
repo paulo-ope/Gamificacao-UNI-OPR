@@ -1,4 +1,4 @@
-"""Rotas da aba Especialista/Analista (projetos e tarefas). Montadas dentro do router do Suporte,
+"""Rotas da aba Especialista/Analista (projetos, tarefas, resultados-chave e ações). Montadas dentro do router do Suporte,
 que já exige `support:read`; escrever exige também `support:plan_write`."""
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from app.services.audit_log import record_audit_log
 from . import planning_service
 from .schemas import (
     SupportPlanArchive,
+    SupportPlanCheckInCreate,
     SupportPlanItemCreate,
     SupportPlanItemDetail,
     SupportPlanItemPage,
@@ -31,7 +32,7 @@ _ENTITY = "support_plan_item"
 @router.get("/items", response_model=SupportPlanItemPage)
 def list_plan_items(
     status: str | None = Query(default=None, description="Status separados por vírgula"),
-    kind: str | None = Query(default=None, pattern="^(project|task)$"),
+    kind: str | None = Query(default=None, pattern="^(project|task|key_result|action)$"),
     assignee_id: int | None = Query(default=None, ge=1),
     q: str | None = Query(default=None, max_length=120),
     include_archived: bool = False,
@@ -103,6 +104,19 @@ def add_plan_update(
 ):
     item, before = planning_service.add_update(db, user, item_id, payload)
     record_audit_log(db, user, "progress", _ENTITY, item.id, before, planning_service.audit_snapshot(item))
+    db.commit()
+    return planning_service.item_detail(db, item.id)
+
+
+@router.post("/items/{item_id}/check-ins", response_model=SupportPlanItemDetail, status_code=201)
+def add_plan_check_in(
+    item_id: int,
+    payload: SupportPlanCheckInCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission(_WRITE)),
+):
+    item, before = planning_service.add_check_in(db, user, item_id, payload)
+    record_audit_log(db, user, "check_in", _ENTITY, item.id, before, planning_service.audit_snapshot(item))
     db.commit()
     return planning_service.item_detail(db, item.id)
 

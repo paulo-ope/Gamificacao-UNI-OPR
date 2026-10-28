@@ -25,6 +25,8 @@ type Props = {
   people: SupportPlanPerson[];
   projects: SupportPlanItem[];
   defaultKind?: SupportPlanKind;
+  /** Quem vai ser o pai ao lançar um resultado-chave (projeto) ou uma ação (resultado-chave). */
+  defaultParent?: { id: number; title: string } | null;
   currentUserId: number;
   onClose: () => void;
   onSaved: (item: SupportPlanItemDetail) => void;
@@ -40,7 +42,10 @@ type Draft = {
   parentId: string;
 };
 
-function initialDraft(item: SupportPlanItem | null, kind: SupportPlanKind, currentUserId: number): Draft {
+// Resultado-chave e ação sempre pertencem a um pai fixo (projeto e resultado-chave); só a tarefa escolhe o projeto.
+const FIXED_PARENT_KINDS: SupportPlanKind[] = ["key_result", "action"];
+
+function initialDraft(item: SupportPlanItem | null, kind: SupportPlanKind, currentUserId: number, parentId: number | null): Draft {
   if (item) {
     return {
       kind: item.kind,
@@ -52,20 +57,20 @@ function initialDraft(item: SupportPlanItem | null, kind: SupportPlanKind, curre
       parentId: item.parent_id ? String(item.parent_id) : "",
     };
   }
-  return { kind, title: "", description: "", priority: "medium", dueDate: "", assigneeIds: [currentUserId], parentId: "" };
+  return { kind, title: "", description: "", priority: "medium", dueDate: "", assigneeIds: [currentUserId], parentId: parentId ? String(parentId) : "" };
 }
 
-export function PlanningItemForm({ open, item, people, projects, defaultKind = "task", currentUserId, onClose, onSaved }: Props) {
-  const [draft, setDraft] = useState<Draft>(() => initialDraft(item, defaultKind, currentUserId));
+export function PlanningItemForm({ open, item, people, projects, defaultKind = "task", defaultParent = null, currentUserId, onClose, onSaved }: Props) {
+  const [draft, setDraft] = useState<Draft>(() => initialDraft(item, defaultKind, currentUserId, defaultParent?.id ?? null));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      setDraft(initialDraft(item, defaultKind, currentUserId));
+      setDraft(initialDraft(item, defaultKind, currentUserId, defaultParent?.id ?? null));
       setError(null);
     }
-  }, [open, item, defaultKind, currentUserId]);
+  }, [open, item, defaultKind, defaultParent, currentUserId]);
 
   function toggleAssignee(id: number) {
     setDraft((current) => ({
@@ -83,7 +88,8 @@ export function PlanningItemForm({ open, item, people, projects, defaultKind = "
     setSaving(true);
     setError(null);
     try {
-      const parentId = draft.kind === "task" && draft.parentId ? Number(draft.parentId) : null;
+      const fixedParent = FIXED_PARENT_KINDS.includes(draft.kind);
+      const parentId = (draft.kind === "task" || fixedParent) && draft.parentId ? Number(draft.parentId) : null;
       const saved = item
         ? await api.updateSupportPlanItem(item.id, {
             version: item.version,
@@ -92,7 +98,8 @@ export function PlanningItemForm({ open, item, people, projects, defaultKind = "
             priority: draft.priority,
             assignee_ids: draft.assigneeIds,
             ...(draft.dueDate ? { due_date: draft.dueDate } : { clear_due_date: true }),
-            ...(parentId ? { parent_id: parentId } : { clear_parent: true }),
+            // Resultado-chave e ação não trocam de pai; só a tarefa pode ficar avulsa.
+            ...(fixedParent ? {} : parentId ? { parent_id: parentId } : { clear_parent: true }),
           })
         : await api.createSupportPlanItem({
             kind: draft.kind,
@@ -118,7 +125,7 @@ export function PlanningItemForm({ open, item, people, projects, defaultKind = "
     <Sheet open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
       <SheetContent className="sm:max-w-xl">
         <SheetHeader>
-          <SheetTitle>{editing ? `Editar ${noun}` : `Lançar ${draft.kind === "project" ? "projeto" : "tarefa"}`}</SheetTitle>
+          <SheetTitle>{editing ? `Editar ${noun}` : `Lançar ${noun}`}</SheetTitle>
           <SheetDescription>Tudo o que for lançado fica visível para a equipe do Suporte.</SheetDescription>
         </SheetHeader>
         <form className="grid gap-4 p-6" onSubmit={submit}>
@@ -128,7 +135,7 @@ export function PlanningItemForm({ open, item, people, projects, defaultKind = "
               <p>{error}</p>
             </div>
           ) : null}
-          {!editing ? (
+          {!editing && !defaultParent ? (
             <Field className="grid gap-1.5">
               <Label>Tipo</Label>
               <Select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as SupportPlanKind, parentId: "" })}>
@@ -139,7 +146,7 @@ export function PlanningItemForm({ open, item, people, projects, defaultKind = "
           ) : null}
           <Field className="grid gap-1.5">
             <Label>Título</Label>
-            <Input value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="O que precisa ser feito" autoFocus />
+            <Input value={draft.title} maxLength={200} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={draft.kind === "key_result" ? "Resultado que precisa ser alcançado" : "O que precisa ser feito"} autoFocus />
           </Field>
           <Field className="grid gap-1.5">
             <Label>Descrição</Label>
@@ -159,6 +166,11 @@ export function PlanningItemForm({ open, item, people, projects, defaultKind = "
               <Input type="date" value={draft.dueDate} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })} />
             </Field>
           </div>
+          {FIXED_PARENT_KINDS.includes(draft.kind) ? (
+            <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              {draft.kind === "action" ? "Resultado-chave" : "Projeto"}: <span className="font-semibold">{defaultParent?.title ?? item?.parent_title ?? "—"}</span>
+            </p>
+          ) : null}
           {draft.kind === "task" ? (
             <Field className="grid gap-1.5">
               <Label>Projeto</Label>

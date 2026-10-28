@@ -1,4 +1,4 @@
-"""Regras da aba Especialista/Analista: projetos e tarefas lançados pela equipe do Suporte.
+"""Regras da aba Especialista/Analista: projetos, tarefas, resultados-chave e ações lançados pela equipe do Suporte.
 
 Tudo o que é lançado é visível para quem acessa o Suporte Interno (`support:read`); quem grava
 precisa de `support:plan_write` (checado na rota). Aqui ficam as regras: tipo e pai, transição de
@@ -28,6 +28,13 @@ CREATE_STATUSES = ("planned", "in_progress", "blocked")
 SUMMARY_PERIOD_DAYS = 30
 # Gravar texto de andamento ao bloquear ou cancelar: sem motivo, o quadro vira um muro mudo.
 STATUSES_REQUIRING_TEXT = ("blocked", "canceled")
+# O quadro e o resumo só têm projeto e tarefa; resultado-chave e ação aparecem dentro do projeto (pedido do usuário, 2026-10-28).
+BOARD_KINDS = ("project", "task")
+# Quem é pai de quem: tarefa e resultado-chave pertencem a um projeto, ação a um resultado-chave.
+PARENT_KIND = {"task": "project", "key_result": "project", "action": "key_result"}
+PARENT_REQUIRED_KINDS = ("key_result", "action")
+PARENT_LABEL = {"project": "projeto", "key_result": "resultado-chave"}
+KIND_LABEL = {"project": "Projeto", "task": "Tarefa", "key_result": "Resultado-chave", "action": "Ação"}
 
 
 def _now() -> datetime:
@@ -89,17 +96,20 @@ def _validated_assignees(db: Session, assignee_ids: list[int]) -> list[int]:
 
 
 def _validated_parent(db: Session, kind: str, parent_id: int | None, item_id: int | None = None) -> int | None:
+    expected = PARENT_KIND.get(kind)
     if parent_id is None:
+        if kind in PARENT_REQUIRED_KINDS:
+            raise _bad_request(f"{KIND_LABEL[kind]} precisa pertencer a um {PARENT_LABEL[expected]}.")
         return None
-    if kind != "task":
-        raise _bad_request("Só tarefa pode pertencer a um projeto.")
+    if expected is None:
+        raise _bad_request("Projeto não pode pertencer a outro item.")
     if item_id is not None and parent_id == item_id:
         raise _bad_request("Um item não pode pertencer a si mesmo.")
     parent = db.get(SupportPlanItem, parent_id)
-    if parent is None or parent.kind != "project":
-        raise _bad_request("O projeto informado não existe.")
+    if parent is None or parent.kind != expected:
+        raise _bad_request(f"O {PARENT_LABEL[expected]} informado não existe.")
     if parent.archived:
-        raise _bad_request("O projeto informado está arquivado.")
+        raise _bad_request(f"O {PARENT_LABEL[expected]} informado está arquivado.")
     return parent_id
 
 
@@ -112,6 +122,8 @@ def _audit_snapshot(item: SupportPlanItem) -> dict[str, Any]:
         "due_date": item.due_date.isoformat() if item.due_date else None,
         "assignee_ids": list(item.assignee_ids or []),
         "parent_id": item.parent_id,
+        "progress": item.progress,
+        "health": item.health,
         "archived": item.archived,
         "version": item.version,
     }
@@ -173,6 +185,8 @@ def update_item(db: Session, item_id: int, payload) -> tuple[SupportPlanItem, di
     if payload.assignee_ids is not None:
         item.assignee_ids = _validated_assignees(db, payload.assignee_ids)
     if payload.clear_parent:
+        if item.kind in PARENT_REQUIRED_KINDS:
+            raise _bad_request(f"{KIND_LABEL[item.kind]} precisa pertencer a um {PARENT_LABEL[PARENT_KIND[item.kind]]}.")
         item.parent_id = None
     elif payload.parent_id is not None:
         item.parent_id = _validated_parent(db, item.kind, payload.parent_id, item.id)
@@ -203,6 +217,8 @@ def add_update(db: Session, user: User, item_id: int, payload) -> tuple[SupportP
             raise _bad_request("Para concluir, descreva o resultado: o que foi feito e o que mudou.")
         item.result = result
         item.completed_at = _now()
+        if item.kind == "action":
+            item.progress = 100
     elif new_status is not None and item.status == "done":
         # Reabrir: o resultado e a data de conclusão antigos deixam de valer.
         item.completed_at = None
@@ -221,6 +237,48 @@ def add_update(db: Session, user: User, item_id: int, payload) -> tuple[SupportP
             status_from=status_from if new_status is not None else None,
             status_to=new_status,
             created_at=item.updated_at,
+        )
+    )
+    db.flush()
+    return item, before
+
+
+def add_check_in(db: Session, user: User, item_id: int, payload) -> tuple[SupportPlanItem, dict[str, Any]]:
+    """Check-in de uma ação: o que andou, o avanço atual e a situação. Uma ação planejada passa a em andamento."""
+    item = _get_item(db, item_id)
+    _check_version(item, payload.version)
+    if item.kind != "action":
+        raise _bad_request("Check-in é dado nas ações.")
+    if item.archived:
+        raise _bad_request("Ação arquivada: desarquive para dar check-in.")
+    if item.status in CLOSED_STATUSES:
+        raise _bad_request("Ação encerrada: reabra para dar check-in.")
+    text = _clean(payload.text)
+    if not text:
+        raise _bad_request("Escreva o que andou desde o último check-in.")
+    before = _audit_snapshot(item)
+    now = _now()
+    status_from = item.status
+    moved = item.status == "planned"
+    if moved:
+        item.status = "in_progress"
+    item.progress = payload.progress
+    item.health = payload.health
+    item.last_check_in_at = now
+    item.version += 1
+    item.updated_at = now
+    db.add(
+        SupportPlanUpdate(
+            item_id=item.id,
+            author_id=user.id,
+            author_name=user.name,
+            text=text,
+            status_from=status_from if moved else None,
+            status_to="in_progress" if moved else None,
+            progress=payload.progress,
+            health=payload.health,
+            is_check_in=True,
+            created_at=now,
         )
     )
     db.flush()
@@ -246,6 +304,65 @@ def _person(users: dict[int, User], user_id: int) -> dict[str, Any]:
     return {"id": user_id, "name": user.name if user else "Usuário removido"}
 
 
+def _average(values: list[int]) -> int:
+    return round(sum(values) / len(values))
+
+
+def progress_by_item(db: Session) -> dict[int, int | None]:
+    """Avanço (0 a 100) de cada item ativo: ação = o do último check-in (100 se concluída); resultado-chave = média das
+    ações; projeto = média dos resultados-chave e das tarefas (tarefa vale 100 se concluída, 0 se não). Cancelados e
+    arquivados ficam fora da conta. Tarefa não tem avanço e projeto sem nada dentro também não (`None`)."""
+    rows = db.execute(
+        select(SupportPlanItem.id, SupportPlanItem.parent_id, SupportPlanItem.kind, SupportPlanItem.status, SupportPlanItem.progress).where(
+            SupportPlanItem.archived.is_(False)
+        )
+    ).all()
+    children: dict[int, list] = defaultdict(list)
+    for row in rows:
+        if row.parent_id and row.status != "canceled":
+            children[row.parent_id].append(row)
+
+    def effective(row) -> int:
+        return 100 if row.status == "done" else int(row.progress or 0)
+
+    result: dict[int, int | None] = {}
+    for row in rows:
+        if row.kind == "action":
+            result[row.id] = effective(row)
+    for row in rows:
+        if row.kind == "key_result":
+            actions = [child for child in children[row.id] if child.kind == "action"]
+            result[row.id] = _average([effective(action) for action in actions]) if actions else effective(row)
+    for row in rows:
+        if row.kind == "project":
+            parts = [result.get(child.id, 0) for child in children[row.id] if child.kind == "key_result"]
+            parts += [100 if child.status == "done" else 0 for child in children[row.id] if child.kind == "task"]
+            result[row.id] = _average(parts) if parts else None
+        elif row.kind == "task":
+            result[row.id] = None
+    return result
+
+
+def _children_counts(db: Session, item_ids: list[int]) -> dict[int, tuple[int, int]]:
+    """Por item: filhos ativos (sem cancelados e arquivados) e quantos estão concluídos."""
+    if not item_ids:
+        return {}
+    totals: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    for parent_id, status, count in db.execute(
+        select(SupportPlanItem.parent_id, SupportPlanItem.status, func.count())
+        .where(
+            SupportPlanItem.parent_id.in_(item_ids),
+            SupportPlanItem.archived.is_(False),
+            SupportPlanItem.status != "canceled",
+        )
+        .group_by(SupportPlanItem.parent_id, SupportPlanItem.status)
+    ):
+        totals[parent_id][0] += count
+        if status == "done":
+            totals[parent_id][1] += count
+    return {key: (value[0], value[1]) for key, value in totals.items()}
+
+
 def _serialize(
     item: SupportPlanItem,
     *,
@@ -253,6 +370,7 @@ def _serialize(
     parent_titles: dict[int, str],
     task_counts: dict[int, tuple[int, int]],
     update_counts: dict[int, int],
+    progress: dict[int, int | None],
     today: date,
 ) -> dict[str, Any]:
     total, done = task_counts.get(item.id, (0, 0))
@@ -278,6 +396,9 @@ def _serialize(
         "tasks_total": total,
         "tasks_done": done,
         "updates_count": update_counts.get(item.id, 0),
+        "progress": progress.get(item.id),
+        "health": item.health,
+        "last_check_in_at": item.last_check_in_at,
     }
 
 
@@ -292,23 +413,10 @@ def _serialize_many(db: Session, items: list[SupportPlanItem]) -> list[dict[str,
         if parent_ids
         else {}
     )
-    task_counts: dict[int, tuple[int, int]] = {}
+    task_counts = _children_counts(db, item_ids)
     update_counts: dict[int, int] = {}
+    progress = progress_by_item(db)
     if item_ids:
-        totals: dict[int, list[int]] = defaultdict(lambda: [0, 0])
-        for parent_id, status, count in db.execute(
-            select(SupportPlanItem.parent_id, SupportPlanItem.status, func.count())
-            .where(
-                SupportPlanItem.parent_id.in_(item_ids),
-                SupportPlanItem.archived.is_(False),
-                SupportPlanItem.status != "canceled",
-            )
-            .group_by(SupportPlanItem.parent_id, SupportPlanItem.status)
-        ):
-            totals[parent_id][0] += count
-            if status == "done":
-                totals[parent_id][1] += count
-        task_counts = {key: (value[0], value[1]) for key, value in totals.items()}
         update_counts = dict(
             db.execute(
                 select(SupportPlanUpdate.item_id, func.count())
@@ -317,7 +425,7 @@ def _serialize_many(db: Session, items: list[SupportPlanItem]) -> list[dict[str,
             ).all()
         )
     return [
-        _serialize(item, users=users, parent_titles=parent_titles, task_counts=task_counts, update_counts=update_counts, today=today)
+        _serialize(item, users=users, parent_titles=parent_titles, task_counts=task_counts, update_counts=update_counts, progress=progress, today=today)
         for item in items
     ]
 
@@ -351,6 +459,8 @@ def list_items(
         statement = statement.where(SupportPlanItem.status.in_(statuses))
     if kind:
         statement = statement.where(SupportPlanItem.kind == kind)
+    else:
+        statement = statement.where(SupportPlanItem.kind.in_(BOARD_KINDS))
     term = _clean(search)
     if term:
         like = f"%{term}%"
@@ -385,6 +495,8 @@ def item_detail(db: Session, item_id: int) -> dict[str, Any]:
     children.sort(key=_sort_key)
     today = _today()
     users = _users_by_id(db, {user_id for child in children for user_id in (child.assignee_ids or [])})
+    child_progress = progress_by_item(db)
+    child_counts = _children_counts(db, [child.id for child in children])
     return {
         **base,
         "updates": [
@@ -395,13 +507,21 @@ def item_detail(db: Session, item_id: int) -> dict[str, Any]:
                 "status_from": update.status_from,
                 "status_to": update.status_to,
                 "created_at": update.created_at,
+                "progress": update.progress,
+                "health": update.health,
+                "is_check_in": update.is_check_in,
             }
             for update in updates
         ],
         "children": [
             {
                 "id": child.id,
+                "kind": child.kind,
                 "title": child.title,
+                "progress": child_progress.get(child.id),
+                "health": child.health,
+                "children_total": child_counts.get(child.id, (0, 0))[0],
+                "children_done": child_counts.get(child.id, (0, 0))[1],
                 "status": child.status,
                 "due_date": child.due_date,
                 "overdue": _is_overdue(child, today),
@@ -414,7 +534,7 @@ def item_detail(db: Session, item_id: int) -> dict[str, Any]:
 
 def summary(db: Session) -> dict[str, Any]:
     today = _today()
-    active = list(db.scalars(select(SupportPlanItem).where(SupportPlanItem.archived.is_(False))))
+    active = list(db.scalars(select(SupportPlanItem).where(SupportPlanItem.archived.is_(False), SupportPlanItem.kind.in_(BOARD_KINDS))))
     since = _now() - timedelta(days=SUMMARY_PERIOD_DAYS)
     return {
         "open": sum(1 for item in active if item.status in OPEN_STATUSES),

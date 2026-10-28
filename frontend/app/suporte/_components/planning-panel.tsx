@@ -94,6 +94,7 @@ export function PlanningPanel({ canWrite, currentUserId }: { canWrite: boolean; 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<SupportPlanItem | null>(null);
   const [newKind, setNewKind] = useState<SupportPlanKind>("task");
+  const [newParent, setNewParent] = useState<{ id: number; title: string } | null>(null);
   const [pendingMove, setPendingMove] = useState<PlanningMove | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
 
@@ -150,16 +151,19 @@ export function PlanningPanel({ canWrite, currentUserId }: { canWrite: boolean; 
     }
   }
 
-  function openForm(nextKind: SupportPlanKind) {
+  function openForm(nextKind: SupportPlanKind, parent: { id: number; title: string } | null = null) {
     setEditing(null);
     setNewKind(nextKind);
+    setNewParent(parent);
     setFormOpen(true);
   }
 
   function handleSaved(saved: SupportPlanItemDetail) {
     // `editing` fica como está: zerar já na hora de fechar trocaria o título do painel durante a animação.
     setFormOpen(false);
-    setOpenId(saved.id);
+    // Resultado-chave e ação nascem dentro de um pai: volta para ele, onde a lista já mostra o novo item.
+    const inside = (saved.kind === "key_result" || saved.kind === "action") && saved.parent_id !== null;
+    setOpenId(inside ? saved.parent_id : saved.id);
     refresh();
   }
 
@@ -292,6 +296,7 @@ export function PlanningPanel({ canWrite, currentUserId }: { canWrite: boolean; 
         refreshKey={reload}
         onClose={() => setOpenId(null)}
         onEdit={(item) => { setEditing(item); setFormOpen(true); }}
+        onCreateChild={(kind, parent) => openForm(kind, parent)}
         onOpenItem={setOpenId}
         onChanged={refresh}
       />
@@ -302,6 +307,7 @@ export function PlanningPanel({ canWrite, currentUserId }: { canWrite: boolean; 
           people={people}
           projects={projects}
           defaultKind={newKind}
+          defaultParent={newParent}
           currentUserId={currentUserId}
           onClose={() => setFormOpen(false)}
           onSaved={handleSaved}

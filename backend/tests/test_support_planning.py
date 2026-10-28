@@ -224,3 +224,116 @@ def test_writing_requires_plan_permission(db_session, admin_user):
         dependency(viewer)
     assert excinfo.value.status_code == 403
     assert dependency(admin_user) is admin_user
+
+
+# ---------------------------------------------------------------------------
+# Projeto > Resultado-chave > Ação, com check-in na ação (pedido do usuário, 2026-10-28)
+# ---------------------------------------------------------------------------
+from app.modules.support.schemas import SupportPlanCheckInCreate  # noqa: E402
+
+
+def _check_in(db, user, item, **kwargs):
+    data = {"version": item.version, "text": "Avançou", "progress": 40, "health": "on_track", **kwargs}
+    return planning_service.add_check_in(db, user, item.id, SupportPlanCheckInCreate(**data))
+
+
+def _okr(db, user):
+    project = _create(db, user, kind="project", title="OKR - Suporte")
+    key_result = _create(db, user, kind="key_result", title="KR 1", parent_id=project.id)
+    action = _create(db, user, kind="action", title="Ação 1", parent_id=key_result.id)
+    return project, key_result, action
+
+
+def test_key_result_and_action_need_the_right_parent(db_session, admin_user):
+    project, key_result, action = _okr(db_session, admin_user)
+    task = _create(db_session, admin_user, title="Tarefa solta")
+
+    with pytest.raises(HTTPException):
+        _create(db_session, admin_user, kind="key_result", title="Sem projeto")
+    with pytest.raises(HTTPException):
+        _create(db_session, admin_user, kind="key_result", title="Pai errado", parent_id=task.id)
+    with pytest.raises(HTTPException):
+        _create(db_session, admin_user, kind="action", title="Sem KR")
+    with pytest.raises(HTTPException):
+        _create(db_session, admin_user, kind="action", title="Direto no projeto", parent_id=project.id)
+    with pytest.raises(HTTPException):
+        _create(db_session, admin_user, kind="project", title="Projeto filho", parent_id=key_result.id)
+    with pytest.raises(HTTPException) as excinfo:
+        planning_service.update_item(db_session, action.id, SupportPlanItemUpdate(version=1, clear_parent=True))
+    assert excinfo.value.status_code == 400
+
+
+def test_check_in_records_progress_health_and_starts_the_action(db_session, admin_user):
+    _, _, action = _okr(db_session, admin_user)
+
+    item, _ = _check_in(db_session, admin_user, action, text="Fechei o desenho", progress=40, health="at_risk")
+
+    assert (item.status, item.progress, item.health, item.version) == ("in_progress", 40, "at_risk", 2)
+    assert item.last_check_in_at is not None
+    entry = planning_service.item_detail(db_session, action.id)["updates"][0]
+    assert (entry["is_check_in"], entry["progress"], entry["health"], entry["text"]) == (True, 40, "at_risk", "Fechei o desenho")
+    assert (entry["status_from"], entry["status_to"]) == ("planned", "in_progress")
+
+
+def test_check_in_is_only_for_open_actions_with_text_and_current_version(db_session, admin_user):
+    project, key_result, action = _okr(db_session, admin_user)
+
+    for wrong in (project, key_result):
+        with pytest.raises(HTTPException):
+            _check_in(db_session, admin_user, wrong)
+    with pytest.raises(HTTPException):
+        _check_in(db_session, admin_user, action, text="   ")
+    with pytest.raises(HTTPException) as stale:
+        _check_in(db_session, admin_user, action, version=9)
+    assert stale.value.status_code == 409
+    _progress(db_session, admin_user, action, status="done", result="Feito")
+    with pytest.raises(HTTPException):
+        _check_in(db_session, admin_user, action)
+    reopened, _ = _progress(db_session, admin_user, action, status="in_progress")
+    archived, _ = planning_service.set_archived(db_session, reopened.id, SupportPlanArchive(version=reopened.version))
+    with pytest.raises(HTTPException):
+        _check_in(db_session, admin_user, archived)
+
+
+def test_progress_rolls_up_from_actions_to_key_results_and_project(db_session, admin_user):
+    project, key_result, action = _okr(db_session, admin_user)
+    second = _create(db_session, admin_user, kind="action", title="Ação 2", parent_id=key_result.id)
+    other_kr = _create(db_session, admin_user, kind="key_result", title="KR 2", parent_id=project.id)
+    task = _create(db_session, admin_user, title="Tarefa", parent_id=project.id)
+    canceled = _create(db_session, admin_user, kind="action", title="Cancelada", parent_id=key_result.id)
+    _progress(db_session, admin_user, canceled, status="canceled", text="Não vale")
+    _check_in(db_session, admin_user, action, progress=50)
+    _progress(db_session, admin_user, second, status="done", result="Ok")
+    _progress(db_session, admin_user, task, status="done", result="Ok")
+
+    progress = planning_service.progress_by_item(db_session)
+
+    assert progress[action.id] == 50 and progress[second.id] == 100
+    assert progress[key_result.id] == 75  # média de 50 e 100; a cancelada não entra
+    assert progress[other_kr.id] == 0  # sem ações: vale o próprio avanço
+    assert progress[project.id] == 58  # média de KR1 (75), KR2 (0) e a tarefa concluída (100)
+    assert progress[task.id] is None
+
+
+def test_board_list_and_summary_leave_out_key_results_and_actions(db_session, admin_user):
+    project, key_result, action = _okr(db_session, admin_user)
+
+    default = planning_service.list_items(db_session)
+    only_actions = planning_service.list_items(db_session, kind="action")
+
+    assert [item["id"] for item in default["items"]] == [project.id]
+    assert [item["id"] for item in only_actions["items"]] == [action.id]
+    assert planning_service.summary(db_session)["open"] == 1
+
+
+def test_detail_of_project_and_key_result_lists_children_with_progress(db_session, admin_user):
+    project, key_result, action = _okr(db_session, admin_user)
+    _check_in(db_session, admin_user, action, progress=30, health="off_track")
+
+    project_children = planning_service.item_detail(db_session, project.id)["children"]
+    kr_detail = planning_service.item_detail(db_session, key_result.id)
+
+    assert [(child["kind"], child["title"], child["progress"], child["children_total"]) for child in project_children] == [("key_result", "KR 1", 30, 1)]
+    assert kr_detail["parent_title"] == "OKR - Suporte" and kr_detail["progress"] == 30
+    action_child = kr_detail["children"][0]
+    assert (action_child["kind"], action_child["progress"], action_child["health"]) == ("action", 30, "off_track")
