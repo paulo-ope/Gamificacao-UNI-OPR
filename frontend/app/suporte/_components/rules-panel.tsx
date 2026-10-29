@@ -237,16 +237,20 @@ export function RulesPanel({ canEdit }: { canEdit: boolean }) {
             <div className="mt-3 grid gap-3 sm:grid-cols-3">
               <NumberInput label="Penalidade começa acima de (segundos)" value={ranking.tmr_penalty.after_seconds} disabled={disabled} hint={`= ${clock(ranking.tmr_penalty.after_seconds)}; não pode ser menor que a última faixa`} onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, tmr_penalty: { ...c.ranking.tmr_penalty, after_seconds: v } } }))} />
               <NumberInput label="A cada (segundos excedidos)" value={ranking.tmr_penalty.block_seconds} disabled={disabled} hint={`= ${clock(ranking.tmr_penalty.block_seconds)}`} onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, tmr_penalty: { ...c.ranking.tmr_penalty, block_seconds: v } } }))} />
-              <NumberInput label="Pontos por bloco excedido" value={ranking.tmr_penalty.points} disabled={disabled} onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, tmr_penalty: { ...c.ranking.tmr_penalty, points: v } } }))} />
+              <NumberInput label={ranking.tmr_penalty.flat ? "Pontos da penalidade (única)" : "Pontos por bloco excedido"} value={ranking.tmr_penalty.points} disabled={disabled} onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, tmr_penalty: { ...c.ranking.tmr_penalty, points: v } } }))} />
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 sm:col-span-3">
+                <input type="checkbox" checked={ranking.tmr_penalty.flat} disabled={disabled} onChange={(e) => update((c) => ({ ...c, ranking: { ...c.ranking, tmr_penalty: { ...c.ranking.tmr_penalty, flat: e.target.checked } } }))} />
+                Penalidade única (desmarcado: repete a cada bloco de segundos excedidos)
+              </label>
             </div>
           </section>
 
           <section>
             <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wide text-blue-600">Ligações atendidas</h3>
             <div className="grid gap-3 sm:grid-cols-3">
-              <NumberInput label="A cada (ligações no mês)" value={ranking.calls.block} disabled={disabled} onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, calls: { ...c.ranking.calls, block: v } } }))} />
-              <NumberInput label="Pontos por bloco" value={ranking.calls.block_points} disabled={disabled} onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, calls: { ...c.ranking.calls, block_points: v } } }))} />
-              <NumberInput label="Pontos por semana completa abaixo do bloco" value={ranking.calls.week_penalty} disabled={disabled} hint="Semana de domingo a sábado inteira dentro do mês." onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, calls: { ...c.ranking.calls, week_penalty: v } } }))} />
+              <NumberInput label="Meta e teto de ligações por semana" value={ranking.calls.week_target} disabled={disabled} hint="Semana parcial nas pontas do mês: proporcional aos dias." onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, calls: { ...c.ranking.calls, week_target: v } } }))} />
+              <NumberInput label="Pontos por ligação atendida" value={ranking.calls.call_points} disabled={disabled} onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, calls: { ...c.ranking.calls, call_points: v } } }))} />
+              <NumberInput label="Pontos por ligação que faltou para a meta" value={ranking.calls.missing_penalty} disabled={disabled} hint="Semana de domingo a sábado; só pontua depois de encerrada." onChange={(v) => update((c) => ({ ...c, ranking: { ...c.ranking, calls: { ...c.ranking.calls, missing_penalty: v } } }))} />
             </div>
           </section>
         </div>

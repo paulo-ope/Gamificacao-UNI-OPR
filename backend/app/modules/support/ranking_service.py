@@ -4,13 +4,13 @@ Por colaborador da equipe do Suporte Técnico (`dashboard_macros.SUPPORT_TEAM`),
 valores abaixo são o PADRÃO; a Configuração > Regras pode alterá-los (`support_rules.RankingRules`) e o ranking de
 cada mês usa as regras em vigor no último dia dele:
 
-- Qualidade da avaliação (CSAT do OPA): nota >= 4,0 vale +5; nota <= 3,9 vale -3; entre as duas, 0;
-- TMR (TMR Geral, regra do OPA): até 1 min +5; até 2 min +3; até 3 min +1; acima de 3 min -2 para cada bloco de
-  3 minutos excedidos (3:01 a 6:00 = -2; 6:01 a 9:00 = -4...);
-- Ligações atendidas (canal `pabx` com o colaborador como primeiro humano): a cada 12 ligações no mês, +20 (48
-  ligações = +80); e cada SEMANA COMPLETA do mês com menos de 12 ligações vale -10 (as duas partes se somam).
-  Conta como semana completa a de domingo a sábado inteira dentro do mês e já encerrada: os dias soltos nas pontas
-  do mês e a semana em andamento não geram penalidade (as ligações deles entram nos blocos).
+- Qualidade da avaliação (CSAT do OPA): nota >= 4,5 (meta) vale +10; nota abaixo de 4,0 vale -10; entre as duas, 0;
+- TMR (TMR Geral, regra do OPA): até 2 min (meta) +10; acima disso -10 (penalidade única);
+- Ligações atendidas (canal `pabx` com o colaborador como primeiro humano), SEMANA a semana (domingo a sábado): cada
+  ligação vale +1 até o teto de 12 na semana; quem não bate a meta perde 1 ponto por ligação que faltou (7 ligações =
+  +7 -5 = +2). Os dias soltos nas pontas do mês formam uma semana parcial, com meta e teto proporcionais aos dias
+  (12 x dias / 7, arredondado para cima); a semana em andamento só pontua depois de encerrada. Mês de 5 semanas
+  cheias: teto de 60 pontos.
 
 Desempate: menor TMR, depois maior avaliação ("TMR menor" e "Avaliação individual" são ponto positivo no quadro).
 Quem não teve nenhum atendimento no mês fica no fim, sem pontos (férias/folga não deve levar -10 de ligações).
@@ -60,8 +60,10 @@ def rule_lines(rules: RankingRules) -> list[dict[str, Any]]:
     """Texto das regras para a tela, gerado a partir dos valores em vigor (nunca fica diferente da pontuação)."""
     rating, penalty, calls = rules.rating, rules.tmr_penalty, rules.calls
     tmr_lines = [f"Até {_minutes(step.max_seconds)}: {_points(step.points)}" for step in rules.tmr_steps]
-    tmr_lines.append(f"Acima de {_minutes(penalty.after_seconds)}: {_points(penalty.points)} a cada {_minutes(penalty.block_seconds)} excedidos")
-    example = calls.block * 4
+    if penalty.flat:
+        tmr_lines.append(f"Acima de {_minutes(penalty.after_seconds)}: {_points(penalty.points)}")
+    else:
+        tmr_lines.append(f"Acima de {_minutes(penalty.after_seconds)}: {_points(penalty.points)} a cada {_minutes(penalty.block_seconds)} excedidos")
     return [
         {
             "key": "rating",
@@ -77,8 +79,9 @@ def rule_lines(rules: RankingRules) -> list[dict[str, Any]]:
             "key": "calls",
             "label": "Ligações atendidas",
             "lines": [
-                f"A cada {calls.block} ligações no mês: {_points(calls.block_points)} ({example} ligações = {_points(4 * calls.block_points)})",
-                f"Cada semana completa com menos de {calls.block} ligações: {_points(calls.week_penalty)}",
+                f"Cada ligação atendida na semana: {_points(calls.call_points)}, até {calls.week_target} por semana (teto)",
+                f"Cada ligação que faltou para a meta da semana: {_points(calls.missing_penalty)}",
+                "Dias soltos nas pontas do mês formam uma semana parcial, com meta e teto proporcionais aos dias.",
             ],
         },
     ]
@@ -103,24 +106,35 @@ def tmr_points(seconds: float | None, rules: RankingRules = DEFAULT_RANKING_RULE
     penalty = rules.tmr_penalty
     if seconds <= penalty.after_seconds:
         return 0  # entre o limite da última faixa e o início da penalidade
+    if penalty.flat:
+        return penalty.points
     return penalty.points * math.ceil((seconds - penalty.after_seconds) / penalty.block_seconds)
 
 
-def calls_points(calls: int, weeks_below: int = 0, rules: RankingRules = DEFAULT_RANKING_RULES) -> int:
-    """Pontos por bloco de ligações no mês menos a penalidade por semana completa abaixo do bloco."""
-    return (calls // rules.calls.block) * rules.calls.block_points + weeks_below * rules.calls.week_penalty
+def week_target(days: int, rules: RankingRules = DEFAULT_RANKING_RULES) -> int:
+    """Meta (e teto) de ligações de uma semana de `days` dias: a cheia vale `week_target`; a parcial é proporcional."""
+    return math.ceil(rules.calls.week_target * days / 7 - 1e-9)
 
 
-def complete_weeks(date_from: date, date_to: date, reference: date) -> list[tuple[date, date]]:
-    """Semanas dom-sáb INTEIRAS dentro de [date_from, date_to] e já encerradas antes de `reference`."""
-    first_sunday = date_from + timedelta(days=(6 - date_from.weekday()) % 7)
+def calls_points(weeks: list[tuple[int, int]], rules: RankingRules = DEFAULT_RANKING_RULES) -> int:
+    """Soma das semanas, cada uma como (ligações, meta): ligações até a meta valem `call_points`; as que faltaram
+    para a meta descontam `missing_penalty`."""
+    total = 0
+    for calls, target in weeks:
+        total += min(calls, target) * rules.calls.call_points + max(target - calls, 0) * rules.calls.missing_penalty
+    return total
+
+
+def scoring_weeks(date_from: date, date_to: date, reference: date) -> list[tuple[date, date]]:
+    """Semanas dom-sáb de [date_from, date_to] já encerradas antes de `reference`; as pontas do mês viram semanas
+    parciais (recortadas no mês)."""
     weeks = []
-    cursor = first_sunday
-    while cursor + timedelta(days=6) <= date_to:
-        end = cursor + timedelta(days=6)
+    cursor = date_from
+    while cursor <= date_to:
+        end = min(cursor + timedelta(days=(5 - cursor.weekday()) % 7), date_to)  # próximo sábado
         if end < reference:
             weeks.append((cursor, end))
-        cursor += timedelta(days=7)
+        cursor = end + timedelta(days=1)
     return weeks
 
 
@@ -158,21 +172,17 @@ def _member_row(
     db: Session, option: dict[str, str], date_from: date, date_to: date, weeks: list[tuple[date, date]], rules: RankingRules
 ) -> dict[str, Any]:
     attendant_id = option["value"]
-    block = rules.calls.block
     filters = OpaAttendanceFilters(date_from=date_from, date_to=date_to, attendant_id=attendant_id)
     metrics = opa_overview_service.overview_metrics(db, filters)
     calls = feedback_service.phone_calls_answered(db, attendant_id, OpaAttendanceFilters(date_from=date_from, date_to=date_to))
     active = metrics["total_attendances"] > 0 or calls > 0
-    weeks_below = 0
+    week_results: list[tuple[int, int]] = []
     if active:
         for week_from, week_to in weeks:
             week_calls = feedback_service.phone_calls_answered(db, attendant_id, OpaAttendanceFilters(date_from=week_from, date_to=week_to))
-            weeks_below += 1 if week_calls < block else 0
-    blocks = calls // block
-    calls_detail = (
-        f"{blocks} {'bloco' if blocks == 1 else 'blocos'} de {block} ({blocks * rules.calls.block_points:+d}) · "
-        f"{weeks_below} de {len(weeks)} semanas abaixo de {block} ({weeks_below * rules.calls.week_penalty:+d})"
-    )
+            week_results.append((week_calls, week_target((week_to - week_from).days + 1, rules)))
+    on_target = sum(1 for week_calls, target in week_results if week_calls >= target)
+    calls_detail = f"{on_target} de {len(weeks)} semanas na meta de ligações ({calls_points(week_results, rules):+d} pontos)"
 
     rating = metrics["average_rating"]
     tmr = metrics["average_tmr_effective_seconds"]
@@ -186,7 +196,7 @@ def _member_row(
         "attendances": metrics["total_attendances"],
         "rating": {"value": rating, "points": rating_points(rating, rules) if active else 0, "partial": False},
         "tmr": {"value": tmr, "points": tmr_points(tmr, rules) if active else 0, "partial": tmr_partial},
-        "calls": {"value": calls, "points": calls_points(calls, weeks_below, rules) if active else 0, "partial": False, "detail": calls_detail},
+        "calls": {"value": calls, "points": calls_points(week_results, rules) if active else 0, "partial": False, "detail": calls_detail},
     }
     row["total_points"] = row["rating"]["points"] + row["tmr"]["points"] + row["calls"]["points"] if active else None
     return row
@@ -196,7 +206,7 @@ def monthly_ranking(db: Session, *, month: date, reference: date) -> dict[str, A
     """Ranking do mês de `month` (qualquer dia do mês), com as regras em vigor no último dia dele."""
     date_from, date_to = month_bounds(month)
     rules = support_rules.ranking_rules_for_month(db, date_to)
-    weeks = complete_weeks(date_from, date_to, reference)
+    weeks = scoring_weeks(date_from, date_to, reference)
     rows = [_member_row(db, option, date_from, date_to, weeks, rules) for option in dashboard_macros.support_team_options(db)]
     rows.sort(key=_sort_key)
     position = 0

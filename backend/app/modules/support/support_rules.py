@@ -29,10 +29,10 @@ MAX_VERSIONS = 60
 
 
 class RatingRule(BaseModel):
-    good_min: float = Field(4.0, ge=0, le=5)
-    good_points: int = Field(5, ge=-1000, le=1000)
-    bad_max: float = Field(3.9, ge=0, le=5)
-    bad_points: int = Field(-3, ge=-1000, le=1000)
+    good_min: float = Field(4.5, ge=0, le=5)
+    good_points: int = Field(10, ge=-1000, le=1000)
+    bad_max: float = Field(3.99, ge=0, le=5)
+    bad_points: int = Field(-10, ge=-1000, le=1000)
 
     @model_validator(mode="after")
     def _ordered(self) -> "RatingRule":
@@ -47,19 +47,24 @@ class TmrStep(BaseModel):
 
 
 class TmrPenalty(BaseModel):
-    after_seconds: float = Field(180.0, gt=0, le=7200)
+    after_seconds: float = Field(120.0, gt=0, le=7200)
     block_seconds: float = Field(180.0, ge=1, le=7200)
-    points: int = Field(-2, ge=-1000, le=1000)
+    points: int = Field(-10, ge=-1000, le=1000)
+    # Penalidade única (não bateu a meta); desligada, repete `points` a cada `block_seconds` excedidos.
+    flat: bool = True
 
 
 class CallsRule(BaseModel):
-    block: int = Field(12, ge=1, le=1000)
-    block_points: int = Field(20, ge=-1000, le=1000)
-    week_penalty: int = Field(-10, ge=-1000, le=1000)
+    """Ligações por SEMANA (dom-sáb): cada uma vale `call_points` até o teto `week_target`; cada ligação que faltou
+    para a meta desconta `missing_penalty`. Semana parcial nas pontas do mês tem meta e teto proporcionais aos dias."""
+
+    week_target: int = Field(12, ge=1, le=1000)
+    call_points: int = Field(1, ge=-1000, le=1000)
+    missing_penalty: int = Field(-1, ge=-1000, le=1000)
 
 
 def _default_tmr_steps() -> list[TmrStep]:
-    return [TmrStep(max_seconds=60, points=5), TmrStep(max_seconds=120, points=3), TmrStep(max_seconds=180, points=1)]
+    return [TmrStep(max_seconds=120, points=10)]
 
 
 class RankingRules(BaseModel):
