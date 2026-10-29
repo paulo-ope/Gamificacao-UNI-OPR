@@ -12,10 +12,10 @@ from app.modules.support.support_rules import FeedbackGoals, IndicatorGoals, Ran
 
 def test_defaults_match_the_values_that_used_to_be_hardcoded():
     rules = support_rules.DEFAULT_RULES
-    assert (rules.ranking.rating.good_min, rules.ranking.rating.good_points, rules.ranking.rating.bad_max, rules.ranking.rating.bad_points) == (4.0, 5, 3.9, -3)
-    assert [(step.max_seconds, step.points) for step in rules.ranking.tmr_steps] == [(60, 5), (120, 3), (180, 1)]
-    assert (rules.ranking.tmr_penalty.after_seconds, rules.ranking.tmr_penalty.block_seconds, rules.ranking.tmr_penalty.points) == (180, 180, -2)
-    assert (rules.ranking.calls.block, rules.ranking.calls.block_points, rules.ranking.calls.week_penalty) == (12, 20, -10)
+    assert (rules.ranking.rating.good_min, rules.ranking.rating.good_points, rules.ranking.rating.bad_max, rules.ranking.rating.bad_points) == (4.5, 10, 3.99, -10)
+    assert [(step.max_seconds, step.points) for step in rules.ranking.tmr_steps] == [(120, 10)]
+    assert (rules.ranking.tmr_penalty.after_seconds, rules.ranking.tmr_penalty.points, rules.ranking.tmr_penalty.flat) == (120, -10, True)
+    assert (rules.ranking.calls.week_target, rules.ranking.calls.call_points, rules.ranking.calls.missing_penalty) == (12, 1, -1)
     assert rules.indicator_goals.csat == dashboard_macros.CSAT_TARGET
     assert rules.indicator_goals.tmr_seconds == dashboard_macros.TMR_TARGET_SECONDS
     assert rules.indicator_goals.tma_seconds == dashboard_macros.TMA_TARGET_SECONDS
@@ -34,7 +34,7 @@ def test_invalid_rules_are_rejected():
     with pytest.raises(ValidationError):  # penalidade começando antes da última faixa
         RankingRules.model_validate({"tmr_penalty": {"after_seconds": 100, "block_seconds": 60, "points": -1}})
     with pytest.raises(ValidationError):  # bloco de ligações zero
-        RankingRules.model_validate({"calls": {"block": 0}})
+        RankingRules.model_validate({"calls": {"week_target": 0}})
     with pytest.raises(ValidationError):  # meta zero
         FeedbackGoals.model_validate({"operational": 0})
     with pytest.raises(ValidationError):  # nota acima de 5
@@ -60,17 +60,17 @@ def test_save_creates_versions_and_same_day_save_replaces(db_session):
 
 
 def test_ranking_rules_for_month_use_the_version_in_force_at_month_end(db_session):
-    old = SupportRules(ranking=RankingRules.model_validate({"calls": {"block": 12, "block_points": 20, "week_penalty": -10}}))
-    new = SupportRules(ranking=RankingRules.model_validate({"calls": {"block": 10, "block_points": 30, "week_penalty": -5}}))
+    old = SupportRules(ranking=RankingRules.model_validate({"calls": {"week_target": 12, "call_points": 2, "missing_penalty": -2}}))
+    new = SupportRules(ranking=RankingRules.model_validate({"calls": {"week_target": 10, "call_points": 3, "missing_penalty": -1}}))
     support_rules.save(db_session, old, saved_by="Ana", today=date(2026, 8, 20))
     support_rules.save(db_session, new, saved_by="Ana", today=date(2026, 10, 3))
     db_session.commit()
 
     # Julho fechou antes da 1ª alteração: padrão. Agosto e setembro: versão de 20/08. Outubro: a de 03/10.
-    assert support_rules.ranking_rules_for_month(db_session, date(2026, 7, 31)).calls.block_points == 20
-    assert support_rules.ranking_rules_for_month(db_session, date(2026, 9, 30)).calls.block == 12
-    assert support_rules.ranking_rules_for_month(db_session, date(2026, 10, 31)).calls.block == 10
-    assert support_rules.ranking_rules_for_month(db_session, date(2026, 10, 31)).calls.block_points == 30
+    assert support_rules.ranking_rules_for_month(db_session, date(2026, 7, 31)).calls.call_points == 1
+    assert support_rules.ranking_rules_for_month(db_session, date(2026, 9, 30)).calls.week_target == 12
+    assert support_rules.ranking_rules_for_month(db_session, date(2026, 10, 31)).calls.week_target == 10
+    assert support_rules.ranking_rules_for_month(db_session, date(2026, 10, 31)).calls.call_points == 3
 
 
 def test_corrupted_setting_falls_back_to_defaults(db_session):
@@ -82,17 +82,17 @@ def test_corrupted_setting_falls_back_to_defaults(db_session):
 
 
 def test_rule_lines_follow_the_saved_values():
-    rules = RankingRules.model_validate({"calls": {"block": 10, "block_points": 30, "week_penalty": -5}})
+    rules = RankingRules.model_validate({"calls": {"week_target": 10, "call_points": 3, "missing_penalty": -1}})
     calls = next(item for item in ranking_service.rule_lines(rules) if item["key"] == "calls")
-    assert calls["lines"][0] == "A cada 10 ligações no mês: +30 pontos (40 ligações = +120 pontos)"
-    assert calls["lines"][1] == "Cada semana completa com menos de 10 ligações: -5 pontos"
+    assert calls["lines"][0] == "Cada ligação atendida na semana: +3 pontos, até 10 por semana (teto)"
+    assert calls["lines"][1] == "Cada ligação que faltou para a meta da semana: -1 ponto"
     default_text = ranking_service.rule_lines(support_rules.DEFAULT_RULES.ranking)
-    assert next(item for item in default_text if item["key"] == "rating")["lines"][0] == "Nota a partir de 4,0: +5 pontos"
+    assert next(item for item in default_text if item["key"] == "rating")["lines"][0] == "Nota a partir de 4,5: +10 pontos"
 
 
 def test_custom_ranking_rules_change_the_points():
     rules = RankingRules.model_validate(
-        {"rating": {"good_min": 4.5, "good_points": 10, "bad_max": 4.0, "bad_points": -5}, "tmr_steps": [{"max_seconds": 30, "points": 8}], "tmr_penalty": {"after_seconds": 90, "block_seconds": 30, "points": -1}}
+        {"rating": {"good_min": 4.5, "good_points": 10, "bad_max": 4.0, "bad_points": -5}, "tmr_steps": [{"max_seconds": 30, "points": 8}], "tmr_penalty": {"after_seconds": 90, "block_seconds": 30, "points": -1, "flat": False}}
     )
     assert ranking_service.rating_points(4.5, rules) == 10 and ranking_service.rating_points(4.2, rules) == 0 and ranking_service.rating_points(4.0, rules) == -5
     assert ranking_service.tmr_points(30, rules) == 8
@@ -117,11 +117,11 @@ def test_closed_month_keeps_its_old_rules_after_a_change(db_session):
         row = ranking_service.monthly_ranking(db_session, month=date(2026, 9, 1), reference=today)["rows"][0]
         return row["rating"]["points"]
 
-    assert points() == 5  # regra padrão: nota >= 4,0 vale +5
+    assert points() == 10  # regra padrão: nota >= 4,5 vale +10
     changed = SupportRules(ranking=RankingRules.model_validate({"rating": {"good_min": 4.0, "good_points": 50, "bad_max": 3.9, "bad_points": -3}}))
     support_rules.save(db_session, changed, saved_by="Ana", today=date(2026, 10, 5))  # vale a partir de outubro
     db_session.commit()
 
-    assert points() == 5  # setembro já fechado: continua com a regra da época
+    assert points() == 10  # setembro já fechado: continua com a regra da época
     october = ranking_service.monthly_ranking(db_session, month=date(2026, 10, 1), reference=today)
     assert october["rules"][0]["lines"][0] == "Nota a partir de 4,0: +50 pontos"

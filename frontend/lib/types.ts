@@ -2995,8 +2995,8 @@ export type SupportRanking = {
 export type SupportRankingRules = {
   rating: { good_min: number; good_points: number; bad_max: number; bad_points: number };
   tmr_steps: { max_seconds: number; points: number }[];
-  tmr_penalty: { after_seconds: number; block_seconds: number; points: number };
-  calls: { block: number; block_points: number; week_penalty: number };
+  tmr_penalty: { after_seconds: number; block_seconds: number; points: number; flat: boolean };
+  calls: { week_target: number; call_points: number; missing_penalty: number };
 };
 
 export type SupportFeedbackGoals = {
